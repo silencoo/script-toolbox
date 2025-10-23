@@ -31,7 +31,7 @@
   const CONFIG_STORAGE_KEYS = ['hath_unified_config', 'hath_gallery_config', 'hath_config'];
 
   // *** 在这里自定义你的收藏分类名称 (0-9) ***
-  const favcats = [
+  const DEFAULT_FAVCATS = [
       'Normal', // 0
       'NTR',      // 1
       'Incest',          // 2
@@ -43,6 +43,8 @@
       'AI Generated',            // 8
       'Lolicon'             // 9
   ];
+
+  let favcats = [...DEFAULT_FAVCATS];
 
   // *** H@H Download Configuration ***
   const DEFAULT_CONFIG = {
@@ -60,10 +62,11 @@
       oneClickMode: true,
       showCategoryNames: true,
       showPanelByDefault: true,
-      showFloatingButton: true
+      showFloatingButton: true,
+      favcats: [...DEFAULT_FAVCATS]
   };
 
-  const HATH_CONFIG = { ...DEFAULT_CONFIG };
+  const HATH_CONFIG = { ...DEFAULT_CONFIG, favcats: [...DEFAULT_FAVCATS] };
 
   // Load saved configuration (handles legacy keys as well)
   loadPersistedConfig();
@@ -81,6 +84,85 @@
               console.warn(`E-Hentai Unified: Failed to read config from ${key}`, error);
           }
       }
+      favcats = normalizeFavcats(HATH_CONFIG.favcats);
+      HATH_CONFIG.favcats = [...favcats];
+  }
+
+  function normalizeFavcats(values) {
+      const sanitized = [...DEFAULT_FAVCATS];
+      if (Array.isArray(values)) {
+          for (let i = 0; i < sanitized.length; i++) {
+              const name = typeof values[i] === 'string' ? values[i].trim() : '';
+              if (name) {
+                  sanitized[i] = name;
+              }
+          }
+      }
+      return sanitized;
+  }
+
+  function getFavcatName(index) {
+      const value = typeof favcats[index] === 'string' ? favcats[index].trim() : '';
+      if (value) {
+          return value;
+      }
+      const fallback = typeof DEFAULT_FAVCATS[index] === 'string' ? DEFAULT_FAVCATS[index] : '';
+      return fallback || `Category ${index}`;
+  }
+
+  function getGalleryButtonLabel(index) {
+      if (!HATH_CONFIG.showCategoryNames) {
+          return String(index);
+      }
+      const name = getFavcatName(index);
+      return name.length > 4 ? name.slice(0, 4) : name;
+  }
+
+  function escapeHtml(value) {
+      return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+  }
+
+  function refreshFavoriteLabels() {
+      document.querySelectorAll('.gallery-controls button[data-favcat]').forEach(btn => {
+          const index = parseInt(btn.dataset.favcat, 10);
+          if (!Number.isInteger(index)) {
+              return;
+          }
+          const name = getFavcatName(index);
+          const label = getGalleryButtonLabel(index);
+          btn.dataset.originalLabel = label;
+          btn.textContent = label;
+          btn.title = `Add to ${name}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
+          btn.style.minWidth = HATH_CONFIG.showCategoryNames ? '24px' : '16px';
+      });
+
+      const bulkFavcatSelect = document.getElementById('bulk-favcat');
+      if (bulkFavcatSelect) {
+          Array.from(bulkFavcatSelect.options).forEach(option => {
+              const index = parseInt(option.value, 10);
+              if (Number.isInteger(index)) {
+                  option.textContent = getFavcatName(index);
+              }
+          });
+      }
+
+      document.querySelectorAll('.hath-detail-button').forEach(btn => {
+          const index = parseInt(btn.dataset.favcat, 10);
+          if (!Number.isInteger(index)) {
+              return;
+          }
+          const name = getFavcatName(index);
+          const label = HATH_CONFIG.showCategoryNames ? name : String(index);
+          btn.dataset.originalText = label;
+          btn.dataset.originalLabel = label;
+          btn.textContent = label;
+          btn.title = `收藏到 ${name}`;
+      });
   }
 
   function init() {
@@ -176,8 +258,8 @@
       buttonContainer.className = 'hath-detail-fav-container';
       buttonContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: 6px; align-items: center;';
 
-      favcats.forEach((catName, index) => {
-          const button = createDetailFavoriteButton(gid, token, index, catName, buttonContainer);
+      favcats.forEach((_, index) => {
+          const button = createDetailFavoriteButton(gid, token, index, buttonContainer);
           buttonContainer.appendChild(button);
       });
 
@@ -204,17 +286,20 @@
       }
   }
 
-  function createDetailFavoriteButton(gid, token, favcatId, favcatName, container) {
+  function createDetailFavoriteButton(gid, token, favcatId, container) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'hath-detail-button';
 
-      const label = HATH_CONFIG.showCategoryNames ? (favcatName || `分类 ${favcatId}`) : String(favcatId);
+      const name = getFavcatName(favcatId);
+      const label = HATH_CONFIG.showCategoryNames ? name : String(favcatId);
       button.textContent = label;
       button.dataset.originalText = label;
+      button.dataset.originalLabel = label;
       button.dataset.originalBackground = '#f5f5f5';
       button.dataset.originalColor = '#333333';
       button.dataset.favcat = String(favcatId);
+      button.title = `收藏到 ${name}`;
 
       button.style.cssText = 'padding: 2px 8px; font-size: 12px; border: 1px solid #d0d0d0; background: #f5f5f5; color: #333333; border-radius: 3px; cursor: pointer; transition: all 0.2s ease;';
       button.addEventListener('mouseenter', () => {
@@ -244,6 +329,7 @@
       const originalBackground = button.dataset.originalBackground || button.style.background || '';
       const originalColor = button.dataset.originalColor || button.style.color || '';
       const originalTitle = button.title;
+      const categoryName = getFavcatName(favcatId);
 
       buttons.forEach(btn => {
           btn.disabled = true;
@@ -253,7 +339,7 @@
       button.textContent = '...';
       button.style.background = '#2196F3';
       button.style.color = '#ffffff';
-      button.title = `正在收藏到 ${favcats[favcatId] || favcatId}`;
+      button.title = `正在收藏到 ${categoryName}`;
 
       const restoreState = (delay = 2000) => {
           setTimeout(() => {
@@ -273,7 +359,7 @@
               button.textContent = '✓';
               button.style.background = '#4CAF50';
               button.style.color = '#ffffff';
-              button.title = `已收藏到 ${favcats[favcatId] || favcatId}`;
+              button.title = `已收藏到 ${categoryName}`;
 
               const shouldDownload = HATH_CONFIG.enabled && HATH_CONFIG.oneClickMode;
               if (shouldDownload) {
@@ -282,7 +368,7 @@
                           if (HATH_CONFIG.showDownloadStatus) {
                               button.textContent = '✓✓';
                           }
-                          button.title = `收藏+下载完成:${favcats[favcatId] || favcatId}`;
+                          button.title = `收藏+下载完成:${categoryName}`;
                           restoreState();
                       },
                       (error) => {
@@ -448,13 +534,15 @@
           max-width: 400px;
       `;
 
+      const favcatOptionsHtml = favcats.map((_, i) => `<option value="${i}">${escapeHtml(getFavcatName(i))}</option>`).join('');
+
       bulkPanel.innerHTML = `
           <h3 style="margin: 0 0 15px 0; color: #333; font-size: 16px;">🎯 Bulk Gallery Operations</h3>
           
           <div style="margin-bottom: 15px;">
               <label style="display: block; margin-bottom: 5px; font-weight: bold;">Favorite Category:</label>
               <select id="bulk-favcat" style="width: 100%; padding: 5px; margin-bottom: 10px;">
-                  ${favcats.map((cat, i) => `<option value="${i}">${cat}</option>`).join('')}
+                  ${favcatOptionsHtml}
               </select>
           </div>
 
@@ -626,14 +714,14 @@
       `;
 
       // Add quick favorite buttons (all 10 categories)
-      const favButtons = favcats.map((cat, i) => {
+      const favButtons = favcats.map((_, i) => {
+          const categoryName = getFavcatName(i);
+          const label = getGalleryButtonLabel(i);
           const btn = document.createElement('button');
-          // Show category names or numbers based on setting
-          btn.textContent = HATH_CONFIG.showCategoryNames ? 
-              (cat.length > 4 ? cat.substring(0, 4) : cat) : 
-              i.toString();
-          btn.title = `Add to ${cat}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
-          btn.dataset.favcat = i;
+          btn.textContent = label;
+          btn.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
+          btn.dataset.favcat = String(i);
+          btn.dataset.originalLabel = label;
           btn.dataset.gid = gid;
           btn.dataset.token = token;
           btn.style.cssText = `
@@ -767,7 +855,9 @@
       }
 
       if (operation === 'favorite' || operation === 'both') {
-          const favcatId = document.getElementById('bulk-favcat').value;
+          const favcatSelect = document.getElementById('bulk-favcat');
+          const parsedFavcat = parseInt(favcatSelect ? favcatSelect.value : '0', 10);
+          const favcatId = Number.isInteger(parsedFavcat) ? parsedFavcat : 0;
           addToFavorites(gallery.gid, gallery.token, favcatId, () => {
               if (operation === 'both') {
                   // Also download
@@ -798,9 +888,11 @@
   }
 
   function handleOneClickFavoriteAndDownload(button, gid, token, favcatId) {
-      const originalText = button.textContent;
+      const categoryName = getFavcatName(favcatId);
+      const originalText = button.dataset.originalLabel || getGalleryButtonLabel(favcatId);
       button.textContent = '...';
       button.disabled = true;
+      button.title = `Adding to ${categoryName}...`;
 
       // First add to favorites
       addToFavorites(gid, token, favcatId, 
@@ -808,37 +900,41 @@
               // Favorite success, now download
               button.textContent = '✓';
               button.style.background = '#4CAF50';
+              button.title = `Added to ${categoryName}`;
               
               if (HATH_CONFIG.enabled) {
                   sendHathDownloadRequest(gid, token, window.location.hostname,
                       (downloadMessage) => {
                           button.textContent = '✓✓';
                           button.style.background = '#4CAF50';
-                          button.title = `Added to ${favcats[favcatId]} + Downloaded`;
+                          button.title = `Added to ${categoryName} + Downloaded`;
                           setTimeout(() => {
                               button.textContent = originalText;
                               button.style.background = '#2196F3';
                               button.disabled = false;
+                              button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
                           }, 3000);
                       },
                       (downloadError) => {
                           button.textContent = '✓!';
                           button.style.background = '#FF9800';
-                          button.title = `Added to ${favcats[favcatId]} but download failed`;
+                          button.title = `Added to ${categoryName} but download failed`;
                           setTimeout(() => {
                               button.textContent = originalText;
                               button.style.background = '#2196F3';
                               button.disabled = false;
+                              button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
                           }, 3000);
                       }
                   );
               } else {
                   // Download disabled, just show favorite success
-                  button.title = `Added to ${favcats[favcatId]}`;
+                  button.title = `Added to ${categoryName}`;
                   setTimeout(() => {
                       button.textContent = originalText;
                       button.style.background = '#2196F3';
                       button.disabled = false;
+                      button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
                   }, 2000);
               }
           },
@@ -846,38 +942,47 @@
               // Favorite failed
               button.textContent = '✗';
               button.style.background = '#f44336';
+              button.title = `Failed to add to ${categoryName}`;
               setTimeout(() => {
                   button.textContent = originalText;
                   button.style.background = '#2196F3';
                   button.disabled = false;
+                  button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
               }, 2000);
           }
       );
   }
 
   function handleQuickFavorite(button, gid, token) {
-      const favcatId = button.dataset.favcat;
-      const originalText = button.textContent;
+      const parsedFavcat = parseInt(button.dataset.favcat, 10);
+      const favcatId = Number.isInteger(parsedFavcat) ? parsedFavcat : 0;
+      const categoryName = getFavcatName(favcatId);
+      const originalText = button.dataset.originalLabel || getGalleryButtonLabel(favcatId);
       button.textContent = '...';
       button.disabled = true;
+      button.title = `Adding to ${categoryName}...`;
 
       addToFavorites(gid, token, favcatId, 
           () => {
               button.textContent = '✓';
               button.style.background = '#4CAF50';
+              button.title = `Added to ${categoryName}`;
               setTimeout(() => {
                   button.textContent = originalText;
                   button.style.background = '#2196F3';
                   button.disabled = false;
+                  button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
               }, 2000);
           },
           () => {
               button.textContent = '✗';
               button.style.background = '#f44336';
+              button.title = `Failed to add to ${categoryName}`;
               setTimeout(() => {
                   button.textContent = originalText;
                   button.style.background = '#2196F3';
                   button.disabled = false;
+                  button.title = `Add to ${categoryName}${HATH_CONFIG.oneClickMode ? ' + Download' : ''}`;
               }, 2000);
           }
       );
@@ -1229,6 +1334,18 @@
           box-shadow: 0 4px 20px rgba(0,0,0,0.3);
       `;
 
+      const favcatInputsHtml = favcats.map((name, index) => {
+          const displayIndex = String(index);
+          const value = escapeHtml(name);
+          const placeholder = escapeHtml(DEFAULT_FAVCATS[index] || '');
+          return `
+              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                  <span style="width: 22px; font-weight: bold;">${displayIndex}</span>
+                  <input type="text" class="favcat-input" data-favcat-index="${displayIndex}" value="${value}" placeholder="${placeholder}" style="flex: 1; padding: 4px; font-size: 12px; border: 1px solid #ccc; border-radius: 3px;">
+              </label>
+          `;
+      }).join('');
+
       panel.innerHTML = `
           <h3 style="margin-top: 0; color: #333;">H@H Download Configuration</h3>
           
@@ -1261,6 +1378,13 @@
                       <input type="checkbox" id="show-floating-button" ${HATH_CONFIG.showFloatingButton ? 'checked' : ''} style="margin-right: 5px;">
                       <span>Show floating reopen button (⚙️)</span>
                   </div>
+              </div>
+          </div>
+
+          <div style="margin-bottom: 15px;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">Category Labels:</label>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">
+                  ${favcatInputsHtml}
               </div>
           </div>
 
@@ -1347,11 +1471,24 @@
           HATH_CONFIG.xeHentaiApiKey = document.getElementById('xeHentai-key').value;
           HATH_CONFIG.customDownloadUrl = document.getElementById('custom-url').value;
           HATH_CONFIG.quality = document.getElementById('hath-quality').value;
+          const favcatInputs = Array.from(panel.querySelectorAll('.favcat-input'));
+          const updatedFavcats = [...favcats];
+          favcatInputs.forEach(input => {
+              const idx = parseInt(input.dataset.favcatIndex, 10);
+              if (Number.isInteger(idx) && idx >= 0 && idx < updatedFavcats.length) {
+                  const value = input.value.trim();
+                  updatedFavcats[idx] = value || DEFAULT_FAVCATS[idx] || '';
+              }
+          });
+          favcats = normalizeFavcats(updatedFavcats);
+          HATH_CONFIG.favcats = [...favcats];
           const batchDelayValue = parseInt(document.getElementById('batch-delay').value, 10);
           HATH_CONFIG.batchDelay = Number.isFinite(batchDelayValue) && batchDelayValue >= 0 ? batchDelayValue : DEFAULT_CONFIG.batchDelay;
           const maxConcurrentValue = parseInt(document.getElementById('max-concurrent').value, 10);
           HATH_CONFIG.maxConcurrent = Number.isFinite(maxConcurrentValue) && maxConcurrentValue > 0 ? maxConcurrentValue : DEFAULT_CONFIG.maxConcurrent;
           HATH_CONFIG.showDownloadStatus = document.getElementById('hath-status').checked;
+
+          refreshFavoriteLabels();
 
           // Save to storage (new + legacy keys)
           persistConfig();
