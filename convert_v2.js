@@ -117,7 +117,6 @@ function buildBaseLists({
     ...autoGroups,
     ...o,
     ...standardProxyNames,
-    PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.DIRECT,
   ]);
 
@@ -694,7 +693,7 @@ function buildProxyGroups({
       name: PROXY_GROUPS.DIRECT,
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Direct.png",
       type: "select",
-      proxies: ["DIRECT", PROXY_GROUPS.MANUAL],
+      proxies: ["DIRECT"],
     },
     {
       name: "AdBlock",
