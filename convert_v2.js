@@ -1,5 +1,5 @@
-// v2: tag-aware profile. [pro]/AI/residential/streaming nodes are kept out of
-// country auto groups and exposed through dedicated service pools/fallback groups.
+// v2: tag-aware profile. [pro]/AI/residential nodes are kept out of country
+// auto groups and exposed directly through the AI policy group.
 const NODE_SUFFIX = "";
 
 function parseBool(e) {
@@ -49,12 +49,6 @@ const PROXY_GROUPS = {
   FALLBACK: "Fallback",
   DIRECT: "Direct",
   CDN: "CDN",
-  AI_NODES: "AI Nodes",
-  RESIDENTIAL_NODES: "Residential Nodes",
-  STREAMING_NODES: "Streaming Nodes",
-  AI_FALLBACK: "AI Fallback",
-  YOUTUBE_FALLBACK: "YouTube Fallback",
-  NETFLIX_FALLBACK: "Netflix Fallback",
 };
 
 // 流量信息关键词：增加 “防丢”、“官方网站”
@@ -64,29 +58,13 @@ const TRAFFIC_KEYWORDS =
 const WHITELIST_KEYWORDS = /(赞助|Node|节点)/i;
 
 const AI_TAGS = ["ai", "openai", "chatgpt", "claude", "gemini", "copilot"];
-const PREMIUM_TAGS = ["pro", "premium", "vip", "plus"];
+const PREMIUM_TAGS = ["pro"];
 const RESIDENTIAL_TAGS = ["res", "home", "isp", "residential", "家宽"];
-const STREAMING_TAGS = [
-  "yt",
-  "youtube",
-  "nf",
-  "netflix",
-  "stream",
-  "streaming",
-  "media",
-  "disney",
-  "hbo",
-  "hulu",
-];
 
 const AI_NODE_KEYWORDS =
   /\b(AI|OpenAI|ChatGPT|Claude|Gemini|Copilot|Perplexity)\b|人工智能|智算/i;
-const PREMIUM_NODE_KEYWORDS =
-  /(专线|高级|倍率|高倍率|Premium|VIP|\bPlus\b|\bx(?:[2-9]|10)\b|[2-9](?:倍|x))/i;
 const RESIDENTIAL_NODE_KEYWORDS =
   /(家宽|家庭宽带|住宅|原生|Residential|Resident|ISP|Home)/i;
-const STREAMING_NODE_KEYWORDS =
-  /(YouTube|Netflix|Disney|HBO|Hulu|Prime Video|流媒体|解锁|媒体)/i;
 
 function uniqueList(items) {
   return [...new Set(items.filter(Boolean))];
@@ -112,7 +90,7 @@ function isAIProxyName(name) {
 }
 
 function isPremiumProxyName(name) {
-  return hasNodeTag(name, PREMIUM_TAGS) || PREMIUM_NODE_KEYWORDS.test(name);
+  return hasNodeTag(name, PREMIUM_TAGS);
 }
 
 function isResidentialProxyName(name) {
@@ -121,17 +99,12 @@ function isResidentialProxyName(name) {
   );
 }
 
-function isStreamingProxyName(name) {
-  return hasNodeTag(name, STREAMING_TAGS) || STREAMING_NODE_KEYWORDS.test(name);
-}
-
 function isStandardProxyName(name) {
   return (
     !isProProxyName(name) &&
     !isAIProxyName(name) &&
     !isPremiumProxyName(name) &&
-    !isResidentialProxyName(name) &&
-    !isStreamingProxyName(name)
+    !isResidentialProxyName(name)
   );
 }
 
@@ -566,10 +539,7 @@ function buildProxyGroups({
   const hasTW = t.includes("Taiwan"),
     hasHK = t.includes("Hong Kong");
 
-  const pools = Object.assign(
-    { ai: [], residential: [], streaming: [] },
-    nodePools,
-  );
+  const pools = Object.assign({ ai: [], residential: [] }, nodePools);
   const autoRefs = standardProxyNames.length > 0 ? [PROXY_GROUPS.AUTO] : [];
   const countryRefs = [
     "Hong Kong",
@@ -578,21 +548,6 @@ function buildProxyGroups({
     "United States",
     "Singapore",
   ].filter((country) => t.includes(country));
-
-  const aiFallbackRefs = uniqueList([
-    pools.ai.length > 0 ? PROXY_GROUPS.AI_NODES : null,
-    pools.residential.length > 0 ? PROXY_GROUPS.RESIDENTIAL_NODES : null,
-    PROXY_GROUPS.FALLBACK,
-  ]);
-  const hasAiFallback = aiFallbackRefs.length > 1;
-
-  const streamingFallbackRefs = uniqueList([
-    pools.streaming.length > 0 ? PROXY_GROUPS.STREAMING_NODES : null,
-    ...autoRefs,
-    ...countryRefs,
-    PROXY_GROUPS.FALLBACK,
-  ]);
-  const hasStreamingFallback = streamingFallbackRefs.length > 1;
 
   const groups = [
     {
@@ -631,33 +586,6 @@ function buildProxyGroups({
     );
   }
 
-  if (pools.ai.length > 0) {
-    groups.push({
-      name: PROXY_GROUPS.AI_NODES,
-      icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/chatgpt.png",
-      type: "select",
-      proxies: pools.ai,
-    });
-  }
-
-  if (pools.residential.length > 0) {
-    groups.push({
-      name: PROXY_GROUPS.RESIDENTIAL_NODES,
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Home.png",
-      type: "select",
-      proxies: pools.residential,
-    });
-  }
-
-  if (pools.streaming.length > 0) {
-    groups.push({
-      name: PROXY_GROUPS.STREAMING_NODES,
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
-      type: "select",
-      proxies: pools.streaming,
-    });
-  }
-
   groups.push(
     buildHealthCheckedGroup({
       name: PROXY_GROUPS.FALLBACK,
@@ -667,58 +595,9 @@ function buildProxyGroups({
     }),
   );
 
-  if (hasAiFallback) {
-    groups.push(
-      buildHealthCheckedGroup({
-        name: PROXY_GROUPS.AI_FALLBACK,
-        icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/chatgpt.png",
-        type: "fallback",
-        proxies: aiFallbackRefs,
-      }),
-    );
-  }
-
-  if (hasStreamingFallback) {
-    groups.push(
-      buildHealthCheckedGroup({
-        name: PROXY_GROUPS.YOUTUBE_FALLBACK,
-        icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
-        type: "fallback",
-        proxies: streamingFallbackRefs,
-      }),
-    );
-    groups.push(
-      buildHealthCheckedGroup({
-        name: PROXY_GROUPS.NETFLIX_FALLBACK,
-        icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png",
-        type: "fallback",
-        proxies: streamingFallbackRefs,
-      }),
-    );
-  }
-
+  const aiNodeCandidates = uniqueList([...pools.ai, ...pools.residential]);
   const aiDefaultProxies = uniqueList([
-    hasAiFallback ? PROXY_GROUPS.AI_FALLBACK : null,
-    pools.ai.length > 0 ? PROXY_GROUPS.AI_NODES : null,
-    pools.residential.length > 0 ? PROXY_GROUPS.RESIDENTIAL_NODES : null,
-    PROXY_GROUPS.FALLBACK,
-    PROXY_GROUPS.MANUAL,
-    PROXY_GROUPS.DIRECT,
-  ]);
-  const streamingDefaultProxies = uniqueList([
-    hasStreamingFallback ? PROXY_GROUPS.YOUTUBE_FALLBACK : null,
-    pools.streaming.length > 0 ? PROXY_GROUPS.STREAMING_NODES : null,
-    ...autoRefs,
-    ...countryRefs,
-    PROXY_GROUPS.FALLBACK,
-    PROXY_GROUPS.MANUAL,
-    PROXY_GROUPS.DIRECT,
-  ]);
-  const netflixDefaultProxies = uniqueList([
-    hasStreamingFallback ? PROXY_GROUPS.NETFLIX_FALLBACK : null,
-    pools.streaming.length > 0 ? PROXY_GROUPS.STREAMING_NODES : null,
-    ...autoRefs,
-    ...countryRefs,
+    ...aiNodeCandidates,
     PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.MANUAL,
     PROXY_GROUPS.DIRECT,
@@ -753,7 +632,7 @@ function buildProxyGroups({
       name: "YouTube",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
       type: "select",
-      proxies: streamingDefaultProxies,
+      proxies: n,
     },
     {
       name: "Bilibili",
@@ -768,7 +647,7 @@ function buildProxyGroups({
       name: "Netflix",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png",
       type: "select",
-      proxies: netflixDefaultProxies,
+      proxies: n,
     },
     {
       name: "Spotify",
@@ -869,10 +748,9 @@ function main(e) {
       (name) => isAIProxyName(name) || isPremiumProxyName(name),
     ),
     residential: realProxyNames.filter(isResidentialProxyName),
-    streaming: realProxyNames.filter(isStreamingProxyName),
   };
 
-  // 地区自动组只使用普通节点，避免 [pro]/AI/家宽/流媒体专用节点被自动选中。
+  // 地区自动组只使用普通节点，避免 [pro]/AI/家宽专用节点被自动选中。
   const standardProxyNames = realProxyNames.filter(isStandardProxyName);
 
   const t = { proxies: proxies };
