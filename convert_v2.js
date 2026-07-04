@@ -44,7 +44,6 @@ function getCountryGroupNames(e, t) {
 const PROXY_GROUPS = {
   ACCOUNT: "Account Info",
   MANUAL: "Proxies",
-  MANUAL_NODES: "Manual Nodes",
   AUTO: "Auto",
   FALLBACK: "Fallback",
   DIRECT: "Direct",
@@ -108,23 +107,34 @@ function isStandardProxyName(name) {
   );
 }
 
-function buildBaseLists({ countryGroupNames: o, hasAutoGroup: hasAutoGroup }) {
+function buildBaseLists({
+  countryGroupNames: o,
+  hasAutoGroup: hasAutoGroup,
+  standardProxyNames: standardProxyNames,
+}) {
   const autoGroups = hasAutoGroup ? [PROXY_GROUPS.AUTO] : [];
   const defaultProxies = uniqueList([
-    PROXY_GROUPS.FALLBACK,
     ...autoGroups,
     ...o,
-    PROXY_GROUPS.MANUAL_NODES,
+    ...standardProxyNames,
+    PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.DIRECT,
   ]);
 
   return {
     defaultProxies: defaultProxies,
     defaultProxiesDirect: uniqueList([PROXY_GROUPS.DIRECT, ...defaultProxies]),
-    defaultFallback: uniqueList([
-      PROXY_GROUPS.MANUAL_NODES,
+    defaultServiceProxies: uniqueList([
+      PROXY_GROUPS.MANUAL,
       ...autoGroups,
       ...o,
+      PROXY_GROUPS.FALLBACK,
+      PROXY_GROUPS.DIRECT,
+    ]),
+    defaultFallback: uniqueList([
+      ...autoGroups,
+      ...o,
+      PROXY_GROUPS.MANUAL,
       PROXY_GROUPS.DIRECT,
     ]),
   };
@@ -530,6 +540,7 @@ function buildProxyGroups({
   countryProxyGroups: o,
   defaultProxies: n,
   defaultProxiesDirect: s,
+  defaultServiceProxies: serviceProxies,
   defaultFallback: i,
   trafficNodes: trafficNodes,
   realProxyNames: realProxyNames,
@@ -555,12 +566,6 @@ function buildProxyGroups({
       icon: "https://fastly.jsdelivr.net/gh/shindgewongxj/WHATSINStash@master/icon/select.png",
       type: "select",
       proxies: n,
-    },
-    {
-      name: PROXY_GROUPS.MANUAL_NODES,
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png",
-      type: "select",
-      proxies: standardProxyNames.length > 0 ? standardProxyNames : ["DIRECT"],
     },
   ];
 
@@ -608,7 +613,7 @@ function buildProxyGroups({
       name: "CDN",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Cloudflare.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "AI",
@@ -620,19 +625,19 @@ function buildProxyGroups({
       name: "Telegram",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Telegram.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "Google",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "YouTube",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "Bilibili",
@@ -647,49 +652,49 @@ function buildProxyGroups({
       name: "Netflix",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "Spotify",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Spotify.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "Steam",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Steam.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "TikTok",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/TikTok.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "PikPak",
       icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/PikPak.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "Crypto",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Cryptocurrency_3.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: "SSH(port 22)",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png",
       type: "select",
-      proxies: n,
+      proxies: serviceProxies,
     },
     {
       name: PROXY_GROUPS.DIRECT,
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Direct.png",
       type: "select",
-      proxies: ["DIRECT", PROXY_GROUPS.MANUAL_NODES],
+      proxies: ["DIRECT", PROXY_GROUPS.MANUAL],
     },
     {
       name: "AdBlock",
@@ -760,10 +765,12 @@ function main(e) {
   const {
     defaultProxies: l,
     defaultProxiesDirect: i,
+    defaultServiceProxies: serviceProxies,
     defaultFallback: c,
   } = buildBaseLists({
     countryGroupNames: n,
     hasAutoGroup: standardProxyNames.length > 0,
+    standardProxyNames: standardProxyNames,
   });
   const p = buildCountryProxyGroups({
     countries: n,
@@ -775,6 +782,7 @@ function main(e) {
     countryProxyGroups: p,
     defaultProxies: l,
     defaultProxiesDirect: i,
+    defaultServiceProxies: serviceProxies,
     defaultFallback: c,
     trafficNodes: trafficNodes,
     realProxyNames: realProxyNames,
