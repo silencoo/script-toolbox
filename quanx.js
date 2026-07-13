@@ -1,4 +1,4 @@
-// author=KOP-XIAO; trojan-fix=codex-5.6 sol extra high
+// author=KOP-XIAO; custom-patch=codex-5.6 sol extra high
 /** 
 ☑️ 资源解析器 ©𝐒𝐡𝐚𝐰𝐧  ⟦2026-07-11 09:51⟧
 ----------------------------------------------------------
@@ -651,6 +651,8 @@ var Pmix = version>=844? 1 : 0 // allow rewrite and filter mix from version 844
 var Pjsonjq = version>=845? 0 : 1 // allow jsonjq from version 845
 var PNS=0 // 不支持的节点统计
 var NSList=["当前订阅内，不支持以下节点 ↘️ \n"] // 不支持节点列表
+var POriginalNodeCount=0
+var PFailedNodeCount=0
 
 var RegoutList= [] ;//用于 regout参数删选提醒
 // URL-Scheme 增加配置
@@ -695,17 +697,7 @@ function Profile_Handle() {
 //
 //流量信息
 //{bytes_used: 1073741824, bytes_remaining: 2147483648, expire_date: 1653193966}}
-var Finfo={}
-if (Pflow!=0) {
-  Pflow = Pflow.split(":")
-  var Bdate=Date.parse(new Date(Pflow[0]))/1000
-  var Btotal=Pflow[1]? Pflow[1]*1024*1024*1024 : 0
-  var Bused=Pflow[2]? Pflow[2]*1024*1024*1024 : 0
-  var Bremain=Btotal !=0 ? Btotal-Bused : 1
-  var BJson={bytes_used: Bused, bytes_remaining: Bremain, expire_date: Bdate}
-  //$notify("Flow","",JSON.strigify(BJson))
-  Finfo = BJson
-}
+var Finfo={bytes_used:0,bytes_remaining:10485760,expire_date:915148800}
 
 //STATUS=🚀↑:0.62GB,↓:15.1GB,TOT:200GB💡Expires:2026-08-02
 //status=🚀↑:0.83gb,↓:17.73gb,tot:200gb💡expires:2026-08-02
@@ -784,7 +776,7 @@ if (UARetry && !inRetry && version>920) {
 } else {
   if (typeof($resource)!=="undefined" && PProfile == 0) {
   Parser()
-  $done({ content: total, info: Finfo })
+  $done(typeQ=="server"?{content:total,info:Finfo}:{content:total})
 } else if (PProfile != 0) {
   try {
     Profile_Handle()
@@ -829,7 +821,7 @@ function Parser() {
   } else {
     total=""
   }
-    $done({ content: total });
+    $done(typeQ=="server"?{content:total,info:Finfo}:{content:total});
 }
 
 
@@ -984,7 +976,9 @@ function ResourceParse() {
       }
       total = para1.indexOf("node_index_prefix")!=-1 ?index_handle(total):total // 节点序号操作
       //$notify("before","haha",total)
-      total = TagCheck_QX(total).join("\n") //节点名检查
+      total = TagCheck_QX(total) //节点名检查
+      ParseReport(total.length)
+      total = total.join("\n")
       if (PUOT==1) { total = total.split("\n").map(UOT).join("\n")}
       if (Pcnt == 1 && total!=undefined) {$notify("⟦" + subtag + "⟧"+"解析后最终返回内容" , "节点数量: " +total.split("\n").length, total)}
       total = PRelay==""? Base64.encode(total) : ServerRelay(total.split("\n"),PRelay) //强制节点类型 base64 加密后再导入 Quantumult X, 如果是relay，则转换成分流类型
@@ -995,11 +989,7 @@ function ResourceParse() {
           $notify("⚠️ 存在 QuantumultX 不支持类型 ➟ ⟦"+subtag+"⟧", "⚠️ 已忽略相关节点，共计 ➟ "+PNS+" 条", "⚠️ 此版本暂不支持 Hysteria2/Tuic/Anytls 等类型, 以及 http-upgrade/xhttp/grpc/mkcp/h2” 等类型 vless\n\n"+NSList.join("\n"))
         }
       }
-      if(Pflow==1) {
-        //$notify("添加流量信息","xxx","xxxx")
-        $done({ content: total, info: {bytes_used: 3073741824, bytes_remaining: 2147483648, expire_date: 1854193966}});
-      //$notify("done?","strange")
-      } else { $done({ content: total });}
+      $done({content:total,info:Finfo});
     } else { // total length = 0
       if(Perror == 0) {
       if (PNS !=0) { // 全部为不支持类型节点
@@ -1068,6 +1058,20 @@ function flowcheck(cnt) {
   flow = flow? flow:"⚠️ 该订阅未返回任何流量信息"
   exptime = exptime? exptime:"⚠️ 该订阅未返回套餐时间信息"
     if (flow != "") { $notify("流量信息: ⟦" + subtag + "⟧", flow, exptime, subinfo_link1) }
+}
+
+function ParseReport(successCount) {
+  var originalCount=Math.max(POriginalNodeCount,successCount+PFailedNodeCount+PNS)
+  var failedCount=Math.max(PFailedNodeCount,originalCount-successCount-PNS)
+  var reportTag=subtag || $resource.tag || "未命名订阅"
+  $notify(
+    "订阅解析完成："+reportTag,
+    "节点数量："+successCount,
+    "原始节点："+originalCount+"\n"+
+    "成功转换："+successCount+"\n"+
+    "转换失败："+failedCount+"\n"+
+    "不支持节点："+PNS
+  )
 }
 
 // regex 后的检查
@@ -2432,6 +2436,12 @@ function Reality_Handle(cnt) {
 function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
   if (Pdbg) {$notify("subs", "node", subs)}
     var list0 = subs.split("\n");
+    if (POriginalNodeCount == 0) {
+      POriginalNodeCount = list0.filter(function(item) {
+        var line = item.trim()
+        return line.length > 3 && !/^[;\/#]/.test(line) && line.indexOf(" url ") == -1
+      }).length
+    }
     var QuanXK = ["shadowsocks=", "trojan=", "vmess=", "http=","socks5=", "vless=", "anytls="];
     var SurgeK = ["=ss,", "=vmess,", "=trojan,", "=http,", "=https,", "=custom,", "=socks5", "=socks5-tls","=anytls"];
     var LoonK = ["=Shadowsocks", "=ShadowsocksR", "=VLESS","=AnyTLS"]
@@ -2542,8 +2552,11 @@ function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
             }
         }
     }
-    if (failedList.length > 0 && Pntf0 != 0) {
-        $notify(`⚠️ 有 ${failedList.length} 条数据解析失败, 已忽略`, "出错内容👇", failedList.join("\n"));
+    if (failedList.length > 0) {
+        PFailedNodeCount=PFailedNodeCount+failedList.length
+        if (Pntf0 != 0) {
+          $notify(`⚠️ 有 ${failedList.length} 条数据解析失败, 已忽略`, "出错内容👇", failedList.join("\n"));
+        }
     }
     //$notify("QXList","check below content",QXlist)
     return QXlist;
@@ -4400,6 +4413,7 @@ function Clash2QX(cnt) {
     aa = aa.replace(new RegExp(patn[4][i], "gmi"),patn[0][i])
   }
   var bb = JSON.parse(aa).proxies
+  POriginalNodeCount=Math.max(POriginalNodeCount,bb.length)
   if (Pdbg==1) { $notify("After YAML Parse", "content", JSON.stringify(bb))}
   //console.log(bb)
   var nl = bb.length
@@ -4442,6 +4456,7 @@ function Clash2QX(cnt) {
       nodelist.push(node)
     } 
     }catch (e) {
+      PFailedNodeCount=PFailedNodeCount+1
       $notify(`⚠️该节点解析错误, 暂时已忽略处理`,`可点击通知并发送链接反馈至 bot`,JSON.stringify(node),bug_link )
       $notify(`⚠️错误内容如下`,`可复制错误内容到反馈 bot`,JSON.stringify(node)+"\n\n"+e)
     }
