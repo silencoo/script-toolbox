@@ -1,6 +1,25 @@
+// author=silencoo; profile-patch=codex-5.6 sol extra high
 // v2: tag-aware profile. [pro]/AI/residential nodes are kept out of country
 // auto groups and exposed directly through the AI policy group.
 const NODE_SUFFIX = "";
+const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
+const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
+
+function setProfileSubscriptionInfo() {
+  if (typeof $options !== "object" || !$options) return;
+  if (!$options._res || typeof $options._res !== "object") $options._res = {};
+  if (!$options._res.headers || typeof $options._res.headers !== "object") {
+    $options._res.headers = {};
+  }
+  $options._res.headers["subscription-userinfo"] = [
+    "upload=0",
+    "download=0",
+    "total=" + PROFILE_FAKE_TOTAL_BYTES,
+    "expire=" + PROFILE_FAKE_EXPIRE_TIMESTAMP
+  ].join("; ");
+  $options._res.headers["profile-web-page-url"] = null;
+  $options._res.headers["plan-name"] = null;
+}
 
 function parseBool(e) {
   return "boolean" == typeof e
@@ -728,6 +747,7 @@ function deduplicateProxies(proxies) {
 }
 
 function main(e) {
+  setProfileSubscriptionInfo();
   let proxies = e.proxies || [];
 
   // 去重处理：重复节点 name 自动加序号
