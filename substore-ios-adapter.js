@@ -28,7 +28,7 @@ function setFakeSubscriptionInfo() {
   }
   $options._res.headers["subscription-userinfo"] = [
     "upload=0",
-    "download=0",
+    "download=8388608",
     "total=" + FAKE_REMAINING_BYTES,
     "expire=" + FAKE_EXPIRE_TIMESTAMP
   ].join("; ");
