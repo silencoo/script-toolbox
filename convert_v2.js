@@ -13,7 +13,7 @@ function setProfileSubscriptionInfo() {
   }
   $options._res.headers["subscription-userinfo"] = [
     "upload=0",
-    "download=0",
+    "download=2097152",
     "total=" + PROFILE_FAKE_TOTAL_BYTES,
     "expire=" + PROFILE_FAKE_EXPIRE_TIMESTAMP
   ].join("; ");
