@@ -3,6 +3,22 @@
 const FAKE_REMAINING_BYTES = 10 * 1024 * 1024;
 const FAKE_EXPIRE_TIMESTAMP = 915148800;
 const TRAFFIC_NODE_PATTERN = /(剩余流量|流量剩余|套餐流量|已用流量|流量重置|重置日|到期时间|套餐到期|过期时间|订阅到期|更新订阅|订阅更新|官方网站|官网|防丢|下次重置|\b(?:traffic|usage|expire[sd]?|remaining|used|total)\b\s*[:：])/i;
+const FAKE_ACCOUNT_NODES = [
+  {
+    name: "剩余流量：10 MB",
+    type: "http",
+    server: "127.0.0.1",
+    port: 1,
+    udp: false
+  },
+  {
+    name: "到期时间：1999-01-01",
+    type: "http",
+    server: "127.0.0.1",
+    port: 2,
+    udp: false
+  }
+];
 
 function setFakeSubscriptionInfo() {
   if (typeof $options !== "object" || !$options) return;
@@ -23,17 +39,20 @@ function setFakeSubscriptionInfo() {
 function operator(proxies = [], targetPlatform, context) {
   setFakeSubscriptionInfo();
   const input = Array.isArray(proxies) ? proxies : [];
-  const output = input.filter((proxy) => {
+  const realNodes = input.filter((proxy) => {
     const name = proxy && proxy.name != null ? String(proxy.name) : "";
     return !TRAFFIC_NODE_PATTERN.test(name);
   });
+  const output = realNodes.concat(
+    FAKE_ACCOUNT_NODES.map((proxy) => Object.assign({}, proxy))
+  );
   if (typeof $substore === "object" && $substore && typeof $substore.info === "function") {
     $substore.info(
       "iOS adapter: input=" + input.length +
       ", output=" + output.length +
-      ", removed=" + (input.length - output.length)
+      ", removed=" + (input.length - realNodes.length) +
+      ", fake-account-nodes=" + FAKE_ACCOUNT_NODES.length
     );
   }
   return output;
 }
-
