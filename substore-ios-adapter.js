@@ -2,7 +2,7 @@
 
 const FAKE_REMAINING_BYTES = 10 * 1024 * 1024;
 const FAKE_EXPIRE_TIMESTAMP = 915148800;
-const TRAFFIC_NODE_PATTERN = /(剩余流量|流量剩余|套餐流量|已用流量|流量重置|重置日|到期时间|套餐到期|过期时间|订阅到期|更新订阅|订阅更新|官方网站|官网|防丢|\b(?:traffic|usage|expire[sd]?|remaining|used|total)\b\s*[:：])/i;
+const TRAFFIC_NODE_PATTERN = /(剩余流量|流量剩余|套餐流量|已用流量|流量重置|重置日|到期时间|套餐到期|过期时间|订阅到期|更新订阅|订阅更新|官方网站|官网|防丢|下次重置|\b(?:traffic|usage|expire[sd]?|remaining|used|total)\b\s*[:：])/i;
 
 function setFakeSubscriptionInfo() {
   if (typeof $options !== "object" || !$options) return;
