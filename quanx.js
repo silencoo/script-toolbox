@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.1.0";
   var QX_LINE_RE = /^\s*(shadowsocks|vmess|trojan|http|socks5)\s*=/i;
 
   function hasOwn(object, key) {
@@ -22,6 +22,120 @@
 
   function lower(value) {
     return String(value === undefined || value === null ? "" : value).toLowerCase();
+  }
+
+  function utf8Bytes(value) {
+    var text = String(value || "");
+    var bytes = [];
+    var i;
+    var code;
+    var next;
+    for (i = 0; i < text.length; i += 1) {
+      code = text.charCodeAt(i);
+      if (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.length) {
+        next = text.charCodeAt(i + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          code = ((code - 0xD800) << 10) + (next - 0xDC00) + 0x10000;
+          i += 1;
+        }
+      }
+      if (code < 0x80) {
+        bytes.push(code);
+      } else if (code < 0x800) {
+        bytes.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
+      } else if (code < 0x10000) {
+        bytes.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+      } else {
+        bytes.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+      }
+    }
+    return bytes;
+  }
+
+  function utf8String(bytes) {
+    var result = "";
+    var i = 0;
+    var first;
+    var code;
+    while (i < bytes.length) {
+      first = bytes[i];
+      if (first < 0x80) {
+        code = first;
+        i += 1;
+      } else if ((first & 0xE0) === 0xC0 && i + 1 < bytes.length) {
+        code = ((first & 0x1F) << 6) | (bytes[i + 1] & 0x3F);
+        i += 2;
+      } else if ((first & 0xF0) === 0xE0 && i + 2 < bytes.length) {
+        code = ((first & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F);
+        i += 3;
+      } else if ((first & 0xF8) === 0xF0 && i + 3 < bytes.length) {
+        code = ((first & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
+        i += 4;
+      } else {
+        code = 0xFFFD;
+        i += 1;
+      }
+      if (code <= 0xFFFF) {
+        result += String.fromCharCode(code);
+      } else {
+        code -= 0x10000;
+        result += String.fromCharCode(0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF));
+      }
+    }
+    return result;
+  }
+
+  function base64Encode(value) {
+    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var bytes = utf8Bytes(value);
+    var output = "";
+    var i;
+    var a;
+    var b;
+    var c;
+    for (i = 0; i < bytes.length; i += 3) {
+      a = bytes[i];
+      b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      output += alphabet.charAt(a >> 2);
+      output += alphabet.charAt(((a & 3) << 4) | (b >> 4));
+      output += i + 1 < bytes.length ? alphabet.charAt(((b & 15) << 2) | (c >> 6)) : "=";
+      output += i + 2 < bytes.length ? alphabet.charAt(c & 63) : "=";
+    }
+    return output;
+  }
+
+  function base64Decode(value) {
+    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var clean = String(value || "").replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    var bytes = [];
+    var i;
+    var a;
+    var b;
+    var c;
+    var d;
+    if (!clean || /[^A-Za-z0-9+/=]/.test(clean)) return null;
+    while (clean.length % 4) clean += "=";
+    for (i = 0; i < clean.length; i += 4) {
+      a = alphabet.indexOf(clean.charAt(i));
+      b = alphabet.indexOf(clean.charAt(i + 1));
+      c = clean.charAt(i + 2) === "=" ? 64 : alphabet.indexOf(clean.charAt(i + 2));
+      d = clean.charAt(i + 3) === "=" ? 64 : alphabet.indexOf(clean.charAt(i + 3));
+      if (a < 0 || b < 0 || c < 0 || d < 0) return null;
+      bytes.push((a << 2) | (b >> 4));
+      if (c < 64) bytes.push(((b & 15) << 4) | (c >> 2));
+      if (d < 64) bytes.push(((c & 3) << 6) | d);
+    }
+    return utf8String(bytes);
+  }
+
+  function decodedSubscription(value) {
+    var clean = String(value || "").replace(/\s+/g, "");
+    var decoded;
+    if (clean.length < 16 || /[^A-Za-z0-9+/_=-]/.test(clean)) return null;
+    decoded = base64Decode(clean);
+    if (!decoded || !/(?:proxies\s*:|trojan:\/\/|ss:\/\/|vmess:\/\/|shadowsocks=|trojan=|vmess=)/i.test(decoded)) return null;
+    return decoded;
   }
 
   function asBoolean(value, fallback) {
@@ -553,6 +667,97 @@
     return [];
   }
 
+  function decodeUriPart(value, plusAsSpace) {
+    var text = String(value || "");
+    if (plusAsSpace) text = text.replace(/\+/g, " ");
+    try {
+      return decodeURIComponent(text);
+    } catch (ignore) {
+      return text;
+    }
+  }
+
+  function uriQuery(value) {
+    var result = {};
+    var parts = String(value || "").split("&");
+    var i;
+    var index;
+    var key;
+    for (i = 0; i < parts.length; i += 1) {
+      if (!parts[i]) continue;
+      index = parts[i].indexOf("=");
+      key = lower(decodeUriPart(index === -1 ? parts[i] : parts[i].slice(0, index), true));
+      result[key] = decodeUriPart(index === -1 ? "" : parts[i].slice(index + 1), true);
+    }
+    return result;
+  }
+
+  function parseTrojanUri(value) {
+    var source = String(value || "").trim();
+    var body = source.slice(9);
+    var hashIndex = body.indexOf("#");
+    var tag = hashIndex === -1 ? "Trojan" : decodeUriPart(body.slice(hashIndex + 1), false);
+    var withoutHash = hashIndex === -1 ? body : body.slice(0, hashIndex);
+    var queryIndex = withoutHash.indexOf("?");
+    var authority = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+    var query = uriQuery(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+    var atIndex = authority.lastIndexOf("@");
+    var password;
+    var endpoint;
+    var host;
+    var port;
+    var closing;
+    var colon;
+    var network;
+    var node;
+    if (atIndex === -1) throw new Error("Trojan URI 缺少密码");
+    password = decodeUriPart(authority.slice(0, atIndex), false);
+    endpoint = authority.slice(atIndex + 1);
+    if (endpoint.charAt(0) === "[") {
+      closing = endpoint.indexOf("]");
+      if (closing === -1 || endpoint.charAt(closing + 1) !== ":") throw new Error("Trojan URI 地址无效");
+      host = endpoint.slice(1, closing);
+      port = endpoint.slice(closing + 2);
+    } else {
+      colon = endpoint.lastIndexOf(":");
+      if (colon === -1) throw new Error("Trojan URI 缺少端口");
+      host = endpoint.slice(0, colon);
+      port = endpoint.slice(colon + 1);
+    }
+    network = lower(query.type || query.network || "tcp");
+    node = {
+      name: tag || "Trojan",
+      type: "trojan",
+      server: decodeUriPart(host, false),
+      port: Number(port),
+      password: password,
+      sni: query.sni || query.peer || query.servername || query["server-name"] || "",
+      network: network,
+      udp: asBoolean(query.udp, false),
+      tfo: asBoolean(query.tfo || query["fast-open"], false),
+      "skip-cert-verify": asBoolean(query.allowinsecure || query.insecure || query["skip-cert-verify"], false)
+    };
+    if (network === "ws" || network === "websocket") {
+      node["ws-opts"] = {
+        path: query.path || "/",
+        headers: { Host: query.host || query.sni || query.peer || "" }
+      };
+    }
+    return node;
+  }
+
+  function parseUriNodes(content) {
+    var lines = String(content || "").replace(/\r\n?/g, "\n").split("\n");
+    var nodes = [];
+    var i;
+    var line;
+    for (i = 0; i < lines.length; i += 1) {
+      line = lines[i].trim();
+      if (/^trojan:\/\//i.test(line)) nodes.push(parseTrojanUri(line));
+    }
+    return nodes;
+  }
+
   function parseNodes(content) {
     var raw = String(content || "").replace(/^\uFEFF/, "");
     var trimmed = raw.trim();
@@ -603,6 +808,7 @@
   function convertResource(content) {
     var existing = qxLines(content);
     var nodes;
+    var decoded;
     var converted = [];
     var skipped = [];
     var seen = {};
@@ -615,6 +821,18 @@
     }
 
     nodes = parseNodes(content);
+    if (!nodes.length) nodes = parseUriNodes(content);
+    if (!nodes.length) {
+      decoded = decodedSubscription(content);
+      if (decoded) {
+        existing = qxLines(decoded);
+        if (existing.length) {
+          return { content: existing.join("\n"), converted: existing.length, skipped: [], version: VERSION };
+        }
+        nodes = parseNodes(decoded);
+        if (!nodes.length) nodes = parseUriNodes(decoded);
+      }
+    }
     if (!nodes.length) throw new Error("没有找到 Clash/Mihomo proxies 节点");
     uniqueTags(nodes);
 
@@ -656,7 +874,7 @@
           result.skipped.slice(0, 4).join("\n")
         );
       }
-      $done({ content: result.content });
+      $done({ content: base64Encode(result.content) });
     } catch (error) {
       $done({ error: "QX Clash Parser " + VERSION + ": " + error.message });
     }
@@ -667,7 +885,9 @@
       VERSION: VERSION,
       convertResource: convertResource,
       parseNodes: parseNodes,
-      convertNode: convertNode
+      convertNode: convertNode,
+      base64Encode: base64Encode,
+      base64Decode: base64Decode
     };
   }
 
