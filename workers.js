@@ -188,10 +188,12 @@ function formatMetric(value, digits = 0) {
 }
 
 function buildCandidateName(candidate) {
-  const parts = [candidate.source];
+  const isGenericPreferredSource = candidate.source === "ADDAPI";
+  const parts = isGenericPreferredSource ? [] : [candidate.source];
   if (candidate.carrier && candidate.carrier !== "ALL") {
     parts.push(candidate.carrier);
   }
+  if (isGenericPreferredSource) parts.push("Preferred");
   if (candidate.colo && candidate.colo !== "DEFAULT") parts.push(candidate.colo);
   if (candidate.speedMbps !== null) {
     parts.push(`${formatMetric(candidate.speedMbps, 1)} Mbps`);
