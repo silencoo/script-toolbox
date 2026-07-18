@@ -1,7 +1,13 @@
-# E-Hentai One-Click Multi-Favorite with H@H Download
+# E-Hentai Favorites & H@H Toolkit
 
 ## Overview
-Enhanced version of the E-Hentai One-Click Multi-Favorite userscript that automatically sends download requests to your Hentai@Home (H@H) client when adding comics to favorites.
+The unified userscript supports gallery listings, uploader pages, and gallery detail pages. It provides bulk favorites and can automatically send download requests to a Hentai@Home (H@H) client.
+
+## Scripts
+
+- [`ehentai-hath.user.js`](./ehentai-hath.user.js): current unified userscript
+- [`legacy/ehentai-gallery.user.js`](./legacy/ehentai-gallery.user.js): legacy gallery-listing script
+- [`legacy/ehentai-detail.user.js`](./legacy/ehentai-detail.user.js): legacy gallery-detail script
 
 ## New Features
 
@@ -63,7 +69,7 @@ Enhanced version of the E-Hentai One-Click Multi-Favorite userscript that automa
 ## Installation
 
 1. Install a userscript manager (Tampermonkey, Greasemonkey, etc.)
-2. Copy the contents of `ehentai_util.js`
+2. Open [`ehentai-hath.user.js`](./ehentai-hath.user.js) and copy its contents
 3. Create a new userscript and paste the code
 4. Save and enable the script
 
