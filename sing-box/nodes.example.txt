@@ -1,0 +1,10 @@
+# One anytls:// link per line.
+# Blank lines and full-line comments are ignored.
+# Inline comments are not supported because # is used as the node name fragment.
+
+anytls://replace-with-password@1.2.3.4:443?sni=www.apple.com&insecure=1#de-1
+anytls://replace-with-password@5.6.7.8:443?sni=www.apple.com&insecure=1#jp-1
+anytls://replace-with-password@hk.example.com:443?sni=www.apple.com&insecure=1#hk-1
+# anytls://replace-with-password@us.example.com:443?sni=www.apple.com&insecure=1#us-residential-1
+# anytls://replace-with-password@sg.example.com:443?sni=www.apple.com&insecure=1#Singapore-1
+# anytls://replace-with-password@tw.example.com:443?sni=www.apple.com&insecure=1#Taiwan-1

@@ -13,6 +13,9 @@ documentation so scripts can evolve without crowding the repository root.
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`agent/`](./agent/) | Setup scripts for AI coding agents that lose built-in tools when routed through third-party providers (e.g. Claude Code via MiniMax) |
+| [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
+| [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
+| [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 
 ## Raw URL changes
 
@@ -58,6 +61,13 @@ Shell scripts under `agent/` can be syntax-checked with:
 
 ```sh
 ./agent/test.sh
+```
+
+The standalone deployment scripts can be checked with:
+
+```sh
+bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh
+python3 sing-box/generate-client-config.py --help
 ```
 
 ## License
