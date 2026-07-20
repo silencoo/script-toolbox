@@ -16,6 +16,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
+| [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 
 ## Raw URL changes
 
@@ -66,7 +67,7 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh
+bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh
 python3 sing-box/generate-client-config.py --help
 ```
 
