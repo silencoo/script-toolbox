@@ -1,0 +1,28 @@
+name: Validate scripts
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check JavaScript syntax
+        run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Install Worker tooling
+        run: npm ci
+        working-directory: workers/cloudflare-vless
+      - name: Test Cloudflare VLESS Worker
+        run: npm test
+        working-directory: workers/cloudflare-vless
+      - name: Validate Worker bundle
+        run: npm run validate
+        working-directory: workers/cloudflare-vless

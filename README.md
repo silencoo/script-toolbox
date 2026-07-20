@@ -1,35 +1,44 @@
 # Scripts
 
-A collection of standalone proxy utilities and browser userscripts.
+A collection of standalone proxy utilities, Cloudflare Workers, and browser
+userscripts. Each tool lives with its own documentation so scripts can evolve
+without crowding the repository root.
 
-## Proxy utilities
+## Contents
 
-| Script | Purpose |
+| Directory | Tools |
 | --- | --- |
-| [`convert.js`](./convert.js) | Sub-Store profile conversion script |
-| [`convert-v2.js`](./convert-v2.js) | Tag-aware Sub-Store profile conversion script |
-| [`ios-adapter.js`](./ios-adapter.js) | Sub-Store iOS compatibility operator |
-| [`resource-parser.js`](./resource-parser.js) | Quantumult X resource parser |
-| [`workers.js`](./workers.js) | Cloudflare Worker that expands a VLESS URL with preferred Cloudflare IPs |
+| [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
+| [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
+| [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
+| [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 
-These files remain at the repository root so their raw GitHub URLs stay short.
+## Raw URL changes
 
-### Cloudflare node Worker
+Moving the scripts into categories changes their GitHub raw URLs:
 
-`workers.js` combines speed- and latency-ranked IPs from multiple optimization
-services, removes duplicates, and keeps the best measurement found for each IP.
-Pass an encoded VLESS URL in the Worker request path.
+| Previous path | New path |
+| --- | --- |
+| `convert.js` | `sub-store/convert.js` |
+| `convert_v2.js` | `sub-store/convert-v2.js` |
+| `substore-ios-adapter.js` | `sub-store/ios-adapter.js` |
+| `quanx.js` | `quantumult-x/resource-parser.js` |
+| `workers.js` | `workers/cloudflare-vless/worker.js` |
 
-Optional Worker query parameters:
+Update any subscriptions or deployments that use the old raw URLs after this
+change is merged.
 
-- `carrier=all|cm|cu|ct|cn` filters carrier-specific measurements.
-- `limit=50` controls the maximum number of generated preferred nodes (up to 100).
-- `minspeed=100` keeps only sources reporting at least that many Mbps.
-- `name` and `remark` control generated node names.
+## Validation
 
-Remote rankings describe the source's test network, so the final nodes should
-still be latency-tested from the connection where they will be used.
+JavaScript syntax and the Cloudflare Worker tests run automatically in GitHub
+Actions. The Worker tests can also be run locally with:
 
-## Browser userscripts
+```sh
+node --test workers/cloudflare-vless/worker.test.mjs
+```
 
-- [E-Hentai Favorites & H@H Toolkit](./userscripts/e-hentai/README.md)
+## License
+
+Original work in this repository is available under the [MIT License](./LICENSE).
+Third-party-derived files retain their existing notices; see
+[`NOTICE.md`](./NOTICE.md) for details.
