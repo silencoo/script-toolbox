@@ -2,8 +2,8 @@
 # agent/claude-code/setup.sh — point Claude Code at MiniMax (China by default).
 #
 # What it does:
-#   1. Installs Node.js if missing (NodeSource on Debian/Ubuntu, Homebrew on macOS, dnf on Fedora).
-#   2. Installs the Claude Code CLI (@anthropic-ai/claude-code) if missing.
+#   1. Installs Claude Code (Anthropic's native installer first; npm fallback if that fails).
+#   2. Installs Node.js 18+ so the npm fallback path is always available.
 #   3. Validates the API key against the MiniMax /v1/models endpoint (skipped with --skip-validate).
 #   4. Writes ~/.claude/settings.json with the MiniMax Anthropic-compatible base URL.
 #   5. Scrubs stale ANTHROPIC_* exports from ~/.zshrc / ~/.bashrc that would
@@ -204,13 +204,14 @@ install_node() {
 if command -v node >/dev/null 2>&1; then
   NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
   if [ "${NODE_MAJOR:-0}" -lt 18 ]; then
-    warn "Node.js $NODE_MAJOR detected - Claude Code needs 18+. Attempting install..."
+    warn "Node.js $NODE_MAJOR detected - the npm fallback path needs 18+. The native installer does not."
     install_node "$PM"
   else
-    ok "Node.js $(node --version) found"
+    ok "Node.js $(node --version) found (kept for the npm fallback path)"
   fi
 else
-  info "Node.js not found - installing..."
+  info "Node.js not found - will only be needed if the native Claude Code installer fails."
+  info "Installing anyway so the npm fallback is available…"
   install_node "$PM"
 fi
 
@@ -219,13 +220,38 @@ command -v npm  >/dev/null 2>&1 || die "npm not on PATH after install. Aborting.
 ok "Node.js $(node --version), npm $(npm --version)"
 
 # ---------- install Claude Code if needed ----------
+# Strategy (Anthropic's current recommendation is the native installer):
+#   1. If `claude` is already on PATH, skip everything.
+#   2. Try the native installer (`curl ... | bash` from claude.ai). No Node.js needed.
+#   3. If that fails (sandboxed env, network restriction, etc.), fall back to the
+#      npm path — which is why we still install Node.js below.
 if command -v claude >/dev/null 2>&1; then
   ok "Claude Code already installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
 else
-  info "Installing @anthropic-ai/claude-code globally..."
-  npm install -g @anthropic-ai/claude-code
-  command -v claude >/dev/null 2>&1 || die "claude CLI not on PATH after install. Check npm prefix -g."
-  ok "Claude Code installed"
+  info "Installing Claude Code via Anthropic's native installer..."
+  if curl -fsSL https://claude.ai/install.sh | bash; then
+    if command -v claude >/dev/null 2>&1; then
+      ok "Claude Code installed (native binary)"
+    else
+      warn "native installer exited 0 but 'claude' is not on PATH - falling back to npm"
+      NATIVE_FAILED=1
+    fi
+  else
+    warn "native installer failed (network blocked or sandbox?) - falling back to npm"
+    NATIVE_FAILED=1
+  fi
+
+  if [ "${NATIVE_FAILED:-0}" = 1 ]; then
+    # npm fallback path. Requires Node.js 18+ — we already installed it above.
+    if command -v npm >/dev/null 2>&1; then
+      info "Falling back to: npm install -g @anthropic-ai/claude-code"
+      npm install -g @anthropic-ai/claude-code
+      command -v claude >/dev/null 2>&1 || die "npm fallback also failed. Install Claude Code manually: https://claude.ai/download"
+      ok "Claude Code installed (via npm)"
+    else
+      die "native installer failed and npm is unavailable. Install Claude Code manually: https://claude.ai/download"
+    fi
+  fi
 fi
 echo
 

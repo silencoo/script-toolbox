@@ -1,5 +1,16 @@
 # Changelog — claude-code (agent)
 
+## 2026-07-20 — install strategy switched to native + npm fallback
+
+- Claude Code install: try `curl -fsSL https://claude.ai/install.sh | bash`
+  first (Anthropic's current recommendation); fall back to
+  `npm install -g @anthropic-ai/claude-code` if the native path fails
+  (network-blocked or sandboxed environments).
+- Node.js install: still happens, but only as a prerequisite for the npm
+  fallback. Wording adjusted so it's clear the native Claude Code binary
+  itself does not require Node.js.
+- Header comment and CHANGELOG updated accordingly.
+
 ## 2026-07-20 — initial migration into `agent/claude-code/`
 
 - Moved `setup-minimax-claude.sh` → `setup.sh`. Header comment updated to

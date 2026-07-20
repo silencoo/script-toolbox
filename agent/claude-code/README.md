@@ -5,7 +5,10 @@ web/docs MCP servers it loses when bypassing Anthropic's hosted tools.
 
 ## What this gives you
 
-1. Claude Code installed (Node 18+ + `@anthropic-ai/claude-code`).
+1. Claude Code installed — tries Anthropic's native installer first
+   (`curl https://claude.ai/install.sh | bash`); falls back to
+   `npm install -g @anthropic-ai/claude-code` if the native path fails
+   (sandboxed / network-blocked environments).
 2. `~/.claude/settings.json` pointed at `https://api.minimaxi.com/anthropic`
    with model `MiniMax-M3` (configurable).
 3. Web search via Brave, semantic search via Exa, live library docs via
