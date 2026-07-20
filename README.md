@@ -42,6 +42,8 @@ See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:
 
 - [`agent/claude-code/`](./agent/claude-code/) — Claude Code + MiniMax (China) + web/docs MCP servers.
+- [`agent/codex/`](./agent/codex/) — OpenAI Codex CLI + MiniMax (China) + web/docs MCP servers.
+- [`agent/opencode/`](./agent/opencode/) — OpenCode + MiniMax (China) + web/docs MCP servers.
 
 ## Validation
 
