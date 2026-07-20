@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================
-# Linux Server Toolkit v8.4 (All-in-One Edition)
+# Linux Server Initialization Script v8.5 (Audit Hardened Edition)
 #
 # README (Quick Guide)
 # - 适用系统: Debian 10+ / Ubuntu 20.04+
-# - 运行方式: sudo ./server-toolkit.sh
+# - 运行方式: sudo ./init.sh
 # - 核心功能: 初始化/换源/SSH/防火墙/Fail2ban/Swap/Docker/运行时管理
 # - 交互模式: 按用途进入九个功能分区
 #
@@ -13,10 +13,12 @@
 # - NON_INTERACTIVE=1  非交互模式（自动使用默认值）
 # - ALLOW_EXTERNAL=1   非交互模式允许外部下载
 # - ALLOW_REMOTE_EXEC=1 非交互模式允许执行远程脚本（比外部下载更高风险）
-# - ALLOW_DANGEROUS=1  非交互模式允许危险操作
+# - ALLOW_DANGEROUS=1  非交互模式允许危险操作；未固定摘要的远程脚本还需要此开关
 # - REMOTE_SCRIPT_SHA256=<sha256>  为本次远程脚本执行提供可信摘要
 # - REMOTE_SCRIPT_CHECKSUM_FILE=/root/init-remote-scripts.sha256  每行格式: SHA256 URL
-# - ALLOW_UNVERIFIED_REMOTE=1  显式允许未固定摘要的远程脚本（不推荐）
+# - ALLOW_UNVERIFIED_REMOTE=1  仅允许代码中显式标注的“未固定摘要”调用点（不推荐）
+# - ACTION_ROLLBACK_MODE=auto  动作失败后的文件回滚策略: auto/prompt/always/never
+# - RESOURCE_CHECK_STRICT=1  资源告警返回非零；默认仅告警并返回成功
 # - DRY_RUN=1          仅输出计划操作，不执行
 # - INIT_PROFILE=docker-host  按预设 Profile 生成计划/执行
 # - PROFILE_FILE=/path/profile.env  导入 Profile 文件
@@ -24,18 +26,18 @@
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 #
 # 使用示例:
-# - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1 ALLOW_DANGEROUS=1 ./server-toolkit.sh
-# - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 DRY_RUN=1 ./server-toolkit.sh
-# - PLAN_ONLY=1 INIT_PROFILE=docker-host ./server-toolkit.sh
-# - PROFILE_FILE=/root/init-profile-docker-host.env ./server-toolkit.sh
+# - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1 ALLOW_DANGEROUS=1 ./init.sh
+# - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 DRY_RUN=1 ./init.sh
+# - PLAN_ONLY=1 INIT_PROFILE=docker-host ./init.sh
+# - PROFILE_FILE=/root/init-profile-docker-host.env ./init.sh
 #
 # 注意:
 # - 本脚本会修改系统配置（/etc/ 等），请先备份重要数据
 # - 若系统启用安全策略或自定义 SSH 端口，请谨慎操作
+# - v8.5 不再安装全局 ERR trap；错误在动作边界捕获，并只回滚该动作新增的文件变更
 # ==============================================================
 
-set -euo pipefail  # 严格模式：遇到错误立即退出
-set -o errtrace    # 让 ERR trap 在函数/子 shell 中生效
+set -euo pipefail  # 严格模式；可预期失败必须由调用点显式捕获
 
 # --- 全局变量 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +48,9 @@ OS_ID=""
 OS_VERSION=""
 APT_UPDATED=false  # apt-get update 标记
 OPERATION_HISTORY=()  # 操作历史记录（用于回滚）
-ROLLBACK_ENABLED=true  # 是否启用回滚
+ROLLBACK_ENABLED="${ROLLBACK_ENABLED:-true}"  # true/false
+ACTION_ROLLBACK_MODE="${ACTION_ROLLBACK_MODE:-auto}"  # auto/prompt/always/never
+RESOURCE_CHECK_STRICT="${RESOURCE_CHECK_STRICT:-0}"  # 1=资源告警返回非零
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"  # 1=非交互模式
 ALLOW_EXTERNAL="${ALLOW_EXTERNAL:-0}"    # 1=非交互模式允许外部资源
 ALLOW_REMOTE_EXEC="${ALLOW_REMOTE_EXEC:-0}"  # 1=非交互模式允许执行远程脚本
@@ -59,6 +63,7 @@ EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permis
 REMOTE_SCRIPT_SHA256="${REMOTE_SCRIPT_SHA256:-}"
 REMOTE_SCRIPT_CHECKSUM_FILE="${REMOTE_SCRIPT_CHECKSUM_FILE:-/root/init-remote-scripts.sha256}"
 ALLOW_UNVERIFIED_REMOTE="${ALLOW_UNVERIFIED_REMOTE:-0}"
+DIR_TRANSACTION_DIR="${DIR_TRANSACTION_DIR:-/var/lib/init-script/transactions}"
 TEMP_FILES=()                            # 临时文件清理列表
 LAST_BACKUP_FILE=""                      # 最近一次备份文件路径
 OPERATION_TARGETS=()
@@ -134,6 +139,37 @@ log_warning() {
 log_error() {
     printf '%b\n' "${RED}[Error]${PLAIN} $*" >&2
     log "ERROR" "$*"
+}
+
+validate_runtime_modes() {
+    case "$EXTERNAL_TRUST_MODE" in
+        strict|standard|permissive) ;;
+        *)
+            log_error "无效的 EXTERNAL_TRUST_MODE: $EXTERNAL_TRUST_MODE"
+            return 1
+            ;;
+    esac
+    case "$ACTION_ROLLBACK_MODE" in
+        auto|prompt|always|never) ;;
+        *)
+            log_error "无效的 ACTION_ROLLBACK_MODE: $ACTION_ROLLBACK_MODE"
+            return 1
+            ;;
+    esac
+    case "$ROLLBACK_ENABLED" in
+        true|false) ;;
+        *)
+            log_error "无效的 ROLLBACK_ENABLED: $ROLLBACK_ENABLED（应为 true/false）"
+            return 1
+            ;;
+    esac
+    case "$RESOURCE_CHECK_STRICT" in
+        0|1) ;;
+        *)
+            log_error "无效的 RESOURCE_CHECK_STRICT: $RESOURCE_CHECK_STRICT（应为 0/1）"
+            return 1
+            ;;
+    esac
 }
 
 # --- 临时文件管理 ---
@@ -285,14 +321,18 @@ external_trust_allows_url() {
                 *) return 1 ;;
             esac
             ;;
-        permissive)
-            return 0
-            ;;
-        standard|*)
+        standard)
             case "$trust_level" in
                 unknown) return 1 ;;
                 *) return 0 ;;
             esac
+            ;;
+        permissive)
+            return 0
+            ;;
+        *)
+            # 配置值异常时失败关闭，避免拼写错误退化为 permissive。
+            return 1
             ;;
     esac
 }
@@ -450,6 +490,11 @@ confirm_remote_script_execution() {
 
     if [ "$NON_INTERACTIVE" = "1" ]; then
         if [ "$ALLOW_EXTERNAL" = "1" ] && [ "$ALLOW_REMOTE_EXEC" = "1" ]; then
+            if ! external_trust_allows_url "$url" && [ "$ALLOW_DANGEROUS" != "1" ]; then
+                log_warning "[非交互] 远程脚本被外部信任策略拒绝: $url"
+                log_warning "如确需越过当前策略，请显式设置 ALLOW_DANGEROUS=1"
+                return 1
+            fi
             log_warning "[非交互] 已允许执行远程脚本: $url"
             return 0
         fi
@@ -462,27 +507,39 @@ confirm_remote_script_execution() {
         return 1
     fi
 
-    confirm_dangerous_action "执行远程脚本: $description" "脚本将先下载到临时目录并记录 SHA256，再由 bash 执行。请确认来源可信。"
+    confirm_dangerous_action "执行远程脚本: $description" \
+        "脚本将先下载到私有临时文件，校验/记录 SHA256 后再执行。请确认来源可信。"
 }
 
-download_remote_script() {
-    local url="$1"
-    local dest="$2"
-    local description="$3"
+download_remote_script_with_policy() {
+    local pin_policy="$1" url="$2" dest="$3" description="$4"
+    local expected_sha="" script_sha=""
+
+    case "$pin_policy" in
+        required|allow-unverified) ;;
+        *) log_error "未知远程脚本摘要策略: $pin_policy"; return 1 ;;
+    esac
 
     if ! confirm_remote_script_execution "$url" "$description"; then
         return 1
     fi
 
-    local expected_sha=""
     expected_sha="$(remote_script_expected_sha256 "$url" 2>/dev/null || true)"
-    if [ -z "$expected_sha" ] && [ "$ALLOW_UNVERIFIED_REMOTE" != "1" ]; then
-        log_error "已拒绝未固定 SHA256 的远程脚本: $url"
-        log_error "请通过 REMOTE_SCRIPT_SHA256 或 root-only 的 $REMOTE_SCRIPT_CHECKSUM_FILE 提供可信摘要"
-        return 1
-    fi
     if [ -z "$expected_sha" ]; then
-        log_warning "正在执行未固定摘要的远程脚本（ALLOW_UNVERIFIED_REMOTE=1）"
+        if [ "$pin_policy" = "required" ]; then
+            log_error "该调用点要求固定 SHA256，已拒绝远程脚本: $url"
+            log_error "请通过 REMOTE_SCRIPT_SHA256 或 root-only 的 $REMOTE_SCRIPT_CHECKSUM_FILE 提供可信摘要"
+            return 1
+        fi
+        if [ "$ALLOW_UNVERIFIED_REMOTE" != "1" ]; then
+            log_error "该调用点允许显式例外，但未设置 ALLOW_UNVERIFIED_REMOTE=1: $url"
+            return 1
+        fi
+        if [ "$NON_INTERACTIVE" = "1" ] && [ "$ALLOW_DANGEROUS" != "1" ]; then
+            log_error "非交互执行未固定摘要的远程脚本还需要 ALLOW_DANGEROUS=1"
+            return 1
+        fi
+        log_warning "正在执行代码中显式标注、但未固定摘要的远程脚本"
     fi
 
     if ! fetch_file "$url" "$dest" "$description"; then
@@ -494,74 +551,117 @@ download_remote_script() {
         return 0
     fi
 
-    chmod 700 "$dest"
-    local script_sha
-    script_sha=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}' || true)
+    chmod 700 "$dest" || { rm -f -- "$dest"; return 1; }
+    script_sha="$(sha256sum "$dest" 2>/dev/null | awk '{print tolower($1)}')"
+    if [[ ! "$script_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
+        rm -f -- "$dest"
+        log_error "无法计算远程脚本 SHA256: $description"
+        return 1
+    fi
     if [ -n "$expected_sha" ] && [ "$script_sha" != "$expected_sha" ]; then
         rm -f -- "$dest"
         log_error "远程脚本 SHA256 不匹配: $description"
         return 1
     fi
     log_warning "远程脚本已下载: $dest"
-    [ -n "$script_sha" ] && log_warning "远程脚本 SHA256: $script_sha"
+    log_warning "远程脚本 SHA256: $script_sha"
 }
 
-run_remote_script() {
-    local url="$1"
-    local description="$2"
-    shift 2
-    local script_path
-    local cmd
+download_remote_script() {
+    download_remote_script_with_policy required "$@"
+}
+
+download_remote_script_unverified() {
+    download_remote_script_with_policy allow-unverified "$@"
+}
+
+run_remote_script_with_policy() {
+    local pin_policy="$1" url="$2" description="$3"
+    shift 3
+    local script_path status=0
 
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] 执行远程脚本: ${description}（实际下载和执行均已阻止）"
         return 0
     fi
 
-    script_path=$(mktemp "/tmp/init_remote_script.XXXXXX")
+    script_path="$(mktemp /tmp/init_remote_script.XXXXXX)" || return 1
     register_temp_file "$script_path"
-    if ! download_remote_script "$url" "$script_path" "$description"; then
+    if ! download_remote_script_with_policy "$pin_policy" "$url" "$script_path" "$description"; then
         return 1
     fi
 
-    cmd=$(shell_join bash "$script_path" "$@")
-    run_cmd "执行 $description" "$cmd"
+    if bash "$script_path" "$@"; then
+        return 0
+    else
+        status=$?
+    fi
+    log_error "执行 $description 失败 (退出码: $status)"
+    return "$status"
+}
+
+run_remote_script() {
+    run_remote_script_with_policy required "$@"
+}
+
+run_remote_script_unverified() {
+    run_remote_script_with_policy allow-unverified "$@"
+}
+
+run_remote_script_as_user_with_policy() {
+    local pin_policy="$1" url="$2" description="$3"
+    shift 3
+    local script_path status=0 target_user="${INSTALL_USER:-root}" target_home="${INSTALL_HOME:-/root}"
+
+    if [ "$DRY_RUN" = "1" ]; then
+        log_info "[DRY RUN] 以用户 $target_user 执行远程脚本: ${description}（实际下载和执行均已阻止）"
+        return 0
+    fi
+
+    script_path="$(mktemp /tmp/init_remote_script.XXXXXX)" || return 1
+    register_temp_file "$script_path"
+    if ! download_remote_script_with_policy "$pin_policy" "$url" "$script_path" "$description"; then
+        return 1
+    fi
+
+    if [ "$target_user" = "root" ]; then
+        if bash "$script_path" "$@"; then
+            return 0
+        else
+            status=$?
+        fi
+    else
+        # 由 root 打开已校验文件并通过 stdin 交给目标用户，避免 chown 后的校验-执行竞态。
+        if sudo -H -u "$target_user" \
+            env HOME="$target_home" USER="$target_user" LOGNAME="$target_user" \
+            bash -s -- "$@" < "$script_path"; then
+            return 0
+        else
+            status=$?
+        fi
+    fi
+    log_error "以用户 $target_user 执行 $description 失败 (退出码: $status)"
+    return "$status"
 }
 
 run_remote_script_as_user() {
-    local url="$1"
-    local description="$2"
-    shift 2
-    local script_path
-    local cmd
+    run_remote_script_as_user_with_policy required "$@"
+}
 
-    if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 以用户 ${INSTALL_USER:-root} 执行远程脚本: ${description}（实际下载和执行均已阻止）"
-        return 0
-    fi
-
-    script_path=$(mktemp "/tmp/init_remote_script.XXXXXX")
-    register_temp_file "$script_path"
-    if ! download_remote_script "$url" "$script_path" "$description"; then
-        return 1
-    fi
-
-    if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 以用户 ${INSTALL_USER:-root} 执行 $description: bash $script_path $*"
-        return 0
-    fi
-
-    if [ "$DRY_RUN" != "1" ] && [ "${INSTALL_USER:-root}" != "root" ]; then
-        chown "$INSTALL_USER:$INSTALL_USER" "$script_path" 2>/dev/null || true
-    fi
-
-    cmd=$(shell_join bash "$script_path" "$@")
-    run_as_user "$cmd"
+run_remote_script_as_user_unverified() {
+    run_remote_script_as_user_with_policy allow-unverified "$@"
 }
 
 # --- 原子文件写入与验证 ---
+# 有些合法配置文件允许为空，因此默认校验器只表示“调用方未要求格式校验”。
 validate_noop_candidate() {
     return 0
+}
+
+validate_nonempty_text_candidate() {
+    local candidate="$1"
+    [ -s "$candidate" ] || return 1
+    LC_ALL=C grep -q '[^[:space:]]' "$candidate"
 }
 
 validate_json_candidate() {
@@ -668,25 +768,186 @@ write_file_atomic() {
     atomic_install_file "$target" "$candidate" "$description" "$mode" "$owner" "$group" "$validator"
 }
 
-replace_directory_transactional() {
-    local target="$1" staged="$2" description="${3:-目录安装}" old=""
-    [ -d "$staged" ] || { log_error "$description 的暂存目录不存在: $staged"; return 1; }
-    if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 原子替换目录 $target ($description)"
-        return 0
-    fi
-    mkdir -p "$(dirname "$target")" || return 1
-    if [ -e "$target" ]; then
-        old="${target}.init-previous.$$"
-        [ ! -e "$old" ] || { log_error "旧版本暂存路径已存在: $old"; return 1; }
-        mv -- "$target" "$old" || return 1
-    fi
-    if ! mv -- "$staged" "$target"; then
-        [ -n "$old" ] && mv -- "$old" "$target" 2>/dev/null || true
+directory_transaction_journal_path() {
+    local target="$1" hash
+    hash="$(printf '%s' "$target" | sha256sum | awk '{print substr($1,1,24)}')"
+    printf '%s/%s.txn' "$DIR_TRANSACTION_DIR" "$hash"
+}
+
+write_directory_transaction_journal() {
+    local target="$1" old="$2" staged="$3" journal tmp
+    case "$DIR_TRANSACTION_DIR" in
+        /*) ;;
+        *) log_error "DIR_TRANSACTION_DIR 必须是绝对路径"; return 1 ;;
+    esac
+    mkdir -p "$DIR_TRANSACTION_DIR" || return 1
+    chmod 700 "$DIR_TRANSACTION_DIR" 2>/dev/null || true
+    journal="$(directory_transaction_journal_path "$target")"
+    tmp="$(mktemp "$DIR_TRANSACTION_DIR/.txn.XXXXXX")" || return 1
+    if ! printf '%s\n%s\n%s\n' "$target" "$old" "$staged" > "$tmp"; then
+        rm -f -- "$tmp"
         return 1
     fi
-    [ -n "$old" ] && rm -rf -- "$old"
-    log_info "$description 已安装到 $target"
+    chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+    mv -f -- "$tmp" "$journal" || { rm -f -- "$tmp"; return 1; }
+    sync -f "$DIR_TRANSACTION_DIR" 2>/dev/null || true
+    printf '%s' "$journal"
+}
+
+recover_directory_transaction_journal() {
+    local journal="$1" target="" old="" staged=""
+    [ -f "$journal" ] || return 0
+    {
+        IFS= read -r target || true
+        IFS= read -r old || true
+        IFS= read -r staged || true
+    } < "$journal"
+
+    case "$target:$old:$staged" in
+        /*:/*:/*) ;;
+        *) log_error "目录事务日志格式无效，已保留: $journal"; return 1 ;;
+    esac
+    [ "$target" != "/" ] || { log_error "拒绝恢复根目录事务: $journal"; return 1; }
+
+    if [ -e "$target" ]; then
+        # live target 存在：事务已完成，或尚未开始移动；隐藏目录均可清理。
+        [ -e "$old" ] && rm -rf -- "$old"
+        [ -e "$staged" ] && rm -rf -- "$staged"
+        rm -f -- "$journal"
+        log_warning "已清理完成或未开始的目录事务: $target"
+        return 0
+    fi
+    if [ -e "$old" ]; then
+        if mv -T -- "$old" "$target"; then
+            [ -e "$staged" ] && rm -rf -- "$staged"
+            rm -f -- "$journal"
+            log_warning "已从事务日志恢复目录: $target"
+            return 0
+        fi
+        log_error "目录事务恢复失败: $target"
+        return 1
+    fi
+    if [ -e "$staged" ]; then
+        # old 意外丢失时，暂存目录是完整准备好的新版本；优先恢复 live 路径。
+        if mv -T -- "$staged" "$target"; then
+            rm -f -- "$journal"
+            log_warning "旧目录缺失，已将完整暂存目录提升为 live target: $target"
+            return 0
+        fi
+    fi
+    log_error "目录事务无法自动恢复，已保留日志: $journal"
+    return 1
+}
+
+recover_pending_directory_transactions() {
+    local journal status=0
+    [ "$DRY_RUN" = "1" ] && return 0
+    [ -d "$DIR_TRANSACTION_DIR" ] || return 0
+    while IFS= read -r -d '' journal; do
+        recover_directory_transaction_journal "$journal" || status=1
+    done < <(find "$DIR_TRANSACTION_DIR" -maxdepth 1 -type f -name '*.txn' -print0 2>/dev/null)
+    return "$status"
+}
+
+atomic_exchange_paths() {
+    local left="$1" right="$2"
+    if mv --help 2>/dev/null | grep -q -- '--exchange'; then
+        if mv --exchange --no-copy -T -- "$left" "$right" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    if command -v python3 > /dev/null 2>&1; then
+        python3 - "$left" "$right" <<'PY_RENAMEAT2'
+import ctypes
+import os
+import sys
+
+AT_FDCWD = -100
+RENAME_EXCHANGE = 2
+left = os.fsencode(sys.argv[1])
+right = os.fsencode(sys.argv[2])
+libc = ctypes.CDLL(None, use_errno=True)
+try:
+    renameat2 = libc.renameat2
+except AttributeError:
+    raise SystemExit(1)
+renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+renameat2.restype = ctypes.c_int
+if renameat2(AT_FDCWD, left, AT_FDCWD, right, RENAME_EXCHANGE) != 0:
+    raise SystemExit(1)
+PY_RENAMEAT2
+        return $?
+    fi
+    return 1
+}
+
+replace_directory_transactional() {
+    local target="$1" staged="$2" description="${3:-目录安装}"
+    local parent base prepared old journal=""
+
+    [ -d "$staged" ] || { log_error "$description 的暂存目录不存在: $staged"; return 1; }
+    if [ "$DRY_RUN" = "1" ]; then
+        log_info "[DRY RUN] 事务式替换目录 $target ($description)"
+        return 0
+    fi
+
+    parent="$(dirname "$target")"
+    base="$(basename "$target")"
+    mkdir -p "$parent" || return 1
+    if [ -e "$target" ] && [ ! -d "$target" ]; then
+        log_error "目录安装目标不是目录: $target"
+        return 1
+    fi
+
+    # 先把新版本完整移动/复制到目标同一文件系统的隐藏目录；此阶段不触碰 live target。
+    prepared="$(mktemp -d "$parent/.${base}.init-stage.XXXXXX")" || return 1
+    rmdir "$prepared" || return 1
+    if ! mv -T -- "$staged" "$prepared"; then
+        rm -rf -- "$prepared"
+        log_error "$description 无法准备到目标文件系统"
+        return 1
+    fi
+
+    if [ ! -e "$target" ]; then
+        if ! mv -T -- "$prepared" "$target"; then
+            rm -rf -- "$prepared"
+            return 1
+        fi
+        log_info "$description 已安装到 $target"
+        return 0
+    fi
+
+    # Linux/文件系统支持时，交换两个目录名，live target 在整个过程始终存在。
+    if atomic_exchange_paths "$target" "$prepared"; then
+        rm -rf -- "$prepared" || log_warning "旧目录清理失败: $prepared"
+        log_info "$description 已通过原子目录交换安装到 $target"
+        return 0
+    fi
+
+    # 不支持 RENAME_EXCHANGE 时使用可恢复的两步 rename；持久化日志可跨进程/重启恢复。
+    old="$(mktemp -d "$parent/.${base}.init-previous.XXXXXX")" || { rm -rf -- "$prepared"; return 1; }
+    rmdir "$old" || { rm -rf -- "$prepared" "$old"; return 1; }
+    journal="$(write_directory_transaction_journal "$target" "$old" "$prepared")" || {
+        rm -rf -- "$prepared" "$old"
+        return 1
+    }
+
+    if ! mv -T -- "$target" "$old"; then
+        rm -f -- "$journal"
+        rm -rf -- "$prepared" "$old"
+        return 1
+    fi
+    if ! mv -T -- "$prepared" "$target"; then
+        mv -T -- "$old" "$target" 2>/dev/null || true
+        rm -f -- "$journal"
+        rm -rf -- "$prepared"
+        return 1
+    fi
+
+    rm -rf -- "$old" || log_warning "旧目录清理失败: $old"
+    rm -f -- "$journal"
+    sync -f "$parent" 2>/dev/null || true
+    log_info "$description 已通过可恢复事务安装到 $target"
 }
 
 # --- 文件块写入（支持更新/追加） ---
@@ -740,26 +1001,23 @@ error_exit() {
 
 # --- 进度显示函数 ---
 show_progress() {
-    local pid=$1
-    local message=$2
+    local pid="$1"
+    local message="$2"
     local spinner='-\|/'
     local i=0
 
-    # 显示进度（带 spinner）
     while kill -0 "$pid" 2>/dev/null; do
-        i=$(( (i+1) %4 ))
-        # 使用 echo -ne 替代 printf 以避免兼容性问题
-        echo -ne "\r${YELLOW}${message} ${spinner:$i:1}${PLAIN}"
+        i=$(( (i + 1) % 4 ))
+        printf '%b' "\r${YELLOW}${message} ${spinner:$i:1}${PLAIN}"
         sleep 0.2
     done
-    # 循环结束时不打印最终状态，交给调用者
 }
 
 # --- 执行命令并显示进度 ---
 execute_with_progress() {
-    local message=$1
+    local message="$1"
     shift
-    local cmd="$*"
+    local cmd="$*" pid status
 
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] $message: $cmd"
@@ -774,33 +1032,37 @@ execute_with_progress() {
         bash -o pipefail -c "$cmd" >> "$LOG_FILE" 2>&1 &
         ACTIVE_CHILD_IS_GROUP=false
     fi
-    local pid=$!
+    pid=$!
     ACTIVE_CHILD_PID="$pid"
     show_progress "$pid" "$message"
 
+    # wait 位于 if 条件中，本身不受 errexit 提前终止；这里显式保存子进程状态。
     if wait "$pid"; then
         ACTIVE_CHILD_PID=""
-        echo -e "\r${GREEN}${message} ✓${PLAIN}"
+        printf '\r%b\n' "${GREEN}${message} ✓${PLAIN}"
         return 0
     else
-        local status=$?
-        ACTIVE_CHILD_PID=""
-        echo -e "\r${RED}${message} ✗${PLAIN}"
-        echo -e "${RED}执行失败，错误日志:${PLAIN}"
-        echo -e "----------------------------------------"
-        tail -n 10 "$LOG_FILE"
-        echo -e "----------------------------------------"
-        return $status
+        status=$?
     fi
+    ACTIVE_CHILD_PID=""
+    printf '\r%b\n' "${RED}${message} ✗${PLAIN}" >&2
+    printf '%b\n' "${RED}执行失败，错误日志:${PLAIN}" >&2
+    printf '%s\n' '----------------------------------------' >&2
+    tail -n 10 "$LOG_FILE" >&2 || true
+    printf '%s\n' '----------------------------------------' >&2
+    return "$status"
 }
 
 execute_with_progress_argv() {
     local message="$1"
     shift
+    local pid rc
+
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] $message"
         return 0
     fi
+
     ensure_log_file || return 1
     if command -v setsid > /dev/null 2>&1; then
         setsid "$@" >> "$LOG_FILE" 2>&1 &
@@ -809,15 +1071,16 @@ execute_with_progress_argv() {
         "$@" >> "$LOG_FILE" 2>&1 &
         ACTIVE_CHILD_IS_GROUP=false
     fi
-    local pid=$!
+    pid=$!
     ACTIVE_CHILD_PID="$pid"
     show_progress "$pid" "$message"
     if wait "$pid"; then
         ACTIVE_CHILD_PID=""
         printf '\r%b\n' "${GREEN}${message} ✓${PLAIN}"
         return 0
+    else
+        rc=$?
     fi
-    local rc=$?
     ACTIVE_CHILD_PID=""
     printf '\r%b\n' "${RED}${message} ✗${PLAIN}" >&2
     tail -n 10 "$LOG_FILE" >&2 || true
@@ -825,7 +1088,6 @@ execute_with_progress_argv() {
 }
 
 # --- 操作确认函数 ---
-# --- 操作确认函数 (Improved) ---
 confirm_action() {
     local message=$1
     local default=${2:-"n"}  # 默认值: n (否)
@@ -848,18 +1110,18 @@ confirm_action() {
         prompt="[y/N]"
         default_desc="默认: N"
     fi
-
-    echo -ne "${YELLOW}${message} ${prompt}: ${PLAIN}"
+    
+    printf '%b' "${YELLOW}${message} ${prompt}: ${PLAIN}"
     IFS= read -r confirm
-
+    
     # Trim whitespace without interpreting quotes or backslashes.
     confirm=$(trim_whitespace "$confirm")
-
+    
     if [ -z "$confirm" ]; then
         confirm=$default
-        echo -e "\033[1A\033[K${YELLOW}${message} ${prompt}: ${GREEN}${default_desc} (自动选择)${PLAIN}"
+        printf '%b\n' "\033[1A\033[K${YELLOW}${message} ${prompt}: ${GREEN}${default_desc} (自动选择)${PLAIN}"
     fi
-
+    
     case "$confirm" in
         y|Y|yes|YES)
             return 0
@@ -882,16 +1144,16 @@ confirm_dangerous_action() {
         log_warning "[非交互] 已拒绝危险操作: $action"
         return 1
     fi
-    echo -e ""
-    echo -e "${RED}╔════════════════════════════════════════╗${PLAIN}"
-    echo -e "${RED}║  ⚠️  警告: 危险操作                    ║${PLAIN}"
-    echo -e "${RED}╚════════════════════════════════════════╝${PLAIN}"
-    echo -e "${YELLOW}操作: ${action}${PLAIN}"
-    echo -e "${YELLOW}说明: ${message}${PLAIN}"
-    echo -e ""
+    printf '%b\n' ""
+    printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
+    printf '%b\n' "${RED}║  ⚠️  警告: 危险操作                    ║${PLAIN}"
+    printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
+    printf '%b\n' "${YELLOW}操作: ${action}${PLAIN}"
+    printf '%b\n' "${YELLOW}说明: ${message}${PLAIN}"
+    printf '%b\n' ""
     read -r -p "${RED}确认执行此操作? (输入 'YES' 继续, 回车取消): ${PLAIN}" confirm
     if [ "$confirm" != "YES" ]; then
-        echo -e "${YELLOW}默认操作: 取消${PLAIN}"
+        printf '%b\n' "${YELLOW}默认操作: 取消${PLAIN}"
         log_warning "操作已取消"
         return 1
     fi
@@ -926,20 +1188,20 @@ confirm_external_resource() {
             return 1
         fi
     fi
-
-    echo -e ""
-    echo -e "${RED}╔════════════════════════════════════════╗${PLAIN}"
-    echo -e "${RED}║  ⚠️  警告: 正在访问外部资源              ║${PLAIN}"
-    echo -e "${RED}╚════════════════════════════════════════╝${PLAIN}"
-    echo -e "${YELLOW}说明: ${description}${PLAIN}"
-    echo -e "${YELLOW}地址: ${CYAN}${url}${PLAIN}"
-    echo -e "${YELLOW}信任级别: ${trust_level} (${EXTERNAL_TRUST_MODE})${PLAIN}"
-    echo -e "${YELLOW}建议: ${trust_advice}${PLAIN}"
-    echo -e ""
-    echo -e "此操作将从外部服务器下载脚本或配置。"
-    echo -e "请仔细检查 URL 是否为您信任的来源。"
-    echo -e ""
-
+    
+    printf '%b\n' ""
+    printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
+    printf '%b\n' "${RED}║  ⚠️  警告: 正在访问外部资源              ║${PLAIN}"
+    printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
+    printf '%b\n' "${YELLOW}说明: ${description}${PLAIN}"
+    printf '%b\n' "${YELLOW}地址: ${CYAN}${url}${PLAIN}"
+    printf '%b\n' "${YELLOW}信任级别: ${trust_level} (${EXTERNAL_TRUST_MODE})${PLAIN}"
+    printf '%b\n' "${YELLOW}建议: ${trust_advice}${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "此操作将从外部服务器下载脚本或配置。"
+    printf '%b\n' "请仔细检查 URL 是否为您信任的来源。"
+    printf '%b\n' ""
+    
     read -r -p "确认继续访问? [y/N]: " confirm
     case "$confirm" in
         y|Y|yes|YES)
@@ -957,13 +1219,13 @@ confirm_external_resource() {
 acquire_script_lock() {
     [ "$DRY_RUN" = "1" ] && return 0
     command -v flock > /dev/null 2>&1 || {
-        log_warning "系统缺少 flock，无法阻止 server-toolkit.sh 并发执行"
+        log_warning "系统缺少 flock，无法阻止 init.sh 并发执行"
         return 0
     }
     mkdir -p "$(dirname "$SCRIPT_LOCK_FILE")" || return 1
     exec 9>"$SCRIPT_LOCK_FILE"
     if ! flock -n 9; then
-        log_error "检测到另一个 server-toolkit.sh 实例正在运行: $SCRIPT_LOCK_FILE"
+        log_error "检测到另一个 init.sh 实例正在运行: $SCRIPT_LOCK_FILE"
         return 1
     fi
 }
@@ -989,15 +1251,15 @@ verify_installation() {
     local command=$2
     local expected_output=${3:-""}
     local version_flag=${4:-"--version"}
-
+    
     log_info "验证 $runtime 安装..."
-
+    
     # 检查命令是否存在
     if ! command -v "$command" > /dev/null 2>&1; then
         log_error "$runtime 安装验证失败: 命令 '$command' 不存在"
         return 1
     fi
-
+    
     # 检查版本（如果提供了期望输出）
     if [ -n "$expected_output" ]; then
         local actual_output
@@ -1013,7 +1275,7 @@ verify_installation() {
         version_output=$("$command" "$version_flag" 2>&1 | head -1)
         log_success "$runtime 安装验证通过: $version_output"
     fi
-
+    
     return 0
 }
 
@@ -1021,10 +1283,10 @@ verify_installation() {
 install_packages_batch() {
     local packages=("$@")
     local to_install=()
-
+    
     # 更新包列表（如果需要）
     update_apt_once || return 1
-
+    
     # 检查哪些包未安装
     log_info "检查已安装的包..."
     for package in "${packages[@]}"; do
@@ -1036,7 +1298,7 @@ install_packages_batch() {
             log_info "已安装: $pkg_name"
         fi
     done
-
+    
     # 批量安装
     if [ ${#to_install[@]} -gt 0 ]; then
         log_info "批量安装 ${#to_install[@]} 个包..."
@@ -1116,9 +1378,53 @@ rollback_last_operation() {
     discard_last_operation
 }
 
+rollback_operations_from() {
+    local start="${1:-0}" total idx rollback_count=0 failure_count=0
+    local -a old_types old_targets old_backups old_descriptions old_history
+    declare -A rolled_back=()
+
+    total="${#OPERATION_TARGETS[@]}"
+    [[ "$start" =~ ^[0-9]+$ ]] || return 1
+    [ "$start" -le "$total" ] || start="$total"
+    [ "$start" -lt "$total" ] || return 0
+
+    old_types=("${OPERATION_TYPES[@]}")
+    old_targets=("${OPERATION_TARGETS[@]}")
+    old_backups=("${OPERATION_BACKUPS[@]}")
+    old_descriptions=("${OPERATION_DESCRIPTIONS[@]}")
+    old_history=("${OPERATION_HISTORY[@]}")
+
+    for (( idx=total-1; idx>=start; idx-- )); do
+        if rollback_operation_at "$idx"; then
+            rolled_back["$idx"]=1
+            rollback_count=$((rollback_count + 1))
+        else
+            failure_count=$((failure_count + 1))
+        fi
+    done
+
+    OPERATION_TYPES=()
+    OPERATION_TARGETS=()
+    OPERATION_BACKUPS=()
+    OPERATION_DESCRIPTIONS=()
+    OPERATION_HISTORY=()
+    for (( idx=0; idx<total; idx++ )); do
+        if [ "$idx" -lt "$start" ] || [ "${rolled_back[$idx]:-0}" != "1" ]; then
+            OPERATION_TYPES+=("${old_types[$idx]}")
+            OPERATION_TARGETS+=("${old_targets[$idx]}")
+            OPERATION_BACKUPS+=("${old_backups[$idx]}")
+            OPERATION_DESCRIPTIONS+=("${old_descriptions[$idx]}")
+            OPERATION_HISTORY+=("${old_history[$idx]}")
+        fi
+    done
+
+    log_info "文件回滚结果: 成功 $rollback_count，失败 $failure_count"
+    [ "$failure_count" -eq 0 ]
+}
+
 # --- 回滚函数 ---
 rollback() {
-    if [ ${#OPERATION_TARGETS[@]} -eq 0 ]; then
+    if [ "${#OPERATION_TARGETS[@]}" -eq 0 ]; then
         log_warning "没有可回滚的操作"
         return 0
     fi
@@ -1131,7 +1437,6 @@ rollback() {
     log_warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_warning "开始回滚操作..."
     log_warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
     log_warning "即将回滚以下操作:"
     local idx
     for (( idx=0; idx<${#OPERATION_TARGETS[@]}; idx++ )); do
@@ -1143,63 +1448,54 @@ rollback() {
         return 1
     fi
 
-    local rollback_count=0
-    # 反向遍历（后进先出）
-    for (( idx=${#OPERATION_TARGETS[@]}-1; idx>=0; idx-- )); do
-        if rollback_operation_at "$idx"; then
-            rollback_count=$((rollback_count + 1))
-        fi
-    done
-
-    log_success "回滚完成: 恢复了 $rollback_count 个文件"
-    OPERATION_HISTORY=()
-    OPERATION_TYPES=()
-    OPERATION_TARGETS=()
-    OPERATION_BACKUPS=()
-    OPERATION_DESCRIPTIONS=()
+    if rollback_operations_from 0; then
+        log_success "回滚完成"
+        return 0
+    fi
+    log_error "部分文件回滚失败；失败项已保留在回滚账本中"
+    return 1
 }
 
 # --- 网络连接检查 ---
 check_network() {
-    log_info "=== 网络连接诊断 ==="
-
-    # 1. IP Address
-    local ipv4=$(curl -s4m 5 https://api.ip.sb/ip || echo "N/A")
-    local ipv6=$(curl -s6m 5 https://api.ip.sb/ip || echo "N/A")
-    echo -e "IPv4: ${GREEN}${ipv4}${PLAIN}"
-    echo -e "IPv6: ${GREEN}${ipv6}${PLAIN}"
-
-    # 2. Connectivity Targets
-    local targets=(
+    local ipv4 ipv6 target url name result http_code time_total latency
+    local -a targets=(
         "www.google.com|Google"
         "github.com|GitHub"
         "www.baidu.com|Baidu"
         "1.1.1.1|Cloudflare DNS"
     )
 
-    echo -e "\n连通性测试:"
-    printf "%-15s %-10s %-10s\n" "目标" "状态" "延迟"
+    log_info "=== 网络连接诊断 ==="
+    ipv4="$(curl -fsS4 --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
+        'https://api.ip.sb/ip' 2>/dev/null || printf 'N/A')"
+    ipv6="$(curl -fsS6 --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
+        'https://api.ip.sb/ip' 2>/dev/null || printf 'N/A')"
+    printf '%b\n' "IPv4: ${GREEN}${ipv4}${PLAIN}"
+    printf '%b\n' "IPv6: ${GREEN}${ipv6}${PLAIN}"
 
+    printf '\n%s\n' '连通性测试:'
+    printf '%-18s %-10s %-10s\n' '目标' '状态' '延迟'
     for target in "${targets[@]}"; do
-        local url=$(echo "$target" | cut -d'|' -f1)
-        local name=$(echo "$target" | cut -d'|' -f2)
+        IFS='|' read -r url name <<< "$target"
+        result="$(curl -o /dev/null -sS -w '%{http_code} %{time_total}' \
+            --connect-timeout 2 --max-time 5 "https://${url}" 2>/dev/null)" || \
+        result="$(curl -o /dev/null -sS -w '%{http_code} %{time_total}' \
+            --connect-timeout 2 --max-time 5 "http://${url}" 2>/dev/null)" || result=""
 
-        # Use curl to get write_out variables for latency
-        local result=$(curl -o /dev/null -s -w "%{http_code} %{time_total}" --connect-timeout 2 "https://$url" 2>/dev/null || curl -o /dev/null -s -w "%{http_code} %{time_total}" --connect-timeout 2 "http://$url" 2>/dev/null)
-
-        if [ -n "$result" ]; then
-            local http_code=$(echo "$result" | awk '{print $1}')
-            local time_total=$(echo "$result" | awk '{print $2}')
-            # Convert to ms
-            local latency=$(awk "BEGIN {printf \"%.0f\", $time_total * 1000}")
-
+        http_code=""
+        time_total=""
+        [ -n "$result" ] && read -r http_code time_total <<< "$result"
+        if [[ "$http_code" =~ ^[0-9]{3}$ ]] && \
+           [[ "$time_total" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            latency="$(awk -v seconds="$time_total" 'BEGIN {printf "%.0f", seconds * 1000}')"
             if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 400 ]; then
-                 printf "%-15s ${GREEN}%-10s${PLAIN} %-10s\n" "$name" "OK" "${latency}ms"
+                printf "%-18s ${GREEN}%-10s${PLAIN} %-10s\n" "$name" 'OK' "${latency}ms"
             else
-                 printf "%-15s ${RED}%-10s${PLAIN} %-10s\n" "$name" "Fail" "-"
+                printf "%-18s ${RED}%-10s${PLAIN} %-10s\n" "$name" 'Fail' "HTTP $http_code"
             fi
         else
-            printf "%-15s ${RED}%-10s${PLAIN} %-10s\n" "$name" "Fail" "Timeout"
+            printf "%-18s ${RED}%-10s${PLAIN} %-10s\n" "$name" 'Fail' 'Timeout'
         fi
     done
 }
@@ -1208,12 +1504,12 @@ check_network() {
 validate_config() {
     local config_file=$1
     local config_type=$2
-
+    
     if [ ! -f "$config_file" ]; then
         log_error "配置文件不存在: $config_file"
         return 1
     fi
-
+    
     case "$config_type" in
         ssh)
             log_info "验证 SSH 配置..."
@@ -1276,51 +1572,47 @@ validate_config() {
 
 # --- 系统资源检查 ---
 check_system_resources() {
-    local min_disk_gb=5
-    local min_memory_mb=512
-    local warnings=0
+    local min_disk_gb=5 min_memory_mb=512 warnings=0
+    local available_disk available_memory cpu_cores
 
     log_info "检查系统资源..."
-
-    # 检查磁盘空间
-    local available_disk=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//' 2>/dev/null || echo "0")
-    if [ -n "$available_disk" ] && [ "$available_disk" -lt "$min_disk_gb" ] 2>/dev/null; then
-        log_error "磁盘空间不足: 需要至少 ${min_disk_gb}GB，当前可用 ${available_disk}GB"
+    available_disk="$(df -BG / 2>/dev/null | awk 'NR==2 {gsub(/G/, "", $4); print $4}' || printf '0')"
+    available_disk="${available_disk:-0}"
+    if [[ "$available_disk" =~ ^[0-9]+$ ]] && [ "$available_disk" -lt "$min_disk_gb" ]; then
+        log_error "磁盘空间不足: 建议至少 ${min_disk_gb}GB，当前可用 ${available_disk}GB"
         warnings=$((warnings + 1))
     else
-        log_success "磁盘空间充足: ${available_disk}GB 可用"
+        log_success "磁盘空间: ${available_disk}GB 可用"
     fi
 
-    # 检查内存
-    local available_memory=$(free -m | awk 'NR==2 {print $7}' 2>/dev/null || echo "0")
-    if [ -n "$available_memory" ] && [ "$available_memory" -lt "$min_memory_mb" ] 2>/dev/null; then
+    available_memory="$(free -m 2>/dev/null | awk 'NR==2 {print $7}' || printf '0')"
+    available_memory="${available_memory:-0}"
+    if [[ "$available_memory" =~ ^[0-9]+$ ]] && [ "$available_memory" -lt "$min_memory_mb" ]; then
         log_warning "可用内存较少: 建议至少 ${min_memory_mb}MB，当前可用 ${available_memory}MB"
         warnings=$((warnings + 1))
     else
-        log_success "内存充足: ${available_memory}MB 可用"
+        log_success "内存: ${available_memory}MB 可用"
     fi
 
-    # 检查 CPU
-    local cpu_cores=$(nproc 2>/dev/null || echo "1")
-    if [ "$cpu_cores" -lt 2 ]; then
+    cpu_cores="$(nproc 2>/dev/null || printf '1')"
+    if [[ "$cpu_cores" =~ ^[0-9]+$ ]] && [ "$cpu_cores" -lt 2 ]; then
         log_warning "CPU 核心数较少: 当前 $cpu_cores 核，某些编译操作可能较慢"
     else
-        log_success "CPU: $cpu_cores 核心"
+        log_success "CPU: ${cpu_cores:-unknown} 核心"
     fi
 
-    if [ $warnings -gt 0 ]; then
-        log_warning "发现 $warnings 个资源警告，建议检查系统资源"
-        return 1
+    if [ "$warnings" -gt 0 ]; then
+        log_warning "发现 $warnings 个资源告警"
+        [ "$RESOURCE_CHECK_STRICT" = "1" ] && return 1
     fi
-
     return 0
 }
 
 # --- 基础检查 ---
 check_root() {
     if [ $EUID -ne 0 ]; then
-        echo -e "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}"
-        echo -e "${YELLOW}请使用 sudo 运行: sudo $0${PLAIN}"
+        printf '%b\n' "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}"
+        printf '%b\n' "${YELLOW}请使用 sudo 运行: sudo $0${PLAIN}"
         exit 1
     fi
 }
@@ -1332,11 +1624,11 @@ check_os() {
     source /etc/os-release
     OS_ID="$ID"
     OS_VERSION="$VERSION_ID"
-
+    
     if [[ "$OS_ID" != "debian" && "$OS_ID" != "ubuntu" ]]; then
         error_exit "此脚本仅支持 Debian 和 Ubuntu 系统"
     fi
-
+    
     log_info "检测到系统: $OS_ID $OS_VERSION"
 }
 
@@ -1428,17 +1720,17 @@ enable_and_restart_service() {
 # --- 模块: 换源 (增强版) ---
 function action_change_mirrors() {
     log_info "正在备份原配置并更换为阿里云源..."
-
+    
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] 将重写 /etc/apt/sources.list"
         return 0
     fi
-
+    
     source /etc/os-release
-
+    
     # 检测架构
     local arch=$(dpkg --print-architecture)
-
+    
     if [ "$ID" == "debian" ]; then
         # Debian 源配置
         local codename=$(lsb_release -cs)
@@ -1459,7 +1751,7 @@ EOF
     else
         error_exit "不支持的操作系统: $ID"
     fi
-
+    
     log_success "换源完成 (架构: $arch)"
 }
 
@@ -1467,7 +1759,7 @@ EOF
 function action_install_essentials() {
     log_info "安装运维必备工具..."
     export DEBIAN_FRONTEND=noninteractive
-
+    
     # 更新包列表（统一管理）
     # 基础工具
     local packages=(
@@ -1477,7 +1769,7 @@ function action_install_essentials() {
         ufw fail2ban unattended-upgrades
         apt-transport-https
     )
-
+    
     # 批量安装（优化版）
     install_packages_batch "${packages[@]}" || return 1
 
@@ -1486,11 +1778,11 @@ function action_install_essentials() {
     execute_with_progress_argv "安装 software-properties-common" \
         apt-get -o DPkg::Lock::Timeout=120 -y install software-properties-common || \
         log_warning "software-properties-common 安装失败 (非关键错误)"
-
-
+    
+    
     # 时区设置
     run_command "设置时区为 Asia/Shanghai" timedatectl set-timezone Asia/Shanghai || log_warning "时区设置失败"
-
+    
     # 时间同步（优先使用 systemd-timesyncd）
     if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
         run_command "启用 systemd-timesyncd" systemctl enable systemd-timesyncd || return 1
@@ -1500,19 +1792,19 @@ function action_install_essentials() {
             run_command "同步系统时间" ntpdate pool.ntp.org || log_warning "时间同步失败"
         fi
     fi
-
+    
     log_success "基础环境安装完毕"
 }
 
 # --- 模块: 系统优化 (增强版) ---
 function action_optimize_system() {
     log_info "系统内核优化..."
-
+    
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] 将重写 /etc/sysctl.conf 并应用 sysctl -p"
         return 0
     fi
-
+    
     # 检查 BBR 支持
     local bbr_available=false
     if modprobe tcp_bbr 2>/dev/null; then
@@ -1521,7 +1813,7 @@ function action_optimize_system() {
     else
         log_warning "当前内核不支持 BBR，将使用其他拥塞控制算法"
     fi
-
+    
     # 生成优化的 sysctl 配置
     local congestion_control="cubic"
     [ "$bbr_available" = true ] && congestion_control="bbr"
@@ -1561,9 +1853,9 @@ net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.send_redirects = 0
 EOF
-
+    
     run_command "应用 sysctl 配置" sysctl --system || log_warning "部分 sysctl 参数应用失败"
-
+    
     # limits 配置
     local limits_block="* soft nofile 65535
 * hard nofile 65535
@@ -1572,7 +1864,7 @@ EOF
 root soft nofile 65535
 root hard nofile 65535"
     ensure_block_in_file "/etc/security/limits.conf" "### INIT.SH LIMITS BEGIN" "### INIT.SH LIMITS END" "$limits_block"
-
+    
     # Shell 别名
     local alias_block="alias ll='ls -alF'
 alias la='ls -A'
@@ -1584,19 +1876,19 @@ alias grep='grep --color=auto'
 alias df='df -h'
 alias du='du -h'"
     ensure_block_in_file "$HOME/.bashrc" "### INIT.SH ALIASES BEGIN" "### INIT.SH ALIASES END" "$alias_block"
-
+    
     log_success "系统内核优化完成"
 }
 
 # --- 模块: 防火墙配置 (新增) ---
 function action_configure_firewall() {
     log_info "配置防火墙 (UFW)..."
-
+    
     if ! command -v ufw > /dev/null 2>&1; then
         log_warning "UFW 未安装，跳过防火墙配置"
         return 1
     fi
-
+    
     local ssh_port allow_web
     ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
     ssh_port="${ssh_port:-22}"
@@ -1606,7 +1898,7 @@ function action_configure_firewall() {
     run_command "设置 UFW 默认出站策略" ufw default allow outgoing || return 1
     run_command "允许 SSH 端口 $ssh_port" ufw allow "$ssh_port/tcp" comment SSH || return 1
     log_info "已允许 SSH 端口: $ssh_port"
-
+    
     # 询问是否允许常用端口
     read -r -p "是否允许 HTTP(80) 和 HTTPS(443) 端口? [y/n]: " allow_web
     case "$allow_web" in
@@ -1616,11 +1908,11 @@ function action_configure_firewall() {
             log_success "已允许 HTTP/HTTPS 端口"
             ;;
     esac
-
+    
     # 启用防火墙
     run_command "启用 UFW" ufw --force enable || return 1
     log_success "防火墙已启用"
-
+    
     # 显示状态
     [ "$DRY_RUN" = "1" ] || ufw status numbered
 }
@@ -1628,17 +1920,17 @@ function action_configure_firewall() {
 # --- 模块: Fail2ban 配置 (新增) ---
 function action_configure_fail2ban() {
     log_info "配置 Fail2ban..."
-
+    
     if ! command -v fail2ban-client > /dev/null 2>&1; then
         log_info "Fail2ban 未安装，正在安装..."
         install_packages_batch "fail2ban"
-
+        
         if ! command -v fail2ban-client > /dev/null 2>&1; then
              log_error "Fail2ban 安装失败"
              return 1
         fi
     fi
-
+    
     # Detect SSH port
     local ssh_port
     ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
@@ -1655,7 +1947,7 @@ maxretry = 5
 bantime = 3600
 findtime = 600
 EOF
-
+    
     if enable_and_restart_service fail2ban; then
         log_success "Fail2ban 配置完成并已启动"
     else
@@ -1667,7 +1959,7 @@ EOF
 # --- 模块: 自动更新配置 (新增) ---
 function action_configure_auto_updates() {
     log_info "配置自动安全更新..."
-
+    
     if ! command -v unattended-upgrades > /dev/null 2>&1; then
         log_warning "unattended-upgrades 未安装，跳过配置"
         return
@@ -1677,7 +1969,7 @@ function action_configure_auto_updates() {
         log_info "[DRY RUN] 将写入 /etc/apt/apt.conf.d/50unattended-upgrades 和 /etc/apt/apt.conf.d/20auto-upgrades"
         return 0
     fi
-
+    
     write_file_atomic /etc/apt/apt.conf.d/50unattended-upgrades "unattended-upgrades 安全来源" 644 0 0 << 'EOF' || return 1
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}-security";
@@ -1690,14 +1982,14 @@ Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF
-
+    
     write_file_atomic /etc/apt/apt.conf.d/20auto-upgrades "APT 自动更新周期" 644 0 0 << 'EOF' || return 1
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
-
+    
     log_success "自动安全更新已配置"
 }
 
@@ -1708,21 +2000,21 @@ function action_configure_swap() {
         dry_run_action_plan action_configure_swap
         return 0
     fi
-
+    
     # 检测现有 Swap
     local existing_swap=$(swapon --show=NAME --noheadings 2>/dev/null | head -1)
     local swap_size=$(free -m | grep Swap | awk '{print $2}')
-
+    
     if [ -n "$existing_swap" ] && [ "$swap_size" -gt 0 ]; then
         log_info "检测到现有 Swap: $existing_swap (大小: ${swap_size}MB)"
         log_warning "为避免中断现有工作负载，脚本不会自动关闭或替换已启用的 Swap"
         return 0
     fi
-
+    
     # 获取内存大小（MB）
     local mem_total=$(free -m | grep Mem | awk '{print $2}')
     local recommended_swap=0
-
+    
     # 根据内存大小推荐 Swap
     if [ "$mem_total" -lt 2048 ]; then
         recommended_swap=2048  # 2GB
@@ -1733,14 +2025,14 @@ function action_configure_swap() {
     else
         recommended_swap=4096  # 4GB (最大推荐)
     fi
-
+    
     log_info "系统内存: ${mem_total}MB"
     log_info "推荐 Swap 大小: ${recommended_swap}MB"
-
+    
     read -r -p "请输入 Swap 大小 (MB，留空使用推荐值 ${recommended_swap}MB): " swap_input
-
+    
     local swap_size_mb=${swap_input:-$recommended_swap}
-
+    
     # 验证输入
     if [[ ! "$swap_size_mb" =~ ^[0-9]+$ ]] || [ "$swap_size_mb" -lt 512 ]; then
         log_error "Swap 大小无效，最小 512MB"
@@ -1750,26 +2042,26 @@ function action_configure_swap() {
     if [ "$swap_size_mb" -gt 16384 ]; then
         log_warning "Swap 大小超过 16GB，可能不必要"
     fi
-
+    
     # 检查磁盘空间
     local available_space=$(df -m / | tail -1 | awk '{print $4}')
     if [ "$available_space" -lt "$swap_size_mb" ]; then
         log_error "磁盘空间不足！可用: ${available_space}MB，需要: ${swap_size_mb}MB"
         return 1
     fi
-
+    
     # 创建 Swap 文件
     local swap_file="/swapfile" swap_candidate="/swapfile.init.$$" old_swap=""
     [ ! -e "$swap_candidate" ] || { log_error "临时 Swap 文件已存在: $swap_candidate"; return 1; }
-
+    
     log_info "创建 ${swap_size_mb}MB Swap 文件（这可能需要几分钟）..."
-
+    
     if ! dd if=/dev/zero of="$swap_candidate" bs=1M count="$swap_size_mb" status=progress; then
         rm -f -- "$swap_candidate"
         return 1
     fi
     chmod 600 "$swap_candidate" || { rm -f -- "$swap_candidate"; return 1; }
-
+    
     # 格式化为 Swap
     log_info "格式化 Swap 文件..."
     ensure_log_file || return 1
@@ -1797,20 +2089,20 @@ function action_configure_swap() {
         return 1
     fi
     [ -n "$old_swap" ] && rm -f -- "$old_swap"
-
+    
     # 添加到 /etc/fstab（如果不存在）
     if ! grep -q "$swap_file" /etc/fstab 2>/dev/null; then
         ensure_block_in_file /etc/fstab "### INIT.SH SWAP BEGIN" "### INIT.SH SWAP END" \
             "$swap_file none swap sw 0 0" "Swap fstab 配置" || return 1
         log_success "已添加到 /etc/fstab，开机自动挂载"
     fi
-
+    
     # 设置 swappiness（如果未设置）
     write_file_atomic /etc/sysctl.d/99-init-swap.conf "Swap swappiness" 644 0 0 <<'EOF' || return 1
 vm.swappiness = 10
 EOF
     run_command "应用 vm.swappiness=10" sysctl -w vm.swappiness=10 || return 1
-
+    
     # 验证
     local final_swap=$(free -m | grep Swap | awk '{print $2}')
     if [ "$final_swap" -gt 0 ]; then
@@ -1825,7 +2117,7 @@ EOF
 # --- 模块: Docker 安装 (新增) ---
 function action_install_docker() {
     log_info "安装 Docker 和 Docker Compose..."
-
+    
     # 检查是否已安装
     if command -v docker > /dev/null 2>&1; then
         local docker_version=$(docker --version)
@@ -1850,11 +2142,11 @@ function action_install_docker() {
                 ;;
         esac
     fi
-
+    
     # 安装依赖
     log_info "安装 Docker 依赖包..."
     install_packages_batch "ca-certificates" "curl" "gnupg" "lsb-release" || return 1
-
+    
     # 添加 Docker 官方 GPG 密钥
     log_info "添加 Docker 官方 GPG 密钥..."
     run_command "创建 APT keyring 目录" install -m 0755 -d /etc/apt/keyrings || return 1
@@ -1874,7 +2166,7 @@ function action_install_docker() {
         log_warning "已跳过 Docker GPG 密钥下载"
         return 1
     fi
-
+    
     # 添加 Docker 仓库
     log_info "添加 Docker 仓库..."
     local arch=$(dpkg --print-architecture)
@@ -1883,11 +2175,11 @@ function action_install_docker() {
         log_warning "Detected $codename, using bookworm for Docker repository"
         codename="bookworm"
     fi
-
+    
     write_file_atomic /etc/apt/sources.list.d/docker.list "Docker APT repository" 644 0 0 <<EOF || return 1
 deb [arch=$arch signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_ID} ${codename} stable
 EOF
-
+    
     # 安装 Docker Engine
     log_info "安装 Docker Engine..."
     APT_UPDATED=false
@@ -1898,22 +2190,22 @@ EOF
         log_error "Docker 安装失败"
         return 1
     fi
-
+    
     # 启动 Docker
     log_info "启动 Docker 服务..."
     run_command "启用 Docker" systemctl enable docker || return 1
     run_command "启动 Docker" systemctl start docker || return 1
-
+    
     if check_service docker; then
         log_success "Docker 服务已启动"
     else
         log_error "Docker 服务启动失败"
         return 1
     fi
-
+    
     # 安装 Docker Compose（如果使用独立版本）
     install_docker_compose || return 1
-
+    
     # 配置 Docker（可选）
     read -r -p "是否配置 Docker（添加当前用户到 docker 组，配置镜像加速）? [y/n]: " config_docker
     case "$config_docker" in
@@ -1921,12 +2213,12 @@ EOF
             configure_docker || return 1
             ;;
     esac
-
+    
     # 验证安装
     if docker --version > /dev/null 2>&1; then
         local docker_ver=$(docker --version)
         log_success "Docker 安装完成: $docker_ver"
-
+        
         # 测试运行
         if docker run --rm hello-world > /dev/null 2>&1; then
             log_success "Docker 测试运行成功"
@@ -1946,13 +2238,13 @@ function install_docker_compose() {
         log_info "检测到 Docker Compose V2 (插件版本)"
         return 0
     fi
-
+    
     # 检查是否已有独立版本
     if command -v docker-compose > /dev/null 2>&1; then
         log_info "检测到 Docker Compose (独立版本)"
         return 0
     fi
-
+    
     log_error "未检测到 Docker Compose V2 插件；为避免未固定二进制下载，不再自动安装独立版本"
     log_error "请检查 docker-compose-plugin 包是否安装成功"
     return 1
@@ -1965,7 +2257,7 @@ function configure_docker() {
         log_info "[DRY RUN] 将写入 /etc/docker/daemon.json 并重启 Docker"
         return 0
     fi
-
+    
     # 配置镜像加速（国内服务器）
     read -r -p "是否配置 Docker 镜像加速（推荐国内服务器）? [y/n]: " use_mirror
     case "$use_mirror" in
@@ -2003,7 +2295,7 @@ EOF
 EOF
             ;;
     esac
-
+    
     # 验证并重启 Docker
     if ! systemd_daemon_reload || ! systemctl restart docker || ! check_service docker; then
         log_error "Docker 配置应用失败，正在恢复上一份配置"
@@ -2012,7 +2304,7 @@ EOF
         return 1
     fi
     log_success "Docker 配置完成并已重启"
-
+    
     # 显示配置信息
     if [ -f /etc/docker/daemon.json ]; then
         log_info "Docker 配置内容:"
@@ -2085,7 +2377,7 @@ function determine_target_user() {
     if [ -n "$target_user" ] && [ "$target_user" != "root" ]; then
         local target_home
         target_home="$(get_user_home "$target_user")"
-        echo -e ""
+        printf '%b\n' ""
         log_info "检测到当前用户: $target_user"
         # 询问是否安装到该用户目录
         if confirm_action "是否将用户级安装/配置写入到用户 $target_user 的目录下? (推荐用于开发)" "y"; then
@@ -2117,7 +2409,7 @@ function install_runtime() {
     local runtime=$1
     local version=${2:-""}
     local manager=${3:-"auto"}
-
+    
     case "$runtime" in
         nodejs|node)
             install_nodejs "$version" "$manager"
@@ -2147,7 +2439,7 @@ function install_runtime() {
 # --- 检测 Runtime 是否已安装 ---
 function check_runtime_installed() {
     local runtime=$1
-
+    
     case "$runtime" in
         nodejs|node)
             command -v node > /dev/null 2>&1 && return 0 || return 1
@@ -2176,7 +2468,7 @@ function check_runtime_installed() {
 # --- 获取 Runtime 版本 ---
 function get_runtime_version() {
     local runtime=$1
-
+    
     case "$runtime" in
         nodejs|node)
             node --version 2>/dev/null | sed 's/v//' || echo ""
@@ -2210,16 +2502,16 @@ function get_runtime_version() {
 function install_nodejs() {
     local version=${1:-"lts/*"}
     local manager=${2:-"nvm"}
-
+    
     # 确定安装用户
     determine_target_user
-
+    
     log_info "安装 Node.js (使用 $manager, 用户: $INSTALL_USER)..."
-
+    
     # 检查是否已安装
     local is_installed=false
     if run_as_user "command -v node >/dev/null 2>&1"; then is_installed=true; fi
-
+    
     if [ "$is_installed" = true ]; then
         local current_version
         if [ "$INSTALL_USER" == "root" ]; then
@@ -2227,34 +2519,34 @@ function install_nodejs() {
         else
              current_version=$(sudo -u "$INSTALL_USER" bash -c "export NVM_DIR=\"$INSTALL_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; node -v" 2>/dev/null)
         fi
-
+        
         log_info "检测到已安装 Node.js: $current_version"
         log_info "检测到已安装 Node.js: $current_version"
         if confirm_action "是否重新安装 Node.js?" "n"; then
             log_info "卸载现有 Node.js..."
-
+            
             # NVM uninstall
             local uninstall_cmd="export NVM_DIR=\"$INSTALL_HOME/.nvm\"; if [ -s \"\$NVM_DIR/nvm.sh\" ]; then source \"\$NVM_DIR/nvm.sh\"; nvm uninstall node; fi"
             run_as_user "$uninstall_cmd" >> "$LOG_FILE" 2>&1
-
+            
             # Apt remove (failsafe)
             apt-get remove -y nodejs npm 2>/dev/null || true
         else
-            echo -e "${YELLOW}使用默认值: n (取消重装)${PLAIN}"
+            printf '%b\n' "${YELLOW}使用默认值: n (取消重装)${PLAIN}"
             log_info "保持现有 Node.js 安装"
             return 0
         fi
     fi
-
+    
     # 安装依赖 (需要 Root 权限)
     log_info "安装 Node.js 依赖包..."
     update_apt_once
     install_packages_batch "curl" "wget" "git" "build-essential"
-
+    
     # 安装 NVM
     local nvm_dir="$INSTALL_HOME/.nvm"
     local check_nvm_cmd="[ -s \"$nvm_dir/nvm.sh\" ]"
-
+    
     if run_as_user "$check_nvm_cmd"; then
         log_info "检测到已安装 NVM"
     else
@@ -2263,7 +2555,7 @@ function install_nodejs() {
         local nvm_repo="https://github.com/nvm-sh/nvm.git"
         local install_nvm_cmd
         install_nvm_cmd=$(shell_join git clone --depth 1 --branch "$nvm_version" "$nvm_repo" "$nvm_dir")
-
+        
         if confirm_external_resource "$nvm_repo" "克隆 NVM 官方仓库 (${nvm_version})"; then
             if [ "$DRY_RUN" = "1" ]; then
                 log_info "[DRY RUN] 跳过 NVM 安装"
@@ -2271,10 +2563,10 @@ function install_nodejs() {
             fi
             if run_as_user "$install_nvm_cmd" >> "$LOG_FILE" 2>&1; then
                 log_success "NVM 安装脚本执行成功"
-
+            
             # 手动配置 NVM 环境到 Shell 配置文件 (解决 .bashrc 不更新的问题)
             log_info "正在配置 NVM 环境变量..."
-
+            
             # 定义 NVM 配置内容
             local nvm_config="
 # NVM configuration (added by init script)
@@ -2282,17 +2574,17 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
 [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"
 [ -s \"\$NVM_DIR/bash_completion\" ] && \. \"\$NVM_DIR/bash_completion\"
 "
-
+            
             local tmp_nvm_config="/tmp/nvm_config_block_$(date +%s)"
             echo "$nvm_config" > "$tmp_nvm_config"
-
+            
             # 优先处理 .bashrc（交互式 bash shell 的标准配置文件）
             # 注意：.profile 主要用于登录 shell，交互式 bash 应该使用 .bashrc
             local bashrc_file="$INSTALL_HOME/.bashrc"
             local config_added=false
-
+            
             log_info "检查 .bashrc 文件: $bashrc_file"
-
+            
             # 确保 .bashrc 存在
             if [ ! -f "$bashrc_file" ]; then
                 log_info ".bashrc 不存在，正在创建..."
@@ -2307,11 +2599,11 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
             else
                 log_info ".bashrc 已存在"
             fi
-
+            
             # 检查并写入 .bashrc
             # 检查并写入 .bashrc 和 .zshrc
             local config_targets=("$bashrc_file" "$INSTALL_HOME/.zshrc")
-
+            
             for target_file in "${config_targets[@]}"; do
                 # 只有当文件存在时才写入 (bashrc 已在前面自动创建)
                 if [ -f "$target_file" ]; then
@@ -2332,11 +2624,11 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                     fi
                 fi
             done
-
+            
             if [ "$config_added" = false ]; then
                 log_error "NVM 配置未能写入任何文件"
             fi
-
+            
             # 如果 .bashrc 配置成功，不再写入其他文件
             # 但如果用户使用 zsh，也配置 .zshrc
             if [ "$config_added" = false ] || [ -n "${ZSH_VERSION:-}" ]; then
@@ -2353,7 +2645,7 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                 fi
             fi
             rm -f "$tmp_nvm_config"
-
+            
             # 再次检查
             if ! run_as_user "$check_nvm_cmd"; then
                  # 尝试 source 一下再检查 (模拟加载)
@@ -2378,17 +2670,17 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
         log_info "[DRY RUN] 将写入 /etc/fail2ban/jail.d/sshd.local 并重启 fail2ban"
         return 0
     fi
-
+    
     # 版本选择
     if [ -z "$version" ] || [ "$version" == "lts/*" ]; then
-        echo -e ""
-        echo -e "${YELLOW}Node.js 版本选择:${PLAIN}"
-        echo -e "${GREEN}[lts]${PLAIN} 最新 LTS 版本 (推荐)"
-        echo -e "${GREEN}[latest]${PLAIN} 最新版本"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}Node.js 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[lts]${PLAIN} 最新 LTS 版本 (推荐)"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新版本"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' ""
         read -r -p "请选择版本 [lts/latest/custom]: " version_choice
-
+        
         case "$version_choice" in
             lts|LTS)
                 version="lts/*"
@@ -2410,14 +2702,14 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                 ;;
         esac
     fi
-
+    
     # 安装 Node.js
     log_info "正在安装 Node.js ${version}..."
-
+    
     local node_install_cmd="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; nvm install \"$version\"; nvm alias default \"$version\"; nvm use default"
-
+    
     if run_as_user "$node_install_cmd" >> "$LOG_FILE" 2>&1; then
-
+        
         # 验证安装
         local verify_cmd="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; node --version"
         local installed_node=""
@@ -2426,22 +2718,22 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
         else
             installed_node=$(sudo -u "$INSTALL_USER" bash -c "$verify_cmd")
         fi
-
+        
         if [ -n "$installed_node" ]; then
             log_success "Node.js 安装完成: $installed_node"
-
+            
             # 配置 npm
             if confirm_action "是否配置 npm（镜像源、全局工具）?" "y"; then
                 log_info "配置 npm..."
-
+                
                 local nvm_env="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; nvm use default >/dev/null"
-
+                
                 # 配置镜像源
                 if confirm_action "是否配置 npm 镜像源 (使用 npmmirror)?" "y"; then
                     run_as_user "$nvm_env; npm config set registry https://registry.npmmirror.com"
                     log_success "已设置 npm 镜像源: npmmirror"
                 fi
-
+                
                 # 安装全局工具
                 if confirm_action "是否安装常用全局工具 (yarn, pnpm, pm2)?" "y"; then
                     log_info "安装全局工具..."
@@ -2449,7 +2741,7 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                     log_success "全局工具安装完成"
                 fi
             fi
-
+            
             show_nvm_usage
         else
             log_error "Node.js 安装验证失败"
@@ -2465,16 +2757,16 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
 
 # --- NVM 使用说明 ---
 function show_nvm_usage() {
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "NVM 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看已安装版本:${PLAIN} nvm list"
-    echo -e "  ${GREEN}安装其他版本:${PLAIN} nvm install <version>"
-    echo -e "  ${GREEN}切换版本:${PLAIN} nvm use <version>"
-    echo -e "  ${GREEN}设置默认版本:${PLAIN} nvm alias default <version>"
-    echo -e "  ${GREEN}查看所有可用版本:${PLAIN} nvm list-remote"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看已安装版本:${PLAIN} nvm list"
+    printf '%b\n' "  ${GREEN}安装其他版本:${PLAIN} nvm install <version>"
+    printf '%b\n' "  ${GREEN}切换版本:${PLAIN} nvm use <version>"
+    printf '%b\n' "  ${GREEN}设置默认版本:${PLAIN} nvm alias default <version>"
+    printf '%b\n' "  ${GREEN}查看所有可用版本:${PLAIN} nvm list-remote"
+    printf '%b\n' ""
     log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
@@ -2486,12 +2778,12 @@ function show_nvm_usage() {
 function install_python() {
     local version=${1:-""}
     local manager=${2:-"pyenv"}
-
+    
     # 确定安装用户
     determine_target_user
-
+    
     log_info "安装 Python (使用 $manager, 用户: $INSTALL_USER)..."
-
+    
     # 检查是否已安装
     local is_installed=false
     if run_as_user "command -v python3 >/dev/null 2>&1"; then is_installed=true; fi
@@ -2503,7 +2795,7 @@ function install_python() {
         else
              current_version=$(sudo -u "$INSTALL_USER" bash -c "python3 --version" 2>/dev/null | awk '{print $2}')
         fi
-
+        
         log_info "检测到已安装 Python: $current_version"
         log_info "检测到已安装 Python: $current_version"
         if confirm_action "是否重新安装 Python?" "n"; then
@@ -2514,7 +2806,7 @@ function install_python() {
             return 0
         fi
     fi
-
+    
     # 安装依赖
     log_info "安装 Python 编译依赖..."
     update_apt_once
@@ -2522,7 +2814,7 @@ function install_python() {
         "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "curl" "llvm" \
         "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" \
         "liblzma-dev" "python3-openssl" "git"
-
+    
     # 安装 pyenv
     local pyenv_dir="$INSTALL_HOME/.pyenv"
     local check_pyenv_cmd="[ -d \"$pyenv_dir\" ]"
@@ -2549,7 +2841,7 @@ function install_python() {
             log_warning "已跳过 pyenv 安装"
             return 1
         fi
-
+        
         # Configure .bashrc
         local bashrc_file="$INSTALL_HOME/.bashrc"
         local pyenv_block="export PYENV_ROOT=\"$INSTALL_HOME/.pyenv\"
@@ -2558,21 +2850,21 @@ eval \"\$(pyenv init -)\""
         ensure_block_in_file "$bashrc_file" "### INIT.SH PYENV BEGIN" "### INIT.SH PYENV END" "$pyenv_block"
         log_success "pyenv 已添加到 $bashrc_file"
     fi
-
+    
     # Env setup for subsequent commands
     local env_setup="export PYENV_ROOT=\"$INSTALL_HOME/.pyenv\"; export PATH=\"\$PYENV_ROOT/bin:\$PATH\"; eval \"\$(pyenv init -)\""
 
     # 版本选择
     if [ -z "$version" ]; then
-        echo -e ""
-        echo -e "${YELLOW}Python 版本选择:${PLAIN}"
-        echo -e "${GREEN}[3.11]${PLAIN} Python 3.11 (推荐)"
-        echo -e "${GREEN}[3.12]${PLAIN} Python 3.12 (最新)"
-        echo -e "${GREEN}[3.10]${PLAIN} Python 3.10"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}Python 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[3.11]${PLAIN} Python 3.11 (推荐)"
+        printf '%b\n' "${GREEN}[3.12]${PLAIN} Python 3.12 (最新)"
+        printf '%b\n' "${GREEN}[3.10]${PLAIN} Python 3.10"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' ""
         read -r -p "请选择版本 [3.11/3.12/3.10/custom]: " version_choice
-
+        
         case "$version_choice" in
             3.11|3.12|3.10)
                 version="$version_choice"
@@ -2591,14 +2883,14 @@ eval \"\$(pyenv init -)\""
                 ;;
         esac
     fi
-
+    
     # 安装 Python
     log_info "正在安装 Python ${version}（这可能需要 10-20 分钟）..."
-
+    
     local install_python_cmd="$env_setup; pyenv install \"$version\"; pyenv global \"$version\""
-
+    
     if run_as_user "$install_python_cmd" >> "$LOG_FILE" 2>&1; then
-
+        
         # 验证
         local verify_cmd="$env_setup; python3 --version"
         local installed_python=""
@@ -2607,10 +2899,10 @@ eval \"\$(pyenv init -)\""
         else
             installed_python=$(sudo -u "$INSTALL_USER" bash -c "$verify_cmd")
         fi
-
+        
         if [ -n "$installed_python" ]; then
             log_success "Python 安装完成: $installed_python"
-
+            
             # 配置 pip
             read -r -p "是否配置 pip（镜像源、升级 pip）? [y/n]: " config_pip
             case "$config_pip" in
@@ -2618,19 +2910,19 @@ eval \"\$(pyenv init -)\""
                     log_info "配置 pip..."
                     local pip_cmd="$env_setup; python3 -m pip install --upgrade pip"
                     run_as_user "$pip_cmd" >> "$LOG_FILE" 2>&1
-
+                    
                     read -r -p "是否使用国内 pip 镜像源（推荐国内服务器）? [y/n]: " use_mirror
                     case "$use_mirror" in
                         y|Y|yes|YES)
                              local pip_conf_dir="$INSTALL_HOME/.pip"
                              local mkdir_cmd="mkdir -p \"$pip_conf_dir\""
                              run_as_user "$mkdir_cmd"
-
+                             
                              local pip_conf_file="$pip_conf_dir/pip.conf"
                              local pip_content="[global]
 index-url = https://pypi.tuna.tsinghua.edu.cn/simple
 trusted-host = pypi.tuna.tsinghua.edu.cn"
-
+                             
                              if [ "$DRY_RUN" = "1" ]; then
                                  log_info "[DRY RUN] 写入 pip 配置: $pip_conf_file"
                              else
@@ -2645,7 +2937,7 @@ trusted-host = pypi.tuna.tsinghua.edu.cn"
                     esac
                     ;;
             esac
-
+            
             show_pyenv_usage
         else
             log_error "Python 安装验证失败"
@@ -2661,16 +2953,16 @@ trusted-host = pypi.tuna.tsinghua.edu.cn"
 
 # --- pyenv 使用说明 ---
 function show_pyenv_usage() {
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "pyenv 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看已安装版本:${PLAIN} pyenv versions"
-    echo -e "  ${GREEN}安装其他版本:${PLAIN} pyenv install <version>"
-    echo -e "  ${GREEN}设置全局版本:${PLAIN} pyenv global <version>"
-    echo -e "  ${GREEN}设置本地版本:${PLAIN} pyenv local <version>"
-    echo -e "  ${GREEN}查看所有可用版本:${PLAIN} pyenv install --list"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看已安装版本:${PLAIN} pyenv versions"
+    printf '%b\n' "  ${GREEN}安装其他版本:${PLAIN} pyenv install <version>"
+    printf '%b\n' "  ${GREEN}设置全局版本:${PLAIN} pyenv global <version>"
+    printf '%b\n' "  ${GREEN}设置本地版本:${PLAIN} pyenv local <version>"
+    printf '%b\n' "  ${GREEN}查看所有可用版本:${PLAIN} pyenv install --list"
+    printf '%b\n' ""
     log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
@@ -2682,10 +2974,10 @@ function show_pyenv_usage() {
 function install_go() {
     local version=${1:-""}
     local manager=${2:-"official"}
-
+    
     log_info "安装 Go (使用官方二进制包)..."
     install_packages_batch curl jq tar || return 1
-
+    
     # 检查是否已安装
     if check_runtime_installed "go"; then
         local current_version=$(get_runtime_version "go")
@@ -2694,10 +2986,10 @@ function install_go() {
             log_info "保持现有 Go 安装"
             return 0
         fi
-
+        
         log_info "新版本完成下载、校验和解压后才会替换现有 Go"
     fi
-
+    
     # 检测系统架构
     local arch=$(uname -m)
     local go_arch=""
@@ -2716,20 +3008,20 @@ function install_go() {
             return 1
             ;;
     esac
-
+    
     log_info "检测到系统架构: $arch (Go: $go_arch)"
-
+    
     # 版本选择
     if [ -z "$version" ]; then
-        echo -e ""
-        echo -e "${YELLOW}Go 版本选择:${PLAIN}"
-        echo -e "${GREEN}[latest]${PLAIN} 最新稳定版本 (推荐)"
-        echo -e "${GREEN}[1.21]${PLAIN} Go 1.21"
-        echo -e "${GREEN}[1.22]${PLAIN} Go 1.22"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本 (例如: 1.21.5)"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}Go 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新稳定版本 (推荐)"
+        printf '%b\n' "${GREEN}[1.21]${PLAIN} Go 1.21"
+        printf '%b\n' "${GREEN}[1.22]${PLAIN} Go 1.22"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本 (例如: 1.21.5)"
+        printf '%b\n' ""
         read -r -p "请选择版本 [latest/1.21/1.22/custom]: " version_choice
-
+        
         case "$version_choice" in
             latest|LATEST)
                 # 获取最新稳定版本
@@ -2777,18 +3069,18 @@ function install_go() {
             version="go${version}"
         fi
     fi
-
+    
     log_info "准备安装 Go 版本: $version"
-
+    
     # 下载 Go
     local go_filename="${version}.linux-${go_arch}.tar.gz"
     local go_url="https://go.dev/dl/${go_filename}"
     local download_dir="/tmp"
     local go_tarball="${download_dir}/go-${version}.tar.gz"
-
+    
     log_info "下载 Go (这可能需要几分钟)..."
     log_info "下载地址: $go_url"
-
+    
     if ! download_go_release "$go_filename" "$go_tarball" "Go ${version}"; then
         log_error "Go 下载失败，请检查网络连接"
         return 1
@@ -2798,15 +3090,15 @@ function install_go() {
         log_info "[DRY RUN] 跳过 Go 解压与安装"
         return 0
     fi
-
+    
     # 检查文件是否下载成功
     if [ ! -f "$go_tarball" ] || [ ! -s "$go_tarball" ]; then
         log_error "Go 下载文件无效"
         return 1
     fi
-
+    
     log_success "Go 下载完成"
-
+    
     local go_stage
     go_stage="$(mktemp -d /tmp/init-go.XXXXXX)" || return 1
     register_temp_file "$go_stage"
@@ -2821,13 +3113,13 @@ function install_go() {
         return 1
     fi
     replace_directory_transactional /usr/local/go "$go_stage/go" "Go ${version}" || return 1
-
+    
     # 清理下载文件
     rm -f -- "$go_tarball"
-
+    
     # 配置环境变量
     log_info "配置 Go 环境变量..."
-
+    
     # 检查 ~/.bashrc 和 ~/.zshrc 并配置
     local go_config_content="
 # Go configuration (added by init script)
@@ -2835,21 +3127,21 @@ export GOROOT=/usr/local/go
 export PATH=\$GOROOT/bin:\$PATH
 "
     local shell_configs=("$HOME/.bashrc" "$HOME/.zshrc")
-
+    
     for rc_file in "${shell_configs[@]}"; do
         ensure_block_in_file "$rc_file" "### INIT.SH GO BEGIN" "### INIT.SH GO END" "$go_config_content"
         log_success "Go 环境变量已写入 $rc_file"
     done
-
+    
     # 设置当前会话的环境变量
     export GOROOT=/usr/local/go
     export PATH=$GOROOT/bin:$PATH
-
+    
     # 验证安装
     if verify_installation "Go" "go" "$version"; then
         local installed_go=$(go version)
         log_success "Go 安装完成: $installed_go"
-
+        
         # 配置 Go（可选）
         read -r -p "是否配置 Go（GOPROXY、GOPATH、常用工具）? [y/n]: " config_go
         case "$config_go" in
@@ -2857,7 +3149,7 @@ export PATH=\$GOROOT/bin:\$PATH
                 configure_go
                 ;;
         esac
-
+        
         show_go_usage
     else
         log_error "Go 安装验证失败，请检查环境变量"
@@ -2872,7 +3164,7 @@ function configure_go() {
         log_info "[DRY RUN] 跳过 Go 配置"
         return 0
     fi
-
+    
     # 配置 GOPROXY（国内镜像）
     read -r -p "是否配置 Go 代理（推荐国内服务器）? [y/n]: " use_proxy
     case "$use_proxy" in
@@ -2882,7 +3174,7 @@ function configure_go() {
             log_success "已设置 Go 代理: https://goproxy.cn"
             ;;
     esac
-
+    
     # 配置 GOPATH（可选，Go 1.11+ 使用 modules，GOPATH 不是必须的）
     read -r -p "是否配置 GOPATH（留空使用默认 ~/go）? [y/n]: " config_gopath
     case "$config_gopath" in
@@ -2893,16 +3185,16 @@ function configure_go() {
             fi
             mkdir -p "$gopath_path"
             go env -w GOPATH="$gopath_path"
-
+            
             # 添加到 PATH（如果不在默认位置）
             if [ "$gopath_path" != "$HOME/go" ]; then
                 ensure_block_in_file "$HOME/.bashrc" "### INIT.SH GOPATH BEGIN" "### INIT.SH GOPATH END" "export PATH=\$GOPATH/bin:\$PATH"
             fi
-
+            
             log_success "已设置 GOPATH: $gopath_path"
             ;;
     esac
-
+    
     # 配置 Go 私有模块（可选）
     read -r -p "是否配置 Go 私有模块（GitLab/GitHub Enterprise）? [y/n]: " config_private
     case "$config_private" in
@@ -2914,13 +3206,13 @@ function configure_go() {
             fi
             ;;
     esac
-
+    
     # 安装常用工具（可选）
     read -r -p "是否安装常用 Go 工具? [y/n]: " install_tools
     case "$install_tools" in
         y|Y|yes|YES)
             log_info "安装常用 Go 工具..."
-
+            
             # gopls (Go 语言服务器)
             read -r -p "安装 gopls (Go 语言服务器)? [y/n]: " install_gopls
             case "$install_gopls" in
@@ -2929,7 +3221,7 @@ function configure_go() {
                         log_success "gopls 安装完成" || log_warning "gopls 安装失败"
                     ;;
             esac
-
+            
             # golangci-lint (代码检查工具)
             read -r -p "安装 golangci-lint (代码检查工具)? [y/n]: " install_lint
             case "$install_lint" in
@@ -2938,7 +3230,7 @@ function configure_go() {
                         log_success "golangci-lint 安装完成" || log_warning "golangci-lint 安装失败"
                     ;;
             esac
-
+            
             # air (热重载工具)
             read -r -p "安装 air (热重载工具)? [y/n]: " install_air
             case "$install_air" in
@@ -2949,28 +3241,28 @@ function configure_go() {
             esac
             ;;
     esac
-
+    
     # 显示配置
     log_info "当前 Go 配置:"
     go env | grep -E "GOROOT|GOPATH|GOPROXY|GOPRIVATE" || go env
-
+    
     log_success "Go 配置完成"
 }
 
 # --- Go 使用说明 ---
 function show_go_usage() {
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Go 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看版本:${PLAIN} go version"
-    echo -e "  ${GREEN}查看环境变量:${PLAIN} go env"
-    echo -e "  ${GREEN}初始化模块:${PLAIN} go mod init <module-name>"
-    echo -e "  ${GREEN}下载依赖:${PLAIN} go mod download"
-    echo -e "  ${GREEN}构建项目:${PLAIN} go build"
-    echo -e "  ${GREEN}运行项目:${PLAIN} go run main.go"
-    echo -e "  ${GREEN}安装工具:${PLAIN} go install <package>@latest"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} go version"
+    printf '%b\n' "  ${GREEN}查看环境变量:${PLAIN} go env"
+    printf '%b\n' "  ${GREEN}初始化模块:${PLAIN} go mod init <module-name>"
+    printf '%b\n' "  ${GREEN}下载依赖:${PLAIN} go mod download"
+    printf '%b\n' "  ${GREEN}构建项目:${PLAIN} go build"
+    printf '%b\n' "  ${GREEN}运行项目:${PLAIN} go run main.go"
+    printf '%b\n' "  ${GREEN}安装工具:${PLAIN} go install <package>@latest"
+    printf '%b\n' ""
     log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
@@ -2982,9 +3274,9 @@ function show_go_usage() {
 function install_php() {
     local version=${1:-""}
     local manager=${2:-"ppa"}
-
+    
     log_info "安装 PHP (使用 ondrej PPA)..."
-
+    
     # 检查是否已安装
     if check_runtime_installed "php"; then
         local current_version=$(get_runtime_version "php")
@@ -2993,44 +3285,44 @@ function install_php() {
             log_info "保持现有 PHP 安装"
             return 0
         fi
-
+        
         # 危险操作确认
         if confirm_dangerous_action "卸载 PHP" "这将删除所有已安装的 PHP 版本和扩展"; then
             log_info "卸载现有 PHP..."
-            apt-get remove -y php* 2>/dev/null || true
+            apt-get remove -y 'php*' 2>/dev/null || true
         else
             return 0
         fi
     fi
-
+    
     # 安装依赖
     log_info "安装 PHP 依赖包..."
     update_apt_once
     install_packages_batch "software-properties-common" "apt-transport-https" "lsb-release" "ca-certificates"
-
+    
     # 添加 ondrej PPA
     log_info "添加 ondrej PHP PPA..."
     if ! add-apt-repository -y ppa:ondrej/php >> "$LOG_FILE" 2>&1; then
         log_error "添加 PPA 失败"
         return 1
     fi
-
+    
     # 添加 PPA 后需要更新
     APT_UPDATED=false
     update_apt_once
-
+    
     # 版本选择
     if [ -z "$version" ]; then
-        echo -e ""
-        echo -e "${YELLOW}PHP 版本选择:${PLAIN}"
-        echo -e "${GREEN}[8.2]${PLAIN} PHP 8.2 (推荐)"
-        echo -e "${GREEN}[8.1]${PLAIN} PHP 8.1"
-        echo -e "${GREEN}[8.0]${PLAIN} PHP 8.0"
-        echo -e "${GREEN}[7.4]${PLAIN} PHP 7.4 (旧版)"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}PHP 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[8.2]${PLAIN} PHP 8.2 (推荐)"
+        printf '%b\n' "${GREEN}[8.1]${PLAIN} PHP 8.1"
+        printf '%b\n' "${GREEN}[8.0]${PLAIN} PHP 8.0"
+        printf '%b\n' "${GREEN}[7.4]${PLAIN} PHP 7.4 (旧版)"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' ""
         read -r -p "请选择版本 [8.2/8.1/8.0/7.4/custom]: " version_choice
-
+        
         case "$version_choice" in
             8.2|8.1|8.0|7.4)
                 version="$version_choice"
@@ -3049,9 +3341,9 @@ function install_php() {
                 ;;
         esac
     fi
-
+    
     log_info "准备安装 PHP $version..."
-
+    
     # 安装 PHP 核心和常用扩展
     local php_packages=(
         "php${version}"
@@ -3067,15 +3359,15 @@ function install_php() {
         "php${version}-redis"
         "php${version}-opcache"
     )
-
+    
     log_info "安装 PHP $version 及常用扩展..."
     install_packages_batch "${php_packages[@]}"
-
+    
     # 验证安装
     if verify_installation "PHP" "php" "$version"; then
         local installed_php=$(php --version | head -1)
         log_success "PHP 安装完成: $installed_php"
-
+        
         # 配置 PHP（可选）
         read -r -p "是否配置 PHP（时区、内存限制、Composer）? [y/n]: " config_php
         case "$config_php" in
@@ -3083,7 +3375,7 @@ function install_php() {
                 configure_php "$version"
                 ;;
         esac
-
+        
         show_php_usage "$version"
     else
         log_error "PHP 安装验证失败"
@@ -3094,29 +3386,33 @@ function install_php() {
 # --- PHP 配置函数 ---
 function configure_php() {
     local version=$1
-
+    
     log_info "配置 PHP $version..."
-
+    
     # 配置时区
     local php_ini="/etc/php/${version}/cli/php.ini"
     local php_fpm_ini="/etc/php/${version}/fpm/php.ini"
-
+    
     if [ -f "$php_ini" ]; then
         create_backup "$php_ini" "PHP CLI 配置" >/dev/null
         sed -i 's/;date.timezone =/date.timezone = Asia\/Shanghai/' "$php_ini"
         log_success "已设置时区: Asia/Shanghai"
     fi
-
+    
     if [ -f "$php_fpm_ini" ]; then
         create_backup "$php_fpm_ini" "PHP-FPM 配置" >/dev/null
         sed -i 's/;date.timezone =/date.timezone = Asia\/Shanghai/' "$php_fpm_ini"
     fi
-
+    
     # 配置内存限制
     read -r -p "是否调整 PHP 内存限制 (默认 128M)? [y/n]: " config_memory
     case "$config_memory" in
         y|Y|yes|YES)
             read -r -p "请输入内存限制 (例如: 256M, 512M): " memory_limit
+            if [[ ! "$memory_limit" =~ ^[1-9][0-9]*[KMG]$ ]]; then
+                log_warning "内存限制格式无效，应类似 256M、1G"
+                return 1
+            fi
             if [ -n "$memory_limit" ]; then
                 if [ -f "$php_ini" ]; then
                     sed -i "s/memory_limit = .*/memory_limit = $memory_limit/" "$php_ini"
@@ -3128,7 +3424,7 @@ function configure_php() {
             fi
             ;;
     esac
-
+    
     # 安装 Composer
     read -r -p "是否安装 Composer (PHP 包管理器)? [y/n]: " install_composer
     case "$install_composer" in
@@ -3136,19 +3432,19 @@ function configure_php() {
             install_composer_tool
             ;;
     esac
-
+    
     log_success "PHP 配置完成"
 }
 
 # --- Composer 安装 ---
 function install_composer_tool() {
     log_info "安装 Composer..."
-
+    
     if command -v composer > /dev/null 2>&1; then
         log_info "检测到已安装 Composer"
         return 0
     fi
-
+    
     # 下载 Composer 安装脚本
     local composer_setup="/tmp/composer-setup.php"
     local composer_url="https://getcomposer.org/installer"
@@ -3156,7 +3452,7 @@ function install_composer_tool() {
         log_error "Composer 下载失败"
         return 1
     fi
-
+    
     # 验证安装脚本
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] 跳过 Composer 安装"
@@ -3171,22 +3467,22 @@ function install_composer_tool() {
     local expected_signature
     expected_signature=$(tr -d '\r\n' < "$composer_sig")
     local actual_signature=$(php -r "echo hash_file('sha384', '$composer_setup');")
-
+    
     if [ "$expected_signature" != "$actual_signature" ]; then
         log_error "Composer 安装脚本签名验证失败"
         rm -f "$composer_setup" "$composer_sig"
         return 1
     fi
-
+    
     # 安装 Composer
     php "$composer_setup" --install-dir=/usr/local/bin --filename=composer >> "$LOG_FILE" 2>&1 || {
         log_error "Composer 安装失败"
         rm -f "$composer_setup" "$composer_sig"
         return 1
     }
-
+    
     rm -f "$composer_setup" "$composer_sig"
-
+    
     # 配置 Composer 镜像（可选）
     read -r -p "是否配置 Composer 国内镜像（推荐国内服务器）? [y/n]: " use_mirror
     case "$use_mirror" in
@@ -3195,7 +3491,7 @@ function install_composer_tool() {
             log_success "已设置 Composer 镜像: 阿里云"
             ;;
     esac
-
+    
     if command -v composer > /dev/null 2>&1; then
         local composer_version=$(composer --version)
         log_success "Composer 安装完成: $composer_version"
@@ -3208,22 +3504,22 @@ function install_composer_tool() {
 # --- PHP 使用说明 ---
 function show_php_usage() {
     local version=$1
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "PHP 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看版本:${PLAIN} php -v"
-    echo -e "  ${GREEN}查看已安装扩展:${PLAIN} php -m"
-    echo -e "  ${GREEN}查看 PHP 配置:${PLAIN} php -i"
-    echo -e "  ${GREEN}PHP-FPM 配置文件:${PLAIN} /etc/php/${version}/fpm/php.ini"
-    echo -e "  ${GREEN}CLI 配置文件:${PLAIN} /etc/php/${version}/cli/php.ini"
-    echo -e "  ${GREEN}启动 PHP-FPM:${PLAIN} systemctl start php${version}-fpm"
-    echo -e "  ${GREEN}安装扩展:${PLAIN} apt-get install php${version}-<extension>"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} php -v"
+    printf '%b\n' "  ${GREEN}查看已安装扩展:${PLAIN} php -m"
+    printf '%b\n' "  ${GREEN}查看 PHP 配置:${PLAIN} php -i"
+    printf '%b\n' "  ${GREEN}PHP-FPM 配置文件:${PLAIN} /etc/php/${version}/fpm/php.ini"
+    printf '%b\n' "  ${GREEN}CLI 配置文件:${PLAIN} /etc/php/${version}/cli/php.ini"
+    printf '%b\n' "  ${GREEN}启动 PHP-FPM:${PLAIN} systemctl start php${version}-fpm"
+    printf '%b\n' "  ${GREEN}安装扩展:${PLAIN} apt-get install php${version}-<extension>"
+    printf '%b\n' ""
     if command -v composer > /dev/null 2>&1; then
-        echo -e "  ${GREEN}Composer 版本:${PLAIN} composer --version"
-        echo -e "  ${GREEN}创建项目:${PLAIN} composer create-project <package>"
-        echo -e ""
+        printf '%b\n' "  ${GREEN}Composer 版本:${PLAIN} composer --version"
+        printf '%b\n' "  ${GREEN}创建项目:${PLAIN} composer create-project <package>"
+        printf '%b\n' ""
     fi
 }
 
@@ -3235,9 +3531,9 @@ function show_php_usage() {
 function install_java() {
     local version=${1:-""}
     local manager=${2:-"adoptium"}
-
+    
     log_info "安装 Java (使用 Adoptium Temurin)..."
-
+    
     # 检查是否已安装
     if check_runtime_installed "java"; then
         local current_version=$(get_runtime_version "java")
@@ -3246,11 +3542,11 @@ function install_java() {
             log_info "保持现有 Java 安装"
             return 0
         fi
-
+        
         # 危险操作确认
         if confirm_dangerous_action "卸载 Java" "这将删除所有已安装的 Java 版本"; then
             log_info "卸载现有 Java..."
-            apt-get remove -y openjdk-* 2>/dev/null || true
+            apt-get remove -y 'openjdk-*' 2>/dev/null || true
             if [ -d "/usr/lib/jvm" ]; then
                 rm -rf /usr/lib/jvm/*
             fi
@@ -3258,12 +3554,12 @@ function install_java() {
             return 0
         fi
     fi
-
+    
     # 安装依赖
     log_info "安装 Java 依赖包..."
     update_apt_once
     install_packages_batch "wget" "apt-transport-https" "ca-certificates" "gnupg"
-
+    
     # 添加 Adoptium GPG 密钥
     log_info "添加 Adoptium GPG 密钥..."
     mkdir -p /etc/apt/keyrings
@@ -3272,28 +3568,28 @@ function install_java() {
         log_error "Adoptium GPG 密钥下载失败"
         return 1
     fi
-
+    
     # 添加 Adoptium 仓库
     log_info "添加 Adoptium 仓库..."
     echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | \
         tee /etc/apt/sources.list.d/adoptium.list >> "$LOG_FILE" 2>&1
-
+    
     # 添加仓库后需要更新
     APT_UPDATED=false
     update_apt_once
-
+    
     # 版本选择
     if [ -z "$version" ]; then
-        echo -e ""
-        echo -e "${YELLOW}Java 版本选择:${PLAIN}"
-        echo -e "${GREEN}[17]${PLAIN} Java 17 LTS (推荐)"
-        echo -e "${GREEN}[21]${PLAIN} Java 21 LTS (最新)"
-        echo -e "${GREEN}[11]${PLAIN} Java 11 LTS"
-        echo -e "${GREEN}[8]${PLAIN} Java 8"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}Java 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[17]${PLAIN} Java 17 LTS (推荐)"
+        printf '%b\n' "${GREEN}[21]${PLAIN} Java 21 LTS (最新)"
+        printf '%b\n' "${GREEN}[11]${PLAIN} Java 11 LTS"
+        printf '%b\n' "${GREEN}[8]${PLAIN} Java 8"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' ""
         read -r -p "请选择版本 [17/21/11/8/custom]: " version_choice
-
+        
         case "$version_choice" in
             17|21|11|8)
                 version="$version_choice"
@@ -3312,34 +3608,34 @@ function install_java() {
                 ;;
         esac
     fi
-
+    
     log_info "准备安装 Java $version..."
-
+    
     # 安装 Java
     local java_package="temurin-${version}-jdk"
     log_info "安装 $java_package..."
-
+    
     if execute_with_progress "安装 Java $version" "apt-get install -y $java_package"; then
         # 设置 JAVA_HOME
         local java_home=$(update-alternatives --list java 2>/dev/null | head -1 | sed 's|/bin/java||')
         if [ -z "$java_home" ]; then
             java_home="/usr/lib/jvm/temurin-${version}-jdk-amd64"
         fi
-
+        
         # 配置环境变量
         local java_block="export JAVA_HOME=${java_home}
 export PATH=\$JAVA_HOME/bin:\$PATH"
         ensure_block_in_file "$HOME/.bashrc" "### INIT.SH JAVA BEGIN" "### INIT.SH JAVA END" "$java_block"
         log_success "Java 环境变量已添加到 ~/.bashrc"
-
+        
         export JAVA_HOME="$java_home"
         export PATH="$JAVA_HOME/bin:$PATH"
-
+        
         # 验证安装
         if verify_installation "Java" "java" "$version"; then
             local installed_java=$(java -version 2>&1 | head -1)
             log_success "Java 安装完成: $installed_java"
-
+            
             # 配置 Java（可选）
             read -r -p "是否配置 Java（Maven、Gradle）? [y/n]: " config_java
             case "$config_java" in
@@ -3347,7 +3643,7 @@ export PATH=\$JAVA_HOME/bin:\$PATH"
                     configure_java
                     ;;
             esac
-
+            
             show_java_usage
         else
             log_error "Java 安装验证失败"
@@ -3362,7 +3658,7 @@ export PATH=\$JAVA_HOME/bin:\$PATH"
 # --- Java 配置函数 ---
 function configure_java() {
     log_info "配置 Java..."
-
+    
     # 安装 Maven
     read -r -p "是否安装 Maven? [y/n]: " install_maven
     case "$install_maven" in
@@ -3370,7 +3666,7 @@ function configure_java() {
             install_maven_tool
             ;;
     esac
-
+    
     # 安装 Gradle
     read -r -p "是否安装 Gradle? [y/n]: " install_gradle
     case "$install_gradle" in
@@ -3378,25 +3674,25 @@ function configure_java() {
             install_gradle_tool
             ;;
     esac
-
+    
     log_success "Java 配置完成"
 }
 
 # --- Maven 安装 ---
 function install_maven_tool() {
     log_info "安装 Maven..."
-
+    
     if command -v mvn > /dev/null 2>&1; then
         log_info "检测到已安装 Maven"
         return 0
     fi
-
+    
     local maven_version="3.9.6"
     local maven_url="https://archive.apache.org/dist/maven/maven-3/${maven_version}/binaries/apache-maven-${maven_version}-bin.tar.gz"
     local maven_sha_url="${maven_url}.sha512"
     local maven_dir="/opt/maven"
     local maven_tar="/tmp/maven.tar.gz"
-
+    
     log_info "下载 Maven ${maven_version}..."
     if ! download_and_verify_checksum_url "$maven_url" "$maven_sha_url" sha512 "$maven_tar" "Maven ${maven_version}"; then
         log_error "Maven 下载失败"
@@ -3406,7 +3702,7 @@ function install_maven_tool() {
         log_info "[DRY RUN] 跳过 Maven 解压与安装"
         return 0
     fi
-
+    
     local maven_stage
     maven_stage="$(mktemp -d /tmp/init-maven.XXXXXX)" || return 1
     register_temp_file "$maven_stage"
@@ -3415,15 +3711,15 @@ function install_maven_tool() {
     [ -x "$maven_stage/maven/bin/mvn" ] || { log_error "Maven 归档结构无效"; return 1; }
     replace_directory_transactional "$maven_dir" "$maven_stage/maven" "Maven ${maven_version}" || return 1
     rm -f -- "$maven_tar"
-
+    
     # 配置环境变量
     local maven_block="export MAVEN_HOME=${maven_dir}
 export PATH=\$MAVEN_HOME/bin:\$PATH"
     ensure_block_in_file "$HOME/.bashrc" "### INIT.SH MAVEN BEGIN" "### INIT.SH MAVEN END" "$maven_block"
-
+    
     export MAVEN_HOME="$maven_dir"
     export PATH="$MAVEN_HOME/bin:$PATH"
-
+    
     if command -v mvn > /dev/null 2>&1; then
         local maven_ver=$(mvn --version | head -1)
         log_success "Maven 安装完成: $maven_ver"
@@ -3436,18 +3732,18 @@ export PATH=\$MAVEN_HOME/bin:\$PATH"
 # --- Gradle 安装 ---
 function install_gradle_tool() {
     log_info "安装 Gradle..."
-
+    
     if command -v gradle > /dev/null 2>&1; then
         log_info "检测到已安装 Gradle"
         return 0
     fi
-
+    
     local gradle_version="8.5"
     local gradle_url="https://services.gradle.org/distributions/gradle-${gradle_version}-bin.zip"
     local gradle_sha_url="${gradle_url}.sha256"
     local gradle_dir="/opt/gradle"
     local gradle_zip="/tmp/gradle.zip"
-
+    
     log_info "下载 Gradle ${gradle_version}..."
     install_packages_batch unzip || return 1
     if ! download_and_verify_checksum_url "$gradle_url" "$gradle_sha_url" sha256 "$gradle_zip" "Gradle ${gradle_version}"; then
@@ -3458,7 +3754,7 @@ function install_gradle_tool() {
         log_info "[DRY RUN] 跳过 Gradle 解压与安装"
         return 0
     fi
-
+    
     local gradle_stage
     gradle_stage="$(mktemp -d /tmp/init-gradle.XXXXXX)" || return 1
     register_temp_file "$gradle_stage"
@@ -3468,15 +3764,15 @@ function install_gradle_tool() {
     replace_directory_transactional "$gradle_dir/gradle" "$gradle_stage/gradle-${gradle_version}" \
         "Gradle ${gradle_version}" || return 1
     rm -f -- "$gradle_zip"
-
+    
     # 配置环境变量
     local gradle_block="export GRADLE_HOME=${gradle_dir}/gradle
 export PATH=\$GRADLE_HOME/bin:\$PATH"
     ensure_block_in_file "$HOME/.bashrc" "### INIT.SH GRADLE BEGIN" "### INIT.SH GRADLE END" "$gradle_block"
-
+    
     export GRADLE_HOME="$gradle_dir/gradle"
     export PATH="$GRADLE_HOME/bin:$PATH"
-
+    
     if command -v gradle > /dev/null 2>&1; then
         local gradle_ver=$(gradle --version | head -1)
         log_success "Gradle 安装完成: $gradle_ver"
@@ -3488,25 +3784,25 @@ export PATH=\$GRADLE_HOME/bin:\$PATH"
 
 # --- Java 使用说明 ---
 function show_java_usage() {
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Java 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看版本:${PLAIN} java -version"
-    echo -e "  ${GREEN}查看编译器版本:${PLAIN} javac -version"
-    echo -e "  ${GREEN}查看 JAVA_HOME:${PLAIN} echo \$JAVA_HOME"
-    echo -e "  ${GREEN}编译 Java 文件:${PLAIN} javac Main.java"
-    echo -e "  ${GREEN}运行 Java 程序:${PLAIN} java Main"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} java -version"
+    printf '%b\n' "  ${GREEN}查看编译器版本:${PLAIN} javac -version"
+    printf '%b\n' "  ${GREEN}查看 JAVA_HOME:${PLAIN} echo \$JAVA_HOME"
+    printf '%b\n' "  ${GREEN}编译 Java 文件:${PLAIN} javac Main.java"
+    printf '%b\n' "  ${GREEN}运行 Java 程序:${PLAIN} java Main"
+    printf '%b\n' ""
     if command -v mvn > /dev/null 2>&1; then
-        echo -e "  ${GREEN}Maven 版本:${PLAIN} mvn --version"
-        echo -e "  ${GREEN}创建 Maven 项目:${PLAIN} mvn archetype:generate"
-        echo -e ""
+        printf '%b\n' "  ${GREEN}Maven 版本:${PLAIN} mvn --version"
+        printf '%b\n' "  ${GREEN}创建 Maven 项目:${PLAIN} mvn archetype:generate"
+        printf '%b\n' ""
     fi
     if command -v gradle > /dev/null 2>&1; then
-        echo -e "  ${GREEN}Gradle 版本:${PLAIN} gradle --version"
-        echo -e "  ${GREEN}初始化 Gradle 项目:${PLAIN} gradle init"
-        echo -e ""
+        printf '%b\n' "  ${GREEN}Gradle 版本:${PLAIN} gradle --version"
+        printf '%b\n' "  ${GREEN}初始化 Gradle 项目:${PLAIN} gradle init"
+        printf '%b\n' ""
     fi
     log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
@@ -3519,9 +3815,9 @@ function show_java_usage() {
 function install_dotnet() {
     local version=${1:-""}
     local manager=${2:-"official"}
-
+    
     log_info "安装 .NET (使用官方安装脚本)..."
-
+    
     # 检查是否已安装
     if check_runtime_installed "dotnet"; then
         local current_version=$(get_runtime_version "dotnet")
@@ -3530,35 +3826,35 @@ function install_dotnet() {
             log_info "保持现有 .NET 安装"
             return 0
         fi
-
+        
         # 危险操作确认
         if confirm_dangerous_action "卸载 .NET" "这将删除所有已安装的 .NET SDK 和运行时"; then
             log_info "卸载现有 .NET..."
-            apt-get remove -y dotnet* 2>/dev/null || true
+            apt-get remove -y 'dotnet*' 2>/dev/null || true
             rm -rf /usr/share/dotnet
             rm -rf /etc/dotnet
         else
             return 0
         fi
     fi
-
+    
     # 安装依赖
     log_info "安装 .NET 依赖包..."
     update_apt_once
     install_packages_batch "wget" "apt-transport-https"
-
+    
     # 版本选择
     if [ -z "$version" ]; then
-        echo -e ""
-        echo -e "${YELLOW}.NET 版本选择:${PLAIN}"
-        echo -e "${GREEN}[8.0]${PLAIN} .NET 8.0 (最新 LTS)"
-        echo -e "${GREEN}[7.0]${PLAIN} .NET 7.0"
-        echo -e "${GREEN}[6.0]${PLAIN} .NET 6.0 LTS"
-        echo -e "${GREEN}[latest]${PLAIN} 最新版本"
-        echo -e "${GREEN}[custom]${PLAIN} 自定义版本"
-        echo -e ""
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}.NET 版本选择:${PLAIN}"
+        printf '%b\n' "${GREEN}[8.0]${PLAIN} .NET 8.0 (最新 LTS)"
+        printf '%b\n' "${GREEN}[7.0]${PLAIN} .NET 7.0"
+        printf '%b\n' "${GREEN}[6.0]${PLAIN} .NET 6.0 LTS"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新版本"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' ""
         read -r -p "请选择版本 [8.0/7.0/6.0/latest/custom]: " version_choice
-
+        
         case "$version_choice" in
             8.0|7.0|6.0)
                 version="$version_choice"
@@ -3580,9 +3876,9 @@ function install_dotnet() {
                 ;;
         esac
     fi
-
+    
     log_info "准备安装 .NET $version..."
-
+    
     # 添加 Microsoft 仓库
     log_info "添加 Microsoft 仓库..."
     local microsoft_repo_pkg="/tmp/packages-microsoft-prod.deb"
@@ -3591,11 +3887,11 @@ function install_dotnet() {
         log_error "下载 Microsoft 仓库配置失败"
         return 1
     fi
-
+    
     dpkg -i "$microsoft_repo_pkg" >> "$LOG_FILE" 2>&1
     rm -f "$microsoft_repo_pkg"
     update_apt_once
-
+    
     # 安装 .NET SDK
     log_info "安装 .NET SDK $version..."
     if execute_with_progress "安装 .NET SDK $version" "apt-get install -y dotnet-sdk-${version}"; then
@@ -3603,7 +3899,7 @@ function install_dotnet() {
         if verify_installation ".NET" "dotnet" "$version"; then
             local installed_dotnet=$(dotnet --version)
             log_success ".NET 安装完成: $installed_dotnet"
-
+            
             # 配置 .NET（可选）
             read -r -p "是否配置 .NET（NuGet 源）? [y/n]: " config_dotnet
             case "$config_dotnet" in
@@ -3611,7 +3907,7 @@ function install_dotnet() {
                     configure_dotnet
                     ;;
             esac
-
+            
             show_dotnet_usage
         else
             log_error ".NET 安装验证失败"
@@ -3626,7 +3922,7 @@ function install_dotnet() {
 # --- .NET 配置函数 ---
 function configure_dotnet() {
     log_info "配置 .NET..."
-
+    
     # 配置 NuGet 源（可选）
     read -r -p "是否配置 NuGet 国内镜像（推荐国内服务器）? [y/n]: " use_mirror
     case "$use_mirror" in
@@ -3636,29 +3932,29 @@ function configure_dotnet() {
             log_success "已添加 NuGet 镜像: Azure China"
             ;;
     esac
-
+    
     # 显示已配置的源
     log_info "当前 NuGet 源:"
     dotnet nuget list source
-
+    
     log_success ".NET 配置完成"
 }
 
 # --- .NET 使用说明 ---
 function show_dotnet_usage() {
-    echo -e ""
+    printf '%b\n' ""
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info ".NET 使用说明:"
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}查看版本:${PLAIN} dotnet --version"
-    echo -e "  ${GREEN}查看已安装 SDK:${PLAIN} dotnet --list-sdks"
-    echo -e "  ${GREEN}查看已安装运行时:${PLAIN} dotnet --list-runtimes"
-    echo -e "  ${GREEN}创建新项目:${PLAIN} dotnet new <template>"
-    echo -e "  ${GREEN}构建项目:${PLAIN} dotnet build"
-    echo -e "  ${GREEN}运行项目:${PLAIN} dotnet run"
-    echo -e "  ${GREEN}发布项目:${PLAIN} dotnet publish"
-    echo -e "  ${GREEN}安装 NuGet 包:${PLAIN} dotnet add package <package>"
-    echo -e ""
+    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} dotnet --version"
+    printf '%b\n' "  ${GREEN}查看已安装 SDK:${PLAIN} dotnet --list-sdks"
+    printf '%b\n' "  ${GREEN}查看已安装运行时:${PLAIN} dotnet --list-runtimes"
+    printf '%b\n' "  ${GREEN}创建新项目:${PLAIN} dotnet new <template>"
+    printf '%b\n' "  ${GREEN}构建项目:${PLAIN} dotnet build"
+    printf '%b\n' "  ${GREEN}运行项目:${PLAIN} dotnet run"
+    printf '%b\n' "  ${GREEN}发布项目:${PLAIN} dotnet publish"
+    printf '%b\n' "  ${GREEN}安装 NuGet 包:${PLAIN} dotnet add package <package>"
+    printf '%b\n' ""
 }
 
 # ==============================================================
@@ -3667,75 +3963,58 @@ function show_dotnet_usage() {
 
 # --- 模块: Runtime 安装菜单 (新增) ---
 function action_install_runtime() {
-    clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#            Runtime 安装管理器                #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}请选择要安装的 Runtime:${PLAIN}"
-    echo -e ""
-    echo -e "${GREEN}[1]${PLAIN} Node.js (使用 nvm)"
-    echo -e "${GREEN}[2]${PLAIN} Python (使用 pyenv)"
-    echo -e "${GREEN}[3]${PLAIN} PHP (使用 ondrej PPA)"
-    echo -e "${GREEN}[4]${PLAIN} Java (使用 Adoptium)"
-    echo -e "${GREEN}[5]${PLAIN} Go (官方二进制包)"
-    echo -e "${GREEN}[6]${PLAIN} .NET (官方安装)"
-    echo -e "${GREEN}[7]${PLAIN} 批量安装（选择多个）"
-    echo -e "${GREEN}[0]${PLAIN} 返回主菜单"
-    echo -e ""
-    read -r -p "请输入 [0-7]: " choice
+    local choice
+    while true; do
+        clear
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#            Runtime 安装管理器                #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}请选择要安装的 Runtime:${PLAIN}"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}[1]${PLAIN} Node.js (使用 nvm)"
+        printf '%b\n' "${GREEN}[2]${PLAIN} Python (使用 pyenv)"
+        printf '%b\n' "${GREEN}[3]${PLAIN} PHP (使用 ondrej PPA)"
+        printf '%b\n' "${GREEN}[4]${PLAIN} Java (使用 Adoptium)"
+        printf '%b\n' "${GREEN}[5]${PLAIN} Go (官方二进制包)"
+        printf '%b\n' "${GREEN}[6]${PLAIN} .NET (官方安装)"
+        printf '%b\n' "${GREEN}[7]${PLAIN} 批量安装（选择多个）"
+        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' ""
+        read -r -p "请输入 [0-7]: " choice
 
-    case "$choice" in
-        1)
-            install_nodejs
-            ;;
-        2)
-            install_python
-            ;;
-        3)
-            install_php
-            ;;
-        4)
-            install_java
-            ;;
-        5)
-            install_go
-            ;;
-        6)
-            install_dotnet
-            ;;
-        7)
-            install_runtime_batch
-            ;;
-        0)
-            return
-            ;;
-        *)
-            log_error "无效选择"
-            sleep 1
-            action_install_runtime
-            ;;
-    esac
+        case "$choice" in
+            1) run_menu_action install_nodejs ;;
+            2) run_menu_action install_python ;;
+            3) run_menu_action install_php ;;
+            4) run_menu_action install_java ;;
+            5) run_menu_action install_go ;;
+            6) run_menu_action install_dotnet ;;
+            7) run_menu_action install_runtime_batch ;;
+            0) return 0 ;;
+            *) menu_invalid_choice ;;
+        esac
+    done
 }
 
 # --- 批量安装 Runtime ---
 function install_runtime_batch() {
     clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#            批量安装 Runtime                   #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}请选择要安装的 Runtime（可多选，用空格分隔）:${PLAIN}"
-    echo -e ""
-    echo -e "${GREEN}[1]${PLAIN} Node.js"
-    echo -e "${GREEN}[2]${PLAIN} Python"
-    echo -e "${GREEN}[3]${PLAIN} PHP"
-    echo -e "${GREEN}[4]${PLAIN} Java"
-    echo -e "${GREEN}[5]${PLAIN} Go"
-    echo -e "${GREEN}[6]${PLAIN} .NET"
-    echo -e ""
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#            批量安装 Runtime                   #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}请选择要安装的 Runtime（可多选，用空格分隔）:${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}[1]${PLAIN} Node.js"
+    printf '%b\n' "${GREEN}[2]${PLAIN} Python"
+    printf '%b\n' "${GREEN}[3]${PLAIN} PHP"
+    printf '%b\n' "${GREEN}[4]${PLAIN} Java"
+    printf '%b\n' "${GREEN}[5]${PLAIN} Go"
+    printf '%b\n' "${GREEN}[6]${PLAIN} .NET"
+    printf '%b\n' ""
     read -r -p "请输入选择 (例如: 1 2): " selections
-
+    
     local runtimes=()
     for sel in $selections; do
         case "$sel" in
@@ -3747,22 +4026,24 @@ function install_runtime_batch() {
             6) runtimes+=("dotnet") ;;
         esac
     done
-
+    
     if [ ${#runtimes[@]} -eq 0 ]; then
         log_warning "未选择任何 Runtime"
         return
     fi
-
-    echo -e ""
+    
+    printf '%b\n' ""
     log_info "将安装以下 Runtime: ${runtimes[*]}"
     read -r -p "确认安装? [y/n]: " confirm
     case "$confirm" in
         y|Y|yes|YES)
             for runtime in "${runtimes[@]}"; do
-                echo -e ""
+                printf '%b\n' ""
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                install_runtime "$runtime"
-                echo -e ""
+                if ! invoke_action install_runtime "$runtime"; then
+                    log_warning "Runtime 安装失败或被取消: $runtime"
+                fi
+                printf '%b\n' ""
             done
             log_success "批量安装完成！"
             ;;
@@ -3783,14 +4064,32 @@ function action_install_nvm_node() {
 
 # --- 模块: SSH 安全配置（事务式） ---
 validate_authorized_keys_candidate() {
-    local candidate="$1"
+    local candidate="$1" line trimmed tmp valid_count=0
     [ -s "$candidate" ] || return 1
-    ssh-keygen -l -f "$candidate" > /dev/null 2>&1
+    command -v ssh-keygen > /dev/null 2>&1 || {
+        log_error "缺少 ssh-keygen，无法校验 authorized_keys"
+        return 1
+    }
+    tmp="$(mktemp /tmp/init-authorized-key.XXXXXX)" || return 1
+    chmod 600 "$tmp"
+    while IFS= read -r line || [ -n "$line" ]; do
+        trimmed="$(trim_whitespace "$line")"
+        [ -z "$trimmed" ] && continue
+        case "$trimmed" in \#*) continue ;; esac
+        printf '%s\n' "$line" > "$tmp"
+        if ! ssh-keygen -l -f "$tmp" > /dev/null 2>&1; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+        valid_count=$((valid_count + 1))
+    done < "$candidate"
+    rm -f -- "$tmp"
+    [ "$valid_count" -gt 0 ]
 }
 
 authorized_keys_has_valid_key() {
     local key_file="${1:-/root/.ssh/authorized_keys}"
-    [ -s "$key_file" ] && ssh-keygen -l -f "$key_file" > /dev/null 2>&1
+    [ -s "$key_file" ] && validate_authorized_keys_candidate "$key_file"
 }
 
 install_authorized_key() {
@@ -3952,102 +4251,92 @@ action_configure_ssh() {
 
 # --- 模块: 运行测试脚本 ---
 function action_run_test_scripts() {
-    clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#           服务器测试脚本选择                  #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}请选择要运行的测试脚本:${PLAIN}"
-    echo -e ""
-    echo -e "${GREEN}[1]${PLAIN} NodeQuality - 节点质量检测"
-    echo -e "${GREEN}[2]${PLAIN} Yabs - Yet Another Benchmark Script (性能测试)"
-    echo -e "${GREEN}[3]${PLAIN} RegionRestrictionCheck - 流媒体解锁检测"
-    echo -e "${GREEN}[4]${PLAIN} IP质量体检脚本 - IP 质量检测"
-    echo -e "${GREEN}[5]${PLAIN} 融合怪测评脚本 - 综合性能测试"
-    echo -e "${GREEN}[0]${PLAIN} 返回主菜单"
-    echo -e ""
-    read -r -p "请输入 [0-5]: " choice
+    local choice
+    while true; do
+        clear
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#           服务器测试脚本选择                  #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}请选择要运行的测试脚本:${PLAIN}"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}[1]${PLAIN} NodeQuality - 节点质量检测"
+        printf '%b\n' "${GREEN}[2]${PLAIN} Yabs - Yet Another Benchmark Script (性能测试)"
+        printf '%b\n' "${GREEN}[3]${PLAIN} RegionRestrictionCheck - 流媒体解锁检测"
+        printf '%b\n' "${GREEN}[4]${PLAIN} IP质量体检脚本 - IP 质量检测"
+        printf '%b\n' "${GREEN}[5]${PLAIN} 融合怪测评脚本 - 综合性能测试"
+        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' ""
+        read -r -p "请输入 [0-5]: " choice
 
-    case "$choice" in
-        1)
-            log_info "运行 NodeQuality 节点质量检测..."
-            echo -e "${YELLOW}注意: 此脚本将从网络下载到临时目录，记录 SHA256 后执行${PLAIN}"
-            if confirm_action "确认运行 NodeQuality?" "y"; then
-                local nodequality_url="https://run.NodeQuality.com"
-                run_remote_script "$nodequality_url" "NodeQuality 节点质量检测" || log_warning "已跳过 NodeQuality 脚本"
-            fi
-            ;;
-        2)
-            log_info "运行 Yabs 性能测试..."
-            echo -e "${YELLOW}注意: 此脚本将从网络下载到临时目录，记录 SHA256 后执行，测试可能需要几分钟${PLAIN}"
-            if confirm_action "确认运行 Yabs?" "y"; then
-                local yabs_url="https://yabs.sh"
-                run_remote_script "$yabs_url" "Yabs 性能测试" || log_warning "已跳过 Yabs 测试"
-            fi
-            ;;
-        3)
-            log_info "运行 RegionRestrictionCheck 流媒体解锁检测..."
-            echo -e "${YELLOW}注意: 此脚本将从网络下载到临时目录，记录 SHA256 后执行${PLAIN}"
-            if confirm_action "确认运行 RegionRestrictionCheck?" "y"; then
-                local unlock_url="https://check.unlock.media"
-                run_remote_script "$unlock_url" "RegionRestrictionCheck" || log_warning "已跳过 RegionRestrictionCheck"
-            fi
-            ;;
-        4)
-            log_info "运行 IP质量体检脚本..."
-            echo -e "${YELLOW}注意: 此脚本将从网络下载到临时目录，记录 SHA256 后执行${PLAIN}"
-            if confirm_action "确认运行 IP质量体检脚本?" "y"; then
-                local ipcheck_url="https://Check.Place"
-                run_remote_script "$ipcheck_url" "IP 质量检测脚本" "-I" || log_warning "已跳过 IP 质量检测脚本"
-            fi
-            ;;
-        5)
-            log_info "运行 融合怪测评脚本..."
-            echo -e "${YELLOW}注意: 此脚本将从网络下载到临时目录，记录 SHA256 后执行，测试可能需要较长时间${PLAIN}"
-            if confirm_action "确认运行 融合怪测评脚本?" "y"; then
-                local script_path="/tmp/ecs.sh"
-                local ecs_url="https://gitlab.com/spiritysdx/za/-/raw/main/ecs.sh"
-                if ! download_remote_script "$ecs_url" "$script_path" "融合怪测评脚本"; then
-                    log_warning "已跳过 融合怪测评脚本"
-                    return 0
+        case "$choice" in
+            1)
+                log_info "运行 NodeQuality 节点质量检测..."
+                if confirm_action "确认运行 NodeQuality?" "y"; then
+                    run_remote_script_unverified 'https://run.NodeQuality.com' \
+                        'NodeQuality 节点质量检测' || log_warning "已跳过 NodeQuality 脚本"
                 fi
-                run_cmd "执行融合怪脚本" "bash \"$script_path\""
-                run_cmd "清理融合怪脚本" "rm -f \"$script_path\""
-            fi
-            ;;
-        0)
-            return
-            ;;
-        *)
-            log_error "无效选择"
-            read -r -p "按 Enter 键返回..."
-            action_run_test_scripts
-            ;;
-    esac
-
-    echo -e ""
-    read -r -p "按 Enter 键返回主菜单..."
+                ;;
+            2)
+                log_info "运行 Yabs 性能测试..."
+                if confirm_action "确认运行 Yabs?" "y"; then
+                    run_remote_script_unverified 'https://yabs.sh' \
+                        'Yabs 性能测试' || log_warning "已跳过 Yabs 测试"
+                fi
+                ;;
+            3)
+                log_info "运行 RegionRestrictionCheck 流媒体解锁检测..."
+                if confirm_action "确认运行 RegionRestrictionCheck?" "y"; then
+                    run_remote_script_unverified 'https://check.unlock.media' \
+                        'RegionRestrictionCheck' || log_warning "已跳过 RegionRestrictionCheck"
+                fi
+                ;;
+            4)
+                log_info "运行 IP质量体检脚本..."
+                if confirm_action "确认运行 IP质量体检脚本?" "y"; then
+                    run_remote_script_unverified 'https://Check.Place' \
+                        'IP 质量检测脚本' '-I' || log_warning "已跳过 IP 质量检测脚本"
+                fi
+                ;;
+            5)
+                log_info "运行融合怪测评脚本..."
+                if confirm_action "确认运行融合怪测评脚本?" "y"; then
+                    local script_path='/tmp/ecs.sh'
+                    local ecs_url='https://gitlab.com/spiritysdx/za/-/raw/main/ecs.sh'
+                    if download_remote_script_unverified "$ecs_url" "$script_path" '融合怪测评脚本'; then
+                        bash "$script_path" || log_warning "融合怪测评脚本执行失败"
+                        rm -f -- "$script_path"
+                    else
+                        log_warning "已跳过融合怪测评脚本"
+                    fi
+                fi
+                ;;
+            0) return 0 ;;
+            *) menu_invalid_choice; continue ;;
+        esac
+        menu_pause
+    done
 }
 
 # --- 模块: DD 重装脚本 (新增) ---
 function action_dd_reinstall() {
     clear
-    echo -e "${RED}################################################${PLAIN}"
-    echo -e "${RED}#            ⚠️  危险警告: DD 系统重装            #${PLAIN}"
-    echo -e "${RED}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${RED}此操作将【擦除所有数据】并重装操作系统！${PLAIN}"
-    echo -e "${RED}此操作不可逆！请确保你已备份所有重要数据！${PLAIN}"
-    echo -e "${YELLOW}脚本来源: https://github.com/bin456789/reinstall${PLAIN}"
-    echo -e ""
-
+    printf '%b\n' "${RED}################################################${PLAIN}"
+    printf '%b\n' "${RED}#            ⚠️  危险警告: DD 系统重装            #${PLAIN}"
+    printf '%b\n' "${RED}################################################${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "${RED}此操作将【擦除所有数据】并重装操作系统！${PLAIN}"
+    printf '%b\n' "${RED}此操作不可逆！请确保你已备份所有重要数据！${PLAIN}"
+    printf '%b\n' "${YELLOW}脚本来源: https://github.com/bin456789/reinstall${PLAIN}"
+    printf '%b\n' ""
+    
     # 强制确认
     read -r -p "请输入 'install' 以确认执行 DD 重装 (输入其他取消): " confirm_dd
     if [ "$confirm_dd" != "install" ]; then
         log_info "操作已取消"
         return
     fi
-
+    
     log_info "正在下载 DD 脚本..."
     local dd_script="/root/reinstall.sh"
     local dd_url="https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh"
@@ -4060,22 +4349,22 @@ function action_dd_reinstall() {
         return 0
     fi
     log_success "DD 脚本下载成功"
-
-    echo -e ""
-    echo -e "${YELLOW}请选择重装目标系统:${PLAIN}"
-    echo -e "${GREEN}[1]${PLAIN} Debian 12 (Bookworm)"
-    echo -e "${GREEN}[2]${PLAIN} Debian 11 (Bullseye)"
-    echo -e "${GREEN}[3]${PLAIN} Ubuntu 22.04 (Jammy)"
-    echo -e "${GREEN}[4]${PLAIN} Ubuntu 20.04 (Focal)"
-    echo -e "${GREEN}[5]${PLAIN} CentOS 7"
-    echo -e "${GREEN}[6]${PLAIN} Alpine Linux"
-    echo -e "${GREEN}[7]${PLAIN} Windows 11 (需要大内存)"
-    echo -e "${GREEN}[8]${PLAIN} 自定义命令 (手动输入参数)"
-    echo -e "${GREEN}[0]${PLAIN} 取消"
-    echo -e ""
-
+    
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}请选择重装目标系统:${PLAIN}"
+    printf '%b\n' "${GREEN}[1]${PLAIN} Debian 12 (Bookworm)"
+    printf '%b\n' "${GREEN}[2]${PLAIN} Debian 11 (Bullseye)"
+    printf '%b\n' "${GREEN}[3]${PLAIN} Ubuntu 22.04 (Jammy)"
+    printf '%b\n' "${GREEN}[4]${PLAIN} Ubuntu 20.04 (Focal)"
+    printf '%b\n' "${GREEN}[5]${PLAIN} CentOS 7"
+    printf '%b\n' "${GREEN}[6]${PLAIN} Alpine Linux"
+    printf '%b\n' "${GREEN}[7]${PLAIN} Windows 11 (需要大内存)"
+    printf '%b\n' "${GREEN}[8]${PLAIN} 自定义命令 (手动输入参数)"
+    printf '%b\n' "${GREEN}[0]${PLAIN} 取消"
+    printf '%b\n' ""
+    
     read -r -p "请输入选择 [0-8]: " dd_choice
-
+    
     local dd_args=()
     case "$dd_choice" in
         1) dd_args=(debian 12) ;;
@@ -4095,12 +4384,12 @@ function action_dd_reinstall() {
 
     local cmd
     cmd=$(shell_join bash "$dd_script" "${dd_args[@]}")
-
-    echo -e ""
-    echo -e "${RED}即将执行: $cmd${PLAIN}"
-    echo -e "${RED}系统将在安装开始后重启，SSH 将断开连接。${PLAIN}"
-    echo -e "${YELLOW}默认密码通常为: 123@@@ (具体请参考脚本说明)${PLAIN}"
-
+    
+    printf '%b\n' ""
+    printf '%b\n' "${RED}即将执行: $cmd${PLAIN}"
+    printf '%b\n' "${RED}系统将在安装开始后重启，SSH 将断开连接。${PLAIN}"
+    printf '%b\n' "${YELLOW}默认密码通常为: 123@@@ (具体请参考脚本说明)${PLAIN}"
+    
     if confirm_dangerous_action "执行 DD 重装" "系统将被重置"; then
         log_info "开始执行 DD 重装..."
         run_cmd "执行 DD 重装" "$cmd"
@@ -4111,8 +4400,8 @@ function action_dd_reinstall() {
 function action_install_1panel() {
     log_info "安装 1Panel 面板..."
     local url="https://resource.1panel.pro/v2/quick_start.sh"
-    echo -e "${YELLOW}脚本来源: ${url}${PLAIN}"
-
+    printf '%b\n' "${YELLOW}脚本来源: ${url}${PLAIN}"
+    
     if confirm_action "确认安装 1Panel?" "y"; then
         run_remote_script "$url" "1Panel 官方安装脚本"
     fi
@@ -4121,11 +4410,11 @@ function action_install_1panel() {
 # --- 模块: 炫酷 MOTD (新增) ---
 function action_configure_motd() {
     log_info "配置炫酷 MOTD (登录欢迎信息)..."
-
+    
     # 安装必要工具
     update_apt_once
     install_packages_batch "lsb-release" "bc" "figlet" "lolcat"
-
+    
     # 创建 MOTD 脚本
     cat > /usr/local/bin/cool-motd.sh << 'EOF'
 #!/bin/bash
@@ -4161,29 +4450,29 @@ clear
 if command -v figlet >/dev/null && command -v lolcat >/dev/null; then
     hostname | figlet | lolcat
 else
-    echo -e "${BLUE}${BOLD}$(hostname)${PLAIN}"
+    printf '%b\n' "${BLUE}${BOLD}$(hostname)${PLAIN}"
 fi
 
-echo -e "${CYAN}==============================================================${PLAIN}"
-echo -e " ${BOLD}OS      :${PLAIN} $os_info"
-echo -e " ${BOLD}Kernel  :${PLAIN} $kernel_info"
-echo -e " ${BOLD}Uptime  :${PLAIN} $uptime_info"
-echo -e " ${BOLD}Load    :${PLAIN} $load_info"
-echo -e " ${BOLD}CPU     :${PLAIN} $cpu_info"
-echo -e " ${BOLD}Memory  :${PLAIN} $mem_used / $mem_total"
-echo -e " ${BOLD}Disk    :${PLAIN} $disk_used / $disk_total ($disk_usage)"
+printf '%b\n' "${CYAN}==============================================================${PLAIN}"
+printf '%b\n' " ${BOLD}OS      :${PLAIN} $os_info"
+printf '%b\n' " ${BOLD}Kernel  :${PLAIN} $kernel_info"
+printf '%b\n' " ${BOLD}Uptime  :${PLAIN} $uptime_info"
+printf '%b\n' " ${BOLD}Load    :${PLAIN} $load_info"
+printf '%b\n' " ${BOLD}CPU     :${PLAIN} $cpu_info"
+printf '%b\n' " ${BOLD}Memory  :${PLAIN} $mem_used / $mem_total"
+printf '%b\n' " ${BOLD}Disk    :${PLAIN} $disk_used / $disk_total ($disk_usage)"
 if [ -n "$ip_v4" ]; then
-    echo -e " ${BOLD}IPv4    :${PLAIN} $ip_v4"
+    printf '%b\n' " ${BOLD}IPv4    :${PLAIN} $ip_v4"
 fi
 if [ -n "$ip_v6" ]; then
-    echo -e " ${BOLD}IPv6    :${PLAIN} $ip_v6"
+    printf '%b\n' " ${BOLD}IPv6    :${PLAIN} $ip_v6"
 fi
-echo -e "${CYAN}==============================================================${PLAIN}"
-echo -e ""
+printf '%b\n' "${CYAN}==============================================================${PLAIN}"
+printf '%b\n' ""
 EOF
 
     chmod +x /usr/local/bin/cool-motd.sh
-
+    
     # 添加到 profile (所有用户登录时显示)
     if [ -d /etc/profile.d ]; then
         echo "/usr/local/bin/cool-motd.sh" > /etc/profile.d/99-cool-motd.sh
@@ -4202,10 +4491,10 @@ EOF
             fi
         done
     fi
-
+    
     # 禁用默认 MOTD (可选，视系统而定)
     chmod -x /etc/update-motd.d/* 2>/dev/null || true
-
+    
     # 立即展示效果
     /usr/local/bin/cool-motd.sh
 }
@@ -4230,7 +4519,7 @@ check_docker_app_ip() {
     echo "访问地址:"
     local ipv4=$(curl -s4m 5 https://api.ip.sb/ip || echo "")
     local docker_port=$(docker port "$docker_name" 2>/dev/null | head -n 1 | awk -F':' '{print $NF}')
-
+    
     if [ -n "$ipv4" ] && [ -n "$docker_port" ]; then
         echo "http://$ipv4:${docker_port}"
     fi
@@ -4241,16 +4530,16 @@ clear_container_rules() {
     local allowed_ip=$2
     local container_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name_or_id")
     if [ -z "$container_ip" ]; then return 1; fi
-
+    
     apt-get install -y iptables
-
-    iptables -D DOCKER-USER -p tcp -d "$container_ip" -j DROP 2>/dev/null
-    iptables -D DOCKER-USER -p tcp -s "$allowed_ip" -d "$container_ip" -j ACCEPT 2>/dev/null
-    iptables -D DOCKER-USER -p tcp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT 2>/dev/null
-    iptables -D DOCKER-USER -p udp -d "$container_ip" -j DROP 2>/dev/null
-    iptables -D DOCKER-USER -p udp -s "$allowed_ip" -d "$container_ip" -j ACCEPT 2>/dev/null
-    iptables -D DOCKER-USER -p udp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT 2>/dev/null
-
+    
+    iptables -D DOCKER-USER -p tcp -d "$container_ip" -j DROP 2>/dev/null || true
+    iptables -D DOCKER-USER -p tcp -s "$allowed_ip" -d "$container_ip" -j ACCEPT 2>/dev/null || true
+    iptables -D DOCKER-USER -p tcp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT 2>/dev/null || true
+    iptables -D DOCKER-USER -p udp -d "$container_ip" -j DROP 2>/dev/null || true
+    iptables -D DOCKER-USER -p udp -s "$allowed_ip" -d "$container_ip" -j ACCEPT 2>/dev/null || true
+    iptables -D DOCKER-USER -p udp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT 2>/dev/null || true
+    
     echo "已清除该容器的访问规则"
     save_iptables_rules
 }
@@ -4260,29 +4549,50 @@ block_container_port() {
     local allowed_ip=$2
     local container_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name_or_id")
     if [ -z "$container_ip" ]; then return 1; fi
-
+    
     apt-get install -y iptables
-
+    
     iptables -I DOCKER-USER -p tcp -d "$container_ip" -j DROP
     iptables -I DOCKER-USER -p tcp -s "$allowed_ip" -d "$container_ip" -j ACCEPT
     iptables -I DOCKER-USER -p tcp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT
     iptables -I DOCKER-USER -p udp -d "$container_ip" -j DROP
     iptables -I DOCKER-USER -p udp -s "$allowed_ip" -d "$container_ip" -j ACCEPT
     iptables -I DOCKER-USER -p udp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT
-
+    
     echo "已限制IP访问该服务"
     save_iptables_rules
 }
 
+detect_country_code() {
+    local country="" geo=""
+    country="$(curl -fsS --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
+        'https://ipinfo.io/country' 2>/dev/null | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' || true)"
+    if [[ "$country" =~ ^[A-Z]{2}$ ]]; then
+        printf '%s' "$country"
+        return 0
+    fi
+
+    geo="$(curl -fsS --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
+        'https://api.ip.sb/geoip' 2>/dev/null || true)"
+    if command -v jq > /dev/null 2>&1; then
+        country="$(printf '%s' "$geo" | jq -r '.country_code // empty' 2>/dev/null | tr '[:lower:]' '[:upper:]')"
+    else
+        country="$(printf '%s' "$geo" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | tr '[:lower:]' '[:upper:]')"
+    fi
+    [[ "$country" =~ ^[A-Z]{2}$ ]] || return 1
+    printf '%s' "$country"
+}
+
 install_add_docker_cn() {
-    local country=$(curl -s ipinfo.io/country)
+    local country=""
+    country="$(detect_country_code 2>/dev/null || true)"
     if [ "$country" = "CN" ]; then
         if [ "$DRY_RUN" = "1" ]; then
             log_info "[DRY RUN] 将写入 /etc/docker/daemon.json (国内镜像)"
             return 0
         fi
         write_file_atomic /etc/docker/daemon.json "Docker 国内镜像配置" 644 0 0 \
-            validate_json_candidate << EOF || return 1
+            validate_json_candidate <<'EOF' || return 1
 {
   "registry-mirrors": [
     "https://docker.1ms.run",
@@ -4295,9 +4605,12 @@ install_add_docker_cn() {
 }
 EOF
         log_info "已配置国内 Docker 镜像源"
+    elif [ -z "$country" ]; then
+        log_warning "无法在超时内判断国家/地区，已跳过自动写入国内 Docker 镜像"
+    else
+        log_info "检测到国家/地区代码 $country，不写入国内 Docker 镜像"
     fi
-    systemctl enable docker
-    systemctl restart docker
+    enable_and_restart_service docker
 }
 
 linuxmirrors_install_docker() {
@@ -4317,20 +4630,50 @@ docker_tato() {
     local volume_count=$(docker volume ls -q 2>/dev/null | wc -l)
 
     if command -v docker > /dev/null; then
-        echo -e "${CYAN}------------------------${PLAIN}"
-        echo -e "${GREEN}Docker 环境已安装${PLAIN}  容器: ${GREEN}$container_count${PLAIN}  镜像: ${GREEN}$image_count${PLAIN}  网络: ${GREEN}$network_count${PLAIN}  卷: ${GREEN}$volume_count${PLAIN}"
+        printf '%b\n' "${CYAN}------------------------${PLAIN}"
+        printf '%b\n' "${GREEN}Docker 环境已安装${PLAIN}  容器: ${GREEN}$container_count${PLAIN}  镜像: ${GREEN}$image_count${PLAIN}  网络: ${GREEN}$network_count${PLAIN}  卷: ${GREEN}$volume_count${PLAIN}"
     else
-        echo -e "${YELLOW}Docker 未安装${PLAIN}"
+        printf '%b\n' "${YELLOW}Docker 未安装${PLAIN}"
     fi
 }
 
+is_valid_ipv4() {
+    local ip="$1" a b c d octet
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    IFS='.' read -r a b c d <<< "$ip"
+    for octet in "$a" "$b" "$c" "$d"; do
+        [ "$octet" -ge 0 ] 2>/dev/null && [ "$octet" -le 255 ] 2>/dev/null || return 1
+    done
+}
+
+get_public_ipv4() {
+    local ip=""
+    ip="$(curl -fsS4 --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
+        'https://api.ip.sb/ip' 2>/dev/null | tr -d '[:space:]' || true)"
+    is_valid_ipv4 "$ip" || return 1
+    printf '%s' "$ip"
+}
+
+prompt_allowed_ipv4() {
+    local value="" detected=""
+    detected="$(get_public_ipv4 2>/dev/null || true)"
+    read -r -e -p "允许访问的来源 IPv4${detected:+ [默认 $detected]}: " value
+    value="${value:-$detected}"
+    is_valid_ipv4 "$value" || { log_error "无效 IPv4: ${value:-empty}"; return 1; }
+    printf '%s' "$value"
+}
+
 submenu_docker_container() {
+    local sub_choice dockername choice container_id container_info container_name network_info line
+    local network_name ip_address docker_name allowed_ip
+    local -a ids docker_args
+
     while true; do
         clear
         echo "Docker 容器列表"
-        docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"
+        docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" || true
         echo ""
-        echo -e "${CYAN}容器操作${PLAIN}"
+        printf '%b\n' "${CYAN}容器操作${PLAIN}"
         echo "------------------------"
         echo "1. 创建新的容器"
         echo "------------------------"
@@ -4342,95 +4685,98 @@ submenu_docker_container() {
         echo "11. 进入指定容器           12. 查看容器日志"
         echo "13. 查看容器网络           14. 查看容器占用"
         echo "------------------------"
-        echo "15. 开启容器端口访问 (IPTables)       16. 关闭容器端口访问 (IPTables)"
+        echo "15. 清除容器 IP 限制       16. 限制容器仅允许指定 IPv4"
         echo "------------------------"
         echo "0. 返回上一级"
         echo "------------------------"
-        read -e -p "请输入你的选择: " sub_choice
-        case $sub_choice in
+        read -r -e -p "请输入你的选择: " sub_choice
+        case "$sub_choice" in
             1)
-                read -e -p "请输入创建命令: " dockername
-                $dockername
+                docker_args=()
+                read -r -e -a docker_args -p "请输入 docker 子命令及参数（例如 run -d --name web nginx:latest）: "
+                if [ "${#docker_args[@]}" -eq 0 ]; then
+                    log_warning "命令不能为空"
+                elif confirm_dangerous_action "执行 Docker 命令" "docker $(shell_join "${docker_args[@]}")"; then
+                    docker "${docker_args[@]}"
+                fi
                 ;;
-            2)
-                read -e -p "请输入容器名: " dockername
-                docker start $dockername
-                ;;
-            3)
-                read -e -p "请输入容器名: " dockername
-                docker stop $dockername
-                ;;
-            4)
-                read -e -p "请输入容器名: " dockername
-                docker rm -f $dockername
-                ;;
-            5)
-                read -e -p "请输入容器名: " dockername
-                docker restart $dockername
+            2|3|4|5|11|12)
+                read -r -e -p "请输入容器名或 ID: " dockername
+                [ -n "$dockername" ] || { log_warning "容器名不能为空"; menu_pause; continue; }
+                case "$sub_choice" in
+                    2) docker start "$dockername" ;;
+                    3) docker stop "$dockername" ;;
+                    4)
+                        if confirm_dangerous_action "删除容器 $dockername" "将强制删除该容器"; then
+                            docker rm -f "$dockername"
+                        fi
+                        ;;
+                    5) docker restart "$dockername" ;;
+                    11) docker exec -it "$dockername" /bin/sh ;;
+                    12) docker logs "$dockername" ;;
+                esac
                 ;;
             6)
-                docker start $(docker ps -a -q)
+                mapfile -t ids < <(docker ps -a -q)
+                [ "${#ids[@]}" -gt 0 ] && docker start "${ids[@]}" || log_info "没有可启动的容器"
                 ;;
             7)
-                docker stop $(docker ps -q)
+                mapfile -t ids < <(docker ps -q)
+                [ "${#ids[@]}" -gt 0 ] && docker stop "${ids[@]}" || log_info "没有运行中的容器"
                 ;;
             8)
-                read -r -p "确定删除所有容器吗？(Y/n): " choice
-                if [[ "$choice" == "Y" ]]; then docker rm -f $(docker ps -a -q); fi
+                mapfile -t ids < <(docker ps -a -q)
+                if [ "${#ids[@]}" -eq 0 ]; then
+                    log_info "没有容器"
+                elif confirm_dangerous_action "删除全部容器" "将强制删除 ${#ids[@]} 个容器"; then
+                    docker rm -f "${ids[@]}"
+                fi
                 ;;
             9)
-                docker restart $(docker ps -q)
-                ;;
-            11)
-                read -e -p "请输入容器名: " dockername
-                docker exec -it $dockername /bin/sh
-                ;;
-            12)
-                read -e -p "请输入容器名: " dockername
-                docker logs $dockername
+                mapfile -t ids < <(docker ps -q)
+                [ "${#ids[@]}" -gt 0 ] && docker restart "${ids[@]}" || log_info "没有运行中的容器"
                 ;;
             13)
-                container_ids=$(docker ps -q)
-                printf "%-25s %-25s %-25s\n" "容器名称" "网络名称" "IP地址"
-                for container_id in $container_ids; do
-                    local container_info=$(docker inspect --format '{{ .Name }}{{ range $network, $config := .NetworkSettings.Networks }} {{ $network }} {{ $config.IPAddress }}{{ end }}' "$container_id")
-                    local container_name=$(echo "$container_info" | awk '{print $1}')
-                    local network_info=$(echo "$container_info" | cut -d' ' -f2-)
-                    echo "$network_info" | while read -r line; do
-                        local network_name=$(echo "$line" | awk '{print $1}')
-                        local ip_address=$(echo "$line" | awk '{print $2}')
-                        printf "%-20s %-20s %-15s\n" "$container_name" "$network_name" "$ip_address"
-                    done
-                done
+                printf '%-25s %-25s %-25s\n' "容器名称" "网络名称" "IP地址"
+                while IFS= read -r container_id; do
+                    [ -n "$container_id" ] || continue
+                    container_info="$(docker inspect --format '{{ .Name }}{{ range $network, $config := .NetworkSettings.Networks }} {{ $network }} {{ $config.IPAddress }}{{ end }}' "$container_id" 2>/dev/null || true)"
+                    container_name="$(printf '%s\n' "$container_info" | awk '{print $1}' | sed 's#^/##')"
+                    network_info="$(printf '%s\n' "$container_info" | cut -d' ' -f2-)"
+                    while IFS= read -r line; do
+                        network_name="$(printf '%s\n' "$line" | awk '{print $1}')"
+                        ip_address="$(printf '%s\n' "$line" | awk '{print $2}')"
+                        [ -n "$network_name" ] && printf '%-25s %-25s %-25s\n' "$container_name" "$network_name" "$ip_address"
+                    done <<< "$network_info"
+                done < <(docker ps -q)
                 ;;
-            14)
-                docker stats --no-stream
-                ;;
-            15)
-                read -e -p "请输入容器名: " docker_name
-                local ipv4=$(curl -s4m 5 https://api.ip.sb/ip || echo "")
-                clear_container_rules "$docker_name" "$ipv4"
+            14) docker stats --no-stream ;;
+            15|16)
+                read -r -e -p "请输入容器名或 ID: " docker_name
+                allowed_ip="$(prompt_allowed_ipv4)" || { menu_pause; continue; }
+                if [ "$sub_choice" = "15" ]; then
+                    clear_container_rules "$docker_name" "$allowed_ip"
+                else
+                    block_container_port "$docker_name" "$allowed_ip"
+                fi
                 check_docker_app_ip "$docker_name"
                 ;;
-            16)
-                read -e -p "请输入容器名: " docker_name
-                local ipv4=$(curl -s4m 5 https://api.ip.sb/ip || echo "")
-                block_container_port "$docker_name" "$ipv4"
-                check_docker_app_ip "$docker_name"
-                ;;
-            0) break ;;
+            0) return 0 ;;
+            *) menu_invalid_choice; continue ;;
         esac
-        read -r -p "按 Enter 继续..."
+        menu_pause
     done
 }
 
 submenu_docker_image() {
+    local sub_choice imagenames
+    local -a ids
     while true; do
         clear
         echo "Docker 镜像列表"
-        docker image ls
+        docker image ls || true
         echo ""
-        echo -e "${CYAN}镜像操作${PLAIN}"
+        printf '%b\n' "${CYAN}镜像操作${PLAIN}"
         echo "------------------------"
         echo "1. 拉取镜像"
         echo "2. 更新镜像"
@@ -4439,37 +4785,41 @@ submenu_docker_image() {
         echo "------------------------"
         echo "0. 返回上一级"
         echo "------------------------"
-        read -e -p "请输入你的选择: " sub_choice
-        case $sub_choice in
-            1)
-                read -e -p "请输入镜像名: " imagenames
-                docker pull $imagenames
-                ;;
-            2)
-                read -e -p "请输入镜像名: " imagenames
-                docker pull $imagenames
+        read -r -e -p "请输入你的选择: " sub_choice
+        case "$sub_choice" in
+            1|2)
+                read -r -e -p "请输入镜像名: " imagenames
+                [ -n "$imagenames" ] && docker pull "$imagenames" || log_warning "镜像名不能为空"
                 ;;
             3)
-                read -e -p "请输入镜像名: " imagenames
-                docker rmi -f $imagenames
+                read -r -e -p "请输入镜像名或 ID: " imagenames
+                if [ -n "$imagenames" ] && confirm_dangerous_action "删除镜像 $imagenames" "将强制删除该镜像"; then
+                    docker rmi -f "$imagenames"
+                fi
                 ;;
             4)
-                read -r -p "确定删除所有镜像吗？(Y/n): " choice
-                if [[ "$choice" == "Y" ]]; then docker rmi -f $(docker images -q); fi
+                mapfile -t ids < <(docker images -q | sort -u)
+                if [ "${#ids[@]}" -eq 0 ]; then
+                    log_info "没有镜像"
+                elif confirm_dangerous_action "删除全部镜像" "将强制删除 ${#ids[@]} 个镜像"; then
+                    docker rmi -f "${ids[@]}"
+                fi
                 ;;
-            0) break ;;
+            0) return 0 ;;
+            *) menu_invalid_choice; continue ;;
         esac
-        read -r -p "按 Enter 继续..."
+        menu_pause
     done
 }
 
 submenu_docker_network() {
+    local sub_choice name net con
     while true; do
         clear
         echo "Docker 网络列表"
-        docker network ls
+        docker network ls || true
         echo ""
-        echo -e "${CYAN}网络操作${PLAIN}"
+        printf '%b\n' "${CYAN}网络操作${PLAIN}"
         echo "------------------------"
         echo "1. 创建网络"
         echo "2. 加入网络"
@@ -4478,52 +4828,56 @@ submenu_docker_network() {
         echo "------------------------"
         echo "0. 返回上一级"
         echo "------------------------"
-        read -e -p "请输入你的选择: " sub_choice
-        case $sub_choice in
+        read -r -e -p "请输入你的选择: " sub_choice
+        case "$sub_choice" in
             1)
-                read -e -p "网络名: " name
-                docker network create $name
+                read -r -e -p "网络名: " name
+                [ -n "$name" ] && docker network create "$name" || log_warning "网络名不能为空"
                 ;;
-            2)
-                read -e -p "网络名: " net
-                read -e -p "容器名: " con
-                docker network connect $net $con
-                ;;
-            3)
-                read -e -p "网络名: " net
-                read -e -p "容器名: " con
-                docker network disconnect $net $con
+            2|3)
+                read -r -e -p "网络名: " net
+                read -r -e -p "容器名: " con
+                if [ -z "$net" ] || [ -z "$con" ]; then
+                    log_warning "网络名和容器名不能为空"
+                elif [ "$sub_choice" = "2" ]; then
+                    docker network connect "$net" "$con"
+                else
+                    docker network disconnect "$net" "$con"
+                fi
                 ;;
             4)
-                read -e -p "网络名: " net
-                docker network rm $net
+                read -r -e -p "网络名: " net
+                if [ -n "$net" ] && confirm_dangerous_action "删除 Docker 网络 $net" "使用中的网络可能删除失败"; then
+                    docker network rm "$net"
+                fi
                 ;;
-            0) break ;;
+            0) return 0 ;;
+            *) menu_invalid_choice; continue ;;
         esac
-        read -r -p "按 Enter 继续..."
+        menu_pause
     done
 }
 
 submenu_docker_manager() {
     while true; do
       clear
-      echo -e "${CYAN}=================================================${PLAIN}"
-      echo -e "${CYAN}           Docker 管理器 (by kejilion.sh)${PLAIN}"
-      echo -e "${CYAN}=================================================${PLAIN}"
+      printf '%b\n' "${CYAN}=================================================${PLAIN}"
+      printf '%b\n' "${CYAN}           Docker 管理器 (by kejilion.sh)${PLAIN}"
+      printf '%b\n' "${CYAN}=================================================${PLAIN}"
       docker_tato
-      echo -e "${CYAN}------------------------${PLAIN}"
-      echo -e "${GREEN}1.${PLAIN}   安装/更新 Docker 环境 ${YELLOW}★${PLAIN}"
-      echo -e "${CYAN}------------------------${PLAIN}"
-      echo -e "${GREEN}2.${PLAIN}   查看 Docker 全局状态 ${YELLOW}★${PLAIN}"
-      echo -e "${CYAN}------------------------${PLAIN}"
-      echo -e "${GREEN}3.${PLAIN}   Docker 容器管理 ${YELLOW}★${PLAIN}"
-      echo -e "${GREEN}4.${PLAIN}   Docker 镜像管理"
-      echo -e "${GREEN}5.${PLAIN}   Docker 网络管理"
-      echo -e "${CYAN}------------------------${PLAIN}"
-      echo -e "${GREEN}8.${PLAIN}   更换 Docker 源 (国内加速)"
-      echo -e "${CYAN}------------------------${PLAIN}"
-      echo -e "${GREEN}0.${PLAIN}   返回主菜单"
-      echo -e "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${GREEN}1.${PLAIN}   安装/更新 Docker 环境 ${YELLOW}★${PLAIN}"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${GREEN}2.${PLAIN}   查看 Docker 全局状态 ${YELLOW}★${PLAIN}"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${GREEN}3.${PLAIN}   Docker 容器管理 ${YELLOW}★${PLAIN}"
+      printf '%b\n' "${GREEN}4.${PLAIN}   Docker 镜像管理"
+      printf '%b\n' "${GREEN}5.${PLAIN}   Docker 网络管理"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${GREEN}8.${PLAIN}   更换 Docker 源 (国内加速)"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
+      printf '%b\n' "${GREEN}0.${PLAIN}   返回主菜单"
+      printf '%b\n' "${CYAN}------------------------${PLAIN}"
       read -e -p "请输入你的选择: " sub_choice
 
       case $sub_choice in
@@ -4553,21 +4907,21 @@ submenu_docker_manager() {
 submenu_app_market() {
     while true; do
         clear
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${CYAN}           应用市场 (精选)                         ${PLAIN}"
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 1Panel 面板 (现代化管理面板)"
-        echo -e "${GREEN}2.${PLAIN} aaPanel (宝塔国际版)"
-        echo -e "${GREEN}3.${PLAIN} 宝塔面板 (官方版)"
-        echo -e "${CYAN}-------------------------------------------------${PLAIN}"
-        echo -e "${GREEN}4.${PLAIN} Nginx Proxy Manager (反向代理面板)"
-        echo -e "${GREEN}5.${PLAIN} Portainer (Docker 管理面板)"
-        echo -e "${GREEN}6.${PLAIN} Uptime Kuma (监控工具)"
-        echo -e "${CYAN}-------------------------------------------------${PLAIN}"
-        echo -e "${GREEN}0.${PLAIN} 返回主菜单"
-        echo -e "${CYAN}-------------------------------------------------${PLAIN}"
+        printf '%b\n' "${CYAN}=================================================${PLAIN}"
+        printf '%b\n' "${CYAN}           应用市场 (精选)                         ${PLAIN}"
+        printf '%b\n' "${CYAN}=================================================${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 1Panel 面板 (现代化管理面板)"
+        printf '%b\n' "${GREEN}2.${PLAIN} aaPanel (宝塔国际版)"
+        printf '%b\n' "${GREEN}3.${PLAIN} 宝塔面板 (官方版)"
+        printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
+        printf '%b\n' "${GREEN}4.${PLAIN} Nginx Proxy Manager (反向代理面板)"
+        printf '%b\n' "${GREEN}5.${PLAIN} Portainer (Docker 管理面板)"
+        printf '%b\n' "${GREEN}6.${PLAIN} Uptime Kuma (监控工具)"
+        printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回主菜单"
+        printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
         read -r -p "请输入选择: " app_choice
-
+        
         case "$app_choice" in
             1)
                 local url="https://resource.1panel.pro/v2/quick_start.sh"
@@ -4647,13 +5001,13 @@ function cd2_get_compose_cmd() {
 }
 
 function action_cd2_mount_helper() {
-    echo -e ""
-    echo -e "${CYAN}CloudDrive2 挂载共享设置${PLAIN}"
-    echo -e "------------------------"
-    echo -e "${GREEN}1.${PLAIN} Docker 为 systemd 服务 (写入 MountFlags=shared)"
-    echo -e "${GREEN}2.${PLAIN} 临时 make-shared (重启后需重做)"
-    echo -e "${GREEN}0.${PLAIN} 返回"
-    echo -e "------------------------"
+    printf '%b\n' ""
+    printf '%b\n' "${CYAN}CloudDrive2 挂载共享设置${PLAIN}"
+    printf '%b\n' "------------------------"
+    printf '%b\n' "${GREEN}1.${PLAIN} Docker 为 systemd 服务 (写入 MountFlags=shared)"
+    printf '%b\n' "${GREEN}2.${PLAIN} 临时 make-shared (重启后需重做)"
+    printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+    printf '%b\n' "------------------------"
     read -r -p "请输入选择 [0-2]: " mount_choice
 
     case "$mount_choice" in
@@ -4686,7 +5040,7 @@ EOF
                 log_error "无法解析挂载点，请检查路径: $target_path"
                 return 1
             fi
-            run_cmd "设置共享挂载" "mount --make-shared \"$mount_point\""
+            run_command "设置共享挂载" mount --make-shared "$mount_point"
             log_warning "提示: make-shared 仅当前运行周期生效，重启后需要重新设置"
             ;;
         0) return ;;
@@ -4736,10 +5090,10 @@ function action_setup_cd2_docker_compose() {
         read -e -p "时区 TZ (默认: $tz_default): " tz
         if [ -z "$tz" ]; then tz="$tz_default"; fi
 
-        run_cmd "创建部署目录" "mkdir -p \"$base_dir\""
-        run_cmd "创建 CloudDrive2 目录" "mkdir -p \"$cloud_dir\" \"$config_dir\""
+        run_command "创建部署目录" mkdir -p "$base_dir"
+        run_command "创建 CloudDrive2 目录" mkdir -p "$cloud_dir" "$config_dir"
         if [ -n "$media_dir" ]; then
-            run_cmd "创建媒体目录" "mkdir -p \"$media_dir\""
+            run_command "创建媒体目录" mkdir -p "$media_dir"
         fi
 
         if [ "$DRY_RUN" = "1" ]; then
@@ -4812,10 +5166,10 @@ function action_setup_cd2_native() {
     if [ -n "$input" ]; then base_dir="$input"; fi
 
     log_info "将执行原生安装脚本: $script_path"
-    echo -e "${YELLOW}说明: 该脚本会更新 apt 并从 GitHub 下载 CloudDrive2${PLAIN}"
+    printf '%b\n' "${YELLOW}说明: 该脚本会更新 apt 并从 GitHub 下载 CloudDrive2${PLAIN}"
 
     if confirm_action "继续执行原生安装脚本?" "n"; then
-        run_cmd "创建安装目录" "mkdir -p \"$base_dir\""
+        run_command "创建安装目录" mkdir -p "$base_dir"
         run_cmd "执行 CloudDrive2 原生安装脚本" "cd \"$base_dir\" && bash \"$script_path\""
         log_success "原生安装脚本执行完成"
         log_info "可使用: tmux attach -t clouddrive2 查看运行状态"
@@ -4827,14 +5181,14 @@ function action_setup_cd2_native() {
 function action_setup_cd2() {
     while true; do
         clear
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${CYAN}           CloudDrive2 (CD2) 安装向导            ${PLAIN}"
-        echo -e "${CYAN}=================================================${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} Docker Compose 安装 (推荐)"
-        echo -e "${GREEN}2.${PLAIN} 原生安装 (install_cd2.sh)"
-        echo -e "${GREEN}3.${PLAIN} 挂载共享设置 (MountFlags/make-shared)"
-        echo -e "${GREEN}0.${PLAIN} 返回主菜单"
-        echo -e "${CYAN}-------------------------------------------------${PLAIN}"
+        printf '%b\n' "${CYAN}=================================================${PLAIN}"
+        printf '%b\n' "${CYAN}           CloudDrive2 (CD2) 安装向导            ${PLAIN}"
+        printf '%b\n' "${CYAN}=================================================${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} Docker Compose 安装 (推荐)"
+        printf '%b\n' "${GREEN}2.${PLAIN} 原生安装 (install_cd2.sh)"
+        printf '%b\n' "${GREEN}3.${PLAIN} 挂载共享设置 (MountFlags/make-shared)"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回主菜单"
+        printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
         read -r -p "请输入选择: " cd2_choice
 
         case "$cd2_choice" in
@@ -4848,134 +5202,98 @@ function action_setup_cd2() {
     done
 }
 
+action_show_system_info() {
+    log_info "系统信息:"
+    uname -a || true
+    printf '%s\n' '--------------------------------'
+    if [ -f /etc/os-release ]; then
+        grep '^PRETTY_NAME=' /etc/os-release || true
+    fi
+    printf '%s\n' '--------------------------------'
+    free -h || true
+    printf '%s\n' '--------------------------------'
+    df -h / || true
+}
+
+action_enable_bbr() {
+    local current=""
+    current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    if [ "$current" = "bbr" ]; then
+        log_info "BBR 已启用"
+        return 0
+    fi
+    if [ "$DRY_RUN" != "1" ] && ! modprobe tcp_bbr 2>/dev/null; then
+        log_error "当前内核未提供 tcp_bbr 模块"
+        return 1
+    fi
+    write_file_atomic /etc/sysctl.d/99-init-bbr.conf "BBR 拥塞控制" 644 0 0 \
+        validate_nonempty_text_candidate <<'EOF' || return 1
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    run_command "应用 BBR sysctl 配置" sysctl --system || return 1
+    if [ "$DRY_RUN" != "1" ]; then
+        current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+        [ "$current" = "bbr" ] || { log_error "BBR 配置未生效"; return 1; }
+    fi
+    log_success "BBR 已启用"
+}
+
 function action_toolbox() {
-    clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              系统工具箱                      #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${GREEN}[1]${PLAIN} DD 系统重装 (危险)"
-    echo -e "${GREEN}[2]${PLAIN} 1Panel 面板 (快捷)"
-    echo -e "${GREEN}[3]${PLAIN} 配置炫酷 MOTD (登录欢迎信息)"
-    echo -e "${GREEN}[4]${PLAIN} 清理系统 (移除无用包/缓存)"
-    echo -e "${GREEN}[5]${PLAIN} 查看系统信息"
-    echo -e "${GREEN}[6]${PLAIN} 开启 BBR (如果未开启)"
-    echo -e "${GREEN}[7]${PLAIN} 清理痕迹/历史记录 (危险)"
-    echo -e "${GREEN}[8]${PLAIN} 服务健康检查 (SSH/UFW/Fail2ban/Docker)"
-    echo -e "${GREEN}[9]${PLAIN} 性能优化预设 (sysctl)"
-    echo -e "${GREEN}[10]${PLAIN} 磁盘工具 (挂载/SMART/Trim)"
-    echo -e "${GREEN}[11]${PLAIN} 用户管理 (新建用户/SSH/Sudo/禁用Root)"
-    echo -e "${GREEN}[12]${PLAIN} 备份/恢复 (restic/borg)"
-    echo -e "${GREEN}[13]${PLAIN} 监控/告警基础"
-    echo -e "${GREEN}[14]${PLAIN} 证书/反向代理"
-    echo -e "${GREEN}[15]${PLAIN} 安全审计"
-    echo -e "${GREEN}[16]${PLAIN} Docker Compose 项目备份"
-    echo -e "${GREEN}[17]${PLAIN} 模块状态总览"
-    echo -e "${GREEN}[18]${PLAIN} 脚本自检/ShellCheck"
-    echo -e "${GREEN}[19]${PLAIN} 运维增强中心 (Profile/报告/安全基线)"
-    echo -e "${GREEN}[0]${PLAIN} 返回主菜单"
-    echo -e ""
+    local tool_choice
+    while true; do
+        clear
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              系统工具箱                      #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}[1]${PLAIN} DD 系统重装 (危险)"
+        printf '%b\n' "${GREEN}[2]${PLAIN} 1Panel 面板 (快捷)"
+        printf '%b\n' "${GREEN}[3]${PLAIN} 配置炫酷 MOTD (登录欢迎信息)"
+        printf '%b\n' "${GREEN}[4]${PLAIN} 清理系统 (移除无用包/缓存)"
+        printf '%b\n' "${GREEN}[5]${PLAIN} 查看系统信息"
+        printf '%b\n' "${GREEN}[6]${PLAIN} 开启 BBR (如果未开启)"
+        printf '%b\n' "${GREEN}[7]${PLAIN} 清理痕迹/历史记录 (危险)"
+        printf '%b\n' "${GREEN}[8]${PLAIN} 服务健康检查 (SSH/UFW/Fail2ban/Docker)"
+        printf '%b\n' "${GREEN}[9]${PLAIN} 性能优化预设 (sysctl)"
+        printf '%b\n' "${GREEN}[10]${PLAIN} 磁盘工具 (挂载/SMART/Trim)"
+        printf '%b\n' "${GREEN}[11]${PLAIN} 用户管理 (新建用户/SSH/Sudo/禁用Root)"
+        printf '%b\n' "${GREEN}[12]${PLAIN} 备份/恢复 (restic/borg)"
+        printf '%b\n' "${GREEN}[13]${PLAIN} 监控/告警基础"
+        printf '%b\n' "${GREEN}[14]${PLAIN} 证书/反向代理"
+        printf '%b\n' "${GREEN}[15]${PLAIN} 安全审计"
+        printf '%b\n' "${GREEN}[16]${PLAIN} Docker Compose 项目备份"
+        printf '%b\n' "${GREEN}[17]${PLAIN} 模块状态总览"
+        printf '%b\n' "${GREEN}[18]${PLAIN} 脚本自检/ShellCheck"
+        printf '%b\n' "${GREEN}[19]${PLAIN} 运维增强中心 (Profile/报告/安全基线)"
+        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' ""
+        read -r -p "请输入选择 [0-19]: " tool_choice
 
-    read -r -p "请输入选择 [0-19]: " tool_choice
-
-    case "$tool_choice" in
-        1) action_dd_reinstall ;;
-        2)
-            local url="https://resource.1panel.pro/v2/quick_start.sh"
-            run_remote_script "$url" "1Panel 官方安装脚本"
-            ;;
-        3) action_configure_motd ;;
-        4) cleanup ;;
-        5)
-            echo -e ""
-            log_info "系统信息:"
-            uname -a
-            echo -e "--------------------------------"
-            cat /etc/os-release | grep PRETTY_NAME
-            echo -e "--------------------------------"
-            free -h
-            echo -e "--------------------------------"
-            df -h /
-            echo -e ""
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        6)
-            if ! grep -q "bbr" /etc/sysctl.conf; then
-                if [ "$DRY_RUN" = "1" ]; then
-                    log_info "[DRY RUN] 追加 BBR 配置到 /etc/sysctl.conf"
-                    log_info "[DRY RUN] 应用 sysctl -p"
-                else
-                    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-                    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-                    sysctl -p
-                fi
-                log_success "BBR 已开启"
-            else
-                log_info "BBR 似乎已开启"
-            fi
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        7)
-            action_clean_traces
-            action_toolbox
-            ;;
-        8)
-            action_service_health
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        9)
-            action_sysctl_presets
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        10)
-            action_disk_tools
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        11)
-            action_user_manager
-            read -r -p "按 Enter 继续..."
-            action_toolbox
-            ;;
-        12)
-            action_backup_restore
-            action_toolbox
-            ;;
-        13)
-            action_monitoring_alerts
-            action_toolbox
-            ;;
-        14)
-            action_reverse_proxy_cert
-            action_toolbox
-            ;;
-        15)
-            action_security_audit
-            action_toolbox
-            ;;
-        16)
-            action_docker_compose_backup
-            action_toolbox
-            ;;
-        17)
-            action_module_status_overview
-            action_toolbox
-            ;;
-        18)
-            action_script_quality
-            action_toolbox
-            ;;
-        19)
-            action_ops_enhancements
-            action_toolbox
-            ;;
-        0) show_menu ;;
-        *) action_toolbox ;;
-    esac
+        case "$tool_choice" in
+            1) run_menu_action action_dd_reinstall ;;
+            2) run_menu_action action_install_1panel ;;
+            3) run_menu_action action_configure_motd ;;
+            4) run_menu_action cleanup ;;
+            5) run_menu_action action_show_system_info ;;
+            6) run_menu_action action_enable_bbr ;;
+            7) run_menu_action action_clean_traces ;;
+            8) run_menu_action action_service_health ;;
+            9) run_menu_action action_sysctl_presets ;;
+            10) run_menu_action action_disk_tools ;;
+            11) run_menu_action action_user_manager ;;
+            12) run_menu_flow action_backup_restore ;;
+            13) run_menu_flow action_monitoring_alerts ;;
+            14) run_menu_flow action_reverse_proxy_cert ;;
+            15) run_menu_flow action_security_audit ;;
+            16) run_menu_flow action_docker_compose_backup ;;
+            17) run_menu_flow action_module_status_overview ;;
+            18) run_menu_flow action_script_quality ;;
+            19) run_menu_flow action_ops_enhancements ;;
+            0) return 0 ;;
+            *) menu_invalid_choice ;;
+        esac
+    done
 }
 
 # --- 模块: 服务健康检查 ---
@@ -4994,11 +5312,11 @@ function action_service_health() {
         fi
         printf "%-12s %-10s %-10s\n" "$svc" "$active" "$enabled"
     done
-    echo -e ""
+    printf '%b\n' ""
     if command -v ufw > /dev/null 2>&1; then
         ufw status numbered || true
     fi
-    echo -e ""
+    printf '%b\n' ""
     if command -v ss > /dev/null 2>&1; then
         log_info "监听端口:"
         ss -tulpn | head -n 30 || true
@@ -5008,9 +5326,9 @@ function action_service_health() {
 # --- 模块: sysctl 性能预设 ---
 function action_sysctl_presets() {
     log_info "sysctl 性能预设..."
-    echo -e "${GREEN}[1]${PLAIN} 保守 (conservative)"
-    echo -e "${GREEN}[2]${PLAIN} 标准 (standard)"
-    echo -e "${GREEN}[3]${PLAIN} 激进 (aggressive)"
+    printf '%b\n' "${GREEN}[1]${PLAIN} 保守 (conservative)"
+    printf '%b\n' "${GREEN}[2]${PLAIN} 标准 (standard)"
+    printf '%b\n' "${GREEN}[3]${PLAIN} 激进 (aggressive)"
     read -r -p "请选择 [1-3]: " preset_choice
     local preset_file="/etc/sysctl.d/99-init-presets.conf"
     local content=""
@@ -5059,16 +5377,16 @@ vm.swappiness = 10"
 # --- 模块: 磁盘工具 ---
 function action_disk_tools() {
     log_info "磁盘详细报告..."
-    echo -e "------------------------------------------------"
-    echo -e "磁盘概览 (按容量排序):"
+    printf '%b\n' "------------------------------------------------"
+    printf '%b\n' "磁盘概览 (按容量排序):"
     lsblk -dn -o NAME,SIZE,TYPE,MODEL,ROTA | awk '$3=="disk"{print $0}' | sort -k2 -h || true
-    echo -e ""
+    printf '%b\n' ""
 
-    echo -e "文件系统与挂载:"
+    printf '%b\n' "文件系统与挂载:"
     lsblk -f || true
-    echo -e ""
+    printf '%b\n' ""
     df -h || true
-    echo -e ""
+    printf '%b\n' ""
 
     if confirm_action "是否收集 IO 统计? (需要 sysstat)" "y"; then
         if ! command -v iostat > /dev/null 2>&1; then
@@ -5081,7 +5399,7 @@ function action_disk_tools() {
         else
             iostat -dx 1 3 || true
         fi
-        echo -e ""
+        printf '%b\n' ""
     fi
 
     if confirm_action "是否收集 SMART/NVMe 统计? (smartctl/nvme-cli)" "y"; then
@@ -5098,8 +5416,8 @@ function action_disk_tools() {
 
         for disk in $(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}'); do
             local dev="/dev/${disk}"
-            echo -e ""
-            echo -e "==== ${dev} ===="
+            printf '%b\n' ""
+            printf '%b\n' "==== ${dev} ===="
 
             if echo "$disk" | grep -q "^nvme"; then
                 if command -v nvme > /dev/null 2>&1; then
@@ -5152,12 +5470,12 @@ configure_restic_local_backup() {
     local backend backend_choice
     local aws_access_key="" aws_secret_key="" b2_account_id="" b2_account_key=""
 
-    echo -e "${YELLOW}请选择 restic 仓库后端:${PLAIN}"
-    echo -e "${GREEN}1.${PLAIN} 本地目录"
-    echo -e "${GREEN}2.${PLAIN} SFTP (user@host:/path)"
-    echo -e "${GREEN}3.${PLAIN} S3 兼容存储"
-    echo -e "${GREEN}4.${PLAIN} Backblaze B2"
-    echo -e "${GREEN}5.${PLAIN} 自定义 restic repository 字符串"
+    printf '%b\n' "${YELLOW}请选择 restic 仓库后端:${PLAIN}"
+    printf '%b\n' "${GREEN}1.${PLAIN} 本地目录"
+    printf '%b\n' "${GREEN}2.${PLAIN} SFTP (user@host:/path)"
+    printf '%b\n' "${GREEN}3.${PLAIN} S3 兼容存储"
+    printf '%b\n' "${GREEN}4.${PLAIN} Backblaze B2"
+    printf '%b\n' "${GREEN}5.${PLAIN} 自定义 restic repository 字符串"
     read -r -p "请选择 [1-5，默认 1]: " backend_choice
     backend_choice="${backend_choice:-1}"
 
@@ -5394,7 +5712,7 @@ preview_restic_snapshot() {
     fi
     log_info "快照统计:"
     restic stats "$snapshot" || true
-    echo -e ""
+    printf '%b\n' ""
     log_info "快照文件预览 (前 200 行):"
     restic ls "$snapshot" | sed -n '1,200p' || true
 }
@@ -5416,10 +5734,10 @@ restore_restic_snapshot() {
     if confirm_action "是否先预览该快照内容?" "y"; then
         log_info "快照统计:"
         restic stats "$snapshot" || true
-        echo -e ""
+        printf '%b\n' ""
         log_info "快照文件预览 (前 200 行):"
         restic ls "$snapshot" | sed -n '1,200p' || true
-        echo -e ""
+        printf '%b\n' ""
     fi
     read -r -p "恢复目标目录 [默认 /restore/restic]: " target
     target="${target:-/restore/restic}"
@@ -5485,18 +5803,18 @@ function action_backup_restore() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              备份 / 恢复                     #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 安装备份工具 (restic/borgbackup)"
-        echo -e "${GREEN}2.${PLAIN} 配置本地 restic 定时备份"
-        echo -e "${GREEN}3.${PLAIN} 立即执行 restic 备份"
-        echo -e "${GREEN}4.${PLAIN} 查看 restic 快照"
-        echo -e "${GREEN}5.${PLAIN} 预览 restic 快照"
-        echo -e "${GREEN}6.${PLAIN} 恢复 restic 快照"
-        echo -e "${GREEN}7.${PLAIN} restic 恢复演练"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              备份 / 恢复                     #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 安装备份工具 (restic/borgbackup)"
+        printf '%b\n' "${GREEN}2.${PLAIN} 配置本地 restic 定时备份"
+        printf '%b\n' "${GREEN}3.${PLAIN} 立即执行 restic 备份"
+        printf '%b\n' "${GREEN}4.${PLAIN} 查看 restic 快照"
+        printf '%b\n' "${GREEN}5.${PLAIN} 预览 restic 快照"
+        printf '%b\n' "${GREEN}6.${PLAIN} 恢复 restic 快照"
+        printf '%b\n' "${GREEN}7.${PLAIN} restic 恢复演练"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-7]: " choice
         case "$choice" in
             1) run_menu_action install_backup_tools ;;
@@ -5640,7 +5958,7 @@ show_monitoring_status() {
     systemctl is-active prometheus-node-exporter >/dev/null 2>&1 && echo "node_exporter: active" || echo "node_exporter: inactive"
     systemctl list-timers init-health-check.timer --no-pager 2>/dev/null || true
     if [ -f /var/log/init-health-check.log ]; then
-        echo -e ""
+        printf '%b\n' ""
         tail -n 20 /var/log/init-health-check.log
     fi
 }
@@ -5649,15 +5967,15 @@ function action_monitoring_alerts() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              监控 / 告警基础                 #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 配置 journald 持久化"
-        echo -e "${GREEN}2.${PLAIN} 安装 node_exporter"
-        echo -e "${GREEN}3.${PLAIN} 安装本机健康检查定时器"
-        echo -e "${GREEN}4.${PLAIN} 查看监控状态"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              监控 / 告警基础                 #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 配置 journald 持久化"
+        printf '%b\n' "${GREEN}2.${PLAIN} 安装 node_exporter"
+        printf '%b\n' "${GREEN}3.${PLAIN} 安装本机健康检查定时器"
+        printf '%b\n' "${GREEN}4.${PLAIN} 查看监控状态"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-4]: " choice
         case "$choice" in
             1) run_menu_action configure_journald_persistent ;;
@@ -5770,13 +6088,13 @@ function action_reverse_proxy_cert() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              证书 / 反向代理                 #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} Caddy 自动 HTTPS 反代 (推荐)"
-        echo -e "${GREEN}2.${PLAIN} Nginx + Certbot 反代"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              证书 / 反向代理                 #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} Caddy 自动 HTTPS 反代 (推荐)"
+        printf '%b\n' "${GREEN}2.${PLAIN} Nginx + Certbot 反代"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-2]: " choice
         case "$choice" in
             1) run_menu_action configure_caddy_reverse_proxy ;;
@@ -5824,18 +6142,18 @@ function action_security_audit() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              安全审计                         #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 安装 Lynis / debsums"
-        echo -e "${GREEN}2.${PLAIN} 运行 Lynis 快速审计"
-        echo -e "${GREEN}3.${PLAIN} 检查 Debian 包文件校验 (debsums)"
-        echo -e "${GREEN}4.${PLAIN} SSH 配置审计"
-        echo -e "${GREEN}5.${PLAIN} 端口暴露扫描"
-        echo -e "${GREEN}6.${PLAIN} Docker 安全基线"
-        echo -e "${GREEN}7.${PLAIN} 外部资源信任清单"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              安全审计                         #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 安装 Lynis / debsums"
+        printf '%b\n' "${GREEN}2.${PLAIN} 运行 Lynis 快速审计"
+        printf '%b\n' "${GREEN}3.${PLAIN} 检查 Debian 包文件校验 (debsums)"
+        printf '%b\n' "${GREEN}4.${PLAIN} SSH 配置审计"
+        printf '%b\n' "${GREEN}5.${PLAIN} 端口暴露扫描"
+        printf '%b\n' "${GREEN}6.${PLAIN} Docker 安全基线"
+        printf '%b\n' "${GREEN}7.${PLAIN} 外部资源信任清单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-7]: " choice
         case "$choice" in
             1) run_menu_action install_security_audit_tools ;;
@@ -6051,22 +6369,22 @@ EOF
 
 list_docker_compose_backup_timers() {
     systemctl list-timers 'init-compose-backup-*.timer' --no-pager 2>/dev/null || true
-    echo -e ""
+    printf '%b\n' ""
     systemctl list-unit-files 'init-compose-backup-*.timer' --no-pager 2>/dev/null || true
 }
 
 action_docker_security_baseline() {
     local scan_dir compose_files ps_file
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              Docker 安全基线                 #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              Docker 安全基线                 #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if ! command -v docker > /dev/null 2>&1; then
         log_warning "未检测到 docker 命令"
         return 1
     fi
 
-    echo -e "${BOLD}运行中容器风险:${PLAIN}"
+    printf '%b\n' "${BOLD}运行中容器风险:${PLAIN}"
     ps_file="$(mktemp /tmp/init-docker-ps.XXXXXX)"
     register_temp_file "$ps_file"
     if ! docker ps -q > "$ps_file" 2>/dev/null || [ ! -s "$ps_file" ]; then
@@ -6096,7 +6414,7 @@ action_docker_security_baseline() {
         done < "$ps_file"
     fi
 
-    echo -e ""
+    printf '%b\n' ""
     read -r -p "扫描 Compose 文件目录 [默认当前目录]: " scan_dir
     scan_dir="${scan_dir:-$(pwd)}"
     if [ ! -d "$scan_dir" ]; then
@@ -6104,7 +6422,7 @@ action_docker_security_baseline() {
         return 0
     fi
 
-    echo -e "${BOLD}Compose 文件风险线索:${PLAIN}"
+    printf '%b\n' "${BOLD}Compose 文件风险线索:${PLAIN}"
     compose_files="$(find "$scan_dir" -maxdepth 5 -type f \( -name 'compose.yaml' -o -name 'compose.yml' -o -name 'docker-compose.yml' -o -name 'docker-compose.yaml' \) 2>/dev/null || true)"
     if [ -z "$compose_files" ]; then
         log_info "未发现 Compose 文件"
@@ -6112,7 +6430,7 @@ action_docker_security_baseline() {
     fi
     while IFS= read -r compose_file; do
         [ -z "$compose_file" ] && continue
-        echo -e "${CYAN}$compose_file${PLAIN}"
+        printf '%b\n' "${CYAN}$compose_file${PLAIN}"
         grep -nE 'privileged:[[:space:]]*true|network_mode:[[:space:]]*host|/var/run/docker.sock|^[[:space:]]*-[[:space:]]*"?[0-9]+:[0-9]+' "$compose_file" 2>/dev/null || \
             echo "  未发现 privileged/host network/docker.sock/显式端口映射线索"
     done <<< "$compose_files"
@@ -6121,9 +6439,9 @@ action_docker_security_baseline() {
 action_docker_image_update_check() {
     local images image local_id local_digests remote_summary remote_digest status
 
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              Docker 镜像更新检查             #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              Docker 镜像更新检查             #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if ! command -v docker > /dev/null 2>&1; then
         log_warning "未检测到 docker 命令"
@@ -6136,13 +6454,13 @@ action_docker_image_update_check() {
         return 0
     fi
 
-    echo -e "${YELLOW}说明:${PLAIN} 此检查只读取远端 manifest 摘要，不会执行 docker pull。私有仓库可能需要先 docker login。"
-    echo -e ""
+    printf '%b\n' "${YELLOW}说明:${PLAIN} 此检查只读取远端 manifest 摘要，不会执行 docker pull。私有仓库可能需要先 docker login。"
+    printf '%b\n' ""
     while IFS= read -r image; do
         [ -z "$image" ] && continue
         case "$image" in
             *@sha256:*|localhost/*|127.0.0.1:*/*)
-                echo -e "${CYAN}$image${PLAIN}"
+                printf '%b\n' "${CYAN}$image${PLAIN}"
                 echo "  跳过: digest 固定镜像或本地仓库镜像"
                 continue
                 ;;
@@ -6168,7 +6486,7 @@ action_docker_image_update_check() {
             status="remote-unavailable"
         fi
 
-        echo -e "${CYAN}$image${PLAIN}"
+        printf '%b\n' "${CYAN}$image${PLAIN}"
         printf "  local-id: %s\n" "${local_id:-unknown}"
         printf "  local-digests:\n%s\n" "${local_digests:-  none}"
         printf "  remote-digest: %s\n" "${remote_digest:-unknown}"
@@ -6176,7 +6494,7 @@ action_docker_image_update_check() {
         if [ "$status" = "review" ]; then
             echo "  建议: 在维护窗口内对对应 Compose 项目执行 docker compose pull && docker compose up -d"
         fi
-        echo -e ""
+        printf '%b\n' ""
     done <<< "$images"
 }
 
@@ -6184,16 +6502,16 @@ function action_docker_compose_backup() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#           Docker Compose 项目备份             #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 立即备份 Compose 项目"
-        echo -e "${GREEN}2.${PLAIN} 配置 Compose 项目定时备份"
-        echo -e "${GREEN}3.${PLAIN} 查看 Compose 备份定时器"
-        echo -e "${GREEN}4.${PLAIN} Docker 安全基线检查"
-        echo -e "${GREEN}5.${PLAIN} Docker 镜像更新检查"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#           Docker Compose 项目备份             #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 立即备份 Compose 项目"
+        printf '%b\n' "${GREEN}2.${PLAIN} 配置 Compose 项目定时备份"
+        printf '%b\n' "${GREEN}3.${PLAIN} 查看 Compose 备份定时器"
+        printf '%b\n' "${GREEN}4.${PLAIN} Docker 安全基线检查"
+        printf '%b\n' "${GREEN}5.${PLAIN} Docker 镜像更新检查"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-5]: " choice
         case "$choice" in
             1) run_menu_action run_docker_compose_backup_once ;;
@@ -6234,12 +6552,12 @@ print_systemd_status() {
 
 function action_module_status_overview() {
     clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              模块状态总览                    #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              模块状态总览                    #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' ""
 
-    echo -e "${BOLD}核心命令:${PLAIN}"
+    printf '%b\n' "${BOLD}核心命令:${PLAIN}"
     print_command_status "Docker" "docker"
     print_command_status "Docker Compose v1" "docker-compose"
     if docker compose version > /dev/null 2>&1; then
@@ -6257,9 +6575,9 @@ function action_module_status_overview() {
     print_command_status "ss" "ss"
     print_command_status "sshd" "sshd"
     print_command_status "unattended-upgrades" "unattended-upgrades"
-    echo -e ""
+    printf '%b\n' ""
 
-    echo -e "${BOLD}服务 / 定时器:${PLAIN}"
+    printf '%b\n' "${BOLD}服务 / 定时器:${PLAIN}"
     print_systemd_status "Docker" "docker.service"
     print_systemd_status "Restic 备份定时器" "init-restic-backup.timer"
     print_systemd_status "健康检查定时器" "init-health-check.timer"
@@ -6267,15 +6585,15 @@ function action_module_status_overview() {
     print_systemd_status "node_exporter" "prometheus-node-exporter.service"
     print_systemd_status "Caddy" "caddy.service"
     print_systemd_status "Nginx" "nginx.service"
-    echo -e ""
+    printf '%b\n' ""
 
     if command -v systemctl > /dev/null 2>&1; then
-        echo -e "${BOLD}Compose 备份定时器:${PLAIN}"
+        printf '%b\n' "${BOLD}Compose 备份定时器:${PLAIN}"
         systemctl list-timers 'init-compose-backup-*.timer' --no-pager 2>/dev/null || true
-        echo -e ""
+        printf '%b\n' ""
     fi
 
-    echo -e "${BOLD}配置文件:${PLAIN}"
+    printf '%b\n' "${BOLD}配置文件:${PLAIN}"
     [ -f /root/.config/init-script/restic.env ] && echo "restic: /root/.config/init-script/restic.env" || echo "restic: 未配置"
     [ -f /etc/systemd/journald.conf.d/99-init.conf ] && echo "journald: 已配置持久化" || echo "journald: 未检测到 init 配置"
     [ -f /etc/apt/apt.conf.d/52unattended-maintenance-window ] && echo "maintenance: 已配置自动更新维护窗口" || echo "maintenance: 未检测到"
@@ -6398,15 +6716,15 @@ function action_script_quality() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              脚本自检 / ShellCheck           #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 静态自检 (bash -n / 函数 / 菜单分区 / 远程执行扫描)"
-        echo -e "${GREEN}2.${PLAIN} 运行 ShellCheck"
-        echo -e "${GREEN}3.${PLAIN} 运行安全/故障注入回归测试"
-        echo -e "${GREEN}4.${PLAIN} 查看模块状态总览"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              脚本自检 / ShellCheck           #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 静态自检 (bash -n / 函数 / 菜单分区 / 远程执行扫描)"
+        printf '%b\n' "${GREEN}2.${PLAIN} 运行 ShellCheck"
+        printf '%b\n' "${GREEN}3.${PLAIN} 运行安全/故障注入回归测试"
+        printf '%b\n' "${GREEN}4.${PLAIN} 查看模块状态总览"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-4]: " choice
         case "$choice" in
             1) run_menu_action run_script_static_self_check ;;
@@ -6451,7 +6769,7 @@ profile_description() {
         minimal) printf '最小服务器基线：基础工具、SSH、防火墙、Fail2ban、自动安全更新、Swap。' ;;
         docker-host) printf 'Docker 应用主机：Docker、反代、Compose 备份、监控、备份与安全基线。' ;;
         dev-box) printf '开发机：语言运行时、终端环境、网络工具、rclone、croc。' ;;
-        secure-server) printf '安全加固：SSH/端口审计、外部资源信任、维护窗口、Lynis/debsums。' ;;
+        secure-server) printf '安全服务器基线：主动配置 SSH/UFW/Fail2ban/自动更新与维护窗口，并附带只读审计报告。' ;;
         *) printf '自定义 Profile。' ;;
     esac
 }
@@ -6496,7 +6814,7 @@ profile_module_impact() {
         essentials) printf 'apt 包: curl/wget/git/vim/tmux 等；不改核心配置。' ;;
         ssh) printf '文件: /etc/ssh/sshd_config；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
         firewall) printf '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
-        fail2ban) printf '文件: /etc/fail2ban/jail.local；服务: fail2ban。' ;;
+        fail2ban) printf '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
         auto_updates) printf '文件: /etc/apt/apt.conf.d/20auto-upgrades, 50unattended-upgrades。' ;;
         swap) printf '文件: /swapfile, /etc/fstab；内核参数: vm.swappiness。' ;;
         docker) printf '仓库: download.docker.com apt；包: docker-ce/docker compose；服务: docker。' ;;
@@ -6564,20 +6882,20 @@ show_profile_plan() {
     local modules="$2"
     local idx=1 module
 
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              Profile 执行计划                #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${BOLD}Profile:${PLAIN} $profile_name"
-    echo -e "${BOLD}说明:${PLAIN} $(profile_description "$profile_name")"
-    echo -e "${BOLD}模式:${PLAIN} DRY_RUN=$DRY_RUN PLAN_ONLY=$PLAN_ONLY EXTERNAL_TRUST_MODE=$EXTERNAL_TRUST_MODE"
-    echo -e ""
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              Profile 执行计划                #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${BOLD}Profile:${PLAIN} $profile_name"
+    printf '%b\n' "${BOLD}说明:${PLAIN} $(profile_description "$profile_name")"
+    printf '%b\n' "${BOLD}模式:${PLAIN} DRY_RUN=$DRY_RUN PLAN_ONLY=$PLAN_ONLY EXTERNAL_TRUST_MODE=$EXTERNAL_TRUST_MODE"
+    printf '%b\n' ""
     for module in $modules; do
         printf "%2d. %-20s %s\n" "$idx" "$module" "$(profile_module_description "$module")"
         printf "    impact: %s\n" "$(profile_module_impact "$module")"
         idx=$((idx + 1))
     done
-    echo -e ""
-    echo -e "${YELLOW}提示:${PLAIN} 计划中包含交互式模块时，Apply 阶段会继续询问必要参数。"
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}提示:${PLAIN} 计划中包含交互式模块时，Apply 阶段会继续询问必要参数。"
 }
 
 write_profile_file() {
@@ -6600,7 +6918,7 @@ write_profile_file() {
 
     mkdir -p "$(dirname "$output_file")"
     {
-        printf '# server-toolkit.sh profile generated at %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '# init.sh profile generated at %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
         printf 'PROFILE_NAME="%s"\n' "$safe_profile_name"
         printf 'PROFILE_MODULES="%s"\n' "$safe_modules"
         printf 'EXTERNAL_TRUST_MODE="%s"\n' "$safe_trust_mode"
@@ -6722,7 +7040,7 @@ apply_profile_modules() {
 
 choose_profile_preset() {
     local profile
-    echo -e "${GREEN}可用 Profile:${PLAIN}"
+    printf '%b\n' "${GREEN}可用 Profile:${PLAIN}"
     for profile in $(profile_presets); do
         printf "  %-14s %s\n" "$profile" "$(profile_description "$profile")"
     done
@@ -6739,18 +7057,18 @@ action_profile_plan_apply() {
     local choice output_file input_file custom_name custom_modules
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#           Profile / Plan / Apply             #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 查看内置 Profile"
-        echo -e "${GREEN}2.${PLAIN} 选择 Profile 并查看计划"
-        echo -e "${GREEN}3.${PLAIN} 选择 Profile 并执行"
-        echo -e "${GREEN}4.${PLAIN} 导出内置 Profile 到文件"
-        echo -e "${GREEN}5.${PLAIN} 导入 Profile 文件并查看计划"
-        echo -e "${GREEN}6.${PLAIN} 导入 Profile 文件并执行"
-        echo -e "${GREEN}7.${PLAIN} 创建自定义 Profile"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#           Profile / Plan / Apply             #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} 查看内置 Profile"
+        printf '%b\n' "${GREEN}2.${PLAIN} 选择 Profile 并查看计划"
+        printf '%b\n' "${GREEN}3.${PLAIN} 选择 Profile 并执行"
+        printf '%b\n' "${GREEN}4.${PLAIN} 导出内置 Profile 到文件"
+        printf '%b\n' "${GREEN}5.${PLAIN} 导入 Profile 文件并查看计划"
+        printf '%b\n' "${GREEN}6.${PLAIN} 导入 Profile 文件并执行"
+        printf '%b\n' "${GREEN}7.${PLAIN} 创建自定义 Profile"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-7]: " choice
         case "$choice" in
             1)
@@ -6790,7 +7108,7 @@ action_profile_plan_apply() {
                 menu_pause
                 ;;
             7)
-                echo -e "${GREEN}可用模块:${PLAIN}"
+                printf '%b\n' "${GREEN}可用模块:${PLAIN}"
                 profile_module_catalog
                 read -r -p "自定义 Profile 名称 [默认 custom]: " custom_name
                 custom_name="${custom_name:-custom}"
@@ -6840,9 +7158,9 @@ generate_system_change_report() {
 
     mkdir -p "$(dirname "$report_file")"
     {
-        printf '# server-toolkit.sh 系统变更报告\n'
+        printf '# init.sh 系统变更报告\n'
         printf '生成时间: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf '脚本版本: v8.4\n'
+        printf '脚本版本: v8.5\n'
         printf '日志文件: %s\n' "$LOG_FILE"
         printf 'DRY_RUN=%s NON_INTERACTIVE=%s EXTERNAL_TRUST_MODE=%s\n' "$DRY_RUN" "$NON_INTERACTIVE" "$EXTERNAL_TRUST_MODE"
 
@@ -6916,11 +7234,11 @@ generate_system_change_report() {
 }
 
 action_port_exposure_scan() {
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              端口暴露扫描                    #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              端口暴露扫描                    #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
 
-    echo -e "${BOLD}监听端口:${PLAIN}"
+    printf '%b\n' "${BOLD}监听端口:${PLAIN}"
     if command -v ss > /dev/null 2>&1; then
         ss -tulpen || true
     elif command -v netstat > /dev/null 2>&1; then
@@ -6929,29 +7247,29 @@ action_port_exposure_scan() {
         log_warning "未检测到 ss/netstat"
     fi
 
-    echo -e "\n${BOLD}UFW:${PLAIN}"
+    printf '%b\n' "\n${BOLD}UFW:${PLAIN}"
     if command -v ufw > /dev/null 2>&1; then
         ufw status verbose || true
     else
         echo "ufw: missing"
     fi
 
-    echo -e "\n${BOLD}Docker 端口映射:${PLAIN}"
+    printf '%b\n' "\n${BOLD}Docker 端口映射:${PLAIN}"
     if command -v docker > /dev/null 2>&1; then
         docker ps --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}' || true
     else
         echo "docker: missing"
     fi
 
-    echo -e "\n${BOLD}反向代理监听线索:${PLAIN}"
+    printf '%b\n' "\n${BOLD}反向代理监听线索:${PLAIN}"
     grep -RInE 'listen[[:space:]]+[0-9]+|reverse_proxy|proxy_pass' /etc/nginx /etc/caddy 2>/dev/null || echo "未发现 Nginx/Caddy 配置线索或目录不存在"
 }
 
 action_ssh_config_audit() {
     local effective port permit_root password_auth pubkey_auth kbd_auth empty_password
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              SSH 配置审计                    #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              SSH 配置审计                    #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if command -v sshd > /dev/null 2>&1; then
         effective="$(sshd -T 2>/dev/null || true)"
@@ -6982,16 +7300,16 @@ action_ssh_config_audit() {
     printf "%-28s %s\n" "KbdInteractiveAuthentication" "${kbd_auth:-default}"
     printf "%-28s %s\n" "PermitEmptyPasswords" "${empty_password:-default}"
 
-    echo -e "\n${BOLD}建议:${PLAIN}"
+    printf '%b\n' "\n${BOLD}建议:${PLAIN}"
     [ "${password_auth,,}" = "no" ] && echo "  - 密码登录已禁用" || echo "  - 建议禁用 PasswordAuthentication"
     [ "${permit_root,,}" = "no" ] && echo "  - root SSH 登录已禁用" || echo "  - 建议禁用 PermitRootLogin"
     [ "${pubkey_auth,,}" = "yes" ] || [ -z "$pubkey_auth" ] && echo "  - 公钥登录可用" || echo "  - 建议启用 PubkeyAuthentication"
     [ "${empty_password,,}" = "no" ] || [ -z "$empty_password" ] && echo "  - 空密码登录未开启" || echo "  - 必须禁用 PermitEmptyPasswords"
 
-    echo -e "\n${BOLD}authorized_keys 权限:${PLAIN}"
+    printf '%b\n' "\n${BOLD}authorized_keys 权限:${PLAIN}"
     find /root /home -maxdepth 3 -name authorized_keys -type f -exec stat -c '%a %U:%G %n' {} \; 2>/dev/null || true
 
-    echo -e "\n${BOLD}防火墙端口匹配:${PLAIN}"
+    printf '%b\n' "\n${BOLD}防火墙端口匹配:${PLAIN}"
     if command -v ufw > /dev/null 2>&1; then
         ufw status numbered | grep -E "${port:-22}|OpenSSH" || true
     else
@@ -7022,14 +7340,14 @@ list_external_resource_inventory() {
 action_external_trust_inventory() {
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#              外部资源信任清单                #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${BOLD}当前策略:${PLAIN} $EXTERNAL_TRUST_MODE"
-    echo -e "${YELLOW}strict:${PLAIN} 仅官方/信息服务通过；${YELLOW}standard:${PLAIN} 未知来源需危险确认；${YELLOW}permissive:${PLAIN} 仅提示。"
-    echo -e ""
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#              外部资源信任清单                #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${BOLD}当前策略:${PLAIN} $EXTERNAL_TRUST_MODE"
+    printf '%b\n' "${YELLOW}strict:${PLAIN} 仅官方/信息服务通过；${YELLOW}standard:${PLAIN} 未知来源需危险确认；${YELLOW}permissive:${PLAIN} 仅提示。"
+    printf '%b\n' ""
     list_external_resource_inventory
-    echo -e "\n${BOLD}远程脚本执行入口:${PLAIN}"
+    printf '%b\n' "\n${BOLD}远程脚本执行入口:${PLAIN}"
     if command -v rg > /dev/null 2>&1; then
         rg -n "run_remote_script|download_remote_script|run_remote_script_as_user" "$script_path" 2>/dev/null || true
     else
@@ -7152,20 +7470,20 @@ action_ops_enhancements() {
     local choice
     while true; do
         clear
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${CYAN}#              运维增强中心                    #${PLAIN}"
-        echo -e "${CYAN}################################################${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} Profile / Plan / Apply"
-        echo -e "${GREEN}2.${PLAIN} 生成系统变更报告"
-        echo -e "${GREEN}3.${PLAIN} 端口暴露扫描"
-        echo -e "${GREEN}4.${PLAIN} SSH 配置审计"
-        echo -e "${GREEN}5.${PLAIN} 外部资源信任清单"
-        echo -e "${GREEN}6.${PLAIN} 自动更新维护窗口"
-        echo -e "${GREEN}7.${PLAIN} Docker 安全基线"
-        echo -e "${GREEN}8.${PLAIN} Docker 镜像更新检查"
-        echo -e "${GREEN}9.${PLAIN} restic 恢复演练"
-        echo -e "${GREEN}0.${PLAIN} 返回"
-        echo -e ""
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${CYAN}#              运维增强中心                    #${PLAIN}"
+        printf '%b\n' "${CYAN}################################################${PLAIN}"
+        printf '%b\n' "${GREEN}1.${PLAIN} Profile / Plan / Apply"
+        printf '%b\n' "${GREEN}2.${PLAIN} 生成系统变更报告"
+        printf '%b\n' "${GREEN}3.${PLAIN} 端口暴露扫描"
+        printf '%b\n' "${GREEN}4.${PLAIN} SSH 配置审计"
+        printf '%b\n' "${GREEN}5.${PLAIN} 外部资源信任清单"
+        printf '%b\n' "${GREEN}6.${PLAIN} 自动更新维护窗口"
+        printf '%b\n' "${GREEN}7.${PLAIN} Docker 安全基线"
+        printf '%b\n' "${GREEN}8.${PLAIN} Docker 镜像更新检查"
+        printf '%b\n' "${GREEN}9.${PLAIN} restic 恢复演练"
+        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        printf '%b\n' ""
         read -r -p "请输入选择 [0-9]: " choice
         case "$choice" in
             1) run_menu_flow action_profile_plan_apply ;;
@@ -7283,39 +7601,39 @@ function action_clean_traces() {
 # --- 任务流 ---
 function task_init_no_mirror() {
     log_info "开始初始化流程（不换源）..."
-    action_install_essentials
-    action_optimize_system
-    action_configure_swap
-    action_configure_ssh
-    action_configure_firewall
-    action_configure_fail2ban
-    action_configure_auto_updates
-    cleanup
+    invoke_action action_install_essentials || return 1
+    invoke_action action_optimize_system || return 1
+    invoke_action action_configure_swap || return 1
+    invoke_action action_configure_ssh || return 1
+    invoke_action action_configure_firewall || return 1
+    invoke_action action_configure_fail2ban || return 1
+    invoke_action action_configure_auto_updates || return 1
+    invoke_action cleanup || return 1
 }
 
 function task_init_with_mirror() {
     log_info "开始初始化流程（换源）..."
-    action_change_mirrors
-    action_install_essentials
-    action_optimize_system
-    action_configure_swap
-    action_configure_ssh
-    action_configure_firewall
-    action_configure_fail2ban
-    action_configure_auto_updates
-    cleanup
+    invoke_action action_change_mirrors || return 1
+    invoke_action action_install_essentials || return 1
+    invoke_action action_optimize_system || return 1
+    invoke_action action_configure_swap || return 1
+    invoke_action action_configure_ssh || return 1
+    invoke_action action_configure_firewall || return 1
+    invoke_action action_configure_fail2ban || return 1
+    invoke_action action_configure_auto_updates || return 1
+    invoke_action cleanup || return 1
 }
 
 # --- 自定义初始化 (批量选择模块) ---
 function task_custom_init() {
     clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#           自定义初始化 - 选择模块            #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}请选择要安装/配置的模块（可多选，用空格分隔，如: 1 3 5）${PLAIN}"
-    echo -e ""
-
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#           自定义初始化 - 选择模块            #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}请选择要安装/配置的模块（可多选，用空格分隔，如: 1 3 5）${PLAIN}"
+    printf '%b\n' ""
+    
     # 定义模块列表
     declare -A modules
     modules[1]="换源 (更换为阿里云镜像源)"
@@ -7331,30 +7649,30 @@ function task_custom_init() {
     modules[11]="备份工具 (restic/borgbackup)"
     modules[12]="监控/日志基础 (journald 持久化 + 健康检查)"
     modules[13]="安全审计工具 (Lynis/debsums)"
-
+    
     # 显示模块列表
     for i in {1..13}; do
         local status=""
-        echo -e "${GREEN}[$i]${PLAIN} ${modules[$i]}"
+        printf '%b\n' "${GREEN}[$i]${PLAIN} ${modules[$i]}"
     done
-    echo -e ""
-    echo -e "${GREEN}[a]${PLAIN} 全选"
-    echo -e "${GREEN}[0]${PLAIN} 返回主菜单"
-    echo -e ""
-
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}[a]${PLAIN} 全选"
+    printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+    printf '%b\n' ""
+    
     read -r -p "请输入选择 (例如: 1 3 5 或 a): " selections
-
+    
     # 处理全选
     if [[ "$selections" == "a" || "$selections" == "A" ]]; then
         selections="1 2 3 4 5 6 7 8 9 10 11 12 13"
     fi
-
+    
     # 验证输入
     if [[ -z "$selections" ]]; then
         log_warning "未选择任何模块，返回主菜单"
         return
     fi
-
+    
     # 解析选择
     local selected_modules=()
     for sel in $selections; do
@@ -7364,23 +7682,23 @@ function task_custom_init() {
             log_warning "无效选择: ${sel}，已忽略"
         fi
     done
-
+    
     if [ ${#selected_modules[@]} -eq 0 ]; then
         log_warning "没有有效的模块选择，返回主菜单"
         return
     fi
-
+    
     # 显示确认
     clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#           确认选择的模块                      #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}已选择以下模块:${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#           确认选择的模块                      #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}已选择以下模块:${PLAIN}"
     for sel in "${selected_modules[@]}"; do
-        echo -e "  ${GREEN}✓${PLAIN} ${modules[$sel]}"
+        printf '%b\n' "  ${GREEN}✓${PLAIN} ${modules[$sel]}"
     done
-    echo -e ""
+    printf '%b\n' ""
     read -r -p "确认执行? [y/n]: " confirm
     case "$confirm" in
         y|Y|yes|YES)
@@ -7390,14 +7708,14 @@ function task_custom_init() {
             return
             ;;
     esac
-
+    
     # 执行选中的模块
     log_info "开始执行自定义初始化..."
-    echo -e ""
-
+    printf '%b\n' ""
+    
     local has_mirror=false
     local has_essentials=false
-
+    
     # 按顺序执行选中的模块
     for sel in "${selected_modules[@]}"; do
         case "$sel" in
@@ -7405,9 +7723,9 @@ function task_custom_init() {
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_change_mirrors
+                invoke_action action_change_mirrors || return 1
                 has_mirror=true
-                echo -e ""
+                printf '%b\n' ""
                 ;;
             2)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -7415,110 +7733,110 @@ function task_custom_init() {
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 # 如果没换源，先更新一次
                 if [ "$has_mirror" = false ]; then
-                    update_apt_once
+                    update_apt_once || return 1
                 fi
-                action_install_essentials
+                invoke_action action_install_essentials || return 1
                 has_essentials=true
-                echo -e ""
+                printf '%b\n' ""
                 ;;
             3)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_optimize_system
-                echo -e ""
+                invoke_action action_optimize_system || return 1
+                printf '%b\n' ""
                 ;;
             4)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_configure_swap
-                echo -e ""
+                invoke_action action_configure_swap || return 1
+                printf '%b\n' ""
                 ;;
             5)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_configure_ssh
-                echo -e ""
+                invoke_action action_configure_ssh || return 1
+                printf '%b\n' ""
                 ;;
             6)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_configure_firewall
-                echo -e ""
+                invoke_action action_configure_firewall || return 1
+                printf '%b\n' ""
                 ;;
             7)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_configure_fail2ban
-                echo -e ""
+                invoke_action action_configure_fail2ban || return 1
+                printf '%b\n' ""
                 ;;
             8)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_configure_auto_updates
-                echo -e ""
+                invoke_action action_configure_auto_updates || return 1
+                printf '%b\n' ""
                 ;;
             9)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_install_docker
-                echo -e ""
+                invoke_action action_install_docker || return 1
+                printf '%b\n' ""
                 ;;
             10)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                action_install_runtime
-                echo -e ""
+                invoke_action action_install_runtime || return 1
+                printf '%b\n' ""
                 ;;
             11)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                install_backup_tools
-                echo -e ""
+                invoke_action install_backup_tools || return 1
+                printf '%b\n' ""
                 ;;
             12)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                configure_journald_persistent
-                install_health_check_timer
-                echo -e ""
+                invoke_action configure_journald_persistent || return 1
+                invoke_action install_health_check_timer || return 1
+                printf '%b\n' ""
                 ;;
             13)
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_info "执行: ${modules[$sel]}"
                 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                install_security_audit_tools
-                echo -e ""
+                invoke_action install_security_audit_tools || return 1
+                printf '%b\n' ""
                 ;;
         esac
     done
-
+    
     # 询问是否清理
-    echo -e ""
+    printf '%b\n' ""
     read -r -p "是否执行清理 (移除无用包)? [y/n]: " do_cleanup
     case "$do_cleanup" in
         y|Y|yes|YES)
-            cleanup
+            invoke_action cleanup || return 1
             ;;
         *)
             log_info "跳过清理"
             ;;
     esac
-
+    
     log_success "自定义初始化完成！"
     log_info "日志文件: $LOG_FILE"
     log_info "备份目录: $BACKUP_DIR"
-
-    echo -e ""
+    
+    printf '%b\n' ""
     read -r -p "按 Enter 键返回主菜单..."
 }
 
@@ -7542,11 +7860,12 @@ function action_install_croc() {
     fi
 
     log_warning "apt 源中未能安装 croc，准备回退到官方安装脚本"
-    if run_remote_script "https://getcroc.schollz.com" "croc 官方安装脚本"; then
+    if run_remote_script_unverified "https://getcroc.schollz.com" "croc 官方安装脚本"; then
         log_success "croc 安装成功"
         log_info "使用方法: croc send [file]"
     else
         log_error "croc 安装失败"
+        return 1
     fi
 }
 
@@ -7659,7 +7978,7 @@ function action_install_terminal_tools() {
         user_home="$HOME"
     fi
     log_info "用户级配置目标: $INSTALL_USER ($user_home)"
-
+    
     # Update & Install deps
     log_info "更新系统并安装基础依赖..."
     update_apt_once
@@ -7670,7 +7989,7 @@ function action_install_terminal_tools() {
         log_warning "tldr 安装失败，尝试安装 tealdeer 作为替代..."
         run_cmd "安装 tealdeer" "apt-get install -y tealdeer"
     fi
-
+    
     # Eza
     log_info "安装 Eza (现代版 ls)..."
     mkdir -p /etc/apt/keyrings
@@ -7687,13 +8006,13 @@ function action_install_terminal_tools() {
         fi
     fi
     run_cmd "安装 eza" "apt-get install -y eza"
-
+    
     # Bat
     log_info "安装 Bat (现代版 cat)..."
     run_cmd "安装 bat" "apt-get install -y bat"
     run_as_user "mkdir -p \"$user_home/.local/bin\""
     run_as_user "ln -sf /usr/bin/batcat \"$user_home/.local/bin/bat\""
-
+    
     # Zoxide
     log_info "安装 Zoxide (智能 cd)..."
     if command -v zoxide > /dev/null 2>&1; then
@@ -7702,9 +8021,9 @@ function action_install_terminal_tools() {
         log_success "zoxide 安装成功"
     else
         log_warning "apt 源中未能安装 zoxide，准备回退到官方安装脚本"
-        run_remote_script_as_user "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "zoxide 官方安装脚本" || log_warning "已跳过 zoxide 安装"
+        run_remote_script_as_user_unverified "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "zoxide 官方安装脚本" || log_warning "已跳过 zoxide 安装"
     fi
-
+    
     # Starship
     log_info "安装 Starship (终端提示符)..."
     if command -v starship > /dev/null 2>&1; then
@@ -7713,9 +8032,9 @@ function action_install_terminal_tools() {
         log_success "starship 安装成功"
     else
         log_warning "apt 源中未能安装 starship，准备回退到官方安装脚本"
-        run_remote_script_as_user "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
+        run_remote_script_as_user_unverified "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
     fi
-
+    
     # Neovim
     log_info "安装最新版 Neovim..."
     local nvim_version="v0.10.4"
@@ -7740,7 +8059,7 @@ function action_install_terminal_tools() {
             return 1
         fi
         replace_directory_transactional /opt/nvim "$nvim_source" "Neovim ${nvim_version}" || return 1
-
+        
         # Link
         ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
         rm -f -- "$nvim_tar"
@@ -7748,19 +8067,19 @@ function action_install_terminal_tools() {
     else
         log_warning "已跳过 Neovim 安装"
     fi
-
+    
     # uv
     log_info "安装 uv (Python 包管理器)..."
-    run_remote_script_as_user "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
-
+    run_remote_script_as_user_unverified "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
+    
     # Oh My Zsh
     log_info "安装 Oh My Zsh..."
     if [ -d "$user_home/.oh-my-zsh" ]; then
         log_info "Oh My Zsh 已存在，跳过安装。"
     else
-        run_remote_script_as_user "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
+        run_remote_script_as_user_unverified "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
     fi
-
+    
     # Plugins
     log_info "下载 Zsh 插件..."
     local zsh_custom="${ZSH_CUSTOM:-$user_home/.oh-my-zsh/custom}"
@@ -7771,7 +8090,7 @@ function action_install_terminal_tools() {
     if [ ! -d "$zsh_custom/plugins/zsh-syntax-highlighting" ]; then
         run_as_user "git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \"$zsh_custom/plugins/zsh-syntax-highlighting\""
     fi
-
+    
     # .zshrc
     log_info "生成配置文件 .zshrc ..."
     local zshrc_file="$user_home/.zshrc"
@@ -7825,7 +8144,7 @@ EOF
 
     # --- Compatibility Migration (Auto-detect & Sync) ---
     log_info "正在迁移现有配置到 .zshrc ..."
-
+    
     # 1. MOTD Migration
     # If cool-motd is executable, ensure it runs in zshrc
     if [ -x "/usr/local/bin/cool-motd.sh" ]; then
@@ -7877,7 +8196,7 @@ NVM_EOF
     else
         log_error "未找到 zsh 可执行文件，无法切换默认 Shell"
     fi
-
+    
     log_success "终端环境初始化完成！请断开 SSH 并重新连接以应用更改。"
 }
 
@@ -7894,7 +8213,7 @@ function action_toggle_zsh_icons() {
         log_error "未找到 ${zshrc_file}，请先执行选项 17 初始化终端环境。"
         return
     fi
-
+    
     run_zsh_cmd() {
         local cmd="$1"
         if [ "$EUID" -eq 0 ] && [ "$INSTALL_USER" != "root" ]; then
@@ -7905,7 +8224,7 @@ function action_toggle_zsh_icons() {
     }
 
     log_info "正在切换 Zsh 图标显示设置..."
-
+    
     # Check if icons are enabled (look for --icons)
     if run_zsh_cmd "grep -q \"alias ls=\\\"eza --icons\\\"\" \"$zshrc_file\""; then
         run_zsh_cmd "sed -i 's/alias ls=\"eza --icons\"/alias ls=\"eza\"/g' \"$zshrc_file\""
@@ -7923,7 +8242,7 @@ function action_toggle_zsh_icons() {
         log_warning "无法自动匹配别名配置，请手动检查 .zshrc。"
         return
     fi
-
+    
     log_info "请断开 SSH 并重新连接，或运行 'source $zshrc_file' 以生效。"
 }
 
@@ -7952,24 +8271,24 @@ menu_header() {
     local title="$1"
     local subtitle="${2:-}"
     clear
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${CYAN}#  Linux 运维一键脚本 v8.4                    #${PLAIN}"
-    echo -e "${CYAN}################################################${PLAIN}"
-    echo -e "${BOLD}${title}${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${CYAN}#  Linux 运维一键脚本 v8.5                    #${PLAIN}"
+    printf '%b\n' "${CYAN}################################################${PLAIN}"
+    printf '%b\n' "${BOLD}${title}${PLAIN}"
     if [ -n "$subtitle" ]; then
-        echo -e "${YELLOW}${subtitle}${PLAIN}"
+        printf '%b\n' "${YELLOW}${subtitle}${PLAIN}"
     fi
-    echo -e ""
+    printf '%b\n' ""
 }
 
 menu_pause() {
     local _
-    echo -e ""
+    printf '%b\n' ""
     read -r -p "按 Enter 键继续..." _
 }
 
 menu_invalid_choice() {
-    echo -e "${RED}输入错误${PLAIN}"
+    printf '%b\n' "${RED}输入错误${PLAIN}"
     sleep 1
 }
 
@@ -7988,16 +8307,67 @@ dry_run_action_plan() {
     esac
 }
 
+handle_action_failure() {
+    local action="$1" status="$2" operation_start="$3"
+    local operation_total mode
+    operation_total="${#OPERATION_TARGETS[@]}"
+
+    if [ "$operation_total" -le "$operation_start" ]; then
+        log_warning "动作失败或被取消: $action (status=$status)；没有新增的可回滚文件变更"
+        return 0
+    fi
+    if [ "$ROLLBACK_ENABLED" != "true" ]; then
+        log_warning "动作失败: $action；文件回滚已禁用，变更保留在回滚账本中"
+        return 0
+    fi
+
+    mode="$ACTION_ROLLBACK_MODE"
+    if [ "$mode" = "auto" ]; then
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            mode="always"
+        else
+            mode="prompt"
+        fi
+    elif [ "$mode" = "prompt" ] && [ "$NON_INTERACTIVE" = "1" ]; then
+        log_warning "非交互模式无法提示，ACTION_ROLLBACK_MODE=prompt 按 always 处理"
+        mode="always"
+    fi
+
+    case "$mode" in
+        always)
+            log_warning "动作失败，自动回滚该动作新增的文件变更: $action"
+            rollback_operations_from "$operation_start" || \
+                log_error "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
+            ;;
+        prompt)
+            if confirm_action "动作 $action 失败，是否回滚该动作新增的文件变更?" "y"; then
+                rollback_operations_from "$operation_start" || \
+                    log_error "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
+            else
+                log_warning "已保留动作 $action 的文件变更，可稍后从回滚菜单处理"
+            fi
+            ;;
+        never)
+            log_warning "ACTION_ROLLBACK_MODE=never：已保留动作 $action 的文件变更"
+            ;;
+    esac
+}
+
 invoke_action() {
-    local action="${1:-}" status=0 had_errexit=false
+    local action="${1:-}" status=0 operation_start had_errexit=false
     [ -n "$action" ] || return 1
     if [ "$DRY_RUN" = "1" ]; then
         dry_run_action_plan "$action"
         return 0
     fi
+
+    operation_start="${#OPERATION_TARGETS[@]}"
     case "$-" in *e*) had_errexit=true; set +e ;; esac
     "$@"
     status=$?
+    if [ "$status" -ne 0 ]; then
+        handle_action_failure "$action" "$status" "$operation_start"
+    fi
     [ "$had_errexit" = true ] && set -e
     return "$status"
 }
@@ -8018,7 +8388,8 @@ run_menu_action() {
         log_warning "操作返回状态: $status"
     fi
     menu_pause
-    return "$status"
+    # 菜单层已经展示失败；不要让 set -e 因菜单动作失败而退出整个脚本。
+    return 0
 }
 
 run_menu_flow() {
@@ -8027,35 +8398,35 @@ run_menu_flow() {
     if [ "$status" -ne 0 ]; then
         log_warning "操作返回状态: $status"
     fi
-    return "$status"
+    return 0
 }
 
 show_recommended_modules() {
     menu_header "推荐模块组合" "按服务器用途选择，避免一上来全装。"
-    echo -e "${GREEN}新 VPS 基线:${PLAIN}"
-    echo -e "  1) 基础工具"
-    echo -e "  2) SSH 安全配置"
-    echo -e "  3) UFW 防火墙 + Fail2ban"
-    echo -e "  4) 自动安全更新"
-    echo -e "  5) Swap + 系统资源检查"
-    echo -e "  6) 可导出的 minimal Profile"
-    echo -e ""
-    echo -e "${GREEN}Docker / 应用主机:${PLAIN}"
-    echo -e "  Docker 官方 apt 安装、Docker 管理器、应用市场、证书/反代、Compose 项目备份、Docker 安全基线、镜像更新检查、服务健康检查"
-    echo -e ""
-    echo -e "${GREEN}开发机:${PLAIN}"
-    echo -e "  Runtime 管理器、终端环境、网络/HTTP 工具集"
-    echo -e ""
-    echo -e "${GREEN}存储 / 媒体机:${PLAIN}"
-    echo -e "  备份/恢复、rclone、CloudDrive2、磁盘工具、共享挂载辅助"
-    echo -e ""
-    echo -e "${GREEN}运维基线增强:${PLAIN}"
-    echo -e "  Profile/Plan/Apply、系统变更报告、端口暴露扫描、SSH 审计、外部资源信任清单、维护窗口、过期内核清理预览、备份恢复演练"
-    echo -e ""
-    echo -e "${YELLOW}谨慎使用:${PLAIN}"
-    echo -e "  DD 重装、清理痕迹、第三方面板安装脚本、服务器测评脚本"
-    echo -e ""
-    echo -e "${CYAN}建议:${PLAIN} 先走“快速开始 -> 自定义初始化”，再按用途进入对应功能分区补模块。"
+    printf '%b\n' "${GREEN}新 VPS 基线:${PLAIN}"
+    printf '%b\n' "  1) 基础工具"
+    printf '%b\n' "  2) SSH 安全配置"
+    printf '%b\n' "  3) UFW 防火墙 + Fail2ban"
+    printf '%b\n' "  4) 自动安全更新"
+    printf '%b\n' "  5) Swap + 系统资源检查"
+    printf '%b\n' "  6) 可导出的 minimal Profile"
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}Docker / 应用主机:${PLAIN}"
+    printf '%b\n' "  Docker 官方 apt 安装、Docker 管理器、应用市场、证书/反代、Compose 项目备份、Docker 安全基线、镜像更新检查、服务健康检查"
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}开发机:${PLAIN}"
+    printf '%b\n' "  Runtime 管理器、终端环境、网络/HTTP 工具集"
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}存储 / 媒体机:${PLAIN}"
+    printf '%b\n' "  备份/恢复、rclone、CloudDrive2、磁盘工具、共享挂载辅助"
+    printf '%b\n' ""
+    printf '%b\n' "${GREEN}运维基线增强:${PLAIN}"
+    printf '%b\n' "  Profile/Plan/Apply、系统变更报告、端口暴露扫描、SSH 审计、外部资源信任清单、维护窗口、过期内核清理预览、备份恢复演练"
+    printf '%b\n' ""
+    printf '%b\n' "${YELLOW}谨慎使用:${PLAIN}"
+    printf '%b\n' "  DD 重装、清理痕迹、第三方面板安装脚本、服务器测评脚本"
+    printf '%b\n' ""
+    printf '%b\n' "${CYAN}建议:${PLAIN} 先走“快速开始 -> 自定义初始化”，再按用途进入对应功能分区补模块。"
     menu_pause
 }
 
@@ -8063,13 +8434,13 @@ show_quick_start_menu() {
     local choice
     while true; do
         menu_header "快速开始" "选择初始化工作流；单项配置请进入对应功能分区。"
-        echo -e "${GREEN}1.${PLAIN} 标准初始化（不换源）"
-        echo -e "${GREEN}2.${PLAIN} 国内镜像初始化（阿里源）"
-        echo -e "${GREEN}3.${PLAIN} 自定义初始化（批量选择模块）${CYAN} [推荐]${PLAIN}"
-        echo -e "${GREEN}4.${PLAIN} Profile / Plan / Apply"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 标准初始化（不换源）"
+        printf '%b\n' "${GREEN}2.${PLAIN} 国内镜像初始化（阿里源）"
+        printf '%b\n' "${GREEN}3.${PLAIN} 自定义初始化（批量选择模块）${CYAN} [推荐]${PLAIN}"
+        printf '%b\n' "${GREEN}4.${PLAIN} Profile / Plan / Apply"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action task_init_no_mirror ;;
@@ -8087,17 +8458,17 @@ show_security_menu() {
     local choice
     while true; do
         menu_header "安全与访问" "账号、SSH、防火墙、防暴力破解集中在这里。"
-        echo -e "${GREEN}1.${PLAIN} SSH 安全配置（端口 / 密钥 / 禁用密码）"
-        echo -e "${GREEN}2.${PLAIN} 用户管理（新建用户 / SSH / sudo / 禁用 root）"
-        echo -e "${GREEN}3.${PLAIN} UFW 防火墙"
-        echo -e "${GREEN}4.${PLAIN} Fail2ban"
-        echo -e "${GREEN}5.${PLAIN} 自动安全更新"
-        echo -e "${GREEN}6.${PLAIN} 安全审计 (Lynis/debsums)"
-        echo -e "${GREEN}7.${PLAIN} SSH 配置审计"
-        echo -e "${GREEN}8.${PLAIN} 端口暴露扫描"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} SSH 安全配置（端口 / 密钥 / 禁用密码）"
+        printf '%b\n' "${GREEN}2.${PLAIN} 用户管理（新建用户 / SSH / sudo / 禁用 root）"
+        printf '%b\n' "${GREEN}3.${PLAIN} UFW 防火墙"
+        printf '%b\n' "${GREEN}4.${PLAIN} Fail2ban"
+        printf '%b\n' "${GREEN}5.${PLAIN} 自动安全更新"
+        printf '%b\n' "${GREEN}6.${PLAIN} 安全审计 (Lynis/debsums)"
+        printf '%b\n' "${GREEN}7.${PLAIN} SSH 配置审计"
+        printf '%b\n' "${GREEN}8.${PLAIN} 端口暴露扫描"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action action_configure_ssh ;;
@@ -8119,16 +8490,16 @@ show_system_menu() {
     local choice
     while true; do
         menu_header "系统与维护" "基础软件、系统参数、Swap、更新、清理和回滚。"
-        echo -e "${GREEN}1.${PLAIN} 安装基础工具"
-        echo -e "${GREEN}2.${PLAIN} 系统优化"
-        echo -e "${GREEN}3.${PLAIN} Swap 配置"
-        echo -e "${GREEN}4.${PLAIN} 性能优化预设（sysctl）"
-        echo -e "${GREEN}5.${PLAIN} 自动更新维护窗口"
-        echo -e "${GREEN}6.${PLAIN} 清理无用包"
-        echo -e "${GREEN}7.${PLAIN} 回滚已备份配置"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 安装基础工具"
+        printf '%b\n' "${GREEN}2.${PLAIN} 系统优化"
+        printf '%b\n' "${GREEN}3.${PLAIN} Swap 配置"
+        printf '%b\n' "${GREEN}4.${PLAIN} 性能优化预设（sysctl）"
+        printf '%b\n' "${GREEN}5.${PLAIN} 自动更新维护窗口"
+        printf '%b\n' "${GREEN}6.${PLAIN} 清理无用包"
+        printf '%b\n' "${GREEN}7.${PLAIN} 回滚已备份配置"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action action_install_essentials ;;
@@ -8149,16 +8520,16 @@ show_docker_app_menu() {
     local choice
     while true; do
         menu_header "Docker 与应用" "容器运行环境、应用市场、面板、反向代理与备份。"
-        echo -e "${GREEN}1.${PLAIN} 安装 Docker Engine + Compose（官方 apt 仓库）"
-        echo -e "${GREEN}2.${PLAIN} Docker 管理器"
-        echo -e "${GREEN}3.${PLAIN} 应用市场（1Panel / aaPanel / NPM / Portainer）"
-        echo -e "${GREEN}4.${PLAIN} 证书 / 反向代理"
-        echo -e "${GREEN}5.${PLAIN} Docker Compose 项目备份"
-        echo -e "${GREEN}6.${PLAIN} Docker 安全基线"
-        echo -e "${GREEN}7.${PLAIN} Docker 镜像更新检查"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 安装 Docker Engine + Compose（官方 apt 仓库）"
+        printf '%b\n' "${GREEN}2.${PLAIN} Docker 管理器"
+        printf '%b\n' "${GREEN}3.${PLAIN} 应用市场（1Panel / aaPanel / NPM / Portainer）"
+        printf '%b\n' "${GREEN}4.${PLAIN} 证书 / 反向代理"
+        printf '%b\n' "${GREEN}5.${PLAIN} Docker Compose 项目备份"
+        printf '%b\n' "${GREEN}6.${PLAIN} Docker 安全基线"
+        printf '%b\n' "${GREEN}7.${PLAIN} Docker 镜像更新检查"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action action_install_docker ;;
@@ -8179,13 +8550,13 @@ show_dev_menu() {
     local choice
     while true; do
         menu_header "开发与终端" "语言运行时、Shell 环境和常用开发工具。"
-        echo -e "${GREEN}1.${PLAIN} Runtime 安装管理器（Node/Python/PHP/Java/Go/.NET）"
-        echo -e "${GREEN}2.${PLAIN} 终端环境（Zsh / Starship / Neovim / Eza）"
-        echo -e "${GREEN}3.${PLAIN} 切换 Zsh 图标显示"
-        echo -e "${GREEN}4.${PLAIN} 网络/HTTP 工具集"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} Runtime 安装管理器（Node/Python/PHP/Java/Go/.NET）"
+        printf '%b\n' "${GREEN}2.${PLAIN} 终端环境（Zsh / Starship / Neovim / Eza）"
+        printf '%b\n' "${GREEN}3.${PLAIN} 切换 Zsh 图标显示"
+        printf '%b\n' "${GREEN}4.${PLAIN} 网络/HTTP 工具集"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_flow action_install_runtime ;;
@@ -8203,15 +8574,15 @@ show_diagnostics_menu() {
     local choice
     while true; do
         menu_header "诊断与测试" "先诊断本机，再运行外部测评脚本。"
-        echo -e "${GREEN}1.${PLAIN} 系统资源检查"
-        echo -e "${GREEN}2.${PLAIN} 网络连接检查"
-        echo -e "${GREEN}3.${PLAIN} 服务健康检查"
-        echo -e "${GREEN}4.${PLAIN} 监控 / 告警基础"
-        echo -e "${GREEN}5.${PLAIN} 服务器测评脚本（远程脚本需二次确认）"
-        echo -e "${GREEN}6.${PLAIN} 模块状态总览"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 系统资源检查"
+        printf '%b\n' "${GREEN}2.${PLAIN} 网络连接检查"
+        printf '%b\n' "${GREEN}3.${PLAIN} 服务健康检查"
+        printf '%b\n' "${GREEN}4.${PLAIN} 监控 / 告警基础"
+        printf '%b\n' "${GREEN}5.${PLAIN} 服务器测评脚本（远程脚本需二次确认）"
+        printf '%b\n' "${GREEN}6.${PLAIN} 模块状态总览"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action check_system_resources ;;
@@ -8231,16 +8602,16 @@ show_storage_menu() {
     local choice
     while true; do
         menu_header "存储与备份" "磁盘、云盘、备份恢复、文件传输和同步工具。"
-        echo -e "${GREEN}1.${PLAIN} 磁盘工具（挂载 / SMART / Trim）"
-        echo -e "${GREEN}2.${PLAIN} CloudDrive2 安装向导"
-        echo -e "${GREEN}3.${PLAIN} CloudDrive2 共享挂载辅助"
-        echo -e "${GREEN}4.${PLAIN} 备份 / 恢复 (restic/borg)"
-        echo -e "${GREEN}5.${PLAIN} rclone"
-        echo -e "${GREEN}6.${PLAIN} croc 文件传输"
-        echo -e "${GREEN}7.${PLAIN} restic 恢复演练"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 磁盘工具（挂载 / SMART / Trim）"
+        printf '%b\n' "${GREEN}2.${PLAIN} CloudDrive2 安装向导"
+        printf '%b\n' "${GREEN}3.${PLAIN} CloudDrive2 共享挂载辅助"
+        printf '%b\n' "${GREEN}4.${PLAIN} 备份 / 恢复 (restic/borg)"
+        printf '%b\n' "${GREEN}5.${PLAIN} rclone"
+        printf '%b\n' "${GREEN}6.${PLAIN} croc 文件传输"
+        printf '%b\n' "${GREEN}7.${PLAIN} restic 恢复演练"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action action_disk_tools ;;
@@ -8261,14 +8632,14 @@ show_script_ops_menu() {
     local choice
     while true; do
         menu_header "脚本与运维" "脚本质量、信任边界、变更记录和日常运维入口。"
-        echo -e "${GREEN}1.${PLAIN} 脚本自检 / ShellCheck"
-        echo -e "${GREEN}2.${PLAIN} 外部资源信任清单"
-        echo -e "${GREEN}3.${PLAIN} 生成系统变更报告"
-        echo -e "${GREEN}4.${PLAIN} 运维增强中心"
-        echo -e "${GREEN}5.${PLAIN} 推荐模块说明"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 脚本自检 / ShellCheck"
+        printf '%b\n' "${GREEN}2.${PLAIN} 外部资源信任清单"
+        printf '%b\n' "${GREEN}3.${PLAIN} 生成系统变更报告"
+        printf '%b\n' "${GREEN}4.${PLAIN} 运维增强中心"
+        printf '%b\n' "${GREEN}5.${PLAIN} 推荐模块说明"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_flow action_script_quality ;;
@@ -8287,12 +8658,12 @@ show_advanced_menu() {
     local choice
     while true; do
         menu_header "高级 / 高风险" "这里的操作可能破坏系统、清空日志或执行第三方脚本。"
-        echo -e "${RED}1.${PLAIN} DD 重装系统"
-        echo -e "${RED}2.${PLAIN} 清理痕迹 / 历史记录"
-        echo -e "${GREEN}3.${PLAIN} 系统工具箱（含危险操作）"
-        echo -e "${GREEN}b.${PLAIN} 返回主菜单"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${RED}1.${PLAIN} DD 重装系统"
+        printf '%b\n' "${RED}2.${PLAIN} 清理痕迹 / 历史记录"
+        printf '%b\n' "${GREEN}3.${PLAIN} 系统工具箱（含危险操作）"
+        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) run_menu_action action_dd_reinstall ;;
@@ -8309,17 +8680,17 @@ show_menu() {
     local choice
     while true; do
         menu_header "主菜单" "按用途进入九个功能分区。"
-        echo -e "${GREEN}1.${PLAIN} 快速开始 ${CYAN}[新机器先看这里]${PLAIN}"
-        echo -e "${GREEN}2.${PLAIN} 安全与访问"
-        echo -e "${GREEN}3.${PLAIN} 系统与维护"
-        echo -e "${GREEN}4.${PLAIN} Docker 与应用"
-        echo -e "${GREEN}5.${PLAIN} 开发与终端"
-        echo -e "${GREEN}6.${PLAIN} 存储与备份"
-        echo -e "${GREEN}7.${PLAIN} 诊断与测试"
-        echo -e "${GREEN}8.${PLAIN} 脚本与运维"
-        echo -e "${RED}9.${PLAIN} 高级 / 高风险"
-        echo -e "${GREEN}0.${PLAIN} 退出"
-        echo -e ""
+        printf '%b\n' "${GREEN}1.${PLAIN} 快速开始 ${CYAN}[新机器先看这里]${PLAIN}"
+        printf '%b\n' "${GREEN}2.${PLAIN} 安全与访问"
+        printf '%b\n' "${GREEN}3.${PLAIN} 系统与维护"
+        printf '%b\n' "${GREEN}4.${PLAIN} Docker 与应用"
+        printf '%b\n' "${GREEN}5.${PLAIN} 开发与终端"
+        printf '%b\n' "${GREEN}6.${PLAIN} 存储与备份"
+        printf '%b\n' "${GREEN}7.${PLAIN} 诊断与测试"
+        printf '%b\n' "${GREEN}8.${PLAIN} 脚本与运维"
+        printf '%b\n' "${RED}9.${PLAIN} 高级 / 高风险"
+        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
             1) show_quick_start_menu ;;
@@ -8337,22 +8708,21 @@ show_menu() {
     done
 }
 
-# --- 错误处理 trap ---
-trap_error() {
+# --- 退出与信号处理 ---
+handle_exit() {
     local exit_code=$?
-    if [ $exit_code -ne 0 ] && [ "$ROLLBACK_ENABLED" = true ]; then
-        log_error "脚本执行出错 (退出码: $exit_code)"
-        if confirm_action "是否回滚本次已记录的文件变更?" "n"; then
-            rollback
-        fi
-    fi
-    exit $exit_code
+    trap - EXIT
+    set +e
+    recover_pending_directory_transactions || true
+    cleanup_temp_files
+    return "$exit_code"
 }
 
 handle_signal() {
     local signal_name="$1" exit_code=143
-    [ "$signal_name" = INT ] && exit_code=130
-    trap - INT TERM ERR
+    [ "$signal_name" = "INT" ] && exit_code=130
+    trap - INT TERM EXIT
+    set +e
     log_warning "收到 ${signal_name}，正在终止活动子进程并清理临时文件"
     if [ -n "$ACTIVE_CHILD_PID" ] && kill -0 "$ACTIVE_CHILD_PID" 2>/dev/null; then
         if [ "$ACTIVE_CHILD_IS_GROUP" = true ]; then
@@ -8363,8 +8733,9 @@ handle_signal() {
         fi
         wait "$ACTIVE_CHILD_PID" 2>/dev/null || true
     fi
+    recover_pending_directory_transactions || true
     cleanup_temp_files
-    log_warning "操作已中断；已生成的备份保留在 ${BACKUP_DIR}，请按日志记录手动恢复"
+    log_warning "操作已中断；文件备份保留在 ${BACKUP_DIR}，请结合日志检查未记录的外部状态变更"
     exit "$exit_code"
 }
 
@@ -8374,9 +8745,11 @@ main() {
         LOG_FILE="/tmp/init_script_dry_run_$(date +%Y%m%d_%H%M%S)_$$.log"
         LOG_READY=false
     fi
+    validate_runtime_modes || exit 2
+
     if [ "$PLAN_ONLY" = "1" ] && { [ -n "$PROFILE_FILE" ] || [ -n "$INIT_PROFILE" ]; }; then
         if [ ! -w "$(dirname "$LOG_FILE")" ]; then
-            LOG_FILE="/tmp/init_script_plan_$(date +%Y%m%d_%H%M%S).log"
+            LOG_FILE="/tmp/init_script_plan_$(date +%Y%m%d_%H%M%S)_$$.log"
         fi
         log_info "Profile PLAN_ONLY 模式，不执行系统变更"
         if [ -n "$PROFILE_FILE" ]; then
@@ -8397,32 +8770,21 @@ main() {
     check_os
     ensure_log_file || exit 1
     acquire_script_lock || exit 1
+    trap 'handle_signal INT' INT
+    trap 'handle_signal TERM' TERM
+    trap handle_exit EXIT
+
+    # 上次若在目录两步 rename 中断，先恢复 live target，再开始新操作。
+    recover_pending_directory_transactions || exit 1
     if [ "$DRY_RUN" != "1" ]; then
         mkdir -p "$BACKUP_DIR"
         chmod 700 "$BACKUP_DIR" 2>/dev/null || true
     fi
 
-    # 设置错误处理 trap
-    if [ "$ROLLBACK_ENABLED" = true ]; then
-        trap trap_error ERR
-    fi
-    trap 'handle_signal INT' INT
-    trap 'handle_signal TERM' TERM
-    trap cleanup_temp_files EXIT
-
     log_info "脚本开始执行，日志文件: $LOG_FILE"
 
-    # 系统资源与网络检查已移除 (用户反馈: 减少启动确认)
-    # if confirm_action "是否检查系统资源?" "y"; then
-    #     check_system_resources || log_warning "系统资源检查有警告，但将继续执行"
-    # fi
-
-    # if confirm_action "是否检查网络连接?" "y"; then
-    #     check_network || log_warning "网络检查失败，某些功能可能无法使用"
-    # fi
-
-    echo -e ""
-    # read -r -p "按 Enter 键进入主菜单..."
+    # 启动时不主动探测资源/网络；诊断菜单可按需执行。
+    printf '%b\n' ""
 
     if [ -n "$PROFILE_FILE" ]; then
         log_info "导入 Profile 文件: $PROFILE_FILE"
