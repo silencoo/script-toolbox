@@ -12,7 +12,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
-| [`agent/`](./agent/) | Setup scripts for AI coding agents (e.g. Claude Code via MiniMax) |
+| [`agent/`](./agent/) | Setup scripts for AI coding agents that lose built-in tools when routed through third-party providers (e.g. Claude Code via MiniMax) |
 
 ## Raw URL changes
 
@@ -28,6 +28,22 @@ Moving the scripts into categories changes their GitHub raw URLs:
 
 Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
+
+## agent
+
+Setup scripts for AI coding agents that lose built-in tools when routed
+through a third-party provider. The first entry covers Claude Code pointed
+at [MiniMax](https://minimaxi.com) — Anthropic's hosted `WebSearch`,
+`WebFetch`, and docs-aware retrieval no-op when you swap the base URL, so
+this folder ships the equivalent MCP servers (Brave Search, Exa,
+Context7) along with the routing installer.
+
+See [`agent/`](./agent/) for the per-agent convention and the full list of
+agents. Today:
+
+- [`agent/claude-code/`](./agent/claude-code/) — Claude Code + MiniMax (China) + web/docs MCP servers.
+- [`agent/codex/`](./agent/codex/) — OpenAI Codex CLI + MiniMax (China) + web/docs MCP servers.
+- [`agent/opencode/`](./agent/opencode/) — OpenCode + MiniMax (China) + web/docs MCP servers.
 
 ## Validation
 

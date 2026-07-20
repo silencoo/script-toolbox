@@ -7,6 +7,8 @@ no-ops when you point it at MiniMax instead of Anthropic).
 Each subfolder is a self-contained agent:
 
 - [`claude-code/`](./claude-code/README.md) — Claude Code + MiniMax (China) + web/docs MCP servers.
+- [`codex/`](./codex/README.md) — OpenAI Codex CLI + MiniMax (China) + web/docs MCP servers.
+- [`opencode/`](./opencode/README.md) — OpenCode + MiniMax (China) + web/docs MCP servers.
 
 ## Per-agent kit
 
