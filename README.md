@@ -1,8 +1,8 @@
 # Scripts
 
-A collection of standalone proxy utilities, Cloudflare Workers, and browser
-userscripts. Each tool lives with its own documentation so scripts can evolve
-without crowding the repository root.
+A collection of standalone proxy utilities, Cloudflare Workers, browser
+userscripts, and AI agent setup scripts. Each tool lives with its own
+documentation so scripts can evolve without crowding the repository root.
 
 ## Contents
 
@@ -12,6 +12,7 @@ without crowding the repository root.
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
+| [`agent/`](./agent/) | Setup scripts for AI coding agents (e.g. Claude Code via MiniMax) |
 
 ## Raw URL changes
 
@@ -35,6 +36,12 @@ Actions. The Worker tests can also be run locally with:
 
 ```sh
 node --test workers/cloudflare-vless/worker.test.mjs
+```
+
+Shell scripts under `agent/` can be syntax-checked with:
+
+```sh
+./agent/test.sh
 ```
 
 ## License
