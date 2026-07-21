@@ -12,6 +12,9 @@ documentation so scripts can evolve without crowding the repository root.
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
+| [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
+| [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
+| [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`agent/`](./agent/) | Setup scripts for AI coding agents that lose built-in tools when routed through third-party providers (e.g. Claude Code via MiniMax) |
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
