@@ -11,6 +11,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
+| [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |

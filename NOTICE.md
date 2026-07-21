@@ -9,6 +9,9 @@ third-party-derived files.
   applicable upstream terms.
 - Files under `userscripts/e-hentai/` were imported from `silencoo/hh_script`.
   Their source headers identify their author and mark them as MIT licensed.
+- Files under `userscripts/123pan-fastlink/` were imported from a local mirror
+  of Bao-qing's `123FastLink`. The userscript retains its original author
+  attribution, and its GreasyFork distribution identifies it as MIT licensed.
 
 External services queried by `workers/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those
