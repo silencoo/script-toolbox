@@ -17,6 +17,8 @@ jobs:
           node-version: 22
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Check Bash syntax
+        run: bash -n docker-sandboxes/sbx-manager.sh
       - name: Install Worker tooling
         run: npm ci
         working-directory: workers/cloudflare-vless
