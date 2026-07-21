@@ -18,6 +18,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes |
+| [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
 ## Raw URL changes
 
