@@ -1,0 +1,26 @@
+curl 'http://localhost:7474/api/indexer' \
+  -H 'Accept: */*' \
+  -H 'Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7' \
+  -H 'Connection: keep-alive' \
+  -H 'Content-Type: application/json' \
+  -H 'DNT: 1' \
+  -H 'Origin: http://localhost:7474' \
+  -H 'Referer: http://localhost:7474/settings/indexers' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' \
+  -H 'x-requested-with: XMLHttpRequest' \
+  --data-raw '{"enabled":true,"identifier":"rss","implementation":"rss","name":"TEST","irc":{},"settings":{},"feed":{"url":"https://jpopsuki.eu/feeds.php?feed=torrents_notify_YOUR_USER_ID_YOUR_FEED_TOKEN&user=YOUR_USER_ID&auth=YOUR_AUTH&passkey=YOUR_PASSKEY&authkey=YOUR_AUTHKEY&name=ITZY+Album","settings":{"download_type":"TORRENT"}}}'
+
+
+
+response example:
+{
+    "id": 199,
+    "name": "TEST",
+    "identifier": "rss-test",
+    "identifier_external": "TEST",
+    "enabled": true,
+    "implementation": "rss",
+    "use_proxy": false,
+    "proxy": null,
+    "proxy_id": 0
+}

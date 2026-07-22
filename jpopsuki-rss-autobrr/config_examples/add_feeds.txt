@@ -1,0 +1,47 @@
+curl 'http://localhost:7474/api/feeds' \
+  -H 'Accept: */*' \
+  -H 'Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7' \
+  -H 'Connection: keep-alive' \
+  -H 'Content-Type: application/json' \
+  -H 'DNT: 1' \
+  -H 'Origin: http://localhost:7474' \
+  -H 'Referer: http://localhost:7474/settings/indexers' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' \
+  -H 'x-requested-with: XMLHttpRequest' \
+  --data-raw '{"name":"TEST","enabled":false,"type":"RSS","url":"https://jpopsuki.eu/feeds.php?feed=torrents_notify_YOUR_USER_ID_YOUR_FEED_TOKEN&user=YOUR_USER_ID&auth=YOUR_AUTH&passkey=YOUR_PASSKEY&authkey=YOUR_AUTHKEY&name=ITZY+Album","interval":30,"timeout":60,"indexer_id":199,"settings":{"download_type":"TORRENT"}}'
+
+
+
+
+
+{
+    "id": 1468,
+    "name": "TEST",
+    "indexer": {
+        "id": 0,
+        "name": "",
+        "identifier": "",
+        "identifier_external": ""
+    },
+    "type": "RSS",
+    "enabled": false,
+    "url": "https://jpopsuki.eu/feeds.php?feed=torrents_notify_YOUR_USER_ID_YOUR_FEED_TOKEN\u0026user=YOUR_USER_ID\u0026auth=YOUR_AUTH\u0026passkey=YOUR_PASSKEY\u0026authkey=YOUR_AUTHKEY\u0026name=ITZY+Album",
+    "interval": 30,
+    "timeout": 60,
+    "max_age": 0,
+    "capabilities": null,
+    "api_key": "<API_KEY>",
+    "cookie": "",
+    "settings": {
+        "download_type": "TORRENT"
+    },
+    "created_at": "0001-01-01T00:00:00Z",
+    "updated_at": "0001-01-01T00:00:00Z",
+    "indexer_id": 199,
+    "last_run": "0001-01-01T00:00:00Z",
+    "last_run_data": "",
+    "next_run": "0001-01-01T00:00:00Z",
+    "ProxyID": 0,
+    "UseProxy": false,
+    "Proxy": null
+}

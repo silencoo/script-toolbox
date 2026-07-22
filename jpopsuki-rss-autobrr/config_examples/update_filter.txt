@@ -1,0 +1,12 @@
+curl 'http://localhost:7474/api/filters/2195' \
+  -X 'PUT' \
+  -H 'Accept: */*' \
+  -H 'Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7' \
+  -H 'Connection: keep-alive' \
+  -H 'Content-Type: application/json' \
+  -H 'DNT: 1' \
+  -H 'Origin: http://localhost:7474' \
+  -H 'Referer: http://localhost:7474/filters/2195' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' \
+  -H 'x-requested-with: XMLHttpRequest' \
+  --data-raw '{"id":2195,"name":"ITZY Album","enabled":true,"announce_types":["NEW"],"priority":0,"use_regex":false,"resolutions":[],"sources":[],"codecs":[],"containers":[],"match_hdr":[],"except_hdr":[],"match_other":[],"except_other":[],"smart_episode":false,"match_language":[],"except_language":[],"formats":[],"quality":[],"media":[],"match_release_types":[],"origins":[],"except_origins":[],"indexers":[{"id":8,"name":"ITZY Album"}],"actions":[{"id":5,"name":"new action","type":"QBITTORRENT","enabled":true,"tags":"ITZY Album","save_path":"/downloads/jpopsuki/ITZY/Album","reannounce_interval":7,"reannounce_max_attempts":25,"client_id":1,"webhook_method":"","webhook_type":""}],"external":[]}'

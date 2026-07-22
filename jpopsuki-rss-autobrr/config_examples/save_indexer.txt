@@ -1,0 +1,12 @@
+curl 'http://localhost:7474/api/filters/8' \
+  -X 'PUT' \
+  -H 'Accept: */*' \
+  -H 'Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7' \
+  -H 'Connection: keep-alive' \
+  -H 'Content-Type: application/json' \
+  -H 'DNT: 1' \
+  -H 'Origin: http://localhost:7474' \
+  -H 'Referer: http://localhost:7474/filters/8/actions' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' \
+  -H 'x-requested-with: XMLHttpRequest' \
+  --data-raw '{"id":8,"name":"ITZY Single","enabled":false,"announce_types":["NEW"],"priority":0,"use_regex":false,"resolutions":[],"sources":[],"codecs":[],"containers":[],"match_hdr":[],"except_hdr":[],"match_other":[],"except_other":[],"smart_episode":false,"match_language":[],"except_language":[],"formats":[],"quality":[],"media":[],"match_release_types":[],"origins":[],"except_origins":[],"indexers":[{"id":6,"name":"ITZY Album"}],"actions":[{"id":0,"name":"new action","enabled":true,"type":"QBITTORRENT","watch_folder":"","exec_cmd":"","exec_args":"","category":"","tags":"ITZY Single","label":"","save_path":"/downloads/jpopsuki/ITZY/Single","paused":false,"ignore_rules":false,"first_last_piece_prio":false,"skip_hash_check":false,"content_layout":"","priority":"","limit_upload_speed":0,"limit_download_speed":0,"limit_ratio":0,"limit_seed_time":0,"reannounce_skip":false,"reannounce_delete":false,"reannounce_interval":7,"reannounce_max_attempts":25,"filter_id":8,"webhook_host":"","webhook_type":"","webhook_method":"","webhook_data":"","webhook_headers":[],"external_download_client_id":0,"external_download_client":"","client_id":1}],"external":[]}'
