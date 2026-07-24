@@ -49,6 +49,8 @@ run_setup() {
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
 [ -f "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
   || fail "default workspace entry helper is missing"
+[ -s "$SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version" ] \
+  || fail "default shell kit version marker is missing or empty"
 [ -f "$SHELL_KIT/files/home/.config/starship.toml" ] \
   || fail "default Starship config is missing"
 grep -Fq 'bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh' \
@@ -295,6 +297,49 @@ assert_contains "$TEST_TMP_DIR/reattach/log" \
   'run --name test-claude -- --resume session-123'
 if grep -Fq "run --name test-claude claude" "$TEST_TMP_DIR/reattach/log"; then
   fail "reattach command retained sandbox creation arguments"
+fi
+
+# Existing named sandboxes predate the current kit marker. Reattaching must
+# apply the current kit once instead of silently keeping stale dotfiles.
+mkdir -p "$TEST_TMP_DIR/stale-kit/home" "$TEST_TMP_DIR/stale-kit/config"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/stale-kit/policy-state"
+: > "$TEST_TMP_DIR/stale-kit/auth-state"
+: > "$TEST_TMP_DIR/stale-kit/log"
+PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+  HOME="$TEST_TMP_DIR/stale-kit/home" \
+  XDG_CONFIG_HOME="$TEST_TMP_DIR/stale-kit/config" \
+  NO_COLOR=1 \
+  SBX_TEST_LOG="$TEST_TMP_DIR/stale-kit/log" \
+  SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/stale-kit/policy-state" \
+  SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/stale-kit/auth-state" \
+  SBX_TEST_SANDBOX_NAMES='stale-shell' \
+  SBX_TEST_SHELL_KIT_CURRENT=0 \
+  "$ROOT_DIR/sbx-manager.sh" run --name stale-shell \
+  > "$TEST_TMP_DIR/stale-kit/output" 2>&1
+assert_contains "$TEST_TMP_DIR/stale-kit/log" \
+  "kit add stale-shell $SHELL_KIT"
+assert_contains "$TEST_TMP_DIR/stale-kit/log" 'run --name stale-shell'
+
+# The opt-out flag also prevents an existing custom sandbox from being
+# modified during reattach.
+mkdir -p "$TEST_TMP_DIR/no-refresh/home" "$TEST_TMP_DIR/no-refresh/config"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/no-refresh/policy-state"
+: > "$TEST_TMP_DIR/no-refresh/auth-state"
+: > "$TEST_TMP_DIR/no-refresh/log"
+PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+  HOME="$TEST_TMP_DIR/no-refresh/home" \
+  XDG_CONFIG_HOME="$TEST_TMP_DIR/no-refresh/config" \
+  NO_COLOR=1 \
+  SBX_TEST_LOG="$TEST_TMP_DIR/no-refresh/log" \
+  SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/no-refresh/policy-state" \
+  SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/no-refresh/auth-state" \
+  SBX_TEST_SANDBOX_NAMES='custom-shell' \
+  SBX_TEST_SHELL_KIT_CURRENT=0 \
+  "$ROOT_DIR/sbx-manager.sh" run --name custom-shell --no-shell-kit \
+  > "$TEST_TMP_DIR/no-refresh/output" 2>&1
+assert_contains "$TEST_TMP_DIR/no-refresh/log" 'run --name custom-shell'
+if grep -Fq 'kit add custom-shell' "$TEST_TMP_DIR/no-refresh/log"; then
+  fail "--no-shell-kit unexpectedly refreshed an existing sandbox"
 fi
 
 printf '%s\n' 'PASS: sbx-manager setup, run, and shell-kit flow'

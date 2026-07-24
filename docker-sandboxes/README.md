@@ -182,7 +182,7 @@ git -C ~/script-toolbox pull --ff-only
 ```
 
 Docker applies `--kit` only while creating a sandbox. To add the shell kit to
-an existing sandbox, run:
+an existing sandbox manually, run:
 
 ```bash
 sbx kit add project-shell ./kits/zsh-shell
@@ -190,8 +190,9 @@ sbx kit add project-shell ./kits/zsh-shell
 
 When `--name` identifies an existing sandbox, the manager automatically switches
 to sbx's reattach syntax and preserves the sandbox's original agent and
-workspace. You can use the same manager command for initial creation and later
-reconnection.
+workspace. Before reconnecting, it checks the bundled shell-kit version inside
+the sandbox and applies the current kit once when the installed copy is stale.
+Pass `--no-shell-kit` to skip this refresh for a custom sandbox.
 
 Run `./sbx-manager.sh --help` for all global, network, daemon, and launch
 options.

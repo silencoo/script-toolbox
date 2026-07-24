@@ -110,6 +110,23 @@ case "${1:-}" in
       printf '%s\n' 'no sandboxes'
     fi
     ;;
+  exec)
+    if [ "${SBX_TEST_SHELL_KIT_CURRENT:-1}" -eq 1 ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  kit)
+    case "${2:-}" in
+      add)
+        printf '%s\n' 'kit added'
+        ;;
+      *)
+        printf 'unsupported kit command: %s\n' "${2:-}" >&2
+        exit 95
+        ;;
+    esac
+    ;;
   run)
     printf '%s\n' 'sandbox started'
     ;;

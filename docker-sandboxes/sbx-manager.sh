@@ -153,7 +153,7 @@ ${C_BOLD}Run helper${C_RESET}
     -t, --template IMAGE     Use an explicit template image.
     -d, --detached           Create/start without attaching.
     --docker-size SIZE       Set internal Docker volume size, e.g. 10g.
-    --no-shell-kit           Do not install the default zsh shell kit.
+    --no-shell-kit           Do not install or refresh the default zsh shell kit.
 
 ${C_BOLD}Examples${C_RESET}
   $SCRIPT_NAME setup open
@@ -1093,8 +1093,34 @@ require_default_shell_kit() {
     || die "The default zsh configuration is missing: $DEFAULT_SHELL_KIT/files/home/.zshrc"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
     || die "The default workspace entry helper is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version" ] \
+    || die "The default shell kit version marker is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/starship.toml" ] \
     || die "The default Starship configuration is missing: $DEFAULT_SHELL_KIT/files/home/.config/starship.toml"
+}
+
+refresh_existing_shell_kit() {
+  local sandbox_name="$1"
+  local local_version_file="$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
+  local remote_version_file="/home/agent/.config/sbx-manager/zsh-shell.version"
+  local expected_version=''
+
+  require_default_shell_kit
+  expected_version="$(sed -n '1p' "$local_version_file")"
+  [ -n "$expected_version" ] \
+    || die "The default shell kit version marker is empty: $local_version_file"
+
+  if sbx exec "$sandbox_name" /bin/sh -c \
+    'actual="$(sed -n "1p" "$1" 2>/dev/null || :)"; [ "$actual" = "$2" ]' \
+    sh "$remote_version_file" "$expected_version" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  section "Refreshing shell kit"
+  say "The existing sandbox '$sandbox_name' is missing shell kit $expected_version."
+  say "Applying the current kit before reattaching."
+  sbx kit add "$sandbox_name" "$DEFAULT_SHELL_KIT" \
+    || die "Could not refresh the shell kit for '$sandbox_name'. Recreate it or run: sbx kit add $sandbox_name $DEFAULT_SHELL_KIT"
 }
 
 run_command() {
@@ -1114,7 +1140,6 @@ run_command() {
   local template=''
   local docker_size=''
   local shell_kit=1
-  local shell_kit_explicitly_disabled=0
   local base=''
   local arg=''
   local seen_separator=0
@@ -1152,7 +1177,6 @@ run_command() {
         ;;
       --no-shell-kit)
         shell_kit=0
-        shell_kit_explicitly_disabled=1
         ;;
       --)
         seen_separator=1
@@ -1187,12 +1211,17 @@ run_command() {
     info "Reattaching to existing sandbox '$name'; its original agent and workspace are preserved."
     if [ "$clone" -eq 1 ] || [ "$no_docker" -eq 1 ] \
       || [ "$minimal" -eq 1 ] || [ "$detached" -eq 1 ] \
-      || [ -n "$template" ] || [ -n "$docker_size" ] \
-      || [ "$shell_kit_explicitly_disabled" -eq 1 ]; then
+      || [ -n "$template" ] || [ -n "$docker_size" ]; then
       warn "Ignoring creation-only options while reattaching to '$name'."
     fi
     if [ "$workspace_provided" -eq 1 ]; then
       say "Requested workspace is ignored for reattach: $workspace"
+    fi
+
+    if [ "$shell_kit" -eq 1 ]; then
+      refresh_existing_shell_kit "$name"
+    else
+      say "Skipping shell kit refresh for existing sandbox '$name'."
     fi
 
     cmd+=(sbx run --name "$name")
