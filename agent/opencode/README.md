@@ -25,14 +25,14 @@ working unchanged — only the host changes.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/opencode/setup.sh | bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/opencode/mcp.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/mcp.sh | bash
 ```
 
 Or clone and run locally:
 
 ```bash
-git clone https://github.com/silencoo/script.git
+git clone https://github.com/silencoo/script-toolbox.git
 cd script/agent/opencode
 ./setup.sh
 ./mcp.sh

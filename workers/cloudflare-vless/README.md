@@ -18,7 +18,7 @@ npx wrangler deploy
 Raw source:
 
 ```text
-https://raw.githubusercontent.com/silencoo/script/main/workers/cloudflare-vless/worker.js
+https://raw.githubusercontent.com/silencoo/script-toolbox/main/workers/cloudflare-vless/worker.js
 ```
 
 ## Request format

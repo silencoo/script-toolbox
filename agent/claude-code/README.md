@@ -21,20 +21,20 @@ web/docs MCP servers it loses when bypassing Anthropic's hosted tools.
 One shot from anywhere on Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/claude-code/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/setup.sh | bash
 ```
 
 Then add the MCP pack (interactive — will prompt for which providers you want
 and for their API keys):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/claude-code/mcp.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/mcp.sh | bash
 ```
 
 Or clone the repo and run them locally:
 
 ```bash
-git clone https://github.com/silencoo/script.git
+git clone https://github.com/silencoo/script-toolbox.git
 cd script/agent/claude-code
 ./setup.sh
 ./mcp.sh

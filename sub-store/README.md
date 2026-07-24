@@ -4,9 +4,9 @@ Standalone scripts intended for use with Sub-Store.
 
 | Script | Purpose | Raw file |
 | --- | --- | --- |
-| [`convert.js`](./convert.js) | Profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script/main/sub-store/convert.js) |
-| [`convert-v2.js`](./convert-v2.js) | Tag-aware profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script/main/sub-store/convert-v2.js) |
-| [`ios-adapter.js`](./ios-adapter.js) | iOS compatibility operator | [raw](https://raw.githubusercontent.com/silencoo/script/main/sub-store/ios-adapter.js) |
+| [`convert.js`](./convert.js) | Profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/convert.js) |
+| [`convert-v2.js`](./convert-v2.js) | Tag-aware profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/convert-v2.js) |
+| [`ios-adapter.js`](./ios-adapter.js) | iOS compatibility operator | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/ios-adapter.js) |
 
 Use the raw URL required by your Sub-Store configuration. Review each script's
 header and settings before enabling it.

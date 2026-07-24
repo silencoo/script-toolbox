@@ -1,19 +1,25 @@
 # Docker Sandboxes Manager
 
-`sbx-manager.sh` installs, configures, diagnoses, and launches Docker
-Sandboxes from one Bash entry point. It wraps the official `sbx` CLI with
-host checks, network-policy presets, daemon and proxy management, template
-discovery, and shortcuts for supported coding agents.
+`sbx-manager.sh` and `sbx-manager.ps1` install, configure, diagnose, and
+launch Docker Sandboxes from Bash or PowerShell. They wrap the official `sbx`
+CLI with host checks, network-policy presets, daemon and proxy management,
+template discovery, and shortcuts for supported coding agents.
 
 ## Supported hosts
 
 - macOS 14 or newer on Apple silicon
+- Windows 11 on 64-bit Intel or AMD with Windows Hypervisor Platform enabled
 - Ubuntu 24.04 or newer with KVM
 - Debian 13 or newer on an architecture for which Docker publishes a standalone
   Linux archive, as an explicitly enabled best-effort mode
 
-Docker Sandboxes requires hardware virtualization. On a VPS, confirm that the
-provider exposes nested virtualization and that `/dev/kvm` is available.
+Docker Sandboxes requires hardware virtualization. On Windows, the PowerShell
+manager checks the Windows version, CPU architecture, and Hypervisor Platform
+feature; when run as Administrator, `install` can enable the feature after
+confirmation. A reboot may be required. Docker Desktop is not required.
+
+On a Linux VPS, confirm that the provider exposes nested virtualization and that
+`/dev/kvm` is available.
 
 Ubuntu uses Docker's official APT package. Debian 13 uses Docker's official
 standalone release archive, verifies its SHA-256 digest from the GitHub release
@@ -28,7 +34,7 @@ The manager includes the system sbin directories when starting `sandboxd` and
 repairs a daemon that previously disabled its block-volume driver because those
 directories were absent from `PATH`.
 
-## Usage
+## Usage on macOS and Linux
 
 Make the script executable and display its built-in help:
 
@@ -53,6 +59,41 @@ On Debian 13 or newer, explicitly enable the best-effort standalone path:
 
 ```bash
 ./sbx-manager.sh --experimental-debian setup balanced
+```
+
+## Usage on Windows
+
+From PowerShell, display the built-in help and run setup:
+
+```powershell
+.\sbx-manager.ps1 --help
+.\sbx-manager.ps1 setup balanced
+```
+
+The manager installs the official `Docker.sbx` WinGet package when `sbx` is not
+already present. If Windows Hypervisor Platform is disabled, open PowerShell as
+Administrator for the first setup. The feature can also be enabled directly:
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All
+```
+
+The PowerShell entry point has the same `install`, `setup`, `login`, `info`,
+`doctor`, `templates`, `network`, `daemon`, and `run` command surface as the
+Bash entry point. Windows workspace paths, including paths with spaces, are
+passed to `sbx` without conversion:
+
+```powershell
+.\sbx-manager.ps1 run codex C:\src\project --name project-codex
+.\sbx-manager.ps1 run claude 'C:\src\project with spaces' --name project-claude --clone
+.\sbx-manager.ps1 run shell . --name project-shell
+```
+
+PowerShell consumes an unquoted `--` token while binding script parameters.
+Quote the separator when forwarding arguments to an agent:
+
+```powershell
+.\sbx-manager.ps1 run claude . --name project-claude '--' --resume session-123
 ```
 
 Inspect the host and diagnose an existing installation:
@@ -146,8 +187,9 @@ Examples:
 
 Proxy settings managed by this script are saved under
 `${XDG_CONFIG_HOME:-$HOME/.config}/sbx-manager/daemon.env` with restrictive
-permissions. Credentials embedded in proxy URLs are redacted from displayed
-status output.
+permissions on macOS/Linux, or
+`%LOCALAPPDATA%\sbx-manager\daemon.json` with a restricted ACL on Windows.
+Credentials embedded in proxy URLs are redacted from displayed status output.
 
 ## Non-interactive operation
 
@@ -156,6 +198,10 @@ the interactive Docker OAuth flow:
 
 ```bash
 ./sbx-manager.sh --yes --skip-login setup balanced
+```
+
+```powershell
+.\sbx-manager.ps1 --yes --skip-login setup balanced
 ```
 
 Set `NO_COLOR=1` to disable terminal formatting.
@@ -168,4 +214,18 @@ The script remains compatible with Bash 3.2 and can be syntax-checked with:
 bash -n sbx-manager.sh
 sbx kit validate kits/zsh-shell
 ./tests/sbx-manager-test.sh
+```
+
+The PowerShell manager can be parsed and regression-tested on Windows with:
+
+```powershell
+$tokens = $null
+$errors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+  (Resolve-Path .\sbx-manager.ps1),
+  [ref]$tokens,
+  [ref]$errors
+) | Out-Null
+if ($errors.Count) { throw $errors }
+.\tests\sbx-manager-test.ps1
 ```

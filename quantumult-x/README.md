@@ -9,7 +9,7 @@ header.
 Raw URL:
 
 ```text
-https://raw.githubusercontent.com/silencoo/script/main/quantumult-x/resource-parser.js
+https://raw.githubusercontent.com/silencoo/script-toolbox/main/quantumult-x/resource-parser.js
 ```
 
 The source file retains its upstream attribution. See the repository

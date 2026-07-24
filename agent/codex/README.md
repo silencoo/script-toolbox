@@ -28,14 +28,14 @@ and add a separate provider block for it.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/codex/setup.sh | bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script/main/agent/codex/mcp.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/mcp.sh | bash
 ```
 
 Or clone and run locally:
 
 ```bash
-git clone https://github.com/silencoo/script.git
+git clone https://github.com/silencoo/script-toolbox.git
 cd script/agent/codex
 ./setup.sh
 ./mcp.sh

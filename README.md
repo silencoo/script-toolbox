@@ -1,4 +1,4 @@
-# Scripts
+# Script Toolbox
 
 A collection of standalone proxy utilities, Cloudflare Workers, browser
 userscripts, and AI agent setup scripts. Each tool lives with its own
@@ -22,7 +22,8 @@ documentation so scripts can evolve without crowding the repository root.
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
-| [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes |
+| [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
+| [`windows-wsl2/`](./windows-wsl2/) | Initialize, update, inspect, and manage WSL 2 on Windows |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
 ## Raw URL changes
@@ -76,6 +77,13 @@ The standalone deployment scripts can be checked with:
 ```sh
 bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh
 python3 sing-box/generate-client-config.py --help
+```
+
+On Windows, validate the Docker Sandboxes PowerShell manager with:
+
+```powershell
+.\docker-sandboxes\tests\sbx-manager-test.ps1
+.\windows-wsl2\tests\setup-test.ps1
 ```
 
 ## License

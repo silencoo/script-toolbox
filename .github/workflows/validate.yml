@@ -28,3 +28,13 @@ jobs:
       - name: Validate Worker bundle
         run: npm run validate
         working-directory: workers/cloudflare-vless
+
+  validate-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows PowerShell managers
+        shell: pwsh
+        run: |
+          ./docker-sandboxes/tests/sbx-manager-test.ps1
+          ./windows-wsl2/tests/setup-test.ps1
