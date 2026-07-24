@@ -20,6 +20,7 @@ ASSUME_YES=0
 EXPERIMENTAL_DEBIAN=0
 SKIP_LOGIN=0
 KVM_SESSION_REFRESH_REQUIRED=0
+PARSED_GLOBAL_OPTION_COUNT=0
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sbx-manager"
 DAEMON_ENV_FILE="$CONFIG_DIR/daemon.env"
@@ -1287,6 +1288,7 @@ setup_command() {
 }
 
 parse_global_options() {
+  PARSED_GLOBAL_OPTION_COUNT=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -y|--yes) ASSUME_YES=1 ;;
@@ -1297,15 +1299,15 @@ parse_global_options() {
       *) break ;;
     esac
     shift
+    PARSED_GLOBAL_OPTION_COUNT=$((PARSED_GLOBAL_OPTION_COUNT + 1))
   done
-  REMAINING_ARGS=("$@")
 }
 
 main() {
-  # Bash 3.2 supports indexed arrays, but not associative arrays.
-  REMAINING_ARGS=()
   parse_global_options "$@"
-  set -- "${REMAINING_ARGS[@]}"
+  # Bash 3.2 with nounset treats an empty array expansion as unbound.
+  # Shift the parsed global options instead of copying the remainder.
+  shift "$PARSED_GLOBAL_OPTION_COUNT"
 
   local command="${1:-help}"
   if [ "$#" -gt 0 ]; then shift; fi

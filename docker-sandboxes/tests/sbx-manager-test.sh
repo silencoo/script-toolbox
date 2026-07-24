@@ -62,6 +62,18 @@ grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
 grep -Fq "alias ll='eza " "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing eza aliases"
 
+# Bash 3.2 with nounset treats an empty array expansion as unbound. Invoking
+# the manager without a command, including after consuming global options,
+# must fall back to help without using an empty remaining-arguments array.
+NO_COLOR=1 "$ROOT_DIR/sbx-manager.sh" \
+  > "$TEST_TMP_DIR/no-arguments-output" 2>&1
+grep -Fq 'Usage' "$TEST_TMP_DIR/no-arguments-output" \
+  || fail "no-argument invocation did not show help"
+NO_COLOR=1 "$ROOT_DIR/sbx-manager.sh" --yes \
+  > "$TEST_TMP_DIR/global-options-only-output" 2>&1
+grep -Fq 'Usage' "$TEST_TMP_DIR/global-options-only-output" \
+  || fail "global-options-only invocation did not show help"
+
 # A fresh setup must initialize the requested preset before diagnose/login.
 # Otherwise the daemon opens its interactive first-use policy picker.
 run_setup fresh setup open
