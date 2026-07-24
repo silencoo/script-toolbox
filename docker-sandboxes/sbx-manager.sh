@@ -140,10 +140,10 @@ ${C_BOLD}Daemon commands${C_RESET}
   daemon start|stop|restart|status
 
 ${C_BOLD}Run helper${C_RESET}
-  run <agent> [workspace] [options] [-- agent arguments]
+  run [agent] [workspace] [options] [-- agent arguments]
 
   Agents: claude, codex, copilot, cursor, docker-agent, droid,
-          gemini, kiro, opencode, shell
+          gemini, kiro, opencode, shell (default)
 
   Options:
     --name NAME              Set a persistent sandbox name.
@@ -158,7 +158,8 @@ ${C_BOLD}Run helper${C_RESET}
 ${C_BOLD}Examples${C_RESET}
   $SCRIPT_NAME setup open
   $SCRIPT_NAME templates --remote
-  $SCRIPT_NAME run shell ~/Projects/app --name app-shell
+  $SCRIPT_NAME run ~/Projects/app
+  $SCRIPT_NAME run ~/Projects/app --name app-shell --clone
   $SCRIPT_NAME run claude ~/Projects/app --name app-claude --clone
   $SCRIPT_NAME run codex . --name app-codex --no-docker
   $SCRIPT_NAME network allow '**'
@@ -1095,10 +1096,13 @@ require_default_shell_kit() {
 }
 
 run_command() {
-  [ "$#" -ge 1 ] || die "Usage: $SCRIPT_NAME run <agent> [workspace] [options] [-- agent arguments]"
-
-  local agent="$1"
-  shift
+  local agent='shell'
+  case "${1:-}" in
+    claude|codex|copilot|cursor|docker-agent|droid|gemini|kiro|opencode|shell)
+      agent="$1"
+      shift
+      ;;
+  esac
   local workspace=''
   local name=''
   local clone=0

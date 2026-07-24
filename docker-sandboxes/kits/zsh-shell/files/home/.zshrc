@@ -19,6 +19,17 @@ plugins=(
 
 source "$ZSH/oh-my-zsh.sh"
 
+# Docker sbx preserves the host's absolute workspace path inside the VM.
+# Present the primary workspace through a short, stable path in interactive
+# shells while keeping the underlying mount or private clone unchanged.
+if [[ -L "$HOME/workspace" ]]; then
+  _sbx_workspace_target="$(readlink "$HOME/workspace")"
+  if [[ -n "$_sbx_workspace_target" && "$PWD" == "$_sbx_workspace_target" ]]; then
+    builtin cd -L "$HOME/workspace"
+  fi
+  unset _sbx_workspace_target
+fi
+
 # Persistent, shared command history.
 HISTFILE="$HOME/.zsh_history"
 HISTSIZE=50000

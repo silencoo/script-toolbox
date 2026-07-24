@@ -49,18 +49,37 @@ run_setup() {
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
 [ -f "$SHELL_KIT/files/home/.config/starship.toml" ] \
   || fail "default Starship config is missing"
-grep -Fq 'bat ca-certificates curl fd-find fzf git ripgrep zoxide zsh' \
+grep -Fq 'bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing modern CLI packages"
 grep -Fq 'eza_version=0.23.5' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing the pinned eza release"
+grep -Fq 'https://github.com/silencoo/script-toolbox.git' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not clone script-toolbox"
+grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not record the primary workspace"
+grep -Fq 'description: Link the primary sbx workspace at ~/workspace' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not create the workspace alias"
 grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing zoxide initialization"
+grep -Fq 'builtin cd -L "$HOME/workspace"' \
+  "$SHELL_KIT/files/home/.zshrc" \
+  || fail "default shell kit does not enter the stable workspace alias"
 grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
   "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing fzf key bindings"
 grep -Fq "alias ll='eza " "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing eza aliases"
+grep -Fq 'format = "${env_var.IS_SANDBOX}$username' \
+  "$SHELL_KIT/files/home/.config/starship.toml" \
+  || fail "Starship sandbox marker is not using the named env-var syntax"
+if grep -Fq '$env_var.IS_SANDBOX' \
+  "$SHELL_KIT/files/home/.config/starship.toml"; then
+  fail "Starship prompt still renders .IS_SANDBOX as literal text"
+fi
 
 # Bash 3.2 with nounset treats an empty array expansion as unbound. Invoking
 # the manager without a command, including after consuming global options,
@@ -209,6 +228,26 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   > "$TEST_TMP_DIR/no-shell-kit/output" 2>&1
 assert_contains "$TEST_TMP_DIR/no-shell-kit/log" \
   "run --name plain-shell shell $TEST_TMP_DIR/no-shell-kit/workspace"
+
+# Omitting the agent makes the manager open a persistent shell workspace.
+mkdir -p "$TEST_TMP_DIR/default-shell/home" \
+  "$TEST_TMP_DIR/default-shell/config" \
+  "$TEST_TMP_DIR/default-shell/workspace"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/default-shell/policy-state"
+: > "$TEST_TMP_DIR/default-shell/auth-state"
+: > "$TEST_TMP_DIR/default-shell/log"
+PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+  HOME="$TEST_TMP_DIR/default-shell/home" \
+  XDG_CONFIG_HOME="$TEST_TMP_DIR/default-shell/config" \
+  NO_COLOR=1 \
+  SBX_TEST_LOG="$TEST_TMP_DIR/default-shell/log" \
+  SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/default-shell/policy-state" \
+  SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/default-shell/auth-state" \
+  "$ROOT_DIR/sbx-manager.sh" run \
+    "$TEST_TMP_DIR/default-shell/workspace" \
+  > "$TEST_TMP_DIR/default-shell/output" 2>&1
+assert_contains "$TEST_TMP_DIR/default-shell/log" \
+  "run --kit $SHELL_KIT shell $TEST_TMP_DIR/default-shell/workspace"
 
 # Passing the original agent/workspace again for an existing named sandbox
 # must be rewritten to sbx's reattach-only syntax.

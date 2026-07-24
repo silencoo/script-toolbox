@@ -1,8 +1,8 @@
 schemaVersion: "1"
 kind: mixin
 name: zsh-shell
-displayName: Productive zsh shell
-description: Installs a productive zsh, Starship, completions, fuzzy search, smart navigation, and modern CLI tools
+displayName: Productive sandbox workspace
+description: Installs a productive zsh workspace, modern CLI tools, and the script-toolbox agent helpers
 
 caps:
   network:
@@ -24,7 +24,7 @@ commands:
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
         apt-get install -y --no-install-recommends \
-          bat ca-certificates curl fd-find fzf git ripgrep zoxide zsh
+          bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh
         rm -rf /var/lib/apt/lists/*
 
         # Debian and Ubuntu avoid package-name collisions by exposing these
@@ -163,6 +163,25 @@ commands:
           4f5416f5fd9b42822de3ff0cebb831843f655d1d \
           "$HOME/.oh-my-zsh/custom/plugins/zsh-completions"
 
+        toolbox_dir="$HOME/script-toolbox"
+        if [ ! -d "$toolbox_dir/.git" ]; then
+          if [ -e "$toolbox_dir" ]; then
+            echo "Refusing to replace non-Git path: $toolbox_dir" >&2
+            exit 1
+          fi
+          git clone -q --depth 1 --branch main \
+            https://github.com/silencoo/script-toolbox.git \
+            "$toolbox_dir"
+        fi
+
+        if [ -L "$HOME/agent" ]; then
+          ln -sfn "$toolbox_dir/agent" "$HOME/agent"
+        elif [ ! -e "$HOME/agent" ]; then
+          ln -s "$toolbox_dir/agent" "$HOME/agent"
+        else
+          echo "Keeping existing path instead of creating ~/agent: $HOME/agent" >&2
+        fi
+
         mkdir -p "$HOME/.oh-my-zsh/custom/completions"
         starship completions zsh \
           > "$HOME/.oh-my-zsh/custom/completions/_starship"
@@ -177,4 +196,32 @@ commands:
             'fi' >> "$profile"
         fi
       user: "1000"
-      description: Install pinned Oh My Zsh plugins and configure interactive login shells
+      description: Install the shell environment and script-toolbox agent helpers
+
+  initFiles:
+    - path: /home/agent/.config/sbx-manager/workspace
+      content: "${WORKDIR}\n"
+      mode: "0644"
+      onlyIfMissing: false
+      description: Record the primary workspace path for a stable home-directory link
+
+  startup:
+    - command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          workspace_file="$HOME/.config/sbx-manager/workspace"
+          [ -r "$workspace_file" ] || exit 0
+          workspace="$(sed -n '1p' "$workspace_file")"
+          [ -n "$workspace" ] || exit 0
+
+          if [ -L "$HOME/workspace" ]; then
+            ln -sfn "$workspace" "$HOME/workspace"
+          elif [ ! -e "$HOME/workspace" ]; then
+            ln -s "$workspace" "$HOME/workspace"
+          else
+            echo "Keeping existing path instead of linking ~/workspace" >&2
+          fi
+      user: "1000"
+      description: Link the primary sbx workspace at ~/workspace

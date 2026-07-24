@@ -111,13 +111,19 @@ Hub tags:
 ./sbx-manager.sh templates --remote
 ```
 
-Launch an agent in a workspace:
+Launch a persistent shell workspace (recommended), or attach directly to an
+agent when a shell is not needed:
 
 ```bash
+./sbx-manager.sh run /path/to/project
+./sbx-manager.sh run /path/to/project --name project-shell --clone
 ./sbx-manager.sh run codex /path/to/project --name project-codex
 ./sbx-manager.sh run claude /path/to/project --name project-claude --clone
-./sbx-manager.sh run shell /path/to/project --name project-shell
 ```
+
+On macOS and Linux, `shell` is the default when the first argument after `run`
+is a workspace path or an option. Write an agent name explicitly only when the
+sandbox should attach directly to that agent.
 
 Every new sandbox launched through the manager receives the bundled
 `kits/zsh-shell` mixin by default. The kit installs zsh, a verified pinned
@@ -135,8 +141,11 @@ The same kit also installs:
 - `fzf` with `Ctrl-R` history search, `Ctrl-T` file insertion, `Alt-C`
   directory changes, and `**` + Tab fuzzy completion
 - `eza` as the colorful `ls`, `l`, `ll`, `la`, and `lt` implementation
-- `bat`, `fd`, and `ripgrep` (`rg`) for highlighted file viewing and fast file
-  and content searches
+- `bat`, `fd`, `jq`, and `ripgrep` (`rg`) for structured data, highlighted file
+  viewing, and fast file and content searches
+- a shallow clone of
+  [`silencoo/script-toolbox`](https://github.com/silencoo/script-toolbox) at
+  `~/script-toolbox`, with `~/agent` linked to its `agent/` directory
 
 `fzf` uses `fd` for traversal and `bat`/`eza` for previews. The kit normalizes
 Debian and Ubuntu's `batcat` and `fdfind` binary names to `bat` and `fd`.
@@ -155,6 +164,20 @@ for an incompatible custom image:
 ```bash
 ./sbx-manager.sh run shell /path/to/project --name custom-shell \
   --template example.com/custom/image:latest --no-shell-kit
+```
+
+Docker sbx mounts the primary workspace at its absolute host path and currently
+does not expose a destination-path option. The kit records sbx's primary
+`WORKDIR`, creates `~/workspace` as a stable link to it, and switches an
+interactive zsh session to that logical path. As a result,
+`run /path/to/project` opens at `~/workspace` without changing whether the
+underlying workspace is a direct host mount or a private `--clone`.
+
+The toolbox is cloned only when the kit is first installed. Update it later
+from inside the sandbox with:
+
+```bash
+git -C ~/script-toolbox pull --ff-only
 ```
 
 Docker applies `--kit` only while creating a sandbox. To add the shell kit to

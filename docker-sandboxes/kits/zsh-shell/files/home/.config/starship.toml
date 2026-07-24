@@ -3,7 +3,7 @@
 add_newline = false
 command_timeout = 1200
 scan_timeout = 30
-format = "$env_var.IS_SANDBOX$username$hostname$directory$git_branch$git_status$nodejs$python$rust$golang$docker_context$fill$cmd_duration$status$line_break$character"
+format = "${env_var.IS_SANDBOX}$username$hostname$directory$git_branch$git_status$nodejs$python$rust$golang$docker_context$fill$cmd_duration$status$line_break$character"
 
 [env_var.IS_SANDBOX]
 format = "[sbx](bold yellow) "
