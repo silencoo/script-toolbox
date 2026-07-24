@@ -18,7 +18,9 @@ jobs:
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
       - name: Check Bash syntax
-        run: bash -n docker-sandboxes/sbx-manager.sh
+        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/tests/setup-test.sh
+      - name: Test Ghostty setup
+        run: ./ghostty/tests/setup-test.sh
       - name: Install Worker tooling
         run: npm ci
         working-directory: workers/cloudflare-vless
