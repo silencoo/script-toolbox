@@ -1091,6 +1091,8 @@ require_default_shell_kit() {
     || die "The default zsh shell kit is missing: $DEFAULT_SHELL_KIT/spec.yaml"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.zshrc" ] \
     || die "The default zsh configuration is missing: $DEFAULT_SHELL_KIT/files/home/.zshrc"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
+    || die "The default workspace entry helper is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/starship.toml" ] \
     || die "The default Starship configuration is missing: $DEFAULT_SHELL_KIT/files/home/.config/starship.toml"
 }

@@ -47,6 +47,8 @@ run_setup() {
 
 [ -f "$SHELL_KIT/spec.yaml" ] || fail "default shell kit spec is missing"
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
+[ -f "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
+  || fail "default workspace entry helper is missing"
 [ -f "$SHELL_KIT/files/home/.config/starship.toml" ] \
   || fail "default Starship config is missing"
 grep -Fq 'bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh' \
@@ -65,9 +67,9 @@ grep -Fq 'description: Link the primary sbx workspace at ~/workspace' \
   || fail "default shell kit does not create the workspace alias"
 grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing zoxide initialization"
-grep -Fq 'builtin cd -L "$HOME/workspace"' \
+grep -Fq 'source "$HOME/.config/sbx-manager/enter-workspace.zsh"' \
   "$SHELL_KIT/files/home/.zshrc" \
-  || fail "default shell kit does not enter the stable workspace alias"
+  || fail "default shell kit does not load the workspace entry helper"
 grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
   "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing fzf key bindings"
@@ -80,6 +82,26 @@ if grep -Fq '$env_var.IS_SANDBOX' \
   "$SHELL_KIT/files/home/.config/starship.toml"; then
   fail "Starship prompt still renders .IS_SANDBOX as literal text"
 fi
+
+# The zsh entry helper must not depend on the asynchronous kit startup command:
+# it creates or refreshes ~/workspace itself and enters that logical path.
+workspace_entry_case="$TEST_TMP_DIR/workspace-entry"
+workspace_entry_home="$workspace_entry_case/home"
+workspace_entry_target="$workspace_entry_case/original workspace"
+workspace_entry_old="$workspace_entry_case/old workspace"
+mkdir -p "$workspace_entry_home/.config/sbx-manager" \
+  "$workspace_entry_target" "$workspace_entry_old"
+printf '%s\n' "$workspace_entry_target" \
+  > "$workspace_entry_home/.config/sbx-manager/workspace"
+ln -s "$workspace_entry_old" "$workspace_entry_home/workspace"
+HOME="$workspace_entry_home" zsh -f -c '
+  cd "$1"
+  source "$2"
+  [[ "$PWD" == "$HOME/workspace" ]]
+  [[ "$(readlink "$HOME/workspace")" == "$1" ]]
+' zsh "$workspace_entry_target" \
+  "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
+  || fail "workspace entry helper did not refresh and enter ~/workspace"
 
 # Bash 3.2 with nounset treats an empty array expansion as unbound. Invoking
 # the manager without a command, including after consuming global options,

@@ -169,7 +169,8 @@ for an incompatible custom image:
 Docker sbx mounts the primary workspace at its absolute host path and currently
 does not expose a destination-path option. The kit records sbx's primary
 `WORKDIR`, creates `~/workspace` as a stable link to it, and switches an
-interactive zsh session to that logical path. As a result,
+interactive zsh session to that logical path. The shell creates the link
+synchronously, so it does not depend on kit startup-command timing. As a result,
 `run /path/to/project` opens at `~/workspace` without changing whether the
 underlying workspace is a direct host mount or a private `--clone`.
 
