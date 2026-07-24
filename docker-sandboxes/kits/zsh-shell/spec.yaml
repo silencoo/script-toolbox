@@ -1,0 +1,180 @@
+schemaVersion: "1"
+kind: mixin
+name: zsh-shell
+displayName: Productive zsh shell
+description: Installs a productive zsh, Starship, completions, fuzzy search, smart navigation, and modern CLI tools
+
+caps:
+  network:
+    allow:
+      - github.com
+      - "*.githubusercontent.com"
+      - "*.ubuntu.com"
+      - deb.debian.org
+      - security.debian.org
+
+commands:
+  install:
+    - command: |
+        set -eu
+        if ! command -v apt-get >/dev/null 2>&1; then
+          echo "zsh-shell kit requires an apt-based sandbox template" >&2
+          exit 1
+        fi
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          bat ca-certificates curl fd-find fzf git ripgrep zoxide zsh
+        rm -rf /var/lib/apt/lists/*
+
+        # Debian and Ubuntu avoid package-name collisions by exposing these
+        # binaries as batcat and fdfind. Normalize them for portable dotfiles.
+        if ! command -v bat >/dev/null 2>&1 && command -v batcat >/dev/null 2>&1; then
+          ln -s "$(command -v batcat)" /usr/local/bin/bat
+        fi
+        if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then
+          ln -s "$(command -v fdfind)" /usr/local/bin/fd
+        fi
+
+        agent_user="$(awk -F: '$3 == 1000 { print $1; exit }' /etc/passwd)"
+        if [ -z "$agent_user" ]; then
+          echo "zsh-shell kit could not find the sandbox user at UID 1000" >&2
+          exit 1
+        fi
+        usermod -s "$(command -v zsh)" "$agent_user"
+
+        starship_version=1.25.1
+        case "$(uname -m)" in
+          x86_64|amd64)
+            starship_target=x86_64-unknown-linux-musl
+            starship_sha256=c6ddd3ecb9c0071a2ad38d98cee748160066b7c4f197421268058f4a5d6f8504
+            ;;
+          aarch64|arm64)
+            starship_target=aarch64-unknown-linux-musl
+            starship_sha256=01517aab398959ea9ea73bdb4f032ea4dbb51dff5c8e5eb05b4a1b9b7ab872b8
+            ;;
+          *)
+            echo "Starship is not bundled for architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        starship_tmp="$(mktemp -d /tmp/starship-install.XXXXXX)"
+        cleanup_starship() {
+          rm -rf -- "$starship_tmp"
+        }
+        trap cleanup_starship 0 1 2 15
+        starship_archive="$starship_tmp/starship.tar.gz"
+        starship_url="https://github.com/starship/starship/releases/download/v${starship_version}/starship-${starship_target}.tar.gz"
+        curl -fL --retry 3 --connect-timeout 20 \
+          "$starship_url" -o "$starship_archive"
+        printf '%s  %s\n' "$starship_sha256" "$starship_archive" \
+          | sha256sum -c -
+        tar -xzf "$starship_archive" -C "$starship_tmp"
+        install -m 0755 "$starship_tmp/starship" /usr/local/bin/starship
+        cleanup_starship
+        trap - 0 1 2 15
+
+        # Ubuntu 24.04 does not ship eza, so use the official release on both
+        # supported architectures for a consistent command and feature set.
+        eza_version=0.23.5
+        eza_completion_sha256=8ca5a250d28c3c7ebd0077aca203701a17d1ea7c92621d9e274b93965e3c9291
+        case "$(uname -m)" in
+          x86_64|amd64)
+            eza_target=x86_64-unknown-linux-gnu
+            eza_sha256=35c70c5c43c29108075e58b893234c67ef585f0b53a7eaf8e9e7d4eec9f339b4
+            ;;
+          aarch64|arm64)
+            eza_target=aarch64-unknown-linux-gnu
+            eza_sha256=40b87ae8628aa2ff0f0d2dc24ab52f689631366385c3da630bae745671fd71ec
+            ;;
+          *)
+            echo "eza is not bundled for architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        eza_tmp="$(mktemp -d /tmp/eza-install.XXXXXX)"
+        cleanup_eza() {
+          rm -rf -- "$eza_tmp"
+        }
+        trap cleanup_eza 0 1 2 15
+        eza_archive="$eza_tmp/eza.tar.gz"
+        eza_completion_archive="$eza_tmp/completions.tar.gz"
+        eza_url="https://github.com/eza-community/eza/releases/download/v${eza_version}/eza_${eza_target}.tar.gz"
+        eza_completion_url="https://github.com/eza-community/eza/releases/download/v${eza_version}/completions-${eza_version}.tar.gz"
+        curl -fL --retry 3 --connect-timeout 20 \
+          "$eza_url" -o "$eza_archive"
+        curl -fL --retry 3 --connect-timeout 20 \
+          "$eza_completion_url" -o "$eza_completion_archive"
+        printf '%s  %s\n' "$eza_sha256" "$eza_archive" \
+          | sha256sum -c -
+        printf '%s  %s\n' "$eza_completion_sha256" "$eza_completion_archive" \
+          | sha256sum -c -
+        tar -xzf "$eza_archive" -C "$eza_tmp"
+        tar -xzf "$eza_completion_archive" -C "$eza_tmp"
+        install -m 0755 "$eza_tmp/eza" /usr/local/bin/eza
+        install -d -m 0755 /usr/local/share/zsh/site-functions
+        install -m 0644 \
+          "$eza_tmp/target/completions-${eza_version}/_eza" \
+          /usr/local/share/zsh/site-functions/_eza
+        cleanup_eza
+        trap - 0 1 2 15
+      description: Install zsh, modern CLI tools, and verified Starship and eza releases
+
+    - command: |
+        set -eu
+        export GIT_TERMINAL_PROMPT=0
+
+        install_repo() {
+          repo_url="$1"
+          revision="$2"
+          target="$3"
+
+          if [ ! -d "$target/.git" ]; then
+            if [ -e "$target" ]; then
+              echo "Refusing to replace non-Git path: $target" >&2
+              return 1
+            fi
+            git init -q "$target"
+            git -C "$target" remote add origin "$repo_url"
+          else
+            git -C "$target" remote set-url origin "$repo_url"
+          fi
+
+          git -C "$target" fetch -q --depth 1 origin "$revision"
+          git -C "$target" checkout -q --detach FETCH_HEAD
+        }
+
+        install_repo \
+          https://github.com/ohmyzsh/ohmyzsh.git \
+          677a4592b18c08ddea737f8aca70bac0e9fc9313 \
+          "$HOME/.oh-my-zsh"
+        install_repo \
+          https://github.com/zsh-users/zsh-autosuggestions.git \
+          85919cd1ffa7d2d5412f6d3fe437ebdbeeec4fc5 \
+          "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        install_repo \
+          https://github.com/zsh-users/zsh-syntax-highlighting.git \
+          1d85c692615a25fe2293bdd44b34c217d5d2bf04 \
+          "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+        install_repo \
+          https://github.com/zsh-users/zsh-completions.git \
+          4f5416f5fd9b42822de3ff0cebb831843f655d1d \
+          "$HOME/.oh-my-zsh/custom/plugins/zsh-completions"
+
+        mkdir -p "$HOME/.oh-my-zsh/custom/completions"
+        starship completions zsh \
+          > "$HOME/.oh-my-zsh/custom/completions/_starship"
+
+        profile="$HOME/.bash_profile"
+        marker="# sbx-manager zsh-shell kit: prefer zsh"
+        if ! grep -Fq "$marker" "$profile" 2>/dev/null; then
+          printf '\n%s\n' "$marker" >> "$profile"
+          printf '%s\n' \
+            'if [[ $- == *i* && -z ${SBX_KEEP_BASH:-} && -x /usr/bin/zsh ]]; then' \
+            '  exec /usr/bin/zsh -l' \
+            'fi' >> "$profile"
+        fi
+      user: "1000"
+      description: Install pinned Oh My Zsh plugins and configure interactive login shells

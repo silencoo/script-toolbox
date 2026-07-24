@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+set -u
+
+: "${SBX_TEST_LOG:?SBX_TEST_LOG is required}"
+: "${SBX_TEST_POLICY_STATE:?SBX_TEST_POLICY_STATE is required}"
+: "${SBX_TEST_AUTH_STATE:?SBX_TEST_AUTH_STATE is required}"
+
+printf '%s\n' "$*" >> "$SBX_TEST_LOG"
+
+case "${1:-}" in
+  version)
+    printf 'sbx version: test\n'
+    ;;
+  policy)
+    case "${2:-}" in
+      init)
+        if [ -e "$SBX_TEST_POLICY_STATE" ]; then
+          printf '%s\n' \
+            'ERROR: global network policy is already initialized; use "sbx policy reset" first to change it' >&2
+          exit 1
+        fi
+        printf '%s\n' "${3:-}" > "$SBX_TEST_POLICY_STATE"
+        printf 'Network policy set to "%s".\n' "${3:-}"
+        ;;
+      reset)
+        rm -f "$SBX_TEST_POLICY_STATE"
+        ;;
+      inspect)
+        printf '%s\n' 'unexpected interactive policy probe' >&2
+        exit 97
+        ;;
+      check)
+        printf 'Allowed: %s\n' "${4:-unknown}"
+        ;;
+      ls)
+        if [ "${*: -1}" = '--json' ]; then
+          preset="$(cat "$SBX_TEST_POLICY_STATE")"
+          case "$preset" in
+            allow-all) rule_id=default-allow-all ;;
+            deny-all) rule_id=default-deny-all ;;
+            balanced) rule_id=balanced-registry-allow ;;
+            *) rule_id=custom-rule ;;
+          esac
+          printf '{"rules":[{"id":"%s","origin":"local"}]}\n' "$rule_id"
+        else
+          printf '%s\n' 'local all test-policy'
+        fi
+        ;;
+      *)
+        printf 'unsupported policy command: %s\n' "${2:-}" >&2
+        exit 98
+        ;;
+    esac
+    ;;
+  diagnose)
+    if [ -e "$SBX_TEST_AUTH_STATE" ]; then
+      auth_message=authenticated
+      auth_status=pass
+    else
+      auth_message='not authenticated'
+      auth_status=warn
+    fi
+    printf '{\n'
+    printf '  "checks": [\n'
+    printf '    {\n'
+    printf '      "name": "Authentication",\n'
+    printf '      "status": "%s",\n' "$auth_status"
+    printf '      "message": "%s"\n' "$auth_message"
+    printf '    }\n'
+    printf '  ]\n'
+    printf '}\n'
+    ;;
+  login)
+    : > "$SBX_TEST_AUTH_STATE"
+    printf '%s\n' 'Login complete.'
+    ;;
+  daemon)
+    case "${2:-}" in
+      status)
+        printf '%s\n' 'Status: running'
+        if [ -n "${SBX_TEST_DAEMON_LOG:-}" ]; then
+          printf 'Logs: %s\n' "$SBX_TEST_DAEMON_LOG"
+        fi
+        ;;
+      start)
+        if [ -n "${SBX_TEST_DAEMON_LOG:-}" ]; then
+          printf '%s\n' '{"msg":"loggingkit started"}' >> "$SBX_TEST_DAEMON_LOG"
+        fi
+        printf '%s\n' 'daemon started'
+        ;;
+      stop)
+        printf '%s\n' 'daemon stopped'
+        ;;
+      *)
+        printf 'unsupported daemon command: %s\n' "${2:-}" >&2
+        exit 96
+        ;;
+    esac
+    ;;
+  template)
+    printf '%s\n' 'no cached templates'
+    ;;
+  ls)
+    if [ "${2:-}" = '-q' ]; then
+      if [ -n "${SBX_TEST_SANDBOX_NAMES:-}" ]; then
+        printf '%s\n' "$SBX_TEST_SANDBOX_NAMES"
+      fi
+    else
+      printf '%s\n' 'no sandboxes'
+    fi
+    ;;
+  run)
+    printf '%s\n' 'sandbox started'
+    ;;
+  *)
+    printf 'unsupported sbx command: %s\n' "${1:-}" >&2
+    exit 99
+    ;;
+esac

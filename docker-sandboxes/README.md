@@ -9,10 +9,24 @@ discovery, and shortcuts for supported coding agents.
 
 - macOS 14 or newer on Apple silicon
 - Ubuntu 24.04 or newer with KVM
-- Debian 13 or newer as an explicitly enabled, best-effort mode
+- Debian 13 or newer on an architecture for which Docker publishes a standalone
+  Linux archive, as an explicitly enabled best-effort mode
 
 Docker Sandboxes requires hardware virtualization. On a VPS, confirm that the
 provider exposes nested virtualization and that `/dev/kvm` is available.
+
+Ubuntu uses Docker's official APT package. Debian 13 uses Docker's official
+standalone release archive, verifies its SHA-256 digest from the GitHub release
+metadata, and installs it under `/usr/local`. Docker does not officially support
+Debian as an SBX host, and standalone installs do not receive APT upgrades.
+If setup newly adds the user to the `kvm` group, it pauses before starting the
+daemon; open a fresh login or SSH session and rerun setup so the new group is
+active.
+
+On Linux, sandbox kit volumes also require `mkfs.ext4` from `e2fsprogs`.
+The manager includes the system sbin directories when starting `sandboxd` and
+repairs a daemon that previously disabled its block-volume driver because those
+directories were absent from `PATH`.
 
 ## Usage
 
@@ -27,6 +41,18 @@ Install and configure an open, balanced, or locked network-policy preset:
 
 ```bash
 ./sbx-manager.sh setup balanced
+```
+
+Setup initializes the requested policy before starting the daemon or checking
+Docker authentication, so a fresh installation does not open a second,
+interactive policy picker. If the requested preset is already active, setup
+keeps its rules and continues. If a different local preset exists, setup asks
+before resetting its rules; pass `--yes` only when that reset is intentional.
+
+On Debian 13 or newer, explicitly enable the best-effort standalone path:
+
+```bash
+./sbx-manager.sh --experimental-debian setup balanced
 ```
 
 Inspect the host and diagnose an existing installation:
@@ -51,6 +77,56 @@ Launch an agent in a workspace:
 ./sbx-manager.sh run claude /path/to/project --name project-claude --clone
 ./sbx-manager.sh run shell /path/to/project --name project-shell
 ```
+
+Every new sandbox launched through the manager receives the bundled
+`kits/zsh-shell` mixin by default. The kit installs zsh, a verified pinned
+Starship binary, and a pinned Oh My Zsh toolchain with extended completions,
+history-based autosuggestions, syntax highlighting, a selectable
+case-insensitive completion menu, and Smart Tab behavior. Its Starship prompt
+shows sandbox context, the working directory, Git state, active language
+toolchains, command duration, and exit status without requiring a large theme
+framework.
+
+The same kit also installs:
+
+- `zoxide` for frecency-based directory jumps (`z keyword`) and interactive
+  selection (`zi`)
+- `fzf` with `Ctrl-R` history search, `Ctrl-T` file insertion, `Alt-C`
+  directory changes, and `**` + Tab fuzzy completion
+- `eza` as the colorful `ls`, `l`, `ll`, `la`, and `lt` implementation
+- `bat`, `fd`, and `ripgrep` (`rg`) for highlighted file viewing and fast file
+  and content searches
+
+`fzf` uses `fd` for traversal and `bat`/`eza` for previews. The kit normalizes
+Debian and Ubuntu's `batcat` and `fdfind` binary names to `bat` and `fd`.
+`eza` icons look best when the host terminal uses a Nerd Font; pass
+`--icons=never` if the current font lacks those glyphs. The original utilities
+remain available as `command ls`, `cat`, and `find`.
+
+The kit also makes zsh the UID 1000 user's login shell. The built-in `shell`
+agent still starts through `bash -l`, so the kit adds an
+interactive-only bridge that switches that login session to zsh; set
+`SBX_KEEP_BASH=1` inside a sandbox when Bash is preferred.
+
+The bundled kit targets the apt-based official sandbox templates. Disable it
+for an incompatible custom image:
+
+```bash
+./sbx-manager.sh run shell /path/to/project --name custom-shell \
+  --template example.com/custom/image:latest --no-shell-kit
+```
+
+Docker applies `--kit` only while creating a sandbox. To add the shell kit to
+an existing sandbox, run:
+
+```bash
+sbx kit add project-shell ./kits/zsh-shell
+```
+
+When `--name` identifies an existing sandbox, the manager automatically switches
+to sbx's reattach syntax and preserves the sandbox's original agent and
+workspace. You can use the same manager command for initial creation and later
+reconnection.
 
 Run `./sbx-manager.sh --help` for all global, network, daemon, and launch
 options.
@@ -90,4 +166,6 @@ The script remains compatible with Bash 3.2 and can be syntax-checked with:
 
 ```bash
 bash -n sbx-manager.sh
+sbx kit validate kits/zsh-shell
+./tests/sbx-manager-test.sh
 ```

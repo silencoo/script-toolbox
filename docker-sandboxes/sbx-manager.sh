@@ -6,24 +6,29 @@
 # Officially supported hosts at the time this script was written:
 #   - macOS 14+ on Apple silicon
 #   - Ubuntu 24.04+ with KVM
-# Debian support is experimental and must be explicitly enabled.
+# Debian support uses Docker's standalone Linux release archive. It is
+# experimental and must be explicitly enabled.
 
 set -Eeuo pipefail
 
 SCRIPT_NAME="${0##*/}"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_VERSION="1.2.2"
 CATALOG_DATE="2026-07-20"
 
 ASSUME_YES=0
 EXPERIMENTAL_DEBIAN=0
 SKIP_LOGIN=0
+KVM_SESSION_REFRESH_REQUIRED=0
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sbx-manager"
 DAEMON_ENV_FILE="$CONFIG_DIR/daemon.env"
 
 DOCS_ROOT="https://docs.docker.com/ai/sandboxes/"
+SBX_RELEASES_API="https://api.github.com/repos/docker/sbx-releases/releases/latest"
 TEMPLATE_REPO="docker.io/docker/sandbox-templates"
 HUB_TAGS_API="https://hub.docker.com/v2/namespaces/docker/repositories/sandbox-templates/tags?page_size=100"
+DEFAULT_SHELL_KIT="${SBX_MANAGER_SHELL_KIT:-$SCRIPT_DIR/kits/zsh-shell}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_BOLD=$'\033[1m'
@@ -107,7 +112,7 @@ ${C_BOLD}Usage${C_RESET}
 ${C_BOLD}Global options${C_RESET}
   -y, --yes                  Accept destructive-policy prompts.
       --skip-login           Do not run Docker OAuth login during setup.
-      --experimental-debian  Permit best-effort installation on Debian 13.
+      --experimental-debian  Install the standalone release on Debian 13+.
   -h, --help                 Show this help.
 
 ${C_BOLD}Main commands${C_RESET}
@@ -147,6 +152,7 @@ ${C_BOLD}Run helper${C_RESET}
     -t, --template IMAGE     Use an explicit template image.
     -d, --detached           Create/start without attaching.
     --docker-size SIZE       Set internal Docker volume size, e.g. 10g.
+    --no-shell-kit           Do not install the default zsh shell kit.
 
 ${C_BOLD}Examples${C_RESET}
   $SCRIPT_NAME setup open
@@ -194,6 +200,9 @@ linux_release_info() {
 }
 
 check_kvm() {
+  local target_user
+  target_user="${SUDO_USER:-${USER:-$(id -un)}}"
+
   section "KVM / virtualization"
 
   if [ -e /dev/kvm ]; then
@@ -202,8 +211,13 @@ check_kvm() {
       success "/dev/kvm is readable and writable by the current user."
     else
       warn "/dev/kvm exists, but the current user cannot read and write it."
-      say "Add the user to the kvm group, then log out/in:"
-      say "  sudo usermod -aG kvm \"${SUDO_USER:-${USER:-$(id -un)}}\""
+      if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx kvm; then
+        warn "$target_user is configured in the kvm group, but this process has not inherited it."
+        say "Open a new login/SSH session, or run 'newgrp kvm' for a temporary subshell."
+      else
+        say "Add the user to the kvm group, then log out/in:"
+        say "  sudo usermod -aG kvm \"$target_user\""
+      fi
     fi
   else
     warn "/dev/kvm does not exist. sbx cannot start Linux microVMs without KVM."
@@ -226,6 +240,129 @@ check_kvm() {
       success "CPU virtualization flags are visible to this OS."
     elif [ "$(host_arch)" = "x86_64" ] || [ "$(host_arch)" = "amd64" ]; then
       warn "No vmx/svm CPU flag is visible. On a VPS, nested virtualization may not be enabled."
+    fi
+  fi
+}
+
+github_release_asset_value() {
+  # Usage: github_release_asset_value "$json" "$asset_name" digest|browser_download_url
+  # GitHub renders each asset's name before its digest and download URL. The
+  # API may return compact or pretty-printed JSON, so collect it before
+  # scanning. This keeps jq/Python out of the bootstrap dependency set.
+  local metadata="$1"
+  local asset_name="$2"
+  local field="$3"
+
+  printf '%s\n' "$metadata" | awk -v asset="$asset_name" -v field="$field" '
+    {
+      json = json $0
+    }
+    END {
+      asset_marker = "\"name\":\"" asset "\""
+      asset_pos = index(json, asset_marker)
+      if (asset_pos == 0) {
+        asset_marker = "\"name\": \"" asset "\""
+        asset_pos = index(json, asset_marker)
+      }
+      if (asset_pos == 0) {
+        exit
+      }
+
+      tail = substr(json, asset_pos + length(asset_marker))
+      marker = "\"" field "\":\""
+      pos = index(tail, marker)
+      if (pos == 0) {
+        marker = "\"" field "\": \""
+        pos = index(tail, marker)
+      }
+      if (pos > 0) {
+        value = substr(tail, pos + length(marker))
+        sub(/".*/, "", value)
+        print value
+      }
+    }
+  '
+}
+
+install_linux_standalone() {
+  local release_arch="$1"
+  local metadata tag asset_name asset_url expected_digest actual_digest
+  local tmp_dir archive install_script
+
+  asset_name="DockerSandboxes-linux-${release_arch}.tar.gz"
+
+  info "Resolving the latest standalone sbx release from Docker..."
+  metadata="$(curl -fsSL \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'User-Agent: sbx-manager' \
+    "$SBX_RELEASES_API")" \
+    || die "Could not read the latest release metadata from $SBX_RELEASES_API"
+
+  tag="$(printf '%s\n' "$metadata" \
+    | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -n 1)"
+  asset_url="$(github_release_asset_value "$metadata" "$asset_name" browser_download_url)"
+  expected_digest="$(github_release_asset_value "$metadata" "$asset_name" digest)"
+  expected_digest="${expected_digest#sha256:}"
+
+  [ -n "$tag" ] || die "The Docker release metadata did not contain a version tag."
+  [ -n "$asset_url" ] || die "Docker $tag does not publish $asset_name. Check the release notes for architecture availability."
+  [ -n "$expected_digest" ] || die "Docker $tag did not publish a SHA-256 digest for $asset_name."
+
+  tmp_dir="$(mktemp -d /tmp/sbx-manager-install.XXXXXX)"
+  archive="$tmp_dir/$asset_name"
+
+  info "Downloading Docker sbx $tag standalone archive..."
+  if ! curl -fL --retry 3 --connect-timeout 20 "$asset_url" -o "$archive"; then
+    rm -rf -- "$tmp_dir"
+    die "Failed to download $asset_url"
+  fi
+
+  actual_digest="$(sha256sum "$archive" | awk '{print $1}')"
+  if [ "$actual_digest" != "$expected_digest" ]; then
+    rm -rf -- "$tmp_dir"
+    die "SHA-256 verification failed for $asset_name."
+  fi
+  success "Verified $asset_name ($actual_digest)."
+
+  if ! tar -xzf "$archive" -C "$tmp_dir"; then
+    rm -rf -- "$tmp_dir"
+    die "Could not extract $asset_name."
+  fi
+
+  install_script="$tmp_dir/docker-sbx/install.sh"
+  if [ ! -f "$install_script" ]; then
+    rm -rf -- "$tmp_dir"
+    die "The release archive does not contain docker-sbx/install.sh."
+  fi
+
+  info "Installing the standalone release under /usr/local..."
+  if ! as_root env \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH" \
+    PREFIX=/usr/local \
+    bash "$install_script"; then
+    rm -rf -- "$tmp_dir"
+    die "Docker's standalone installer failed."
+  fi
+  rm -rf -- "$tmp_dir"
+  hash -r
+
+  warn "This standalone installation is outside APT; rerun the installer manually to apply future sbx updates."
+}
+
+configure_kvm_group() {
+  local target_user="$1"
+
+  if ! getent group kvm >/dev/null 2>&1; then
+    as_root groupadd kvm
+  fi
+
+  if [ "$target_user" != root ]; then
+    id "$target_user" >/dev/null 2>&1 || die "Cannot add unknown user to the kvm group: $target_user"
+    as_root usermod -aG kvm "$target_user"
+    if { [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; } \
+      && id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx kvm; then
+      KVM_SESSION_REFRESH_REQUIRED=1
     fi
   fi
 }
@@ -260,7 +397,7 @@ install_macos() {
 }
 
 install_linux() {
-  local rel id version pretty major target_user
+  local rel id version pretty major target_user release_arch
   rel="$(linux_release_info)"
   id="${rel%%|*}"
   rel="${rel#*|}"
@@ -272,7 +409,8 @@ install_linux() {
   say "Detected: $pretty ($(host_arch))"
 
   case "$(host_arch)" in
-    x86_64|amd64|aarch64|arm64) ;;
+    x86_64|amd64) release_arch=amd64 ;;
+    aarch64|arm64) release_arch=arm64 ;;
     *) die "Unsupported Linux architecture: $(host_arch)" ;;
   esac
 
@@ -283,7 +421,7 @@ install_linux() {
     [ "$major" -ge 24 ] || die "The official Linux installation requires Ubuntu 24.04 or newer."
   elif [ "$id" = "debian" ]; then
     if [ "$EXPERIMENTAL_DEBIAN" -ne 1 ]; then
-      die "Debian is not an officially supported sbx host. Rerun with --experimental-debian for a best-effort package check; Ubuntu 24.04+ is the supported path."
+      die "Debian is not an officially supported sbx host. Rerun with --experimental-debian to use Docker's standalone Linux archive; Ubuntu 24.04+ is the supported path."
     fi
     case "$major" in
       ''|*[!0-9]*) die "Could not parse Debian version: $version" ;;
@@ -301,28 +439,29 @@ install_linux() {
     return 0
   fi
 
-  info "Installing APT prerequisites..."
+  info "Installing host prerequisites..."
   as_root apt-get update
-  as_root apt-get install -y ca-certificates curl
+  as_root apt-get install -y ca-certificates curl e2fsprogs tar
 
-  info "Adding Docker's APT repository..."
-  if [ "$(id -u)" -eq 0 ]; then
-    curl -fsSL https://get.docker.com | REPO_ONLY=1 sh
+  if [ "$id" = "debian" ]; then
+    install_linux_standalone "$release_arch"
   else
-    curl -fsSL https://get.docker.com | sudo REPO_ONLY=1 sh
-  fi
-  as_root apt-get update
+    info "Adding Docker's APT repository..."
+    if [ "$(id -u)" -eq 0 ]; then
+      curl -fsSL https://get.docker.com | REPO_ONLY=1 sh
+    else
+      curl -fsSL https://get.docker.com | sudo REPO_ONLY=1 sh
+    fi
+    as_root apt-get update
 
-  if ! apt-cache show docker-sbx >/dev/null 2>&1; then
-    die "The configured repository does not publish docker-sbx for $pretty / $(host_arch). Do not force-install an Ubuntu package on this host."
+    if ! apt-cache show docker-sbx >/dev/null 2>&1; then
+      die "The configured repository does not publish docker-sbx for $pretty / $(host_arch)."
+    fi
+
+    as_root apt-get install -y docker-sbx
   fi
 
-  as_root apt-get install -y docker-sbx
-
-  if ! getent group kvm >/dev/null 2>&1; then
-    as_root groupadd kvm
-  fi
-  as_root usermod -aG kvm "$target_user"
+  configure_kvm_group "$target_user"
 
   require_sbx
   success "Installed $(sbx version 2>/dev/null | head -n 1)."
@@ -339,12 +478,30 @@ install_sbx() {
 }
 
 is_authenticated() {
+  local diagnosis
   require_sbx
-  sbx diagnose 2>/dev/null | grep -Eqi 'Authentication.*authenticated'
+  diagnosis="$(NO_COLOR=1 sbx diagnose --output json 2>/dev/null)" || return 1
+  printf '%s\n' "$diagnosis" | awk '
+    /"name"[[:space:]]*:[[:space:]]*"Authentication"/ {
+      authentication_check = 1
+      next
+    }
+    authentication_check &&
+      /"message"[[:space:]]*:[[:space:]]*"authenticated"/ {
+      authenticated = 1
+    }
+    authentication_check && /^[[:space:]]*}/ {
+      authentication_check = 0
+    }
+    END {
+      exit authenticated ? 0 : 1
+    }
+  '
 }
 
 login_sbx() {
   require_sbx
+  load_daemon_env
   if is_authenticated; then
     success "sbx is already authenticated."
     return 0
@@ -355,6 +512,17 @@ login_sbx() {
 }
 
 load_daemon_env() {
+  # Debian's default non-root PATH may omit sbin even though e2fsprogs installs
+  # mkfs.ext4 there. sandboxd discovers the block-volume driver from PATH when
+  # it starts, so keep the system administration directories visible.
+  if [ "$(host_os)" = "Linux" ]; then
+    case ":$PATH:" in
+      *:/usr/sbin:*) ;;
+      *) PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH" ;;
+    esac
+    export PATH
+  fi
+
   if [ -r "$DAEMON_ENV_FILE" ]; then
     # This file is generated by this script with shell-escaped values.
     # shellcheck disable=SC1090
@@ -375,6 +543,68 @@ daemon_restart() {
   sbx daemon stop >/dev/null 2>&1 || true
   sbx daemon start --detach
   sbx daemon status
+}
+
+daemon_log_path() {
+  local status
+  status="$(sbx daemon status 2>/dev/null || true)"
+  printf '%s\n' "$status" | sed -n 's/^Logs:[[:space:]]*//p' | head -n 1
+}
+
+daemon_block_driver_disabled() {
+  local log_path
+  log_path="$(daemon_log_path)"
+  [ -n "$log_path" ] && [ -r "$log_path" ] || return 1
+
+  # The log is append-only. Reset at each daemon session marker so an old
+  # failure does not make a successfully restarted daemon look unhealthy.
+  awk '
+    /"msg":"loggingkit started"/ {
+      disabled = 0
+    }
+    /mkfs\.ext4 not available, disabling block volume driver/ {
+      disabled = 1
+    }
+    END {
+      exit disabled ? 0 : 1
+    }
+  ' "$log_path"
+}
+
+ensure_block_volume_driver() {
+  local active_sandboxes=''
+  [ "$(host_os)" = "Linux" ] || return 0
+
+  load_daemon_env
+  if ! has mkfs.ext4; then
+    die "mkfs.ext4 is required for sandbox kit volumes. Install e2fsprogs, then rerun this command."
+  fi
+
+  daemon_block_driver_disabled || return 0
+  warn "sandboxd started without mkfs.ext4 in PATH, so its block-volume driver is disabled."
+
+  # A stopped daemon can be started by the list operation below. If that
+  # already picked up the corrected PATH, no explicit restart is needed.
+  if ! active_sandboxes="$(sbx ls -q 2>/dev/null)"; then
+    die "Could not list sandboxes safely before restarting sandboxd. Run '$SCRIPT_NAME doctor' for details."
+  fi
+  if ! daemon_block_driver_disabled; then
+    success "sandboxd picked up mkfs.ext4 and enabled block-volume support."
+    return 0
+  fi
+
+  if [ -n "$active_sandboxes" ]; then
+    warn "Restarting sandboxd stops running sandboxes; their disks are preserved."
+    confirm "Restart sandboxd to enable block-volume support?" \
+      || die "Cannot launch this agent until sandboxd is restarted with mkfs.ext4 available."
+  fi
+
+  info "Restarting sandboxd with system sbin directories in PATH..."
+  daemon_restart >/dev/null
+  if daemon_block_driver_disabled; then
+    die "sandboxd still could not enable its block-volume driver. Run '$SCRIPT_NAME doctor' and inspect the daemon log."
+  fi
+  success "Enabled sandboxd block-volume support."
 }
 
 daemon_command() {
@@ -412,23 +642,61 @@ policy_check_allowed() {
   esac
 }
 
+current_network_preset() {
+  local rules
+  rules="$(sbx policy ls \
+    --include-inactive \
+    --source local \
+    --type network \
+    --json 2>/dev/null)" || return 1
+
+  case "$rules" in
+    *default-allow-all*) printf 'allow-all\n' ;;
+    *default-deny-all*) printf 'deny-all\n' ;;
+    *'"origin"'*'"local"'*) printf 'balanced\n' ;;
+    *) return 1 ;;
+  esac
+}
+
 configure_network_mode() {
-  local mode="$1" preset existing=0
+  local mode="$1" keep_matching="${2:-0}"
+  local preset init_output current_preset='' initialized=0
   require_sbx
+  load_daemon_env
   preset="$(policy_mode_to_preset "$mode")" || die "Unknown network mode: $mode (use open, balanced, or locked)"
 
-  if sbx policy inspect local-policy >/dev/null 2>&1; then
-    existing=1
+  # Do not probe with `policy inspect` or another daemon-backed command here.
+  # On an uninitialized installation, starting the daemon opens sbx's
+  # interactive policy picker. `policy init` is both the non-interactive probe
+  # and the initialization operation, and reports a stable error when a policy
+  # already exists.
+  if init_output="$(sbx policy init "$preset" 2>&1)"; then
+    [ -z "$init_output" ] || say "$init_output"
+    initialized=1
+  else
+    case "$init_output" in
+      *"global network policy is already initialized"*)
+        current_preset="$(current_network_preset || true)"
+        if [ "$keep_matching" -eq 1 ] && [ "$current_preset" = "$preset" ]; then
+          success "Local network policy already uses preset: $preset"
+        else
+          warn "Changing the preset resets local policy rules and stops the sbx daemon. Sandbox disks are preserved."
+          confirm "Reset local policy to '$mode'?" || die "Cancelled."
+          sbx policy reset --force
+          sbx policy init "$preset"
+          initialized=1
+        fi
+        ;;
+      *)
+        [ -z "$init_output" ] || warn "$init_output"
+        die "Could not initialize the local network policy preset: $preset"
+        ;;
+    esac
   fi
 
-  if [ "$existing" -eq 1 ]; then
-    warn "Changing the preset resets local policy rules and stops the sbx daemon. Sandbox disks are preserved."
-    confirm "Reset local policy to '$mode'?" || die "Cancelled."
-    sbx policy reset --force
+  if [ "$initialized" -eq 1 ]; then
+    success "Initialized local policy preset: $preset"
   fi
-
-  sbx policy init "$preset"
-  success "Initialized local policy preset: $preset"
 
   # v0.35.0 could occasionally retain a stale policy snapshot. Restart only
   # when the open preset fails an actual policy check.
@@ -816,6 +1084,15 @@ doctor_command() {
   fi
 }
 
+require_default_shell_kit() {
+  [ -f "$DEFAULT_SHELL_KIT/spec.yaml" ] \
+    || die "The default zsh shell kit is missing: $DEFAULT_SHELL_KIT/spec.yaml"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.zshrc" ] \
+    || die "The default zsh configuration is missing: $DEFAULT_SHELL_KIT/files/home/.zshrc"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.config/starship.toml" ] \
+    || die "The default Starship configuration is missing: $DEFAULT_SHELL_KIT/files/home/.config/starship.toml"
+}
+
 run_command() {
   [ "$#" -ge 1 ] || die "Usage: $SCRIPT_NAME run <agent> [workspace] [options] [-- agent arguments]"
 
@@ -829,9 +1106,14 @@ run_command() {
   local detached=0
   local template=''
   local docker_size=''
+  local shell_kit=1
+  local shell_kit_explicitly_disabled=0
   local base=''
   local arg=''
   local seen_separator=0
+  local workspace_provided=0
+  local reattach=0
+  local sandbox_names=''
   local cmd
   local extra_args
 
@@ -861,6 +1143,10 @@ run_command() {
         [ "$#" -ge 1 ] || die "--docker-size requires a value such as 10g"
         docker_size="$1"; shift
         ;;
+      --no-shell-kit)
+        shell_kit=0
+        shell_kit_explicitly_disabled=1
+        ;;
       --)
         seen_separator=1
         while [ "$#" -gt 0 ]; do
@@ -872,6 +1158,7 @@ run_command() {
       *)
         if [ -z "$workspace" ]; then
           workspace="$arg"
+          workspace_provided=1
         else
           die "Only one workspace is accepted by this helper. Use raw 'sbx run' for additional mounts."
         fi
@@ -880,56 +1167,88 @@ run_command() {
     [ "$seen_separator" -eq 0 ] || break
   done
 
-  [ -n "$workspace" ] || workspace="$PWD"
-  [ -d "$workspace" ] || die "Workspace directory does not exist: $workspace"
-
-  if [ "$minimal" -eq 1 ]; then
-    [ "$agent" = "claude" ] || die "--minimal is only valid with the claude agent."
-    base="claude-code-minimal"
-  fi
-
-  if [ -n "$template" ] && { [ "$no_docker" -eq 1 ] || [ "$minimal" -eq 1 ]; }; then
-    warn "An explicit --template overrides automatic --no-docker/--minimal template selection."
-  fi
-
-  if [ -z "$template" ]; then
-    if [ "$minimal" -eq 1 ]; then
-      if [ "$no_docker" -eq 1 ]; then
-        template="$TEMPLATE_REPO:$base"
-      else
-        template="$TEMPLATE_REPO:${base}-docker"
-      fi
-    elif [ "$no_docker" -eq 1 ]; then
-      template="$TEMPLATE_REPO:$base"
+  load_daemon_env
+  if [ -n "$name" ]; then
+    sandbox_names="$(sbx ls -q 2>/dev/null)" \
+      || die "Could not list existing sandboxes before running '$name'."
+    if printf '%s\n' "$sandbox_names" | grep -Fqx -- "$name"; then
+      reattach=1
     fi
   fi
 
-  if [ "$clone" -eq 1 ] && ! git -C "$workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    warn "--clone was requested, but the workspace does not appear to be a Git working tree. sbx may reject it."
-  fi
+  if [ "$reattach" -eq 1 ]; then
+    info "Reattaching to existing sandbox '$name'; its original agent and workspace are preserved."
+    if [ "$clone" -eq 1 ] || [ "$no_docker" -eq 1 ] \
+      || [ "$minimal" -eq 1 ] || [ "$detached" -eq 1 ] \
+      || [ -n "$template" ] || [ -n "$docker_size" ] \
+      || [ "$shell_kit_explicitly_disabled" -eq 1 ]; then
+      warn "Ignoring creation-only options while reattaching to '$name'."
+    fi
+    if [ "$workspace_provided" -eq 1 ]; then
+      say "Requested workspace is ignored for reattach: $workspace"
+    fi
 
-  cmd+=(sbx run)
-  [ -z "$name" ] || cmd+=(--name "$name")
-  [ "$clone" -eq 0 ] || cmd+=(--clone)
-  [ "$detached" -eq 0 ] || cmd+=(--detached)
-  [ -z "$template" ] || cmd+=(--template "$template")
-  cmd+=("$agent" "$workspace")
+    cmd+=(sbx run --name "$name")
+  else
+    [ -n "$workspace" ] || workspace="$PWD"
+    [ -d "$workspace" ] || die "Workspace directory does not exist: $workspace"
+
+    if [ "$minimal" -eq 1 ]; then
+      [ "$agent" = "claude" ] || die "--minimal is only valid with the claude agent."
+      base="claude-code-minimal"
+    fi
+
+    if [ -n "$template" ] && { [ "$no_docker" -eq 1 ] || [ "$minimal" -eq 1 ]; }; then
+      warn "An explicit --template overrides automatic --no-docker/--minimal template selection."
+    fi
+
+    if [ -z "$template" ]; then
+      if [ "$minimal" -eq 1 ]; then
+        if [ "$no_docker" -eq 1 ]; then
+          template="$TEMPLATE_REPO:$base"
+        else
+          template="$TEMPLATE_REPO:${base}-docker"
+        fi
+      elif [ "$no_docker" -eq 1 ]; then
+        template="$TEMPLATE_REPO:$base"
+      fi
+    fi
+
+    if [ "$clone" -eq 1 ] && ! git -C "$workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      warn "--clone was requested, but the workspace does not appear to be a Git working tree. sbx may reject it."
+    fi
+
+    ensure_block_volume_driver
+    cmd+=(sbx run)
+    [ -z "$name" ] || cmd+=(--name "$name")
+    [ "$clone" -eq 0 ] || cmd+=(--clone)
+    [ "$detached" -eq 0 ] || cmd+=(--detached)
+    [ -z "$template" ] || cmd+=(--template "$template")
+    if [ "$shell_kit" -eq 1 ]; then
+      require_default_shell_kit
+      cmd+=(--kit "$DEFAULT_SHELL_KIT")
+    fi
+    cmd+=("$agent" "$workspace")
+  fi
 
   if [ "${#extra_args[@]}" -gt 0 ]; then
     cmd+=(--)
     cmd+=("${extra_args[@]}")
   fi
 
-  section "Launching sandbox"
+  if [ "$reattach" -eq 1 ]; then
+    section "Reattaching sandbox"
+  else
+    section "Launching sandbox"
+  fi
   printf 'Command:'
   shell_quote_command "${cmd[@]}"
 
-  if [ -n "$docker_size" ]; then
+  if [ "$reattach" -eq 0 ] && [ -n "$docker_size" ]; then
     export DOCKER_SANDBOXES_DOCKER_SIZE="$docker_size"
     say "DOCKER_SANDBOXES_DOCKER_SIZE=$docker_size"
   fi
 
-  load_daemon_env
   exec "${cmd[@]}"
 }
 
@@ -941,13 +1260,28 @@ setup_command() {
     success "Using existing sbx at $(command -v sbx)."
   fi
 
+  if [ "$KVM_SESSION_REFRESH_REQUIRED" -eq 1 ]; then
+    warn "sbx is installed, but this process has not inherited the new kvm group."
+    say "Open a new login/SSH session and rerun:"
+    if [ "$EXPERIMENTAL_DEBIAN" -eq 1 ]; then
+      say "  $SCRIPT_NAME --experimental-debian setup $mode"
+    else
+      say "  $SCRIPT_NAME setup $mode"
+    fi
+    return 0
+  fi
+
+  # Initialize policy before diagnose/login: either command can start the
+  # daemon and trigger sbx's first-use interactive policy picker.
+  configure_network_mode "$mode" 1
+  ensure_block_volume_driver
+
   if [ "$SKIP_LOGIN" -eq 0 ]; then
     login_sbx
   else
     warn "Skipping sbx login by request."
   fi
 
-  configure_network_mode "$mode"
   info_command
   print_template_catalog
 }
