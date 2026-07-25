@@ -218,6 +218,11 @@ commands:
 
           if [ -L "$HOME/workspace" ]; then
             ln -sfn "$workspace" "$HOME/workspace"
+          elif [ -d "$HOME/workspace" ] \
+            && rmdir -- "$HOME/workspace" 2>/dev/null; then
+            # The shell image may seed an empty directory at this path.
+            # rmdir deliberately refuses to replace a non-empty directory.
+            ln -sfn "$workspace" "$HOME/workspace"
           elif [ ! -e "$HOME/workspace" ]; then
             ln -s "$workspace" "$HOME/workspace"
           else

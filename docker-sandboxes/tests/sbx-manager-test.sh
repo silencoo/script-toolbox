@@ -67,6 +67,8 @@ grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
 grep -Fq 'description: Link the primary sbx workspace at ~/workspace' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not create the workspace alias"
+grep -Fq 'rmdir -- "$HOME/workspace"' "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not replace the image's empty workspace directory"
 grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing zoxide initialization"
 grep -Fq 'source "$HOME/.config/sbx-manager/enter-workspace.zsh"' \
@@ -104,6 +106,25 @@ HOME="$workspace_entry_home" zsh -f -c '
 ' zsh "$workspace_entry_target" \
   "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
   || fail "workspace entry helper did not refresh and enter ~/workspace"
+
+# The official shell image may pre-create ~/workspace as an empty directory.
+# It is safe to replace only when rmdir confirms that it contains no data.
+empty_workspace_case="$TEST_TMP_DIR/empty-workspace-entry"
+empty_workspace_home="$empty_workspace_case/home"
+empty_workspace_target="$empty_workspace_case/target workspace"
+mkdir -p "$empty_workspace_home/.config/sbx-manager" \
+  "$empty_workspace_home/workspace" "$empty_workspace_target"
+printf '%s\n' "$empty_workspace_target" \
+  > "$empty_workspace_home/.config/sbx-manager/workspace"
+HOME="$empty_workspace_home" zsh -f -c '
+  cd "$1"
+  source "$2"
+  [[ -L "$HOME/workspace" ]]
+  [[ "$PWD" == "$HOME/workspace" ]]
+  [[ "$(readlink "$HOME/workspace")" == "$1" ]]
+' zsh "$empty_workspace_target" \
+  "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
+  || fail "workspace entry helper did not replace an empty ~/workspace directory"
 
 # Bash 3.2 with nounset treats an empty array expansion as unbound. Invoking
 # the manager without a command, including after consuming global options,

@@ -173,6 +173,8 @@ interactive zsh session to that logical path. The shell creates the link
 synchronously, so it does not depend on kit startup-command timing. As a result,
 `run /path/to/project` opens at `~/workspace` without changing whether the
 underlying workspace is a direct host mount or a private `--clone`.
+If the base image already contains an empty `~/workspace` directory, the kit
+replaces it safely; a non-empty directory is always preserved.
 
 The toolbox is cloned only when the kit is first installed. Update it later
 from inside the sandbox with:

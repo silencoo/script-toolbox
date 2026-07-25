@@ -12,6 +12,12 @@ if [[ -r "$_sbx_workspace_file" ]]; then
     if [[ -L "$HOME/workspace" ]]; then
       ln -sfn "$_sbx_workspace_target" "$HOME/workspace"
       _sbx_workspace_link_ready=1
+    elif [[ -d "$HOME/workspace" ]] \
+      && rmdir -- "$HOME/workspace" 2>/dev/null; then
+      # The shell base image seeds an empty ~/workspace directory. Replace
+      # only an empty directory; rmdir refuses to remove user content.
+      ln -sfn "$_sbx_workspace_target" "$HOME/workspace"
+      _sbx_workspace_link_ready=1
     elif [[ ! -e "$HOME/workspace" ]]; then
       ln -s "$_sbx_workspace_target" "$HOME/workspace"
       _sbx_workspace_link_ready=1
