@@ -1,0 +1,38 @@
+#compdef claude
+# Curated Claude Code CLI completion for the sbx-manager shell kit.
+
+_claude() {
+  _arguments -s -S \
+    '--dangerously-skip-permissions[Skip permission prompts and safety checks (isolated sandboxes only)]' \
+    '--allow-dangerously-skip-permissions[Allow switching to bypassPermissions later]' \
+    '--permission-mode=[Initial permission mode]:mode:(default acceptEdits plan auto dontAsk bypassPermissions)' \
+    '--add-dir=[Grant access to another directory]:directory:_directories' \
+    '--agent=[Use a configured agent]:agent name:' \
+    '--agents=[Define agents from JSON]:JSON:' \
+    '--allowedTools=[Tools that run without permission prompts]:tool rules:' \
+    '--disallowedTools=[Tools removed from the session]:tool rules:' \
+    '--tools=[Restrict the available tools]:tool names:' \
+    '--model=[Model ID or alias]:model:' \
+    '--effort=[Reasoning effort]:effort:(low medium high xhigh max)' \
+    '--append-system-prompt=[Append to the default system prompt]:prompt:' \
+    '--append-system-prompt-file=[Append a prompt file]:file:_files' \
+    '--debug=[Enable debug logging with optional category filter]:categories:' \
+    '--debug-file=[Write debug logs to a file]:file:_files' \
+    '--plugin-dir=[Load a plugin directory or zip]:path:_files' \
+    '--plugin-url=[Load a plugin zip URL]:URL:' \
+    '--permission-prompt-tool=[MCP tool that handles permission prompts]:tool:' \
+    '--bare[Skip auto-discovery for a minimal session]' \
+    '--continue[Continue the most recent conversation]' \
+    '-c[Continue the most recent conversation]' \
+    '--resume=[Resume a session]:session:' \
+    '-r[Resume a session]:session:' \
+    '--print[Print a response and exit]' \
+    '-p[Print a response and exit]' \
+    '--remote=[Create a web session]:task:' \
+    '--verbose[Enable verbose output]' \
+    '--version[Print the version]' \
+    '--help[Show help]' \
+    '*:prompt or path:_files'
+}
+
+_claude "$@"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent/opencode/mcp.sh — add web/docs MCP servers to OpenCode
 #
-# What it writes (in ~/.config/opencode/config.json):
+# What it writes (in ~/.config/opencode/opencode.json):
 #   mcp.brave      -> https://api.search.brave.com/mcp        (X-Subscription-Token)
 #   mcp.exa        -> https://mcp.exa.ai/mcp                  (Bearer)
 #   mcp.context7   -> https://mcp.context7.com/mcp            (Bearer, optional)
@@ -38,11 +38,12 @@ on_error() {
 trap 'on_error $LINENO' ERR
 
 ask_yes_no() {
-  local ans
+  local ans lower
   while true; do
     printf '%s [y/N] ' "$1"
     read -r ans
-    case "${ans,,}" in
+    lower="$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')"
+    case "$lower" in
       y|yes) return 0 ;;
       n|no|"") return 1 ;;
     esac
@@ -61,7 +62,8 @@ UNINSTALL=0
 DRY_RUN=0
 
 SETTINGS_DIR="${HOME}/.config/opencode"
-SETTINGS_FILE="${SETTINGS_DIR}/config.json"
+SETTINGS_FILE="${SETTINGS_DIR}/opencode.json"
+LEGACY_SETTINGS_FILE="${SETTINGS_DIR}/config.json"
 # Marker string for entries this script owns. Don't change without bumping
 # a migration step.
 MANAGED_BY="agent/opencode/mcp.sh"
@@ -151,9 +153,18 @@ printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  agent/opencode/mcp.sh                
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
 echo
 
+# OpenCode's current global config filename is opencode.json. Preserve users of
+# the previous script by copying its legacy config.json once when needed.
+if [ ! -f "$SETTINGS_FILE" ] && [ -f "$LEGACY_SETTINGS_FILE" ]; then
+  mkdir -p "$SETTINGS_DIR"
+  cp "$LEGACY_SETTINGS_FILE" "$SETTINGS_FILE"
+  chmod 600 "$SETTINGS_FILE"
+  warn "copied legacy config.json to the current global path: $SETTINGS_FILE"
+fi
+
 # ---------- uninstall path ----------
 if [ "$UNINSTALL" = 1 ]; then
-  [ -f "$SETTINGS_FILE" ] || die "no config.json at $SETTINGS_FILE"
+  [ -f "$SETTINGS_FILE" ] || die "no opencode.json at $SETTINGS_FILE"
   command -v jq >/dev/null 2>&1 || die "jq is required for --uninstall"
   info "Removing mcp.* entries written by ${MANAGED_BY}..."
   jq --arg mgr "$MANAGED_BY" '
@@ -347,7 +358,7 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 
-# ---------- write config.json (merge, never touch provider.*) ----------
+# ---------- write opencode.json (merge, never touch provider.*) ----------
 mkdir -p "$SETTINGS_DIR"
 [ -w "$SETTINGS_DIR" ] || die "$SETTINGS_DIR is not writable - fix permissions and re-run"
 
@@ -367,7 +378,7 @@ for p in "${PROVIDERS[@]}"; do
   fi
 done
 if [ "$conflict" = 1 ] && [ "$FORCE" != 1 ]; then
-  die "config.json has existing mcp entries with different URLs - re-run with --force to overwrite."
+  die "opencode.json has existing mcp entries with different URLs - re-run with --force to overwrite."
 fi
 
 TMP_OUT="$(mktemp)"

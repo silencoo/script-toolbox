@@ -1,5 +1,22 @@
 # Changelog — claude-code (agent)
 
+## 2026-07-25 — provider and model menus
+
+- Added Anthropic, DeepSeek, OpenRouter, MiniMax China/global, and custom
+  Anthropic-compatible providers.
+- Added interactive current-model menus and `--provider`, `--base-url`,
+  `--models-url`, `--key-env`, `--auth-mode`, and `--list-providers`.
+- Updated MiniMax from the nonexistent `MiniMax-M3` default to the documented
+  `MiniMax-M2.7` family, and DeepSeek to V4 Pro/Flash.
+- Setup prompts now use `/dev/tty`, including one-shot `curl | bash` installs.
+- Settings now retain exactly one Claude credential type; bearer providers no
+  longer leave an empty `ANTHROPIC_API_KEY` beside `ANTHROPIC_AUTH_TOKEN`.
+- Interactive setup can back up and clean conflicting shell exports, while
+  automation can opt in explicitly with `--clean-shell-env`.
+- The Docker sandbox zsh kit now completes and suggests
+  `claude --dangerously-skip-permissions` without making bypass mode the
+  default.
+
 ## 2026-07-20 — install strategy switched to native + npm fallback
 
 - Claude Code install: try `curl -fsSL https://claude.ai/install.sh | bash`

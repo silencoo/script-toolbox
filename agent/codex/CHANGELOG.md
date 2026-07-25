@@ -1,5 +1,15 @@
 # Changelog — codex (agent)
 
+## 2026-07-25 — Responses-compatible provider setup
+
+- Replaced the obsolete MiniMax Chat Completions block with OpenAI,
+  OpenRouter, and custom Responses-compatible provider choices.
+- Added GPT-5.6 family presets and custom URL/key/model input.
+- Credentials now live in a separate mode-`0600` file and are supplied through
+  Codex's command-backed provider authentication.
+- Setup-owned TOML is bounded by explicit markers and legacy MiniMax blocks
+  are migrated on the next run.
+
 ## 2026-07-20 — initial agent
 
 - `setup.sh` installs Node.js 18+ and `@openai/codex`, validates the API key

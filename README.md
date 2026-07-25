@@ -17,7 +17,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
-| [`agent/`](./agent/) | Setup scripts for AI coding agents that lose built-in tools when routed through third-party providers (e.g. Claude Code via MiniMax) |
+| [`agent/`](./agent/) | Interactive multi-provider setup scripts for Claude Code, Codex CLI, OpenCode, and Pi, plus web/docs MCP packs where supported |
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
@@ -44,19 +44,18 @@ change is merged.
 
 ## agent
 
-Setup scripts for AI coding agents that lose built-in tools when routed
-through a third-party provider. The first entry covers Claude Code pointed
-at [MiniMax](https://minimaxi.com) — Anthropic's hosted `WebSearch`,
-`WebFetch`, and docs-aware retrieval no-op when you swap the base URL, so
-this folder ships the equivalent MCP servers (Brave Search, Exa,
-Context7) along with the routing installer.
+Interactive setup scripts for AI coding agents. Each installer offers
+protocol-compatible mainstream providers, current model presets, a custom
+provider URL/key/model flow, and non-interactive flags. The same folders also
+ship optional Brave Search, Exa, and Context7 MCP configuration.
 
 See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:
 
-- [`agent/claude-code/`](./agent/claude-code/) — Claude Code + MiniMax (China) + web/docs MCP servers.
-- [`agent/codex/`](./agent/codex/) — OpenAI Codex CLI + MiniMax (China) + web/docs MCP servers.
-- [`agent/opencode/`](./agent/opencode/) — OpenCode + MiniMax (China) + web/docs MCP servers.
+- [`agent/claude-code/`](./agent/claude-code/) — Anthropic, DeepSeek, OpenRouter, MiniMax, or custom Anthropic-compatible endpoint.
+- [`agent/codex/`](./agent/codex/) — OpenAI, OpenRouter, or a custom Responses-compatible endpoint.
+- [`agent/opencode/`](./agent/opencode/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider.
+- [`agent/pi/`](./agent/pi/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider through Pi's native API adapters.
 
 ## Validation
 

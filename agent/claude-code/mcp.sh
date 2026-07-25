@@ -41,11 +41,12 @@ on_error() {
 trap 'on_error $LINENO' ERR
 
 ask_yes_no() {
-  local ans
+  local ans lower
   while true; do
     printf '%s [y/N] ' "$1"
     read -r ans
-    case "${ans,,}" in
+    lower="$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')"
+    case "$lower" in
       y|yes) return 0 ;;
       n|no|"") return 1 ;;
     esac

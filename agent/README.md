@@ -1,45 +1,73 @@
 # agent/
 
-Setup scripts for AI coding agents that lose built-in tools when routed
-through third-party providers (e.g. Claude Code's `WebSearch` / `WebFetch`
-no-ops when you point it at MiniMax instead of Anthropic).
+Interactive installers for Claude Code, Codex CLI, OpenCode, and Pi. The setup
+scripts install the client, let you choose a provider and model, validate the
+key when the provider exposes a models endpoint, and preserve credentials with
+mode `0600`.
 
-Each subfolder is a self-contained agent:
+- [`claude-code/`](./claude-code/README.md) — Anthropic, DeepSeek, OpenRouter,
+  MiniMax China/global, or a custom Anthropic Messages endpoint.
+- [`codex/`](./codex/README.md) — OpenAI, OpenRouter, or a custom OpenAI
+  Responses endpoint.
+- [`opencode/`](./opencode/README.md) — Anthropic, OpenAI, Google Gemini,
+  DeepSeek, OpenRouter, MiniMax China/global, or a custom Chat Completions,
+  Responses, or Anthropic endpoint.
+- [`pi/`](./pi/README.md) — Anthropic, OpenAI, Google Gemini, DeepSeek,
+  OpenRouter, MiniMax China/global, or a custom Chat Completions, Responses,
+  Anthropic, or Google endpoint.
 
-- [`claude-code/`](./claude-code/README.md) — Claude Code + MiniMax (China) + web/docs MCP servers.
-- [`codex/`](./codex/README.md) — OpenAI Codex CLI + MiniMax (China) + web/docs MCP servers.
-- [`opencode/`](./opencode/README.md) — OpenCode + MiniMax (China) + web/docs MCP servers.
+Every model menu also has a custom model-ID entry. All selections can be
+supplied as flags for automation:
+
+```bash
+./claude-code/setup.sh
+./codex/setup.sh --provider openai --model gpt-5.6
+./opencode/setup.sh --provider custom --protocol chat \
+  --base-url https://gateway.example.com/v1 --model my-model --key-env MY_API_KEY
+./pi/setup.sh --provider openrouter --model openai/gpt-5.6
+```
+
+Use `--list-providers` on any setup script to see its current built-in model
+IDs without installing anything. `--region china|global` remains as a
+backward-compatible shortcut for MiniMax where MiniMax is supported.
 
 ## Per-agent kit
 
-Every agent folder ships the same surface area so future agents (codex, opencode, gemini, …) drop in without inventing new conventions:
-
 | File | Required | Purpose |
-|---|---|---|
-| `setup.sh`     | yes | Install the agent's binary, write its settings, validate against the upstream model listing. |
-| `mcp.sh`       | yes | Add web/docs MCP servers that restore the agent's lost built-in tools. |
-| `uninstall.sh` | yes | Run both `--uninstall` paths and print manual cleanup hints. |
-| `README.md`    | yes | One-paragraph purpose, install, usage, uninstall, caveats. |
-| `CHANGELOG.md` | yes | Per-agent changelog. |
+|---|---:|---|
+| `setup.sh` | yes | Install the client and configure a provider/model. |
+| `mcp.sh` | when supported | Add the Brave / Exa / Context7 MCP pack. Pi has no built-in MCP client. |
+| `uninstall.sh` | yes | Remove setup and MCP entries owned by these scripts. |
+| `README.md` | yes | Usage and compatibility notes. |
+| `CHANGELOG.md` | yes | Per-agent history. |
 
-## Verifying
+The setup scripts share [`setup-lib.sh`](./setup-lib.sh). When a per-agent
+script is run through `curl ... | bash`, it downloads that helper from the
+same repository; prompts read from `/dev/tty`, so one-shot interactive use
+still works.
+
+## Credentials
+
+- Claude Code stores its selected provider variables in
+  `~/.claude/settings.json` with file mode `0600`.
+- Codex stores keys separately under `~/.codex/provider-keys/` and uses the
+  supported command-backed provider authentication mechanism.
+- OpenCode stores keys separately under
+  `~/.config/opencode/provider-keys/` and references them with OpenCode's
+  `{file:...}` substitution.
+- Pi stores keys separately under `~/.pi/agent/provider-keys/` and references
+  them with Pi's command-backed `apiKey` substitution.
+
+## Verify
 
 ```bash
-# Run all agents' syntax check (mirrors the spirit of the repo's JS CI).
 ./test.sh
 
-# Or just one agent.
 bash -n claude-code/setup.sh
-bash -n claude-code/mcp.sh
-bash -n claude-code/uninstall.sh
+bash -n codex/setup.sh
+bash -n opencode/setup.sh
+bash -n pi/setup.sh
 ```
 
-## Adding a new agent
-
-1. Create `agent/<your-agent>/` with the five files above.
-2. Header comment of each script starts with the path: `# agent/<your-agent>/<script>.sh — …`.
-3. Use a `_managed_by: "<full script path>"` marker for any state you write
-   into `~/.<agent>/` so `--uninstall` only strips your own entries.
-4. Inline your helpers — there is no shared lib, by convention.
-5. Add the agent to the bullet list at the top of this file.
-6. Run `./test.sh` before pushing.
+The scripts are compatible with macOS `/bin/bash` 3.2 and do not require
+associative arrays or Bash lowercase expansion.

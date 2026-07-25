@@ -1,26 +1,25 @@
-# opencode (agent)
+# OpenCode setup
 
-Install OpenCode and route it through **MiniMax** in China. Adds the web/docs
-MCP servers OpenCode needs to keep Claude-class capabilities when it's not
-talking to Anthropic directly.
+Installs OpenCode and configures a mainstream or custom provider:
 
-## What this gives you
+| Provider | Default model | Other menu choices |
+|---|---|---|
+| Anthropic | `claude-sonnet-4-6` | Opus 4.8, Fable 5 |
+| OpenAI | `gpt-5.6` | Terra, Luna |
+| Google Gemini | `gemini-3.6-flash` | 3.1 Pro Preview, 3.5 Flash-Lite |
+| DeepSeek | `deepseek-v4-pro` | V4 Flash |
+| OpenRouter | `openai/gpt-5.6` | Claude Sonnet 4.6, Auto |
+| MiniMax China/global | `MiniMax-M2.7` | M2.7 highspeed, M2.5 |
+| Custom | user supplied | Chat Completions, Responses, or Anthropic |
 
-1. OpenCode installed via `npm install -g opencode-ai`.
-2. `~/.config/opencode/config.json` with `provider.anthropic.options.baseURL`
-   overridden to MiniMax's Anthropic-compatible endpoint.
-3. The same Brave / Exa / Context7 MCP pack as `claude-code`, written into
-   the `mcp.<name>` block of `config.json`.
-4. A scrubber for stale `ANTHROPIC_*` / `OPENAI_API_KEY` exports in
-   `~/.zshrc` / `~/.bashrc` that would override `config.json`.
+The current global configuration path is
+`~/.config/opencode/opencode.json`. If the previous script created
+`config.json`, setup and MCP scripts copy it to the current path once.
 
-## Why `provider.anthropic.options.baseURL` instead of a new provider
-
-OpenCode ships with a built-in Anthropic provider. The cleanest way to
-point it at MiniMax is to override the `baseURL` of the existing
-`anthropic` provider, rather than registering a new one. That way OpenCode's
-native Anthropic tooling (tool use, streaming, thinking blocks) keeps
-working unchanged — only the host changes.
+Each setup preset is registered as a script-toolbox-owned custom provider, so
+uninstalling it cannot delete a user's built-in provider configuration. The API
+key is stored separately under `~/.config/opencode/provider-keys/` with mode
+`0600` and referenced through OpenCode's `{file:...}` syntax.
 
 ## Install
 
@@ -29,89 +28,49 @@ curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/
 curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/mcp.sh | bash
 ```
 
-Or clone and run locally:
+Or from a clone:
 
 ```bash
-git clone https://github.com/silencoo/script-toolbox.git
-cd script/agent/opencode
+cd agent/opencode
 ./setup.sh
 ./mcp.sh
 ```
 
-## Files
+No separate `opencode auth login` step is needed for keys configured by this
+script.
 
-| File | Purpose |
-|---|---|
-| [`setup.sh`](./setup.sh) | Install Node + OpenCode, write `config.json`, validate against `/v1/models`, scrub env exports. |
-| [`mcp.sh`](./mcp.sh) | Add Brave / Exa / Context7 as `mcp.<name>` entries in `config.json`. |
-| [`uninstall.sh`](./uninstall.sh) | Run both `--uninstall` paths and print manual cleanup hints. |
-| [`CHANGELOG.md`](./CHANGELOG.md) | Per-agent changelog. |
-
-## Usage
-
-### `setup.sh`
+## Automation and custom providers
 
 ```bash
-# Interactive
-./setup.sh
+./setup.sh --list-providers
 
-# Non-interactive
-MINIMAX_API_KEY=sk-... ./setup.sh
+GEMINI_API_KEY=... \
+  ./setup.sh --provider google --model gemini-3.6-flash
 
-# International account
-./setup.sh --region global --model MiniMax-M3
+DEEPSEEK_API_KEY=... \
+  ./setup.sh --provider deepseek --model deepseek-v4-pro
 
-# Skip the /v1/models probe
-./setup.sh --skip-validate
+./setup.sh --provider custom --protocol chat \
+  --base-url https://gateway.example.com/v1 \
+  --model my-model --key-env MY_API_KEY
+
+./setup.sh --provider custom --protocol anthropic \
+  --base-url https://gateway.example.com/anthropic/v1 \
+  --model my-model --key custom-secret
 ```
 
-After `setup.sh` runs, **authenticate OpenCode once**:
+`--region china|global` remains a MiniMax compatibility shortcut. Use
+`--skip-validate` for a custom gateway without a models endpoint.
+
+## MCP and uninstall
 
 ```bash
-opencode auth login   # pick "Anthropic" - base URL is already overridden
-```
-
-### `mcp.sh`
-
-```bash
-# Interactive
 ./mcp.sh
+./uninstall.sh
 
-# All three providers, keys supplied via flags
-./mcp.sh --all \
-  --key brave=BSA... --key exa=EXA... --key context7=CT7...
-
-# Just brave + exa, keys from env
-BRAVE_API_KEY=BSA... EXA_API_KEY=EXA... \
-  ./mcp.sh --provider brave --provider exa
-
-# Preview without writing
-./mcp.sh --dry-run
+# Or remove only one part:
+./setup.sh --uninstall
+./mcp.sh --uninstall
 ```
 
-## Uninstall
-
-```bash
-./uninstall.sh                # removes provider + MCP entries
-./setup.sh --uninstall        # or just the provider piece
-./mcp.sh   --uninstall        # or just the MCP piece
-```
-
-## Notes / caveats
-
-- **Region.** `--region china` (default) hits `api.minimaxi.com`. Use
-  `--region global` for international accounts (`api.minimax.io`).
-- **Key type.** Pay-as-You-Go key from
-  [platform.minimaxi.com](https://platform.minimaxi.com) (China) or
-  [platform.minimax.io](https://platform.minimax.io) (international).
-- **Model id is case-sensitive.** `MiniMax-M3` exactly.
-- **Auth is two-step.** `setup.sh` writes the base URL into `config.json`
-  but OpenCode still needs `opencode auth login` to store the API key in
-  `~/.local/share/opencode/auth.json`. The script does this automatically
-  if `MINIMAX_API_KEY` is in the env; otherwise it prints the instruction.
-
-## Requirements
-
-- `bash` 4+, `curl`, `jq`
-- `sudo` on Linux (only if Node.js needs installing)
-- macOS users: Homebrew (only if Node.js needs installing)
+Use `/models` in OpenCode to switch away from the configured default.

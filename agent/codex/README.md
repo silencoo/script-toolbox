@@ -1,29 +1,23 @@
-# codex (agent)
+# Codex CLI setup
 
-Install OpenAI Codex CLI and route it through **MiniMax** in China. Adds the
-web/docs MCP servers Codex needs to keep Claude-class capabilities when it's
-not talking to OpenAI directly.
+Installs OpenAI Codex CLI and configures one of these Responses-compatible
+providers:
 
-## What this gives you
+| Provider | Default model | Other menu choices |
+|---|---|---|
+| OpenAI | `gpt-5.6` | `gpt-5.6-terra`, `gpt-5.6-luna` |
+| OpenRouter | `openai/gpt-5.6` | `openrouter/auto`, custom model ID |
+| Custom | user supplied | any Responses-compatible model |
 
-1. Codex CLI installed via `npm install -g @openai/codex`.
-2. `~/.codex/config.toml` configured with a `[model_providers.minimax]`
-   provider block and a `[profiles.minimax]` profile pointing at
-   `MiniMax-M3` (configurable).
-3. The same Brave / Exa / Context7 MCP pack as `claude-code`, written into
-   the `[mcp_servers.*]` tables of `config.toml`.
-4. A scrubber for stale `OPENAI_API_KEY` exports in `~/.zshrc` / `~/.bashrc`
-   that would override `config.toml`.
+Current Codex supports only `wire_api = "responses"` for custom providers.
+The old script's `wire_api = "chat"` MiniMax configuration is no longer valid,
+so Chat-Completions-only providers are intentionally absent instead of being
+offered as broken presets.
 
-## Why `wire_api = "chat"` matters
-
-Codex CLI **defaults to the OpenAI Responses API** (`/v1/responses`), which
-MiniMax does not implement. The provider block sets `wire_api = "chat"`
-to force Codex to use `/v1/chat/completions`, which MiniMax does support.
-Removing it will break Codex.
-
-If MiniMax later adds a Responses-compatible endpoint, bump this default
-and add a separate provider block for it.
+Credentials are stored under `~/.codex/provider-keys/` with mode `0600`.
+`config.toml` uses Codex's command-backed provider auth to read that file; it
+does not require a permanent shell export and does not place the key directly
+in TOML.
 
 ## Install
 
@@ -32,89 +26,49 @@ curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/
 curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/mcp.sh | bash
 ```
 
-Or clone and run locally:
+Or from a clone:
 
 ```bash
-git clone https://github.com/silencoo/script-toolbox.git
-cd script/agent/codex
+cd agent/codex
 ./setup.sh
 ./mcp.sh
 ```
 
-## Files
-
-| File | Purpose |
-|---|---|
-| [`setup.sh`](./setup.sh) | Install Node + Codex, write `config.toml`, validate against `/v1/models`, scrub `OPENAI_API_KEY`. |
-| [`mcp.sh`](./mcp.sh) | Add Brave / Exa / Context7 as `[mcp_servers.*]` blocks in `config.toml`. |
-| [`uninstall.sh`](./uninstall.sh) | Run both `--uninstall` paths and print manual cleanup hints. |
-| [`CHANGELOG.md`](./CHANGELOG.md) | Per-agent changelog. |
-
-## Usage
-
-### `setup.sh`
+## Automation and custom providers
 
 ```bash
-# Interactive
-./setup.sh
+./setup.sh --list-providers
 
-# Non-interactive
-MINIMAX_API_KEY=sk-... ./setup.sh
+OPENAI_API_KEY=sk-... \
+  ./setup.sh --provider openai --model gpt-5.6
 
-# International account
-./setup.sh --region global --model MiniMax-M3
+OPENROUTER_API_KEY=sk-or-... \
+  ./setup.sh --provider openrouter --model openai/gpt-5.6
 
-# Skip the /v1/models probe
-./setup.sh --skip-validate
+./setup.sh --provider custom \
+  --base-url https://gateway.example.com/v1 \
+  --models-url https://gateway.example.com/v1/models \
+  --model my-model --key-env MY_API_KEY
 ```
 
-### `mcp.sh`
+After setup:
 
 ```bash
-# Interactive
+codex --profile script_toolbox
+```
+
+Use `--skip-validate` for gateways without a models endpoint.
+
+## MCP and uninstall
+
+```bash
 ./mcp.sh
+./uninstall.sh
 
-# All three providers, keys supplied via flags
-./mcp.sh --all \
-  --key brave=BSA... --key exa=EXA... --key context7=CT7...
-
-# Just brave + exa, keys from env
-BRAVE_API_KEY=BSA... EXA_API_KEY=EXA... \
-  ./mcp.sh --provider brave --provider exa
-
-# Preview without writing
-./mcp.sh --dry-run
+# Or remove only one part:
+./setup.sh --uninstall
+./mcp.sh --uninstall
 ```
 
-## Uninstall
-
-```bash
-./uninstall.sh                # removes provider/profile + MCP entries
-./setup.sh --uninstall        # or just the provider/profile piece
-./mcp.sh   --uninstall        # or just the MCP piece
-```
-
-## Notes / caveats
-
-- **Region.** `--region china` (default) hits `api.minimaxi.com`. Use
-  `--region global` for international accounts (`api.minimax.io`).
-- **Key type.** Pay-as-You-Go key from
-  [platform.minimaxi.com](https://platform.minimaxi.com) (China) or
-  [platform.minimax.io](https://platform.minimax.io) (international).
-  Token Plan / subscription keys silently 401 in coding tools.
-- **Model id is case-sensitive.** `MiniMax-M3` exactly.
-- **`OPENAI_API_KEY` overrides config.toml.** If you previously ran
-  `codex /login`, your shell rc may contain an `OPENAI_API_KEY=…` export.
-  `setup.sh` offers to scrub those lines.
-
-## Requirements
-
-- `bash` 4+, `curl`, `jq`
-- `sudo` on Linux (only if Node.js needs installing)
-- macOS users: Homebrew (only if Node.js needs installing)
-
-## Provenance
-
-Provider block shape lifted from
-[MiniMax's own Codex docs](https://platform.minimax.io/docs/token-plan/codex-cli)
-with `wire_api = "chat"` made explicit.
+The setup block is bounded by explicit markers, so unrelated `config.toml`
+settings and MCP entries are preserved.

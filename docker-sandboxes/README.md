@@ -144,6 +144,9 @@ The same kit also installs:
 - `bat`, `fd`, `jq`, and `ripgrep` (`rg`) for structured data, highlighted file
   viewing, and fast file and content searches
 - a UTF-8 locale for literal Chinese and other non-ASCII filename completion
+- a Claude Code completion entry for
+  `claude --dangerously-skip-permissions`, also seeded as an autosuggestion;
+  it remains opt-in and is intended only for the isolated sandbox
 - a sparse checkout containing only
   [`script-toolbox/agent`](https://github.com/silencoo/script-toolbox/tree/main/agent)
   under `~/.local/share/sbx-manager`, exposed through the short `~/agent` link

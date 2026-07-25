@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent/opencode/setup.sh — install OpenCode and choose a mainstream or custom provider.
+# agent/pi/setup.sh — install Pi and choose a mainstream or custom provider.
 
 set -euo pipefail
 
@@ -32,6 +32,7 @@ BASE_URL_OVERRIDE=""
 MODELS_URL_OVERRIDE=""
 CUSTOM_NAME=""
 PROTOCOL=""
+AUTH_MODE=""
 REGION=""
 FORCE=0
 SKIP_VALIDATE=0
@@ -39,16 +40,17 @@ UNINSTALL=0
 LIST_PROVIDERS=0
 INTERACTIVE=0
 
-SETTINGS_DIR="${HOME}/.config/opencode"
-SETTINGS_FILE="${SETTINGS_DIR}/opencode.json"
-LEGACY_SETTINGS_FILE="${SETTINGS_DIR}/config.json"
+SETTINGS_DIR="${HOME}/.pi/agent"
+SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
+MODELS_FILE="${SETTINGS_DIR}/models.json"
 STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider"
 KEY_DIR="${SETTINGS_DIR}/provider-keys"
-MANAGED_BY="agent/opencode/setup.sh"
+MANAGED_BY="agent/pi/setup.sh"
+STATE_UNSET="__SCRIPT_TOOLBOX_UNSET__"
 
 usage() {
   cat <<EOF
-${C_BOLD}agent/opencode/setup.sh${C_RESET} - interactive OpenCode provider setup
+${C_BOLD}agent/pi/setup.sh${C_RESET} - interactive Pi provider setup
 
 ${C_BOLD}Usage:${C_RESET}
   setup.sh [options]
@@ -62,7 +64,8 @@ ${C_BOLD}Options:${C_RESET}
   --models-url <url>         Override the key/model validation endpoint.
   --key-env <name>           Custom provider environment variable.
   --provider-name <name>     Display name for a custom provider.
-  --protocol <type>          custom only: chat, responses, or anthropic.
+  --protocol <type>          custom only: chat, responses, anthropic, or google.
+  --auth-mode <mode>         custom only: bearer, api-key, or google-key.
   --region <china|global>    Backward-compatible alias for MiniMax selection.
   --list-providers           Print presets and current model IDs.
   --skip-validate            Skip the models endpoint probe.
@@ -72,9 +75,8 @@ ${C_BOLD}Options:${C_RESET}
 
 ${C_BOLD}Examples:${C_RESET}
   ./setup.sh
-  OPENAI_API_KEY=sk-... ./setup.sh --provider openai
-  GEMINI_API_KEY=... ./setup.sh --provider google --model gemini-3.6-flash
-  ./setup.sh --provider custom --protocol chat \\
+  OPENAI_API_KEY=sk-... ./setup.sh --provider openai --model gpt-5.6
+  ./setup.sh --provider custom --protocol chat --auth-mode bearer \\
     --base-url https://gateway.example.com/v1 --model my-model --key-env MY_API_KEY
 EOF
 }
@@ -88,51 +90,57 @@ deepseek        deepseek-v4-pro (default), deepseek-v4-flash
 openrouter      openai/gpt-5.6 (default), anthropic/claude-sonnet-4.6, openrouter/auto
 minimax-cn      MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
 minimax-global  MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
-custom          OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages
+custom          OpenAI Chat Completions, Responses, Anthropic Messages, or Google Generative AI
 EOF
 }
 
-migrate_legacy_file() {
-  if [ ! -f "$SETTINGS_FILE" ] && [ -f "$LEGACY_SETTINGS_FILE" ]; then
-    cp "$LEGACY_SETTINGS_FILE" "$SETTINGS_FILE"
-    chmod 600 "$SETTINGS_FILE"
-    warn "copied legacy config.json to the current global path: $SETTINGS_FILE"
-  fi
-}
-
 remove_previous_provider() {
-  local file="$1" output="$2" old_id="" old_key=""
-  if [ -f "$STATE_FILE" ]; then
-    old_id="$(sed -n '1p' "$STATE_FILE")"
-    old_key="$(sed -n '2p' "$STATE_FILE")"
-    case "$old_id" in
-      script-toolbox-*)
-        jq --arg id "$old_id" '
-          del(.provider[$id])
-          | if (.provider // {}) == {} then del(.provider) else . end
-          | if (.model // "") | startswith($id + "/") then del(.model) else . end
-          | if (.small_model // "") | startswith($id + "/") then del(.small_model) else . end
-        ' "$file" > "$output"
-        ;;
-      *) die "unexpected provider ID in $STATE_FILE; refusing to remove it" ;;
-    esac
-    case "$old_key" in
-      "$KEY_DIR"/*.key) rm -f "$old_key" ;;
-      "") ;;
-      *) warn "ignoring unexpected key path in $STATE_FILE" ;;
-    esac
-  else
-    # Migration for the old MiniMax-only setup, which put a private marker in
-    # the built-in Anthropic provider object.
-    jq --arg mgr "$MANAGED_BY" '
-      if .provider.anthropic._managed_by == $mgr then
-        del(.provider.anthropic.options.baseURL, .provider.anthropic._managed_by)
-        | if (.provider.anthropic.options // {}) == {} then del(.provider.anthropic.options) else . end
-        | if (.provider.anthropic // {}) == {} then del(.provider.anthropic) else . end
-        | if (.provider // {}) == {} then del(.provider) else . end
-      else . end
-    ' "$file" > "$output"
+  local models_input="$1" models_output="$2" settings_input="$3" settings_output="$4"
+  local old_id="" old_key="" old_default_provider="" old_default_model=""
+
+  if [ ! -f "$STATE_FILE" ]; then
+    cp "$models_input" "$models_output"
+    cp "$settings_input" "$settings_output"
+    return 0
   fi
+
+  old_id="$(sed -n '1p' "$STATE_FILE")"
+  old_key="$(sed -n '2p' "$STATE_FILE")"
+  old_default_provider="$(sed -n '3p' "$STATE_FILE")"
+  old_default_model="$(sed -n '4p' "$STATE_FILE")"
+  old_default_provider="${old_default_provider:-$STATE_UNSET}"
+  old_default_model="${old_default_model:-$STATE_UNSET}"
+  case "$old_id" in
+    script-toolbox-*)
+      jq --arg id "$old_id" '
+        del(.providers[$id])
+        | if (.providers // {}) == {} then del(.providers) else . end
+      ' "$models_input" > "$models_output"
+      jq \
+        --arg id "$old_id" \
+        --arg old_provider "$old_default_provider" \
+        --arg old_model "$old_default_model" \
+        --arg unset "$STATE_UNSET" '
+        if .defaultProvider == $id
+        then
+          if $old_provider == $unset then del(.defaultProvider)
+          else .defaultProvider = $old_provider
+          end
+          | if $old_model == $unset then del(.defaultModel)
+            else .defaultModel = $old_model
+            end
+        else .
+        end
+      ' "$settings_input" > "$settings_output"
+      ;;
+    *) die "unexpected provider ID in $STATE_FILE; refusing to remove it" ;;
+  esac
+
+  case "$old_key" in
+    "$KEY_DIR"/*.key) rm -f "$old_key" ;;
+    "") ;;
+    *) warn "ignoring unexpected key path in $STATE_FILE" ;;
+  esac
 }
 
 while [ $# -gt 0 ]; do
@@ -145,6 +153,7 @@ while [ $# -gt 0 ]; do
     --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
     --provider-name)  CUSTOM_NAME="${2:?}"; shift 2 ;;
     --protocol)       PROTOCOL="${2:?}"; shift 2 ;;
+    --auth-mode)      AUTH_MODE="${2:?}"; shift 2 ;;
     --region)         REGION="${2:?}"; shift 2 ;;
     --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
@@ -162,18 +171,19 @@ fi
 
 command -v jq >/dev/null 2>&1 || die "jq is required (apt/brew install jq)"
 mkdir -p "$SETTINGS_DIR"
-migrate_legacy_file
+[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
+[ -f "$MODELS_FILE" ] || printf '{}\n' > "$MODELS_FILE"
+jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
+jq empty "$MODELS_FILE" >/dev/null 2>&1 || die "$MODELS_FILE is not valid JSON"
 
 if [ "$UNINSTALL" = 1 ]; then
-  [ -f "$SETTINGS_FILE" ] || die "no opencode.json at $SETTINGS_FILE"
-  [ -f "$STATE_FILE" ] || {
-    legacy="$(jq -r '.provider.anthropic._managed_by // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
-    [ "$legacy" = "$MANAGED_BY" ] || die "no $MANAGED_BY state marker; refusing to touch opencode.json"
-  }
-  TMP="$(mktemp)"
-  remove_previous_provider "$SETTINGS_FILE" "$TMP"
-  mv "$TMP" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  [ -f "$STATE_FILE" ] || die "no $MANAGED_BY state marker; refusing to touch Pi configuration"
+  TMP_MODELS="$(mktemp)"
+  TMP_SETTINGS="$(mktemp)"
+  remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"
+  mv "$TMP_MODELS" "$MODELS_FILE"
+  mv "$TMP_SETTINGS" "$SETTINGS_FILE"
+  chmod 600 "$MODELS_FILE" "$SETTINGS_FILE"
   rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY provider and credential"
   exit 0
@@ -189,7 +199,7 @@ fi
 
 if [ -z "$PROVIDER" ]; then
   INTERACTIVE=1
-  choose_menu "Choose the OpenCode provider:" 1 \
+  choose_menu "Choose the Pi provider:" 1 \
     "anthropic|Anthropic" \
     "openai|OpenAI" \
     "google|Google Gemini" \
@@ -204,9 +214,10 @@ fi
 case "$PROVIDER" in
   anthropic)
     DISPLAY_NAME="Anthropic"
-    NPM_PACKAGE="@ai-sdk/anthropic"
-    BASE_URL="https://api.anthropic.com/v1"
+    API_TYPE="anthropic-messages"
+    BASE_URL="https://api.anthropic.com"
     MODELS_URL="https://api.anthropic.com/v1/models"
+    AUTH_HEADER=false
     VALIDATION_AUTH="x-api-key"
     KEY_ENV="ANTHROPIC_API_KEY"
     KEY_DOC_URL="https://console.anthropic.com/settings/keys"
@@ -215,9 +226,10 @@ case "$PROVIDER" in
     ;;
   openai)
     DISPLAY_NAME="OpenAI"
-    NPM_PACKAGE="@ai-sdk/openai"
+    API_TYPE="openai-responses"
     BASE_URL="https://api.openai.com/v1"
     MODELS_URL="https://api.openai.com/v1/models"
+    AUTH_HEADER=true
     VALIDATION_AUTH="bearer"
     KEY_ENV="OPENAI_API_KEY"
     KEY_DOC_URL="https://platform.openai.com/api-keys"
@@ -226,9 +238,10 @@ case "$PROVIDER" in
     ;;
   google)
     DISPLAY_NAME="Google Gemini"
-    NPM_PACKAGE="@ai-sdk/google"
+    API_TYPE="google-generative-ai"
     BASE_URL="https://generativelanguage.googleapis.com/v1beta"
     MODELS_URL="https://generativelanguage.googleapis.com/v1beta/models"
+    AUTH_HEADER=false
     VALIDATION_AUTH="x-goog-api-key"
     KEY_ENV="GEMINI_API_KEY"
     KEY_DOC_URL="https://aistudio.google.com/app/apikey"
@@ -237,9 +250,10 @@ case "$PROVIDER" in
     ;;
   deepseek)
     DISPLAY_NAME="DeepSeek"
-    NPM_PACKAGE="@ai-sdk/openai-compatible"
+    API_TYPE="openai-completions"
     BASE_URL="https://api.deepseek.com"
     MODELS_URL="https://api.deepseek.com/models"
+    AUTH_HEADER=true
     VALIDATION_AUTH="bearer"
     KEY_ENV="DEEPSEEK_API_KEY"
     KEY_DOC_URL="https://platform.deepseek.com/api_keys"
@@ -248,9 +262,10 @@ case "$PROVIDER" in
     ;;
   openrouter)
     DISPLAY_NAME="OpenRouter"
-    NPM_PACKAGE="@ai-sdk/openai-compatible"
+    API_TYPE="openai-completions"
     BASE_URL="https://openrouter.ai/api/v1"
     MODELS_URL="https://openrouter.ai/api/v1/models"
+    AUTH_HEADER=true
     VALIDATION_AUTH="bearer"
     KEY_ENV="OPENROUTER_API_KEY"
     KEY_DOC_URL="https://openrouter.ai/settings/keys"
@@ -259,17 +274,18 @@ case "$PROVIDER" in
     ;;
   minimax-cn|minimax-global)
     DISPLAY_NAME="MiniMax"
-    NPM_PACKAGE="@ai-sdk/anthropic"
+    API_TYPE="anthropic-messages"
+    AUTH_HEADER=true
     VALIDATION_AUTH="x-api-key"
     KEY_ENV="MINIMAX_API_KEY"
     DEFAULT_MODEL="MiniMax-M2.7"
     MODEL_CHOICES="minimax"
     if [ "$PROVIDER" = "minimax-cn" ]; then
-      BASE_URL="https://api.minimaxi.com/anthropic/v1"
+      BASE_URL="https://api.minimaxi.com/anthropic"
       MODELS_URL="https://api.minimaxi.com/anthropic/v1/models"
       KEY_DOC_URL="https://platform.minimaxi.com/user-center/basic-information/interface-key"
     else
-      BASE_URL="https://api.minimax.io/anthropic/v1"
+      BASE_URL="https://api.minimax.io/anthropic"
       MODELS_URL="https://api.minimax.io/anthropic/v1/models"
       KEY_DOC_URL="https://platform.minimax.io/user-center/basic-information/interface-key"
     fi
@@ -282,17 +298,34 @@ case "$PROVIDER" in
     MODEL_CHOICES="custom"
     if [ -z "$PROTOCOL" ] && [ "$INTERACTIVE" = 1 ]; then
       choose_menu "Choose the API protocol:" 1 \
-        "chat|OpenAI Chat Completions (/chat/completions)" \
-        "responses|OpenAI Responses (/responses)" \
-        "anthropic|Anthropic Messages (/messages)"
+        "chat|OpenAI Chat Completions" \
+        "responses|OpenAI Responses" \
+        "anthropic|Anthropic Messages" \
+        "google|Google Generative AI"
       PROTOCOL="$MENU_VALUE"
     fi
     PROTOCOL="${PROTOCOL:-chat}"
     case "$PROTOCOL" in
-      chat)       NPM_PACKAGE="@ai-sdk/openai-compatible"; VALIDATION_AUTH="bearer" ;;
-      responses)  NPM_PACKAGE="@ai-sdk/openai"; VALIDATION_AUTH="bearer" ;;
-      anthropic)  NPM_PACKAGE="@ai-sdk/anthropic"; VALIDATION_AUTH="x-api-key" ;;
-      *) die "--protocol must be chat, responses, or anthropic" ;;
+      chat)       API_TYPE="openai-completions"; DEFAULT_AUTH_MODE="bearer" ;;
+      responses)  API_TYPE="openai-responses"; DEFAULT_AUTH_MODE="bearer" ;;
+      anthropic)  API_TYPE="anthropic-messages"; DEFAULT_AUTH_MODE="api-key" ;;
+      google)     API_TYPE="google-generative-ai"; DEFAULT_AUTH_MODE="google-key" ;;
+      *) die "--protocol must be chat, responses, anthropic, or google" ;;
+    esac
+    if [ -z "$AUTH_MODE" ] && [ "$INTERACTIVE" = 1 ]; then
+      choose_menu "How should the API key be sent?" 1 \
+        "${DEFAULT_AUTH_MODE}|Recommended for the selected protocol" \
+        "bearer|Authorization: Bearer" \
+        "api-key|x-api-key" \
+        "google-key|x-goog-api-key"
+      AUTH_MODE="$MENU_VALUE"
+    fi
+    AUTH_MODE="${AUTH_MODE:-$DEFAULT_AUTH_MODE}"
+    case "$AUTH_MODE" in
+      bearer)     AUTH_HEADER=true;  VALIDATION_AUTH="bearer" ;;
+      api-key)    AUTH_HEADER=false; VALIDATION_AUTH="x-api-key" ;;
+      google-key) AUTH_HEADER=false; VALIDATION_AUTH="x-goog-api-key" ;;
+      *) die "--auth-mode must be bearer, api-key, or google-key" ;;
     esac
     BASE_URL="${BASE_URL_OVERRIDE:-}"
     [ -n "$BASE_URL" ] || {
@@ -375,10 +408,10 @@ fi
 [ -n "$KEY" ] || die "no API key supplied"
 
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
-printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  OpenCode provider setup                                      |" "${C_RESET}"
+printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  Pi provider setup                                            |" "${C_RESET}"
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
 info "Provider : $DISPLAY_NAME ($PROVIDER)"
-info "Protocol : $NPM_PACKAGE"
+info "Protocol : $API_TYPE"
 info "Base URL : $BASE_URL"
 info "Model    : $MODEL"
 echo
@@ -391,61 +424,98 @@ else
   validate_model_api "$MODELS_URL" "$VALIDATION_AUTH" "$KEY" "$MODEL"
 fi
 
-ensure_npm_cli opencode opencode-ai "OpenCode"
-
-if [ ! -f "$SETTINGS_FILE" ]; then
-  printf '{}\n' > "$SETTINGS_FILE"
+ensure_node 22 19
+if command -v pi >/dev/null 2>&1; then
+  ok "Pi already installed ($(pi --version 2>/dev/null || echo 'unknown version'))"
+else
+  info "Installing @earendil-works/pi-coding-agent globally..."
+  npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+  command -v pi >/dev/null 2>&1 || die "pi is not on PATH after npm install"
+  ok "Pi installed"
 fi
-jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
 
 PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
 [ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
 PROVIDER_ID="script-toolbox-${PROVIDER_SUFFIX}"
 KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
-KEY_REFERENCE="{file:${KEY_FILE}}"
+KEY_COMMAND='!cat "$HOME/.pi/agent/provider-keys/'"${PROVIDER_ID}"'.key"'
 
-TMP_CLEAN="$(mktemp)"
-remove_previous_provider "$SETTINGS_FILE" "$TMP_CLEAN"
+if [ -f "$STATE_FILE" ]; then
+  old_id="$(sed -n '1p' "$STATE_FILE")"
+  ORIGINAL_DEFAULT_PROVIDER="$(sed -n '3p' "$STATE_FILE")"
+  ORIGINAL_DEFAULT_MODEL="$(sed -n '4p' "$STATE_FILE")"
+  ORIGINAL_DEFAULT_PROVIDER="${ORIGINAL_DEFAULT_PROVIDER:-$STATE_UNSET}"
+  ORIGINAL_DEFAULT_MODEL="${ORIGINAL_DEFAULT_MODEL:-$STATE_UNSET}"
+  case "$old_id" in
+    script-toolbox-*) ;;
+    *) [ "$FORCE" = 1 ] || die "unexpected state marker; use --force to replace it" ;;
+  esac
+elif jq -e --arg id "$PROVIDER_ID" '.providers[$id] != null' "$MODELS_FILE" >/dev/null; then
+  [ "$FORCE" = 1 ] || die "$MODELS_FILE already contains $PROVIDER_ID; use --force to replace it"
+  ORIGINAL_DEFAULT_PROVIDER="$(jq -r '.defaultProvider // empty' "$SETTINGS_FILE")"
+  ORIGINAL_DEFAULT_MODEL="$(jq -r '.defaultModel // empty' "$SETTINGS_FILE")"
+  ORIGINAL_DEFAULT_PROVIDER="${ORIGINAL_DEFAULT_PROVIDER:-$STATE_UNSET}"
+  ORIGINAL_DEFAULT_MODEL="${ORIGINAL_DEFAULT_MODEL:-$STATE_UNSET}"
+else
+  ORIGINAL_DEFAULT_PROVIDER="$(jq -r '.defaultProvider // empty' "$SETTINGS_FILE")"
+  ORIGINAL_DEFAULT_MODEL="$(jq -r '.defaultModel // empty' "$SETTINGS_FILE")"
+  ORIGINAL_DEFAULT_PROVIDER="${ORIGINAL_DEFAULT_PROVIDER:-$STATE_UNSET}"
+  ORIGINAL_DEFAULT_MODEL="${ORIGINAL_DEFAULT_MODEL:-$STATE_UNSET}"
+fi
+
+TMP_MODELS="$(mktemp)"
+TMP_SETTINGS="$(mktemp)"
+remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"
 write_secret_file "$KEY_FILE" "$KEY"
 
 TMP_OUT="$(mktemp)"
 jq \
   --arg id "$PROVIDER_ID" \
-  --arg npm "$NPM_PACKAGE" \
-  --arg name "$DISPLAY_NAME (script-toolbox)" \
   --arg base "$BASE_URL" \
-  --arg keyref "$KEY_REFERENCE" \
-  --arg model "$MODEL" '
-  .["$schema"] = (.["$schema"] // "https://opencode.ai/config.json")
-  | .provider = (.provider // {})
-  | .provider[$id] = {
-      npm: $npm,
-      name: $name,
-      options: {
-        baseURL: $base,
-        apiKey: $keyref
-      },
-      models: {
-        ($model): {
-          name: $model
+  --arg api "$API_TYPE" \
+  --arg keycmd "$KEY_COMMAND" \
+  --arg model "$MODEL" \
+  --argjson auth_header "$AUTH_HEADER" '
+  .providers = (.providers // {})
+  | .providers[$id] = {
+      baseUrl: $base,
+      api: $api,
+      apiKey: $keycmd,
+      authHeader: $auth_header,
+      models: [
+        {
+          id: $model,
+          name: $model,
+          reasoning: true
         }
-      }
+      ]
     }
-  | .model = ($id + "/" + $model)
-' "$TMP_CLEAN" > "$TMP_OUT"
+' "$TMP_MODELS" > "$TMP_OUT"
+mv "$TMP_OUT" "$MODELS_FILE"
+rm -f "$TMP_MODELS"
+
+jq \
+  --arg id "$PROVIDER_ID" \
+  --arg model "$MODEL" '
+  .defaultProvider = $id
+  | .defaultModel = $model
+' "$TMP_SETTINGS" > "$TMP_OUT"
 mv "$TMP_OUT" "$SETTINGS_FILE"
-rm -f "$TMP_CLEAN"
-chmod 600 "$SETTINGS_FILE"
+rm -f "$TMP_SETTINGS"
+
+chmod 600 "$MODELS_FILE" "$SETTINGS_FILE"
 {
   printf '%s\n' "$PROVIDER_ID"
   printf '%s\n' "$KEY_FILE"
+  printf '%s\n' "$ORIGINAL_DEFAULT_PROVIDER"
+  printf '%s\n' "$ORIGINAL_DEFAULT_MODEL"
 } > "$STATE_FILE"
 chmod 600 "$STATE_FILE"
-ok "wrote $SETTINGS_FILE and a separate chmod-600 credential"
+ok "wrote Pi models/settings and a separate chmod-600 credential"
 
 echo
 printf '%s%s%s\n' "${C_BOLD}" "Ready" "${C_RESET}"
-printf '  %s\n' "Run: opencode"
+printf '  %s\n' "Run: pi"
 printf '  %s\n' "Default model: $PROVIDER_ID/$MODEL"
-printf '  %s\n' "Use /models to switch; uninstall this provider config with: $0 --uninstall"
+printf '  %s\n' "Use /model to switch; uninstall this provider config with: $0 --uninstall"
 ok "done"

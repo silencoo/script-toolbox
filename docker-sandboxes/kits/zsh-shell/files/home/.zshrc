@@ -5,6 +5,7 @@ zstyle ':omz:update' mode disabled
 
 # Completion directories must be on fpath before Oh My Zsh initializes compinit.
 fpath=(
+  "$HOME/.config/sbx-manager/completions"
   /usr/local/share/zsh/site-functions
   "$ZSH/custom/plugins/zsh-completions/src"
   $fpath
@@ -38,6 +39,16 @@ setopt share_history
 setopt hist_ignore_dups
 setopt hist_find_no_dups
 setopt hist_reduce_blanks
+
+# Offer the explicit bypass command through zsh-autosuggestions without making
+# it an alias or default. Claude's bypass mode is only appropriate here because
+# the command runs inside an isolated sandbox.
+_sbx_claude_bypass='claude --dangerously-skip-permissions'
+if ! grep -Fqx -- "$_sbx_claude_bypass" "$HISTFILE" 2>/dev/null; then
+  print -r -- "$_sbx_claude_bypass" >> "$HISTFILE"
+  fc -R "$HISTFILE"
+fi
+unset _sbx_claude_bypass
 
 # Selectable, case-insensitive completion menu.
 zstyle ':completion:*' menu select

@@ -1,33 +1,21 @@
 #!/usr/bin/env bash
-# agent/claude-code/setup.sh — point Claude Code at MiniMax (China by default).
-#
-# What it does:
-#   1. Installs Claude Code (Anthropic's native installer first; npm fallback if that fails).
-#   2. Installs Node.js 18+ so the npm fallback path is always available.
-#   3. Validates the API key against the MiniMax /v1/models endpoint (skipped with --skip-validate).
-#   4. Writes ~/.claude/settings.json with the MiniMax Anthropic-compatible base URL.
-#   5. Scrubs stale ANTHROPIC_* exports from ~/.zshrc / ~/.bashrc that would
-#      override settings.json (the silent "Both ANTHROPIC_AUTH_TOKEN and
-#      ANTHROPIC_API_KEY set" warning on Claude Code startup).
-#
-# Re-runnable: safe to execute again. Pass --force to overwrite a different base URL.
+# agent/claude-code/setup.sh — install Claude Code and choose an Anthropic-compatible provider.
 
 set -euo pipefail
 
-# ---------- inlined common helpers (no shared lib) ----------
-if [ -t 1 ]; then
-  C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'; C_RED=$'\033[31m'
-  C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'; C_RESET=$'\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+COMMON_LIB="${SCRIPT_DIR}/../setup-lib.sh"
+if [ -r "$COMMON_LIB" ]; then
+  # shellcheck source=../setup-lib.sh
+  . "$COMMON_LIB"
 else
-  C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_RESET=""
+  command -v curl >/dev/null 2>&1 || { printf '%s\n' "curl is required" >&2; exit 1; }
+  COMMON_LIB="$(mktemp)"
+  curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/setup-lib.sh > "$COMMON_LIB"
+  # shellcheck source=../setup-lib.sh
+  . "$COMMON_LIB"
+  rm -f "$COMMON_LIB"
 fi
-
-log()  { printf '%s\n' "$*"; }
-info() { printf '%s%s%s\n' "${C_BLUE}▸${C_RESET}" " " "$*"; }
-ok()   { printf '%s%s%s\n' "${C_GREEN}✓${C_RESET}" " " "$*"; }
-warn() { printf '%s%s%s\n' "${C_YELLOW}!${C_RESET}" " " "$*" >&2; }
-err()  { printf '%s%s%s\n' "${C_RED}✗${C_RESET}" " " "$*" >&2; }
-die()  { err "$*"; exit 1; }
 
 on_error() {
   local exit_code=$?
@@ -36,386 +24,396 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 
-ask_yes_no() {
-  local ans
-  while true; do
-    printf '%s [y/N] ' "$1"
-    read -r ans
-    case "${ans,,}" in
-      y|yes) return 0 ;;
-      n|no|"") return 1 ;;
-    esac
-  done
-}
-
-detect_pm() {
-  if   command -v apt-get >/dev/null 2>&1; then echo "apt"
-  elif command -v dnf     >/dev/null 2>&1; then echo "dnf"
-  elif command -v yum     >/dev/null 2>&1; then echo "yum"
-  elif command -v brew    >/dev/null 2>&1; then echo "brew"
-  elif command -v apk     >/dev/null 2>&1; then echo "apk"
-  else echo "none"
-  fi
-}
-# ---------- end inlined common helpers ----------
-
-# ---------- defaults ----------
-REGION="china"
-MODEL="MiniMax-M3"
+PROVIDER=""
+MODEL=""
 KEY=""
+KEY_ENV_OVERRIDE=""
+BASE_URL_OVERRIDE=""
+MODELS_URL_OVERRIDE=""
+AUTH_MODE_OVERRIDE=""
+REGION=""
 FORCE=0
 SKIP_VALIDATE=0
 UNINSTALL=0
+LIST_PROVIDERS=0
+INTERACTIVE=0
+CLEAN_SHELL_ENV=0
 
 SETTINGS_DIR="${HOME}/.claude"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
+STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider"
+MANAGED_BY="agent/claude-code/setup.sh"
 
-# ---------- usage ----------
 usage() {
   cat <<EOF
-${C_BOLD}agent/claude-code/setup.sh${C_RESET} - point Claude Code at MiniMax
+${C_BOLD}agent/claude-code/setup.sh${C_RESET} - interactive Claude Code provider setup
 
 ${C_BOLD}Usage:${C_RESET}
   setup.sh [options]
 
 ${C_BOLD}Options:${C_RESET}
-  --region <china|global>   Default: china
-                              china  -> https://api.minimaxi.com/anthropic
-                              global -> https://api.minimax.io/anthropic
-  --model  <model-id>       Default: MiniMax-M3
-  --key    <api-key>        Default: read from \$MINIMAX_API_KEY, otherwise prompt
-  --force                   Overwrite settings.json even if base URL differs
-  --skip-validate           Skip the /v1/models probe (offline / sandboxed use)
-  --uninstall               Remove the MiniMax entries from ~/.claude/settings.json
-  -h | --help               Show this help
+  --provider <id>            anthropic, deepseek, openrouter, minimax-cn,
+                             minimax-global, or custom. Omit for a menu.
+  --model <model-id>         Omit for an interactive model menu.
+  --key <api-key>            Falls back to the provider's standard env var.
+  --base-url <url>           Override the preset URL; required for custom.
+  --models-url <url>         Override the key/model validation endpoint.
+  --key-env <name>           Custom provider environment variable.
+  --auth-mode <mode>         custom only: api-key or auth-token.
+  --region <china|global>    Backward-compatible alias for MiniMax selection.
+  --list-providers           Print presets and current model IDs.
+  --skip-validate            Skip the models endpoint probe.
+  --clean-shell-env          Back up shell rc files and remove ANTHROPIC auth
+                             exports that would override settings.json.
+  --force                    Replace a provider config not created by this script.
+  --uninstall                Remove only this script's Claude environment/model keys.
+  -h | --help                Show this help.
 
 ${C_BOLD}Examples:${C_RESET}
-  # Interactive (prompts for the API key)
-  ${C_DIM}./setup.sh${C_RESET}
-
-  # Non-interactive
-  ${C_DIM}MINIMAX_API_KEY=sk-... ./setup.sh${C_RESET}
-
-  # International account + a newer model
-  ${C_DIM}./setup.sh --region global --model MiniMax-M3${C_RESET}
+  ./setup.sh
+  ./setup.sh --provider deepseek --model deepseek-v4-pro
+  OPENROUTER_API_KEY=sk-or-... ./setup.sh --provider openrouter
+  ./setup.sh --provider custom --base-url https://gateway.example.com/anthropic \\
+    --model my-model --key-env MY_API_KEY
 EOF
 }
 
-# ---------- arg parse ----------
+list_providers() {
+  cat <<'EOF'
+anthropic       claude-sonnet-4-6 (default), claude-opus-4-8, claude-fable-5
+deepseek        deepseek-v4-pro (default), deepseek-v4-flash
+openrouter      ~anthropic/claude-sonnet-latest (default), ~anthropic/claude-opus-latest, openrouter/auto
+minimax-cn      MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
+minimax-global  MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
+custom          any Anthropic Messages-compatible URL and model ID
+EOF
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --region)         REGION="${2:?}"; shift 2 ;;
+    --provider)       PROVIDER="${2:?}"; shift 2 ;;
     --model)          MODEL="${2:?}"; shift 2 ;;
     --key)            KEY="${2:?}"; shift 2 ;;
-    --force)          FORCE=1; shift ;;
+    --base-url)       BASE_URL_OVERRIDE="${2:?}"; shift 2 ;;
+    --models-url)     MODELS_URL_OVERRIDE="${2:?}"; shift 2 ;;
+    --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
+    --auth-mode)      AUTH_MODE_OVERRIDE="${2:?}"; shift 2 ;;
+    --region)         REGION="${2:?}"; shift 2 ;;
+    --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
+    --clean-shell-env) CLEAN_SHELL_ENV=1; shift ;;
+    --force)          FORCE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
     -h|--help)        usage; exit 0 ;;
     *)                die "unknown argument: $1 (use --help)" ;;
   esac
 done
 
-# ---------- banner ----------
-printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
-printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  agent/claude-code/setup.sh                                   |" "${C_RESET}"
-printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
-echo
-
-# ---------- region -> URLs ----------
-case "$REGION" in
-  china)
-    BASE_URL="https://api.minimaxi.com/anthropic"
-    API_HOST="https://api.minimaxi.com"
-    KEY_DOC_URL="https://platform.minimaxi.com/user-center/basic-information/interface-key"
-    ;;
-  global)
-    BASE_URL="https://api.minimax.io/anthropic"
-    API_HOST="https://api.minimax.io"
-    KEY_DOC_URL="https://platform.minimax.io/user-center/basic-information/interface-key"
-    ;;
-  *)
-    die "--region must be 'china' or 'global'"
-    ;;
-esac
-
-info "Region : ${REGION}"
-info "Base   : ${BASE_URL}"
-info "Model  : ${MODEL}"
-echo
-
-# ---------- uninstall path ----------
-if [ "$UNINSTALL" = 1 ]; then
-  if [ ! -f "$SETTINGS_FILE" ]; then
-    die "no settings.json at $SETTINGS_FILE"
-  fi
-  if command -v jq >/dev/null 2>&1; then
-    jq '
-      if .env then
-        .env |= with_entries(select(.key | startswith("ANTHROPIC_") | not))
-              | del(.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, .env.API_TIMEOUT_MS)
-      else . end
-      | del(.model)
-    ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-    ok "removed MiniMax entries from $SETTINGS_FILE"
-  else
-    die "jq is required for --uninstall (install jq or edit the file by hand)"
-  fi
+if [ "$LIST_PROVIDERS" = 1 ]; then
+  list_providers
   exit 0
 fi
 
-# ---------- preflight ----------
-command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
-
-if ! command -v jq >/dev/null 2>&1; then
-  warn "jq not found - /v1/models validation will be skipped. Install jq for the safety check."
+if [ "$UNINSTALL" = 1 ]; then
+  [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
+  command -v jq >/dev/null 2>&1 || die "jq is required for --uninstall"
+  [ -f "$STATE_FILE" ] || {
+    existing="$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
+    case "$existing" in
+      *api.minimax.io*|*api.minimaxi.com*) warn "migrating legacy MiniMax install without a state marker" ;;
+      *) die "no $MANAGED_BY state marker; refusing to remove possibly user-owned settings" ;;
+    esac
+  }
+  jq '
+    if .env then
+      del(
+        .env.ANTHROPIC_BASE_URL,
+        .env.ANTHROPIC_AUTH_TOKEN,
+        .env.ANTHROPIC_API_KEY,
+        .env.ANTHROPIC_MODEL,
+        .env.ANTHROPIC_SMALL_FAST_MODEL,
+        .env.ANTHROPIC_DEFAULT_SONNET_MODEL,
+        .env.ANTHROPIC_DEFAULT_OPUS_MODEL,
+        .env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+        .env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+        .env.API_TIMEOUT_MS
+      )
+      | if .env == {} then del(.env) else . end
+    else . end
+    | del(.model)
+  ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+  chmod 600 "$SETTINGS_FILE"
+  rm -f "$STATE_FILE"
+  ok "removed $MANAGED_BY settings"
+  exit 0
 fi
 
-# ---------- detect package manager ----------
-PM="$(detect_pm)"
-
-# ---------- install Node if needed ----------
-install_node() {
-  local pm="$1"
-  case "$pm" in
-    apt)
-      info "Installing Node.js via NodeSource (requires sudo)..."
-      curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-      sudo apt-get install -y nodejs
-      ;;
-    dnf|yum)
-      info "Installing Node.js via NodeSource (requires sudo)..."
-      curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo -E bash -
-      sudo "$pm" install -y nodejs
-      ;;
-    brew)
-      info "Installing Node.js via Homebrew..."
-      brew install node
-      ;;
-    apk)
-      info "Installing Node.js via apk..."
-      sudo apk add --no-cache nodejs npm
-      ;;
-    *)
-      die "could not detect a supported package manager. Install Node.js 18+ manually: https://nodejs.org/"
-      ;;
+if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
+  case "$REGION" in
+    china)  PROVIDER="minimax-cn" ;;
+    global) PROVIDER="minimax-global" ;;
+    *)      die "--region must be china or global" ;;
   esac
-}
-
-if command -v node >/dev/null 2>&1; then
-  NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-  if [ "${NODE_MAJOR:-0}" -lt 18 ]; then
-    warn "Node.js $NODE_MAJOR detected - the npm fallback path needs 18+. The native installer does not."
-    install_node "$PM"
-  else
-    ok "Node.js $(node --version) found (kept for the npm fallback path)"
-  fi
-else
-  info "Node.js not found - will only be needed if the native Claude Code installer fails."
-  info "Installing anyway so the npm fallback is available…"
-  install_node "$PM"
 fi
 
-command -v node >/dev/null 2>&1 || die "Node.js still not on PATH after install. Aborting."
-command -v npm  >/dev/null 2>&1 || die "npm not on PATH after install. Aborting."
-ok "Node.js $(node --version), npm $(npm --version)"
+if [ -z "$PROVIDER" ]; then
+  INTERACTIVE=1
+  choose_menu "Choose the Claude Code provider:" 1 \
+    "anthropic|Anthropic (official Claude API)" \
+    "deepseek|DeepSeek (Anthropic-compatible)" \
+    "openrouter|OpenRouter (Anthropic skin)" \
+    "minimax-cn|MiniMax (mainland China)" \
+    "minimax-global|MiniMax (international)" \
+    "custom|Custom Anthropic-compatible provider"
+  PROVIDER="$MENU_VALUE"
+fi
 
-# ---------- install Claude Code if needed ----------
-# Strategy (Anthropic's current recommendation is the native installer):
-#   1. If `claude` is already on PATH, skip everything.
-#   2. Try the native installer (`curl ... | bash` from claude.ai). No Node.js needed.
-#   3. If that fails (sandboxed env, network restriction, etc.), fall back to the
-#      npm path — which is why we still install Node.js below.
+case "$PROVIDER" in
+  anthropic)
+    DISPLAY_NAME="Anthropic"
+    BASE_URL="https://api.anthropic.com"
+    MODELS_URL="https://api.anthropic.com/v1/models"
+    KEY_ENV="ANTHROPIC_API_KEY"
+    KEY_DOC_URL="https://console.anthropic.com/settings/keys"
+    AUTH_MODE="api-key"
+    VALIDATION_AUTH="x-api-key"
+    DEFAULT_MODEL="claude-sonnet-4-6"
+    MODEL_CHOICES="anthropic"
+    ;;
+  deepseek)
+    DISPLAY_NAME="DeepSeek"
+    BASE_URL="https://api.deepseek.com/anthropic"
+    MODELS_URL="https://api.deepseek.com/models"
+    KEY_ENV="DEEPSEEK_API_KEY"
+    KEY_DOC_URL="https://platform.deepseek.com/api_keys"
+    AUTH_MODE="api-key"
+    VALIDATION_AUTH="bearer"
+    DEFAULT_MODEL="deepseek-v4-pro"
+    MODEL_CHOICES="deepseek"
+    ;;
+  openrouter)
+    DISPLAY_NAME="OpenRouter"
+    BASE_URL="https://openrouter.ai/api"
+    MODELS_URL="https://openrouter.ai/api/v1/models"
+    KEY_ENV="OPENROUTER_API_KEY"
+    KEY_DOC_URL="https://openrouter.ai/settings/keys"
+    AUTH_MODE="auth-token"
+    VALIDATION_AUTH="bearer"
+    DEFAULT_MODEL="~anthropic/claude-sonnet-latest"
+    MODEL_CHOICES="openrouter"
+    ;;
+  minimax-cn|minimax-global)
+    DISPLAY_NAME="MiniMax"
+    KEY_ENV="MINIMAX_API_KEY"
+    AUTH_MODE="auth-token"
+    VALIDATION_AUTH="x-api-key"
+    DEFAULT_MODEL="MiniMax-M2.7"
+    MODEL_CHOICES="minimax"
+    if [ "$PROVIDER" = "minimax-cn" ]; then
+      BASE_URL="https://api.minimaxi.com/anthropic"
+      MODELS_URL="https://api.minimaxi.com/anthropic/v1/models"
+      KEY_DOC_URL="https://platform.minimaxi.com/user-center/basic-information/interface-key"
+    else
+      BASE_URL="https://api.minimax.io/anthropic"
+      MODELS_URL="https://api.minimax.io/anthropic/v1/models"
+      KEY_DOC_URL="https://platform.minimax.io/user-center/basic-information/interface-key"
+    fi
+    ;;
+  custom)
+    DISPLAY_NAME="Custom provider"
+    KEY_ENV="${KEY_ENV_OVERRIDE:-CUSTOM_API_KEY}"
+    KEY_DOC_URL="your provider console"
+    VALIDATION_AUTH="bearer"
+    DEFAULT_MODEL=""
+    MODEL_CHOICES="custom"
+    BASE_URL="${BASE_URL_OVERRIDE:-}"
+    [ -n "$BASE_URL" ] || {
+      prompt_value "Anthropic-compatible base URL (before /v1/messages)" ""
+      BASE_URL="$PROMPT_REPLY"
+    }
+    MODELS_URL="$(derive_models_url "$BASE_URL")"
+    AUTH_MODE="${AUTH_MODE_OVERRIDE:-}"
+    if [ -z "$AUTH_MODE" ] && [ "$INTERACTIVE" = 1 ]; then
+      choose_menu "How should Claude Code send the key?" 1 \
+        "auth-token|Bearer token (most gateways)" \
+        "api-key|x-api-key (Anthropic SDK style)"
+      AUTH_MODE="$MENU_VALUE"
+    fi
+    AUTH_MODE="${AUTH_MODE:-auth-token}"
+    [ "$AUTH_MODE" = "api-key" ] && VALIDATION_AUTH="x-api-key"
+    ;;
+  *) die "unknown provider '$PROVIDER' (use --list-providers)" ;;
+esac
+
+[ -n "$KEY_ENV_OVERRIDE" ] && KEY_ENV="$KEY_ENV_OVERRIDE"
+[ -n "$BASE_URL_OVERRIDE" ] && BASE_URL="$BASE_URL_OVERRIDE"
+[ -n "$MODELS_URL_OVERRIDE" ] && MODELS_URL="$MODELS_URL_OVERRIDE"
+[ -n "$AUTH_MODE_OVERRIDE" ] && AUTH_MODE="$AUTH_MODE_OVERRIDE"
+case "$AUTH_MODE" in api-key|auth-token) ;; *) die "--auth-mode must be api-key or auth-token" ;; esac
+
+if [ -z "$MODEL" ]; then
+  if [ "$INTERACTIVE" = 1 ]; then
+    case "$MODEL_CHOICES" in
+      anthropic)
+        choose_menu "Choose a model:" 1 \
+          "claude-sonnet-4-6|Claude Sonnet 4.6 (balanced default)" \
+          "claude-opus-4-8|Claude Opus 4.8" \
+          "claude-fable-5|Claude Fable 5" \
+          "__custom__|Enter another model ID"
+        ;;
+      deepseek)
+        choose_menu "Choose a model:" 1 \
+          "deepseek-v4-pro|DeepSeek V4 Pro" \
+          "deepseek-v4-flash|DeepSeek V4 Flash" \
+          "__custom__|Enter another model ID"
+        ;;
+      openrouter)
+        choose_menu "Choose a model:" 1 \
+          "~anthropic/claude-sonnet-latest|Claude Sonnet latest route" \
+          "~anthropic/claude-opus-latest|Claude Opus latest route" \
+          "openrouter/auto|OpenRouter Auto" \
+          "__custom__|Enter another OpenRouter model ID"
+        ;;
+      minimax)
+        choose_menu "Choose a model:" 1 \
+          "MiniMax-M2.7|MiniMax M2.7" \
+          "MiniMax-M2.7-highspeed|MiniMax M2.7 Highspeed" \
+          "MiniMax-M2.5|MiniMax M2.5" \
+          "__custom__|Enter another model ID"
+        ;;
+      custom) MENU_VALUE="__custom__" ;;
+    esac
+    MODEL="$MENU_VALUE"
+    if [ "$MODEL" = "__custom__" ]; then
+      prompt_value "Model ID" "$DEFAULT_MODEL"
+      MODEL="$PROMPT_REPLY"
+    fi
+  else
+    MODEL="$DEFAULT_MODEL"
+  fi
+fi
+[ -n "$MODEL" ] || die "model ID is required (use --model)"
+
+if [ -z "$KEY" ]; then
+  KEY="$(read_env "$KEY_ENV")"
+fi
+if [ -z "$KEY" ]; then
+  prompt_secret "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
+  KEY="$PROMPT_REPLY"
+fi
+[ -n "$KEY" ] || die "no API key supplied"
+
+printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
+printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  Claude Code provider setup                                   |" "${C_RESET}"
+printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
+info "Provider : $DISPLAY_NAME ($PROVIDER)"
+info "Base URL : $BASE_URL"
+info "Model    : $MODEL"
+echo
+
+command -v curl >/dev/null 2>&1 || die "curl is required"
+command -v jq >/dev/null 2>&1 || die "jq is required (apt/brew install jq)"
+
+if [ "$SKIP_VALIDATE" = 1 ]; then
+  warn "--skip-validate set; skipping provider probe"
+else
+  info "Validating the API key..."
+  validate_model_api "$MODELS_URL" "$VALIDATION_AUTH" "$KEY" "$MODEL"
+fi
+
 if command -v claude >/dev/null 2>&1; then
   ok "Claude Code already installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
 else
-  info "Installing Claude Code via Anthropic's native installer..."
-  if curl -fsSL https://claude.ai/install.sh | bash; then
-    if command -v claude >/dev/null 2>&1; then
-      ok "Claude Code installed (native binary)"
-    else
-      warn "native installer exited 0 but 'claude' is not on PATH - falling back to npm"
-      NATIVE_FAILED=1
-    fi
+  info "Installing Claude Code through Anthropic's native installer..."
+  if ! curl -fsSL https://claude.ai/install.sh | bash || ! command -v claude >/dev/null 2>&1; then
+    warn "native install was unavailable; falling back to npm"
+    ensure_npm_cli claude @anthropic-ai/claude-code "Claude Code"
   else
-    warn "native installer failed (network blocked or sandbox?) - falling back to npm"
-    NATIVE_FAILED=1
-  fi
-
-  if [ "${NATIVE_FAILED:-0}" = 1 ]; then
-    # npm fallback path. Requires Node.js 18+ — we already installed it above.
-    if command -v npm >/dev/null 2>&1; then
-      info "Falling back to: npm install -g @anthropic-ai/claude-code"
-      npm install -g @anthropic-ai/claude-code
-      command -v claude >/dev/null 2>&1 || die "npm fallback also failed. Install Claude Code manually: https://claude.ai/download"
-      ok "Claude Code installed (via npm)"
-    else
-      die "native installer failed and npm is unavailable. Install Claude Code manually: https://claude.ai/download"
-    fi
+    ok "Claude Code installed"
   fi
 fi
-echo
 
-# ---------- API key ----------
-if [ -z "$KEY" ]; then
-  KEY="${MINIMAX_API_KEY:-}"
-fi
-
-if [ -z "$KEY" ]; then
-  printf '%s%s%s' "${C_BOLD}" "MiniMax API key (input hidden, see ${KEY_DOC_URL}): " "${C_RESET}"
-  stty -echo 2>/dev/null || true
-  IFS= read -r KEY
-  stty echo 2>/dev/null || true
-  printf '\n'
-fi
-
-if [ -z "$KEY" ]; then
-  die "no API key supplied (use --key, \$MINIMAX_API_KEY, or the interactive prompt)"
-fi
-ok "API key captured"
-
-# ---------- validate against /v1/models ----------
-if [ "$SKIP_VALIDATE" = 1 ]; then
-  warn "--skip-validate set; skipping /v1/models probe"
-elif command -v jq >/dev/null 2>&1; then
-  info "Validating key against ${API_HOST}/v1/models..."
-  MODELS_JSON="$(mktemp)"
-  HTTP_CODE="$(curl -sS -o "$MODELS_JSON" -w '%{http_code}' \
-    -H "Authorization: Bearer $KEY" \
-    "${API_HOST}/v1/models" || echo "000")"
-
-  if [ "$HTTP_CODE" != "200" ]; then
-    cat "$MODELS_JSON" >&2 || true
-    rm -f "$MODELS_JSON"
-    if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-      die "HTTP $HTTP_CODE from ${API_HOST}/v1/models.
-  -> The key was rejected. Make sure you're using a Pay-as-You-Go key from
-    ${KEY_DOC_URL}
-    (Token-Plan / subscription keys do not work with coding tools)."
-    else
-      die "HTTP $HTTP_CODE from ${API_HOST}/v1/models - connectivity or region issue?"
-    fi
-  fi
-
-  if ! jq -e --arg m "$MODEL" '.data[].id | select(. == $m)' "$MODELS_JSON" >/dev/null; then
-    AVAILABLE="$(jq -r '.data[].id' "$MODELS_JSON" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
-    rm -f "$MODELS_JSON"
-    die "Model '${MODEL}' not visible to this key at ${API_HOST}.
-  Available models: ${AVAILABLE:-<none>}
-  -> Wrong region? Try --region $([ "$REGION" = "china" ] && echo global || echo china).
-  -> Wrong key type? You need a Pay-as-You-Go key."
-  fi
-  rm -f "$MODELS_JSON"
-  ok "Key valid, model '${MODEL}' is available"
-else
-  warn "jq not available - skipping validation"
-fi
-echo
-
-# ---------- write ~/.claude/settings.json ----------
 mkdir -p "$SETTINGS_DIR"
-[ -w "$SETTINGS_DIR" ] || die "$SETTINGS_DIR is not writable. Fix permissions and re-run."
-
-if [ -f "$SETTINGS_FILE" ]; then
-  if grep -q "$BASE_URL" "$SETTINGS_FILE" 2>/dev/null; then
-    info "settings.json already configured for ${BASE_URL} - updating in place"
-  elif [ "$FORCE" = 1 ]; then
-    warn "settings.json has a different base URL - overwriting (--force)"
-  else
-    die "settings.json exists with a different base URL.
-  Re-run with --force to overwrite, or run --uninstall first."
-  fi
-fi
-
-# Seed an empty object if the file is missing
 if [ ! -f "$SETTINGS_FILE" ]; then
   printf '{}\n' > "$SETTINGS_FILE"
+fi
+jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
+
+existing_url="$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE")"
+if [ -n "$existing_url" ] && [ "$existing_url" != "$BASE_URL" ] && [ ! -f "$STATE_FILE" ]; then
+  case "$existing_url" in
+    *api.minimax.io*|*api.minimaxi.com*) warn "upgrading the legacy MiniMax-only setup" ;;
+    *) [ "$FORCE" = 1 ] || die "settings.json already has ANTHROPIC_BASE_URL=$existing_url; use --force to replace it" ;;
+  esac
 fi
 
 TMP="$(mktemp)"
 jq \
   --arg url "$BASE_URL" \
-  --arg tok "$KEY" \
-  --arg m   "$MODEL" '
-  .env = (.env // {}) |
-  .env.ANTHROPIC_BASE_URL             = $url |
-  .env.ANTHROPIC_AUTH_TOKEN           = $tok |
-  .env.ANTHROPIC_MODEL                = $m |
-  .env.ANTHROPIC_SMALL_FAST_MODEL     = $m |
-  .env.ANTHROPIC_DEFAULT_SONNET_MODEL = $m |
-  .env.ANTHROPIC_DEFAULT_OPUS_MODEL   = $m |
-  .env.ANTHROPIC_DEFAULT_HAIKU_MODEL  = $m |
-  .env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1" |
-  .env.API_TIMEOUT_MS = "3000000" |
-  .model = $m
+  --arg token "$KEY" \
+  --arg model "$MODEL" \
+  --arg auth "$AUTH_MODE" \
+  --arg third "$([ "$PROVIDER" = "anthropic" ] && printf 0 || printf 1)" '
+  .env = (.env // {})
+  | .env.ANTHROPIC_BASE_URL = $url
+  | .env.ANTHROPIC_MODEL = $model
+  | .env.ANTHROPIC_SMALL_FAST_MODEL = $model
+  | .env.ANTHROPIC_DEFAULT_SONNET_MODEL = $model
+  | .env.ANTHROPIC_DEFAULT_OPUS_MODEL = $model
+  | .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $model
+  | .model = $model
+  | if $auth == "api-key"
+    then .env.ANTHROPIC_API_KEY = $token | del(.env.ANTHROPIC_AUTH_TOKEN)
+    else .env.ANTHROPIC_AUTH_TOKEN = $token | del(.env.ANTHROPIC_API_KEY)
+    end
+  | if $third == "1"
+    then .env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+       | .env.API_TIMEOUT_MS = "3000000"
+    else del(.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, .env.API_TIMEOUT_MS)
+    end
 ' "$SETTINGS_FILE" > "$TMP" && mv "$TMP" "$SETTINGS_FILE"
 chmod 600 "$SETTINGS_FILE"
+write_secret_file "$STATE_FILE" "$PROVIDER"
 ok "wrote $SETTINGS_FILE (chmod 600)"
-echo
 
-# ---------- unset conflicting env in this shell ----------
-unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL 2>/dev/null || true
-
-# ---------- scrub stale exports from shell rc files ----------
-# Claude Code warns:
-#   "Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set - auth may not work as expected"
-# whenever both are exported in the environment - typically because ~/.zshrc or ~/.bashrc
-# still contains `export ANTHROPIC_API_KEY=...` left over from a previous `claude /login`
-# or a manual copy-paste. settings.json is not enough; the warning comes from the shell env.
-scrub_rc_file() {
-  local rc="$1"
+clean_shell_auth_exports() {
+  local rc="$1" backup
   [ -f "$rc" ] || return 0
   if grep -Eq '^[[:space:]]*(export[[:space:]]+)?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL)=' "$rc"; then
-    if [ ! -t 0 ] || [ "$FORCE" = 1 ]; then
-      local backup="${rc}.bak.$(date +%Y%m%d%H%M%S)"
+    if [ "$CLEAN_SHELL_ENV" = 1 ] ||
+       { [ "$INTERACTIVE" = 1 ] && ask_yes_no "Remove duplicate ANTHROPIC auth exports from $rc? A backup will be saved."; }; then
+      backup="${rc}.bak.$(date +%Y%m%d%H%M%S)"
       cp "$rc" "$backup"
-      sed -i.tmp -E '/^[[:space:]]*(export[[:space:]]+)?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL)=/d' "$rc"
+      sed -i.tmp -E \
+        '/^[[:space:]]*(export[[:space:]]+)?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL)=/d' \
+        "$rc"
       rm -f "${rc}.tmp"
-      ok "removed stale ANTHROPIC_* exports from $rc (backup: $backup)"
+      ok "removed duplicate ANTHROPIC auth exports from $rc (backup: $backup)"
     else
-      warn "$rc contains a stale ANTHROPIC_* export that will override settings.json."
-      printf '  offending line(s):\n'
-      grep -nE '^[[:space:]]*(export[[:space:]]+)?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL)=' "$rc" | sed 's/^/    /'
-      if ask_yes_no "  Remove these lines from $rc now? (a backup will be saved)"; then
-        local backup="${rc}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc" "$backup"
-        sed -i.tmp -E '/^[[:space:]]*(export[[:space:]]+)?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL)=/d' "$rc"
-        rm -f "${rc}.tmp"
-        ok "removed stale ANTHROPIC_* exports from $rc (backup: $backup)"
-      else
-        warn "left $rc untouched - Claude Code may show 'Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set' on startup."
-      fi
+      warn "$rc exports ANTHROPIC auth variables that override settings.json."
+      warn "Re-run with --clean-shell-env, then open a new shell."
     fi
   fi
 }
 
-if [ "$UNINSTALL" != 1 ]; then
-  for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.zshenv" "$HOME/.bash_profile"; do
-    scrub_rc_file "$rc"
-  done
+for rc in \
+  "${ZDOTDIR:-$HOME}/.zshrc" \
+  "${ZDOTDIR:-$HOME}/.zprofile" \
+  "$HOME/.bashrc" \
+  "$HOME/.bash_profile" \
+  "$HOME/.profile"; do
+  clean_shell_auth_exports "$rc"
+done
+
+if { [ "$AUTH_MODE" = "api-key" ] && [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; } ||
+   { [ "$AUTH_MODE" = "auth-token" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; }; then
+  warn "this already-running shell contains the other Claude credential type."
+  warn "After cleaning shell startup files, run: unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL"
 fi
 
-# ---------- post-install checklist ----------
-printf '%s%s%s\n' "${C_BOLD}" "Next steps" "${C_RESET}"
-printf '%s\n' "--------------------------------------------------------------"
-cat <<EOF
-1. Start Claude Code:
-     ${C_DIM}claude${C_RESET}
-
-2. Inside the TUI, run:
-     ${C_DIM}/status${C_RESET}   -> should show ${BASE_URL} and model ${MODEL}
-     ${C_DIM}/model${C_RESET}    -> should list ${MODEL}
-
-3. If you ever see this warning on startup:
-     ${C_YELLOW}Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set - auth may not work as expected${C_RESET}
-
-   it means your shell environment still has an old export (e.g. from a previous
-   ${C_DIM}claude /login${C_RESET} that wrote ${C_DIM}export ANTHROPIC_API_KEY=...${C_RESET} into
-   ${C_DIM}~/.zshrc${C_RESET} or ${C_DIM}~/.bashrc${C_RESET}). settings.json values are ignored
-   when these shell vars are set. Re-run this script - it will scrub those lines
-   for you, with a .bak backup.
-
-4. To uninstall later:
-     ${C_DIM}$0 --uninstall${C_RESET}
-EOF
 echo
+printf '%s%s%s\n' "${C_BOLD}" "Ready" "${C_RESET}"
+printf '  %s\n' "Run: claude"
+printf '  %s\n' "Then check /status and /model; expected provider URL: $BASE_URL"
+printf '  %s\n' "Uninstall this provider config: $0 --uninstall"
 ok "done"

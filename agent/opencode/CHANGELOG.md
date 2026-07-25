@@ -1,5 +1,15 @@
 # Changelog — opencode (agent)
 
+## 2026-07-25 — mainstream and custom providers
+
+- Added Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, MiniMax
+  China/global, and custom Chat/Responses/Anthropic provider menus.
+- Added current model presets and a custom model-ID entry for every provider.
+- Moved the global config to the current `~/.config/opencode/opencode.json`
+  path, with one-time migration from the old `config.json`.
+- Keys now live in mode-`0600` files referenced with `{file:...}`; setup-owned
+  providers use unique IDs so uninstall does not delete built-in settings.
+
 ## 2026-07-20 — initial agent
 
 - `setup.sh` installs Node.js 18+ and `opencode-ai`, validates the API key
