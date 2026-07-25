@@ -143,9 +143,10 @@ The same kit also installs:
 - `eza` as the colorful `ls`, `l`, `ll`, `la`, and `lt` implementation
 - `bat`, `fd`, `jq`, and `ripgrep` (`rg`) for structured data, highlighted file
   viewing, and fast file and content searches
-- a shallow clone of
-  [`silencoo/script-toolbox`](https://github.com/silencoo/script-toolbox) at
-  `~/script-toolbox`, with `~/agent` linked to its `agent/` directory
+- a UTF-8 locale for literal Chinese and other non-ASCII filename completion
+- a sparse checkout containing only
+  [`script-toolbox/agent`](https://github.com/silencoo/script-toolbox/tree/main/agent)
+  under `~/.local/share/sbx-manager`, exposed through the short `~/agent` link
 
 `fzf` uses `fd` for traversal and `bat`/`eza` for previews. The kit normalizes
 Debian and Ubuntu's `batcat` and `fdfind` binary names to `bat` and `fd`.
@@ -176,11 +177,11 @@ underlying workspace is a direct host mount or a private `--clone`.
 If the base image already contains an empty `~/workspace` directory, the kit
 replaces it safely; a non-empty directory is always preserved.
 
-The toolbox is cloned only when the kit is first installed. Update it later
-from inside the sandbox with:
+The hidden agent-helper checkout is created only when the kit is first
+installed. Update it later from inside the sandbox with:
 
 ```bash
-git -C ~/script-toolbox pull --ff-only
+git -C ~/.local/share/sbx-manager/script-toolbox pull --ff-only
 ```
 
 Docker applies `--kit` only while creating a sandbox. To add the shell kit to
@@ -195,6 +196,9 @@ to sbx's reattach syntax and preserves the sandbox's original agent and
 workspace. Before reconnecting, it checks the bundled shell-kit version inside
 the sandbox and applies the current kit once when the installed copy is stale.
 Pass `--no-shell-kit` to skip this refresh for a custom sandbox.
+When `--name` is omitted, the manager now derives Docker's stable
+`<agent>-<workspace>` name itself, so repeating the same path-only command can
+also detect, refresh, and reconnect to the existing sandbox.
 
 Run `./sbx-manager.sh --help` for all global, network, daemon, and launch
 options.

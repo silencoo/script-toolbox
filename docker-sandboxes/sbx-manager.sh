@@ -1123,6 +1123,30 @@ refresh_existing_shell_kit() {
     || die "Could not refresh the shell kit for '$sandbox_name'. Recreate it or run: sbx kit add $sandbox_name $DEFAULT_SHELL_KIT"
 }
 
+default_sandbox_name() {
+  local agent="$1"
+  local workspace="$2"
+  local naming_path=''
+  local leaf=''
+  local sanitized=''
+
+  naming_path="$(cd "$workspace" 2>/dev/null && pwd -P)" \
+    || naming_path="$workspace"
+  leaf="${naming_path%/}"
+  leaf="${leaf##*/}"
+  [ -n "$leaf" ] || leaf='workspace'
+  sanitized="$(
+    printf '%s' "$leaf" \
+      | LC_ALL=C tr '[:upper:]_' '[:lower:]-' \
+      | LC_ALL=C sed 's/[^a-z0-9.+-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+  )"
+  if [ -z "$sanitized" ]; then
+    sanitized="workspace-$(printf '%s' "$naming_path" | cksum | awk '{print $1}')"
+  fi
+  sanitized="$(printf '%.48s' "$sanitized")"
+  printf '%s-%s\n' "$agent" "$sanitized"
+}
+
 run_command() {
   local agent='shell'
   case "${1:-}" in
@@ -1144,6 +1168,7 @@ run_command() {
   local arg=''
   local seen_separator=0
   local workspace_provided=0
+  local generated_name=0
   local reattach=0
   local sandbox_names=''
   local cmd
@@ -1198,13 +1223,18 @@ run_command() {
     [ "$seen_separator" -eq 0 ] || break
   done
 
+  if [ -z "$name" ]; then
+    [ -n "$workspace" ] || workspace="$PWD"
+    [ -d "$workspace" ] || die "Workspace directory does not exist: $workspace"
+    name="$(default_sandbox_name "$agent" "$workspace")"
+    generated_name=1
+  fi
+
   load_daemon_env
-  if [ -n "$name" ]; then
-    sandbox_names="$(sbx ls -q 2>/dev/null)" \
-      || die "Could not list existing sandboxes before running '$name'."
-    if printf '%s\n' "$sandbox_names" | grep -Fqx -- "$name"; then
-      reattach=1
-    fi
+  sandbox_names="$(sbx ls -q 2>/dev/null)" \
+    || die "Could not list existing sandboxes before running '$name'."
+  if printf '%s\n' "$sandbox_names" | grep -Fqx -- "$name"; then
+    reattach=1
   fi
 
   if [ "$reattach" -eq 1 ]; then
@@ -1214,7 +1244,7 @@ run_command() {
       || [ -n "$template" ] || [ -n "$docker_size" ]; then
       warn "Ignoring creation-only options while reattaching to '$name'."
     fi
-    if [ "$workspace_provided" -eq 1 ]; then
+    if [ "$workspace_provided" -eq 1 ] && [ "$generated_name" -eq 0 ]; then
       say "Requested workspace is ignored for reattach: $workspace"
     fi
 
@@ -1256,7 +1286,7 @@ run_command() {
 
     ensure_block_volume_driver
     cmd+=(sbx run)
-    [ -z "$name" ] || cmd+=(--name "$name")
+    cmd+=(--name "$name")
     [ "$clone" -eq 0 ] || cmd+=(--clone)
     [ "$detached" -eq 0 ] || cmd+=(--detached)
     [ -z "$template" ] || cmd+=(--template "$template")

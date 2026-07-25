@@ -13,6 +13,11 @@ caps:
       - deb.debian.org
       - security.debian.org
 
+environment:
+  variables:
+    LANG: "C.UTF-8"
+    LC_ALL: "C.UTF-8"
+
 commands:
   install:
     - command: |
@@ -163,23 +168,42 @@ commands:
           4f5416f5fd9b42822de3ff0cebb831843f655d1d \
           "$HOME/.oh-my-zsh/custom/plugins/zsh-completions"
 
-        toolbox_dir="$HOME/script-toolbox"
-        if [ ! -d "$toolbox_dir/.git" ]; then
-          if [ -e "$toolbox_dir" ]; then
-            echo "Refusing to replace non-Git path: $toolbox_dir" >&2
-            exit 1
-          fi
-          git clone -q --depth 1 --branch main \
-            https://github.com/silencoo/script-toolbox.git \
-            "$toolbox_dir"
+        toolbox_url=https://github.com/silencoo/script-toolbox.git
+        toolbox_store="$HOME/.local/share/sbx-manager/script-toolbox"
+        legacy_toolbox="$HOME/script-toolbox"
+        mkdir -p "$(dirname "$toolbox_store")"
+
+        # Migrate the old visible checkout only when it is the untouched
+        # kit-owned repository. Keep any user-modified checkout in place.
+        if [ ! -e "$toolbox_store" ] \
+          && [ -d "$legacy_toolbox/.git" ] \
+          && [ "$(git -C "$legacy_toolbox" remote get-url origin 2>/dev/null || :)" = "$toolbox_url" ] \
+          && [ -z "$(git -C "$legacy_toolbox" status --porcelain 2>/dev/null)" ]; then
+          mv "$legacy_toolbox" "$toolbox_store"
         fi
 
+        if [ ! -d "$toolbox_store/.git" ]; then
+          if [ -e "$toolbox_store" ]; then
+            echo "Refusing to replace non-Git path: $toolbox_store" >&2
+            exit 1
+          fi
+          git clone -q --depth 1 --filter=blob:none --sparse --branch main \
+            "$toolbox_url" "$toolbox_store"
+        fi
+        git -C "$toolbox_store" remote set-url origin "$toolbox_url"
+        git -C "$toolbox_store" sparse-checkout init --cone
+        git -C "$toolbox_store" sparse-checkout set agent
+
         if [ -L "$HOME/agent" ]; then
-          ln -sfn "$toolbox_dir/agent" "$HOME/agent"
+          ln -sfn "$toolbox_store/agent" "$HOME/agent"
         elif [ ! -e "$HOME/agent" ]; then
-          ln -s "$toolbox_dir/agent" "$HOME/agent"
+          ln -s "$toolbox_store/agent" "$HOME/agent"
         else
           echo "Keeping existing path instead of creating ~/agent: $HOME/agent" >&2
+        fi
+
+        if [ -d "$legacy_toolbox/.git" ]; then
+          echo "Keeping modified or unrelated legacy checkout: $legacy_toolbox" >&2
         fi
 
         mkdir -p "$HOME/.oh-my-zsh/custom/completions"
@@ -196,7 +220,7 @@ commands:
             'fi' >> "$profile"
         fi
       user: "1000"
-      description: Install the shell environment and script-toolbox agent helpers
+      description: Install the shell environment and sparse agent helpers
 
   initFiles:
     - path: /home/agent/.config/sbx-manager/workspace

@@ -19,6 +19,10 @@ plugins=(
 
 source "$ZSH/oh-my-zsh.sh"
 
+# Preserve UTF-8 filenames literally in completion lists. The kit also sets a
+# UTF-8 locale before zsh starts so the line editor treats them as characters.
+setopt print_eight_bit
+
 # Docker sbx preserves the host's absolute workspace path inside the VM. This
 # helper creates ~/workspace synchronously, then enters it as a logical path.
 if [[ -r "$HOME/.config/sbx-manager/enter-workspace.zsh" ]]; then

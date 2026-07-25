@@ -56,11 +56,21 @@ run_setup() {
 grep -Fq 'bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing modern CLI packages"
+grep -Fq 'LANG: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not set a UTF-8 LANG"
+grep -Fq 'LC_ALL: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not set a UTF-8 LC_ALL"
 grep -Fq 'eza_version=0.23.5' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing the pinned eza release"
 grep -Fq 'https://github.com/silencoo/script-toolbox.git' \
   "$SHELL_KIT/spec.yaml" \
-  || fail "default shell kit does not clone script-toolbox"
+  || fail "default shell kit does not fetch the agent helpers"
+grep -Fq 'toolbox_store="$HOME/.local/share/sbx-manager/script-toolbox"' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not hide the sparse toolbox checkout"
+grep -Fq 'git -C "$toolbox_store" sparse-checkout set agent' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not limit the toolbox checkout to agent/"
 grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not record the primary workspace"
@@ -74,6 +84,8 @@ grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
 grep -Fq 'source "$HOME/.config/sbx-manager/enter-workspace.zsh"' \
   "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit does not load the workspace entry helper"
+grep -Fq 'setopt print_eight_bit' "$SHELL_KIT/files/home/.zshrc" \
+  || fail "default shell kit does not enable literal non-ASCII completion output"
 grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
   "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing fzf key bindings"
@@ -86,6 +98,16 @@ if grep -Fq '$env_var.IS_SANDBOX' \
   "$SHELL_KIT/files/home/.config/starship.toml"; then
   fail "Starship prompt still renders .IS_SANDBOX as literal text"
 fi
+
+# In the C locale zsh quotes every UTF-8 byte as $'\NNN'. The kit locale must
+# make filename completion preserve the original Chinese characters.
+utf8_filename='grok注册机_20260725.zip'
+utf8_quoted="$(
+  LANG=C.UTF-8 LC_ALL=C.UTF-8 zsh -f -c \
+    'value="$1"; print -r -- "${(q)value}"' zsh "$utf8_filename"
+)"
+[ "$utf8_quoted" = "$utf8_filename" ] \
+  || fail "UTF-8 locale did not preserve a Chinese filename in zsh"
 
 # The zsh entry helper must not depend on the asynchronous kit startup command:
 # it creates or refreshes ~/workspace itself and enters that logical path.
@@ -292,7 +314,54 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
     "$TEST_TMP_DIR/default-shell/workspace" \
   > "$TEST_TMP_DIR/default-shell/output" 2>&1
 assert_contains "$TEST_TMP_DIR/default-shell/log" \
-  "run --kit $SHELL_KIT shell $TEST_TMP_DIR/default-shell/workspace"
+  "run --name shell-workspace --kit $SHELL_KIT shell $TEST_TMP_DIR/default-shell/workspace"
+
+# The manager must derive Docker's stable default name itself. Otherwise a
+# repeated path-only command cannot detect and refresh its existing sandbox.
+mkdir -p "$TEST_TMP_DIR/generated-name/home" \
+  "$TEST_TMP_DIR/generated-name/config" \
+  "$TEST_TMP_DIR/generated-name/grok_reg"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/generated-name/policy-state"
+: > "$TEST_TMP_DIR/generated-name/auth-state"
+: > "$TEST_TMP_DIR/generated-name/log"
+PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+  HOME="$TEST_TMP_DIR/generated-name/home" \
+  XDG_CONFIG_HOME="$TEST_TMP_DIR/generated-name/config" \
+  NO_COLOR=1 \
+  SBX_TEST_LOG="$TEST_TMP_DIR/generated-name/log" \
+  SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/generated-name/policy-state" \
+  SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/generated-name/auth-state" \
+  SBX_TEST_SANDBOX_NAMES='shell-grok-reg' \
+  SBX_TEST_SHELL_KIT_CURRENT=0 \
+  "$ROOT_DIR/sbx-manager.sh" run "$TEST_TMP_DIR/generated-name/grok_reg" \
+  > "$TEST_TMP_DIR/generated-name/output" 2>&1
+assert_contains "$TEST_TMP_DIR/generated-name/log" \
+  "kit add shell-grok-reg $SHELL_KIT"
+assert_contains "$TEST_TMP_DIR/generated-name/log" \
+  'run --name shell-grok-reg'
+
+# Relative paths are resolved for naming, while the original workspace
+# argument remains untouched for sbx.
+mkdir -p "$TEST_TMP_DIR/relative-name/home" \
+  "$TEST_TMP_DIR/relative-name/config" \
+  "$TEST_TMP_DIR/relative-name/Project_Name"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/relative-name/policy-state"
+: > "$TEST_TMP_DIR/relative-name/auth-state"
+: > "$TEST_TMP_DIR/relative-name/log"
+(
+  cd "$TEST_TMP_DIR/relative-name/Project_Name"
+  PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+    HOME="$TEST_TMP_DIR/relative-name/home" \
+    XDG_CONFIG_HOME="$TEST_TMP_DIR/relative-name/config" \
+    NO_COLOR=1 \
+    SBX_TEST_LOG="$TEST_TMP_DIR/relative-name/log" \
+    SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/relative-name/policy-state" \
+    SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/relative-name/auth-state" \
+    "$ROOT_DIR/sbx-manager.sh" run . \
+    > "$TEST_TMP_DIR/relative-name/output" 2>&1
+)
+assert_contains "$TEST_TMP_DIR/relative-name/log" \
+  "run --name shell-project-name --kit $SHELL_KIT shell ."
 
 # Passing the original agent/workspace again for an existing named sandbox
 # must be rewritten to sbx's reattach-only syntax.
