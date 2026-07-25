@@ -5,6 +5,9 @@
 - Missing `jq` is installed automatically on supported package managers.
 - Provider credentials are rotated only after a valid replacement config is
   ready, and setup/MCP transforms atomically replace `opencode.json`.
+- Running `mcp.sh` without provider flags now opens an interactive MCP
+  checklist, while named environment keys work without any CLI `--key` flag
+  on Bash 3.2.
 - Restored executable modes for the MCP and uninstall entry points.
 
 ## 2026-07-25 — mainstream and custom providers
@@ -12,6 +15,8 @@
 - Added Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, MiniMax
   China/global, and custom Chat/Responses/Anthropic provider menus.
 - Added current model presets and a custom model-ID entry for every provider.
+- MiniMax China/global now default to the official `MiniMax-M3`, with M2.7,
+  M2.7 Highspeed, and M2.5 retained as fallback choices.
 - Moved the global config to the current `~/.config/opencode/opencode.json`
   path, with one-time migration from the old `config.json`.
 - Keys now live in mode-`0600` files referenced with `{file:...}`; setup-owned

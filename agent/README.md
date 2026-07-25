@@ -41,6 +41,20 @@ backward-compatible shortcut for MiniMax where MiniMax is supported.
 | `README.md` | yes | Usage and compatibility notes. |
 | `CHANGELOG.md` | yes | Per-agent history. |
 
+Run an MCP script without provider flags to open an interactive checklist for
+Brave, Exa, and Context7. Prompts use `/dev/tty`, so this also works with a
+one-shot `curl | bash` install. For automation, repeat `--provider`, or use
+`--all`; each `--key NAME=value` applies only to that named MCP. Missing CLI
+keys fall back to `BRAVE_API_KEY`, `EXA_API_KEY`, or `CONTEXT7_API_KEY`, and
+Context7 can be used anonymously:
+
+```bash
+./claude-code/mcp.sh
+
+BRAVE_API_KEY=BSA... EXA_API_KEY=EXA... \
+  ./codex/mcp.sh --provider brave --provider exa --provider context7
+```
+
 The setup scripts share [`setup-lib.sh`](./setup-lib.sh). When a per-agent
 script is run through `curl ... | bash`, it downloads that helper from the
 same repository; prompts read from `/dev/tty`, so one-shot interactive use

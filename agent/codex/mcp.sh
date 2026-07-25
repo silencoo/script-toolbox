@@ -38,17 +38,64 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 
+select_tty() {
+  if [ -t 0 ]; then
+    TTY_MODE="stdio"
+  elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    TTY_MODE="devtty"
+  else
+    return 1
+  fi
+}
+
+have_tty() {
+  select_tty
+}
+
 ask_yes_no() {
   local ans lower
+  have_tty || return 1
   while true; do
-    printf '%s [y/N] ' "$1"
-    read -r ans
+    if [ "$TTY_MODE" = "stdio" ]; then
+      printf '%s [y/N] ' "$1" >&2
+      IFS= read -r ans || return 1
+    else
+      printf '%s [y/N] ' "$1" > /dev/tty
+      IFS= read -r ans < /dev/tty || return 1
+    fi
     lower="$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')"
     case "$lower" in
       y|yes) return 0 ;;
       n|no|"") return 1 ;;
     esac
   done
+}
+
+prompt_secret() {
+  local label="$1" input
+  have_tty || die "interactive API key input needs a TTY; use --key NAME=value or the provider environment variable"
+  if [ "$TTY_MODE" = "stdio" ]; then
+    printf '%s: ' "$label" >&2
+    stty -echo <&0 2>/dev/null || true
+    if ! IFS= read -r input; then
+      stty echo <&0 2>/dev/null || true
+      printf '\n' >&2
+      die "failed to read API key from the terminal"
+    fi
+    stty echo <&0 2>/dev/null || true
+    printf '\n' >&2
+  else
+    printf '%s: ' "$label" > /dev/tty
+    stty -echo < /dev/tty 2>/dev/null || true
+    if ! IFS= read -r input < /dev/tty; then
+      stty echo < /dev/tty 2>/dev/null || true
+      printf '\n' > /dev/tty
+      die "failed to read API key from the terminal"
+    fi
+    stty echo < /dev/tty 2>/dev/null || true
+    printf '\n' > /dev/tty
+  fi
+  PROMPT_SECRET_REPLY="$input"
 }
 # ---------- end inlined common helpers ----------
 
@@ -172,7 +219,7 @@ ${C_BOLD}Usage:${C_RESET}
 
 ${C_BOLD}Options:${C_RESET}
   --provider <name>          Add a provider. Repeatable. name in {${ALL_PROVIDERS[*]}}
-                             Default: prompt for each one interactively.
+                             Default: choose each MCP interactively via /dev/tty.
   --key NAME=value           API key for provider NAME. Repeatable.
                              Falls back to env: BRAVE_API_KEY, EXA_API_KEY, CONTEXT7_API_KEY.
   --all                      Enable all three providers.
@@ -237,14 +284,19 @@ if [ "$ALL" = 1 ]; then
 fi
 
 if [ ${#PROVIDERS[@]} -eq 0 ]; then
-  if [ ! -t 0 ]; then
-    die "no --provider / --all given and stdin is not a TTY - nothing to do"
+  if ! have_tty; then
+    die "no --provider / --all given and no interactive TTY is available - nothing to do"
   fi
-  info "No --provider flag given - prompting for each."
+  info "Interactive MCP selection - choose each service independently."
   for p in "${ALL_PROVIDERS[@]}"; do
     display="$(p_display "$p")"
     url="$(p_mcp_url "$p")"
-    if ask_yes_no "Enable ${display} (${url})?"; then
+    if [ "$(p_optional "$p")" = "yes" ]; then
+      key_note="API key optional"
+    else
+      key_note="API key required"
+    fi
+    if ask_yes_no "Enable ${display} (${key_note}; ${url})?"; then
       PROVIDERS+=("$p")
     fi
   done
@@ -252,23 +304,26 @@ if [ ${#PROVIDERS[@]} -eq 0 ]; then
     die "no providers selected - nothing to do"
   fi
 fi
+info "Selected MCPs: ${PROVIDERS[*]}"
 
 # Validate names + apply pending --key flags
 for p in "${PROVIDERS[@]}"; do
   p_display "$p" >/dev/null 2>&1 || die "unknown provider: '$p' (valid: ${ALL_PROVIDERS[*]})"
 done
-for kv in "${PENDING_KEYS[@]}"; do
-  k="${kv%%=*}"
-  matched=0
-  for p in "${PROVIDERS[@]}"; do
-    if [ "$k" = "$p" ]; then matched=1; break; fi
+if [ ${#PENDING_KEYS[@]} -gt 0 ]; then
+  for kv in "${PENDING_KEYS[@]}"; do
+    k="${kv%%=*}"
+    matched=0
+    for p in "${PROVIDERS[@]}"; do
+      if [ "$k" = "$p" ]; then matched=1; break; fi
+    done
+    if [ "$matched" = 0 ]; then
+      warn "--key $k=... provided but '$k' isn't in the enabled provider set - ignoring"
+    else
+      set_key "$k" "${kv#*=}"
+    fi
   done
-  if [ "$matched" = 0 ]; then
-    warn "--key $k=... provided but '$k' isn't in the enabled provider set - ignoring"
-  else
-    set_key "$k" "${kv#*=}"
-  fi
-done
+fi
 echo
 
 # ---------- collect keys ----------
@@ -290,28 +345,20 @@ for p in "${PROVIDERS[@]}"; do
     continue
   fi
   if [ "$(p_optional "$p")" = "yes" ]; then
-    if [ -t 0 ] && ask_yes_no "${display} key is optional (higher rate limit). Provide one?"; then
-      printf '%s' "${display} API key (input hidden): "
-      stty -echo 2>/dev/null || true
-      IFS= read -r key_in
-      stty echo 2>/dev/null || true
-      printf '\n'
-      set_key "$p" "$key_in"
+    if have_tty && ask_yes_no "${display} key is optional (higher rate limit). Provide one?"; then
+      prompt_secret "${display} API key (input hidden)"
+      set_key "$p" "$PROMPT_SECRET_REPLY"
     else
       set_key "$p" ""
       info "${display}: proceeding without a key (lower rate limit)"
     fi
   else
-    if [ ! -t 0 ]; then
+    if ! have_tty; then
       die "no key for required provider '${p}' (use --key ${p}=..., or set \$${envname_upper})"
     fi
-    printf '%s' "${display} API key (input hidden): "
-    stty -echo 2>/dev/null || true
-    IFS= read -r key_in
-    stty echo 2>/dev/null || true
-    printf '\n'
-    [ -n "$key_in" ] || die "no key supplied for required provider '${p}'"
-    set_key "$p" "$key_in"
+    prompt_secret "${display} API key (input hidden)"
+    [ -n "$PROMPT_SECRET_REPLY" ] || die "no key supplied for required provider '${p}'"
+    set_key "$p" "$PROMPT_SECRET_REPLY"
   fi
 done
 echo

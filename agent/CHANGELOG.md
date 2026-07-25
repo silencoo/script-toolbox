@@ -10,6 +10,11 @@
   configuration is ready; Pi stages both JSON files before replacing either.
 - Codex MCP blocks now have explicit ownership boundaries. Refresh and
   uninstall preserve user-managed MCP tables.
+- MCP scripts now open an interactive Brave/Exa/Context7 checklist when no
+  provider flags are supplied, including when stdin is occupied by `curl`.
+- Fixed Bash 3.2 handling when no CLI `--key` flags are supplied; each selected
+  MCP can independently use its named flag, environment variable, prompt, or
+  anonymous access where supported.
 - Restored executable modes for all setup, MCP, and uninstall entry points.
 - Expanded isolated tests for dependency installation, invalid-JSON rollback,
   MCP ownership, provider setup, and uninstall.
@@ -18,6 +23,8 @@
 
 - Replaced MiniMax-China defaults with protocol-aware interactive provider and
   model menus.
+- Updated MiniMax China/global presets to the official `MiniMax-M3` default,
+  retaining M2.7, M2.7 Highspeed, and M2.5 as fallback choices.
 - Added current presets for Anthropic, OpenAI, Google Gemini, DeepSeek,
   OpenRouter, and MiniMax China/global, plus custom URL/key/model flows.
 - Added `setup-lib.sh` so local and `curl | bash` installs share TTY-safe

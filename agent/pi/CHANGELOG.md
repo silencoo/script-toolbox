@@ -12,6 +12,8 @@
 - Added the current `@earendil-works/pi-coding-agent` installer.
 - Added interactive Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter,
   MiniMax China/global, and custom-provider selection.
+- MiniMax China/global now default to the official `MiniMax-M3`, with M2.7,
+  M2.7 Highspeed, and M2.5 retained as fallback choices.
 - Added Pi-native Chat Completions, Responses, Anthropic Messages, and Google
   Generative AI protocol choices.
 - Stores credentials in a separate mode-`0600` file and references it through

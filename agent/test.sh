@@ -44,7 +44,7 @@ run_dependency_tests() {
 }
 
 run_config_tests() {
-  local test_root fake_bin test_home bad_home system_path
+  local test_root fake_bin test_home bad_home minimax_home system_path
   command -v jq >/dev/null 2>&1 || {
     echo "skip: isolated provider config tests require jq" >&2
     return 2
@@ -68,6 +68,41 @@ run_config_tests() {
     } > "${fake_bin}/${cmd}"
     chmod +x "${fake_bin}/${cmd}"
   done
+
+  # MiniMax presets must follow the current official model ID when --model is
+  # omitted. Exercise each client that exposes a MiniMax provider.
+  minimax_home="${test_root}/minimax-claude"
+  HOME="$minimax_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider minimax-global --key test-minimax \
+      --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '.model == "MiniMax-M3" and .env.ANTHROPIC_MODEL == "MiniMax-M3"' \
+    "$minimax_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+
+  minimax_home="${test_root}/minimax-opencode"
+  HOME="$minimax_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/opencode/setup.sh" \
+      --provider minimax-global --key test-minimax \
+      --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .model == "script-toolbox-minimax-global/MiniMax-M3"
+    and .provider["script-toolbox-minimax-global"].models["MiniMax-M3"].name == "MiniMax-M3"
+  ' "$minimax_home/.config/opencode/opencode.json" >/dev/null || {
+    rm -rf "$test_root"; return 1;
+  }
+
+  minimax_home="${test_root}/minimax-pi"
+  HOME="$minimax_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/pi/setup.sh" \
+      --provider minimax-global --key test-minimax \
+      --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .defaultProvider == "script-toolbox-minimax-global"
+    and .defaultModel == "MiniMax-M3"
+  ' "$minimax_home/.pi/agent/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .providers["script-toolbox-minimax-global"].models[0].id == "MiniMax-M3"
+  ' "$minimax_home/.pi/agent/models.json" >/dev/null || { rm -rf "$test_root"; return 1; }
 
   printf '%s\n' \
     'export ANTHROPIC_AUTH_TOKEN=stale-token' \
@@ -117,9 +152,9 @@ run_config_tests() {
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    BRAVE_API_KEY='test-"brave\key' \
     "$SCRIPT_DIR/claude-code/mcp.sh" \
-      --provider brave --provider context7 --key 'brave=test-"brave\key' \
-      --skip-validate >/dev/null || {
+      --provider brave --provider context7 --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   jq -e '
@@ -160,9 +195,9 @@ run_config_tests() {
     '[mcp_servers.user_owned]' \
     'url = "https://user.example/mcp"' \
     >> "$test_home/.codex/config.toml"
-  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" BRAVE_API_KEY=test-brave \
     "$SCRIPT_DIR/codex/mcp.sh" \
-      --provider brave --key brave=test-brave --skip-validate >/dev/null || {
+      --provider brave --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
@@ -212,8 +247,9 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    EXA_API_KEY='test-"exa\key' \
     "$SCRIPT_DIR/opencode/mcp.sh" \
-      --provider exa --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
+      --provider exa --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   jq -e '

@@ -11,7 +11,7 @@ package and configures a mainstream or custom provider:
 | Google Gemini | `gemini-3.6-flash` | Google Generative AI |
 | DeepSeek | `deepseek-v4-pro` | OpenAI Chat Completions |
 | OpenRouter | `openai/gpt-5.6` | OpenAI Chat Completions |
-| MiniMax China/global | `MiniMax-M2.7` | Anthropic Messages |
+| MiniMax China/global | `MiniMax-M3` | Anthropic Messages |
 | Custom | user supplied | Chat, Responses, Anthropic, or Google |
 
 Pi currently requires Node.js `22.19.0` or newer. Setup installs the npm package

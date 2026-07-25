@@ -83,8 +83,8 @@ list_providers() {
 anthropic       claude-sonnet-4-6 (default), claude-opus-4-8, claude-fable-5
 deepseek        deepseek-v4-pro (default), deepseek-v4-flash
 openrouter      ~anthropic/claude-sonnet-latest (default), ~anthropic/claude-opus-latest, openrouter/auto
-minimax-cn      MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
-minimax-global  MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
+minimax-cn      MiniMax-M3 (default), MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5
+minimax-global  MiniMax-M3 (default), MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5
 custom          any Anthropic Messages-compatible URL and model ID
 EOF
 }
@@ -214,7 +214,7 @@ case "$PROVIDER" in
     KEY_ENV="MINIMAX_API_KEY"
     AUTH_MODE="auth-token"
     VALIDATION_AUTH="x-api-key"
-    DEFAULT_MODEL="MiniMax-M2.7"
+    DEFAULT_MODEL="MiniMax-M3"
     MODEL_CHOICES="minimax"
     if [ "$PROVIDER" = "minimax-cn" ]; then
       BASE_URL="https://api.minimaxi.com/anthropic"
@@ -283,6 +283,7 @@ if [ -z "$MODEL" ]; then
         ;;
       minimax)
         choose_menu "Choose a model:" 1 \
+          "MiniMax-M3|MiniMax M3" \
           "MiniMax-M2.7|MiniMax M2.7" \
           "MiniMax-M2.7-highspeed|MiniMax M2.7 Highspeed" \
           "MiniMax-M2.5|MiniMax M2.5" \

@@ -8,7 +8,7 @@ Anthropic-Messages-compatible provider. Presets:
 | Anthropic | `claude-sonnet-4-6` | `claude-opus-4-8`, `claude-fable-5` |
 | DeepSeek | `deepseek-v4-pro` | `deepseek-v4-flash` |
 | OpenRouter | `~anthropic/claude-sonnet-latest` | Opus latest, `openrouter/auto` |
-| MiniMax China/global | `MiniMax-M2.7` | M2.7 highspeed, M2.5 |
+| MiniMax China/global | `MiniMax-M3` | M2.7, M2.7 highspeed, M2.5 |
 | Custom | user supplied | any model ID |
 
 The script writes `~/.claude/settings.json`, uses `ANTHROPIC_API_KEY` for

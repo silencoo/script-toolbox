@@ -5,6 +5,9 @@
 - Missing `jq` is installed automatically on supported package managers.
 - Setup and MCP updates validate the existing JSON and atomically replace it;
   failed transforms leave the original settings untouched.
+- Running `mcp.sh` without provider flags now opens an interactive MCP
+  checklist, while named environment keys work without any CLI `--key` flag
+  on Bash 3.2.
 
 ## 2026-07-25 — provider and model menus
 
@@ -12,8 +15,8 @@
   Anthropic-compatible providers.
 - Added interactive current-model menus and `--provider`, `--base-url`,
   `--models-url`, `--key-env`, `--auth-mode`, and `--list-providers`.
-- Updated MiniMax from the nonexistent `MiniMax-M3` default to the documented
-  `MiniMax-M2.7` family, and DeepSeek to V4 Pro/Flash.
+- Updated MiniMax to the official `MiniMax-M3` default while retaining the
+  M2.7 family as fallback choices, and updated DeepSeek to V4 Pro/Flash.
 - Setup prompts now use `/dev/tty`, including one-shot `curl | bash` installs.
 - Settings now retain exactly one Claude credential type; bearer providers no
   longer leave an empty `ANTHROPIC_API_KEY` beside `ANTHROPIC_AUTH_TOKEN`.

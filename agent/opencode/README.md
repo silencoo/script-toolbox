@@ -9,7 +9,7 @@ Installs OpenCode and configures a mainstream or custom provider:
 | Google Gemini | `gemini-3.6-flash` | 3.1 Pro Preview, 3.5 Flash-Lite |
 | DeepSeek | `deepseek-v4-pro` | V4 Flash |
 | OpenRouter | `openai/gpt-5.6` | Claude Sonnet 4.6, Auto |
-| MiniMax China/global | `MiniMax-M2.7` | M2.7 highspeed, M2.5 |
+| MiniMax China/global | `MiniMax-M3` | M2.7, M2.7 highspeed, M2.5 |
 | Custom | user supplied | Chat Completions, Responses, or Anthropic |
 
 The current global configuration path is

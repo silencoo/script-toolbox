@@ -88,8 +88,8 @@ openai          gpt-5.6 (default), gpt-5.6-terra, gpt-5.6-luna
 google          gemini-3.6-flash (default), gemini-3.1-pro-preview, gemini-3.5-flash-lite
 deepseek        deepseek-v4-pro (default), deepseek-v4-flash
 openrouter      openai/gpt-5.6 (default), anthropic/claude-sonnet-4.6, openrouter/auto
-minimax-cn      MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
-minimax-global  MiniMax-M2.7 (default), MiniMax-M2.7-highspeed, MiniMax-M2.5
+minimax-cn      MiniMax-M3 (default), MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5
+minimax-global  MiniMax-M3 (default), MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5
 custom          OpenAI Chat Completions, Responses, Anthropic Messages, or Google Generative AI
 EOF
 }
@@ -296,7 +296,7 @@ case "$PROVIDER" in
     AUTH_HEADER=true
     VALIDATION_AUTH="x-api-key"
     KEY_ENV="MINIMAX_API_KEY"
-    DEFAULT_MODEL="MiniMax-M2.7"
+    DEFAULT_MODEL="MiniMax-M3"
     MODEL_CHOICES="minimax"
     if [ "$PROVIDER" = "minimax-cn" ]; then
       BASE_URL="https://api.minimaxi.com/anthropic"
@@ -398,6 +398,7 @@ if [ -z "$MODEL" ]; then
         ;;
       minimax)
         choose_menu "Choose a model:" 1 \
+          "MiniMax-M3|MiniMax M3" \
           "MiniMax-M2.7|MiniMax M2.7" \
           "MiniMax-M2.7-highspeed|MiniMax M2.7 Highspeed" \
           "MiniMax-M2.5|MiniMax M2.5" \

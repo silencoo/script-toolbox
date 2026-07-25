@@ -5,6 +5,9 @@
 - Setup stages the complete TOML update before rotating credentials.
 - MCP refresh and uninstall now remove only explicitly marked script-owned
   blocks, preserving user-managed MCP tables and unrelated section headers.
+- Running `mcp.sh` without provider flags now opens an interactive MCP
+  checklist, while named environment keys work without any CLI `--key` flag
+  on Bash 3.2.
 - Restored executable modes for the MCP and uninstall entry points.
 
 ## 2026-07-25 — Responses-compatible provider setup
