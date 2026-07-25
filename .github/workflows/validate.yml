@@ -20,7 +20,7 @@ jobs:
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
       - name: Check Bash syntax
-        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/tests/setup-test.sh
+        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh
       - name: Test agent setup scripts
         run: ./agent/test.sh
       - name: Check zsh kit syntax
@@ -28,7 +28,9 @@ jobs:
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.zshrc
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.config/sbx-manager/completions/_claude
       - name: Test Ghostty setup
-        run: ./ghostty/tests/setup-test.sh
+        run: |
+          ./ghostty/tests/setup-test.sh
+          ./ghostty/tests/ssh-terminfo-test.sh
       - name: Install Worker tooling
         run: npm ci
         working-directory: workers/cloudflare-vless

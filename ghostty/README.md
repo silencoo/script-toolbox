@@ -92,6 +92,51 @@ Then connect normally:
 ssh user@example.com
 ```
 
+## Manual SSH terminfo installation
+
+Ghostty's automatic `ssh-terminfo` integration is the preferred option. For
+hosts where the shell wrapper is unavailable, `ssh-terminfo.sh` copies the
+local `xterm-ghostty` entry to the remote user's `~/.terminfo`:
+
+```bash
+./ssh-terminfo.sh user@example.com
+```
+
+Install it system-wide as well when programs run through `sudo` need to resolve
+`xterm-ghostty`:
+
+```bash
+./ssh-terminfo.sh --system user@example.com
+```
+
+The system mode first installs a per-user copy and then runs the equivalent of:
+
+```bash
+infocmp -x xterm-ghostty | sudo tic -x -
+sudo infocmp -x xterm-ghostty >/dev/null
+```
+
+It uses `doas` when `sudo` is unavailable. You can also run the helper directly
+inside an interactive Ghostty SSH session:
+
+```bash
+./ssh-terminfo.sh --system
+```
+
+Check an existing installation without changing it:
+
+```bash
+./ssh-terminfo.sh --check user@example.com
+./ssh-terminfo.sh --check --system user@example.com
+```
+
+The helper reports the current or remote `TERM` during verification. In an
+interactive Ghostty SSH session, the expected value is:
+
+```text
+xterm-ghostty
+```
+
 Ghostty can validate the full configuration with:
 
 ```zsh
@@ -108,8 +153,9 @@ The regression test only uses `--config-only`. It does not install Ghostty or
 enable package repositories:
 
 ```bash
-bash -n setup.sh tests/setup-test.sh
+bash -n setup.sh ssh-terminfo.sh tests/setup-test.sh tests/ssh-terminfo-test.sh
 ./tests/setup-test.sh
+./tests/ssh-terminfo-test.sh
 ```
 
 Official references:
