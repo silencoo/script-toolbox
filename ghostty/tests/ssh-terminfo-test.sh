@@ -70,7 +70,7 @@ PATH="$FAKE_BIN:/usr/bin:/bin" \
 HOME="$TEST_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" > "$TEST_TMP_DIR/user-output"
+  "$ROOT_DIR/ssh-terminfo.sh" --user > "$TEST_TMP_DIR/user-output"
 
 [ -f "$TEST_HOME/.terminfo/xterm-ghostty.compiled" ] \
   || fail "the per-user terminfo entry was not compiled"
@@ -92,12 +92,26 @@ grep -Fq 'sudo infocmp -x xterm-ghostty' "$TEST_LOG" \
 grep -Fq 'is available system-wide' "$TEST_TMP_DIR/system-output" \
   || fail "the system installation was not confirmed"
 
+printf '2\n' | \
+  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  HOME="$TEST_HOME" \
+  TERM=xterm-ghostty \
+  TEST_LOG="$TEST_LOG" \
+    "$ROOT_DIR/ssh-terminfo.sh" > "$TEST_TMP_DIR/menu-output"
+
+grep -Fq 'Ghostty SSH terminfo setup' "$TEST_TMP_DIR/menu-output" \
+  || fail "running without an operation flag did not open the menu"
+grep -Fq 'recommended for sudo' "$TEST_TMP_DIR/menu-output" \
+  || fail "the menu does not explain the system-wide option"
+grep -Fq 'is available system-wide' "$TEST_TMP_DIR/menu-output" \
+  || fail "menu option 2 did not perform a system-wide installation"
+
 PATH="$FAKE_BIN:/usr/bin:/bin" \
 HOME="$TEST_HOME" \
 REMOTE_HOME="$REMOTE_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" server.example.com \
+  "$ROOT_DIR/ssh-terminfo.sh" --user server.example.com \
   > "$TEST_TMP_DIR/remote-user-output"
 
 [ -f "$REMOTE_HOME/.terminfo/xterm-ghostty.compiled" ] \
@@ -121,6 +135,8 @@ grep -Fq 'was installed system-wide' "$TEST_TMP_DIR/remote-system-output" \
 "$ROOT_DIR/ssh-terminfo.sh" --help > "$TEST_TMP_DIR/help-output"
 grep -Fq -- '--system' "$TEST_TMP_DIR/help-output" \
   || fail "help output is missing --system"
+grep -Fq -- '--user' "$TEST_TMP_DIR/help-output" \
+  || fail "help output is missing --user"
 grep -Fq 'user@host' "$TEST_TMP_DIR/help-output" \
   || fail "help output is missing the SSH destination"
 

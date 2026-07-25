@@ -95,15 +95,25 @@ ssh user@example.com
 ## Manual SSH terminfo installation
 
 Ghostty's automatic `ssh-terminfo` integration is the preferred option. For
-hosts where the shell wrapper is unavailable, `ssh-terminfo.sh` copies the
-local `xterm-ghostty` entry to the remote user's `~/.terminfo`:
+hosts where the shell wrapper is unavailable, run `ssh-terminfo.sh` without
+options to choose an action from an interactive menu:
 
 ```bash
-./ssh-terminfo.sh user@example.com
+./ssh-terminfo.sh
 ```
 
-Install it system-wide as well when programs run through `sudo` need to resolve
-`xterm-ghostty`:
+Choose the system-wide option when programs run through `sudo` need to resolve
+`xterm-ghostty`. The menu also supports per-user installation and both
+verification modes.
+
+To skip the menu, use an explicit option. This copies the local
+`xterm-ghostty` entry to a remote user's `~/.terminfo`:
+
+```bash
+./ssh-terminfo.sh --user user@example.com
+```
+
+Install it system-wide as well:
 
 ```bash
 ./ssh-terminfo.sh --system user@example.com
