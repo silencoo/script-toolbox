@@ -120,15 +120,14 @@ toml_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-remove_state_key() {
+previous_key_file() {
   local old_key=""
   [ -f "$STATE_FILE" ] || return 0
   old_key="$(sed -n '1p' "$STATE_FILE")"
   case "$old_key" in
-    "$KEY_DIR"/*.key) rm -f "$old_key" ;;
-    *) warn "ignoring unexpected key path in $STATE_FILE" ;;
+    "$KEY_DIR"/*.key) printf '%s' "$old_key" ;;
+    *) warn "ignoring unexpected key path in $STATE_FILE"; return 0 ;;
   esac
-  rm -f "$STATE_FILE"
 }
 
 while [ $# -gt 0 ]; do
@@ -160,15 +159,23 @@ if [ "$UNINSTALL" = 1 ]; then
   if ! grep -qF "$BEGIN_MARKER" "$SETTINGS_FILE" && ! grep -q "$MANAGED_BY" "$SETTINGS_FILE"; then
     die "no $MANAGED_BY marker; refusing to touch config.toml"
   fi
-  TMP="$(mktemp)"
-  strip_managed_block "$SETTINGS_FILE" "$TMP"
-  if grep -q "$MANAGED_BY" "$TMP" 2>/dev/null; then
-    strip_legacy_minimax "$TMP" "${TMP}.legacy"
-    mv "${TMP}.legacy" "$TMP"
+  OLD_KEY_FILE="$(previous_key_file)"
+  TMP="$(make_temp_near "$SETTINGS_FILE")"
+  if ! strip_managed_block "$SETTINGS_FILE" "$TMP"; then
+    rm -f "$TMP"
+    die "failed to prepare config.toml update"
   fi
-  mv "$TMP" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
-  remove_state_key
+  if grep -q "$MANAGED_BY" "$TMP" 2>/dev/null; then
+    TMP_LEGACY="$(make_temp_near "$SETTINGS_FILE")"
+    if ! strip_legacy_minimax "$TMP" "$TMP_LEGACY"; then
+      rm -f "$TMP" "$TMP_LEGACY"
+      die "failed to remove the legacy Codex block"
+    fi
+    mv "$TMP_LEGACY" "$TMP"
+  fi
+  replace_file "$TMP" "$SETTINGS_FILE"
+  [ -z "$OLD_KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
+  rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY provider/profile and credential"
   exit 0
 fi
@@ -295,15 +302,20 @@ elif grep -q "\\[profiles.${PROFILE_NAME}\\]" "$SETTINGS_FILE" 2>/dev/null && [ 
   die "profile '$PROFILE_NAME' already exists but is not marked as ours; use --force"
 fi
 
-TMP="$(mktemp)"
-strip_managed_block "$SETTINGS_FILE" "$TMP"
-if grep -q "$MANAGED_BY" "$TMP" 2>/dev/null; then
-  strip_legacy_minimax "$TMP" "${TMP}.legacy"
-  mv "${TMP}.legacy" "$TMP"
+OLD_KEY_FILE="$(previous_key_file)"
+TMP="$(make_temp_near "$SETTINGS_FILE")"
+if ! strip_managed_block "$SETTINGS_FILE" "$TMP"; then
+  rm -f "$TMP"
+  die "failed to prepare config.toml update"
 fi
-
-remove_state_key
-write_secret_file "$KEY_FILE" "$KEY"
+if grep -q "$MANAGED_BY" "$TMP" 2>/dev/null; then
+  TMP_LEGACY="$(make_temp_near "$SETTINGS_FILE")"
+  if ! strip_legacy_minimax "$TMP" "$TMP_LEGACY"; then
+    rm -f "$TMP" "$TMP_LEGACY"
+    die "failed to upgrade the legacy Codex block"
+  fi
+  mv "$TMP_LEGACY" "$TMP"
+fi
 
 ESC_DISPLAY="$(toml_escape "$DISPLAY_NAME")"
 ESC_BASE="$(toml_escape "$BASE_URL")"
@@ -327,8 +339,10 @@ ESC_KEY_FILE="$(toml_escape "$KEY_FILE")"
   printf 'model_provider = "%s"\n' "$PROVIDER_ID"
   printf '%s\n' "$END_MARKER"
 } >> "$TMP"
-mv "$TMP" "$SETTINGS_FILE"
-chmod 600 "$SETTINGS_FILE"
+
+write_secret_file "$KEY_FILE" "$KEY"
+replace_file "$TMP" "$SETTINGS_FILE"
+[ -z "$OLD_KEY_FILE" ] || [ "$OLD_KEY_FILE" = "$KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
 write_secret_file "$STATE_FILE" "$KEY_FILE"
 ok "wrote $SETTINGS_FILE and a separate chmod-600 credential"
 

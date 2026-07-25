@@ -1,5 +1,11 @@
 # Changelog — claude-code (agent)
 
+## 2026-07-25 — reliable JSON updates
+
+- Missing `jq` is installed automatically on supported package managers.
+- Setup and MCP updates validate the existing JSON and atomically replace it;
+  failed transforms leave the original settings untouched.
+
 ## 2026-07-25 — provider and model menus
 
 - Added Anthropic, DeepSeek, OpenRouter, MiniMax China/global, and custom

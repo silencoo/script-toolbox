@@ -101,10 +101,9 @@ migrate_legacy_file() {
 }
 
 remove_previous_provider() {
-  local file="$1" output="$2" old_id="" old_key=""
+  local file="$1" output="$2" old_id=""
   if [ -f "$STATE_FILE" ]; then
     old_id="$(sed -n '1p' "$STATE_FILE")"
-    old_key="$(sed -n '2p' "$STATE_FILE")"
     case "$old_id" in
       script-toolbox-*)
         jq --arg id "$old_id" '
@@ -115,11 +114,6 @@ remove_previous_provider() {
         ' "$file" > "$output"
         ;;
       *) die "unexpected provider ID in $STATE_FILE; refusing to remove it" ;;
-    esac
-    case "$old_key" in
-      "$KEY_DIR"/*.key) rm -f "$old_key" ;;
-      "") ;;
-      *) warn "ignoring unexpected key path in $STATE_FILE" ;;
     esac
   else
     # Migration for the old MiniMax-only setup, which put a private marker in
@@ -133,6 +127,17 @@ remove_previous_provider() {
       else . end
     ' "$file" > "$output"
   fi
+}
+
+previous_key_file() {
+  local path=""
+  [ -f "$STATE_FILE" ] || return 0
+  path="$(sed -n '2p' "$STATE_FILE")"
+  case "$path" in
+    "$KEY_DIR"/*.key) printf '%s' "$path" ;;
+    "") ;;
+    *) die "unexpected key path in $STATE_FILE; refusing to continue" ;;
+  esac
 }
 
 while [ $# -gt 0 ]; do
@@ -160,24 +165,31 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   exit 0
 fi
 
-command -v jq >/dev/null 2>&1 || die "jq is required (apt/brew install jq)"
 mkdir -p "$SETTINGS_DIR"
 migrate_legacy_file
 
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no opencode.json at $SETTINGS_FILE"
+  ensure_jq
+  require_json_object "$SETTINGS_FILE"
   [ -f "$STATE_FILE" ] || {
     legacy="$(jq -r '.provider.anthropic._managed_by // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
     [ "$legacy" = "$MANAGED_BY" ] || die "no $MANAGED_BY state marker; refusing to touch opencode.json"
   }
-  TMP="$(mktemp)"
-  remove_previous_provider "$SETTINGS_FILE" "$TMP"
-  mv "$TMP" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  OLD_KEY_FILE="$(previous_key_file)"
+  TMP="$(make_temp_near "$SETTINGS_FILE")"
+  if ! remove_previous_provider "$SETTINGS_FILE" "$TMP"; then
+    rm -f "$TMP"
+    die "failed to update $SETTINGS_FILE; the original file was left unchanged"
+  fi
+  replace_file "$TMP" "$SETTINGS_FILE"
+  [ -z "$OLD_KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
   rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY provider and credential"
   exit 0
 fi
+
+ensure_jq
 
 if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
   case "$REGION" in
@@ -396,7 +408,7 @@ ensure_npm_cli opencode opencode-ai "OpenCode"
 if [ ! -f "$SETTINGS_FILE" ]; then
   printf '{}\n' > "$SETTINGS_FILE"
 fi
-jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
+require_json_object "$SETTINGS_FILE"
 
 PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
 [ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
@@ -404,12 +416,15 @@ PROVIDER_ID="script-toolbox-${PROVIDER_SUFFIX}"
 KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
 KEY_REFERENCE="{file:${KEY_FILE}}"
 
-TMP_CLEAN="$(mktemp)"
-remove_previous_provider "$SETTINGS_FILE" "$TMP_CLEAN"
-write_secret_file "$KEY_FILE" "$KEY"
+OLD_KEY_FILE="$(previous_key_file)"
+TMP_CLEAN="$(make_temp_near "$SETTINGS_FILE")"
+if ! remove_previous_provider "$SETTINGS_FILE" "$TMP_CLEAN"; then
+  rm -f "$TMP_CLEAN"
+  die "failed to prepare $SETTINGS_FILE; the original file was left unchanged"
+fi
 
-TMP_OUT="$(mktemp)"
-jq \
+TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+if ! jq \
   --arg id "$PROVIDER_ID" \
   --arg npm "$NPM_PACKAGE" \
   --arg name "$DISPLAY_NAME (script-toolbox)" \
@@ -432,15 +447,15 @@ jq \
       }
     }
   | .model = ($id + "/" + $model)
-' "$TMP_CLEAN" > "$TMP_OUT"
-mv "$TMP_OUT" "$SETTINGS_FILE"
+' "$TMP_CLEAN" > "$TMP_OUT"; then
+  rm -f "$TMP_CLEAN" "$TMP_OUT"
+  die "failed to update $SETTINGS_FILE with jq; the original file was left unchanged"
+fi
 rm -f "$TMP_CLEAN"
-chmod 600 "$SETTINGS_FILE"
-{
-  printf '%s\n' "$PROVIDER_ID"
-  printf '%s\n' "$KEY_FILE"
-} > "$STATE_FILE"
-chmod 600 "$STATE_FILE"
+write_secret_file "$KEY_FILE" "$KEY"
+replace_file "$TMP_OUT" "$SETTINGS_FILE"
+[ -z "$OLD_KEY_FILE" ] || [ "$OLD_KEY_FILE" = "$KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
+write_secret_file "$STATE_FILE" "$(printf '%s\n%s' "$PROVIDER_ID" "$KEY_FILE")"
 ok "wrote $SETTINGS_FILE and a separate chmod-600 credential"
 
 echo

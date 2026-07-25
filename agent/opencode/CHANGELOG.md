@@ -1,5 +1,12 @@
 # Changelog — opencode (agent)
 
+## 2026-07-25 — failure-safe configuration updates
+
+- Missing `jq` is installed automatically on supported package managers.
+- Provider credentials are rotated only after a valid replacement config is
+  ready, and setup/MCP transforms atomically replace `opencode.json`.
+- Restored executable modes for the MCP and uninstall entry points.
+
 ## 2026-07-25 — mainstream and custom providers
 
 - Added Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, MiniMax

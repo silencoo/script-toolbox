@@ -49,6 +49,60 @@ ask_yes_no() {
     esac
   done
 }
+
+detect_pm() {
+  if   command -v apt-get >/dev/null 2>&1; then echo "apt"
+  elif command -v dnf     >/dev/null 2>&1; then echo "dnf"
+  elif command -v yum     >/dev/null 2>&1; then echo "yum"
+  elif command -v brew    >/dev/null 2>&1; then echo "brew"
+  elif command -v apk     >/dev/null 2>&1; then echo "apk"
+  else echo "none"
+  fi
+}
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    die "administrator privileges are required for package installation; install jq manually or add sudo"
+  fi
+}
+
+ensure_jq() {
+  local pm
+  command -v jq >/dev/null 2>&1 && return 0
+  pm="$(detect_pm)"
+  warn "jq not found - installing it because JSON configuration cannot be updated without it"
+  case "$pm" in
+    apt)     run_as_root apt-get install -y jq ;;
+    dnf|yum) run_as_root "$pm" install -y jq ;;
+    brew)    brew install jq ;;
+    apk)     run_as_root apk add --no-cache jq ;;
+    *)       die "jq is required, and no supported package manager was found; install jq manually and re-run" ;;
+  esac
+  command -v jq >/dev/null 2>&1 || die "jq installation finished but jq is still not on PATH"
+}
+
+make_temp_near() {
+  mktemp "${1}.tmp.XXXXXX"
+}
+
+replace_file() {
+  local temporary="$1" target="$2"
+  chmod 600 "$temporary"
+  mv "$temporary" "$target"
+}
+
+require_json_object() {
+  jq -e 'type == "object"' "$1" >/dev/null 2>&1 ||
+    die "$1 is not a valid JSON object; it was left unchanged"
+}
+
+json_quote() {
+  jq -Rn --arg value "$1" '$value'
+}
 # ---------- end inlined common helpers ----------
 
 # ---------- defaults ----------
@@ -165,23 +219,28 @@ fi
 # ---------- uninstall path ----------
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no opencode.json at $SETTINGS_FILE"
-  command -v jq >/dev/null 2>&1 || die "jq is required for --uninstall"
+  ensure_jq
+  require_json_object "$SETTINGS_FILE"
   info "Removing mcp.* entries written by ${MANAGED_BY}..."
-  jq --arg mgr "$MANAGED_BY" '
+  TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+  if ! jq --arg mgr "$MANAGED_BY" '
     .mcp = (
       (.mcp // {})
       | with_entries(select(.value._managed_by != $mgr))
     )
     | if (.mcp // {}) == {} then del(.mcp) else . end
-  ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  ' "$SETTINGS_FILE" > "$TMP_OUT"; then
+    rm -f "$TMP_OUT"
+    die "failed to prepare opencode.json update"
+  fi
+  replace_file "$TMP_OUT" "$SETTINGS_FILE"
   ok "removed ${MANAGED_BY}-owned entries from $SETTINGS_FILE"
   exit 0
 fi
 
 # ---------- preflight ----------
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
-command -v jq   >/dev/null 2>&1 || die "jq is required (install with apt/brew)"
+ensure_jq
 
 # ---------- resolve provider set ----------
 if [ "$ALL" = 1 ]; then
@@ -339,13 +398,14 @@ TMP_NEW="$(mktemp)"
     prefix="$(p_prefix "$p")"
     key="$(get_key "$p")"
 
-    printf '    "%s": {\n' "$p"
+    printf '    %s: {\n' "$(json_quote "$p")"
     printf '      "type": "http",\n'
-    printf '      "url": "%s",\n' "$url"
+    printf '      "url": %s,\n' "$(json_quote "$url")"
     if [ -n "$key" ]; then
-      printf '      "headers": { "%s": "%s%s" },\n' "$hdr" "$prefix" "$key"
+      printf '      "headers": { %s: %s },\n' \
+        "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
     fi
-    printf '      "_managed_by": "%s"\n' "$MANAGED_BY"
+    printf '      "_managed_by": %s\n' "$(json_quote "$MANAGED_BY")"
     printf '    }'
   done
   printf '\n  }\n}\n'
@@ -366,6 +426,7 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   printf '{}\n' > "$SETTINGS_FILE"
   chmod 600 "$SETTINGS_FILE"
 fi
+require_json_object "$SETTINGS_FILE"
 
 # Pre-check: any provider whose URL differs from what's already there?
 conflict=0
@@ -381,14 +442,16 @@ if [ "$conflict" = 1 ] && [ "$FORCE" != 1 ]; then
   die "opencode.json has existing mcp entries with different URLs - re-run with --force to overwrite."
 fi
 
-TMP_OUT="$(mktemp)"
-jq --slurpfile new "$TMP_NEW" --arg mgr "$MANAGED_BY" '
+TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+if ! jq --slurpfile new "$TMP_NEW" --arg mgr "$MANAGED_BY" '
   .mcp = (.mcp // {})
   | reduce ($new[0].mcp | to_entries[]) as $e (.;
       .mcp[$e.key] = ($e.value + { _managed_by: $mgr }))
-    )
-' "$SETTINGS_FILE" > "$TMP_OUT" && mv "$TMP_OUT" "$SETTINGS_FILE"
-chmod 600 "$SETTINGS_FILE"
+' "$SETTINGS_FILE" > "$TMP_OUT"; then
+  rm -f "$TMP_NEW" "$TMP_OUT"
+  die "failed to merge MCP entries; opencode.json was left unchanged"
+fi
+replace_file "$TMP_OUT" "$SETTINGS_FILE"
 rm -f "$TMP_NEW"
 ok "wrote $SETTINGS_FILE (chmod 600)"
 echo

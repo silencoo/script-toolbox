@@ -1,5 +1,12 @@
 # Changelog — codex (agent)
 
+## 2026-07-25 — ownership-safe updates
+
+- Setup stages the complete TOML update before rotating credentials.
+- MCP refresh and uninstall now remove only explicitly marked script-owned
+  blocks, preserving user-managed MCP tables and unrelated section headers.
+- Restored executable modes for the MCP and uninstall entry points.
+
 ## 2026-07-25 — Responses-compatible provider setup
 
 - Replaced the obsolete MiniMax Chat Completions block with OpenAI,

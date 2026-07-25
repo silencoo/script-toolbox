@@ -116,7 +116,8 @@ fi
 
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
-  command -v jq >/dev/null 2>&1 || die "jq is required for --uninstall"
+  ensure_jq
+  require_json_object "$SETTINGS_FILE"
   [ -f "$STATE_FILE" ] || {
     existing="$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
     case "$existing" in
@@ -124,7 +125,8 @@ if [ "$UNINSTALL" = 1 ]; then
       *) die "no $MANAGED_BY state marker; refusing to remove possibly user-owned settings" ;;
     esac
   }
-  jq '
+  TMP="$(make_temp_near "$SETTINGS_FILE")"
+  if ! jq '
     if .env then
       del(
         .env.ANTHROPIC_BASE_URL,
@@ -141,12 +143,17 @@ if [ "$UNINSTALL" = 1 ]; then
       | if .env == {} then del(.env) else . end
     else . end
     | del(.model)
-  ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  ' "$SETTINGS_FILE" > "$TMP"; then
+    rm -f "$TMP"
+    die "failed to update $SETTINGS_FILE with jq; the original file was left unchanged"
+  fi
+  replace_file "$TMP" "$SETTINGS_FILE"
   rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY settings"
   exit 0
 fi
+
+ensure_jq
 
 if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
   case "$REGION" in
@@ -312,7 +319,6 @@ info "Model    : $MODEL"
 echo
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
-command -v jq >/dev/null 2>&1 || die "jq is required (apt/brew install jq)"
 
 if [ "$SKIP_VALIDATE" = 1 ]; then
   warn "--skip-validate set; skipping provider probe"
@@ -337,7 +343,7 @@ mkdir -p "$SETTINGS_DIR"
 if [ ! -f "$SETTINGS_FILE" ]; then
   printf '{}\n' > "$SETTINGS_FILE"
 fi
-jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
+require_json_object "$SETTINGS_FILE"
 
 existing_url="$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE")"
 if [ -n "$existing_url" ] && [ "$existing_url" != "$BASE_URL" ] && [ ! -f "$STATE_FILE" ]; then
@@ -347,8 +353,8 @@ if [ -n "$existing_url" ] && [ "$existing_url" != "$BASE_URL" ] && [ ! -f "$STAT
   esac
 fi
 
-TMP="$(mktemp)"
-jq \
+TMP="$(make_temp_near "$SETTINGS_FILE")"
+if ! jq \
   --arg url "$BASE_URL" \
   --arg token "$KEY" \
   --arg model "$MODEL" \
@@ -371,8 +377,11 @@ jq \
        | .env.API_TIMEOUT_MS = "3000000"
     else del(.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, .env.API_TIMEOUT_MS)
     end
-' "$SETTINGS_FILE" > "$TMP" && mv "$TMP" "$SETTINGS_FILE"
-chmod 600 "$SETTINGS_FILE"
+' "$SETTINGS_FILE" > "$TMP"; then
+  rm -f "$TMP"
+  die "failed to update $SETTINGS_FILE with jq; the original file was left unchanged"
+fi
+replace_file "$TMP" "$SETTINGS_FILE"
 write_secret_file "$STATE_FILE" "$PROVIDER"
 ok "wrote $SETTINGS_FILE (chmod 600)"
 

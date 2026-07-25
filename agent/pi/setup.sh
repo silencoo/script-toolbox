@@ -96,27 +96,28 @@ EOF
 
 remove_previous_provider() {
   local models_input="$1" models_output="$2" settings_input="$3" settings_output="$4"
-  local old_id="" old_key="" old_default_provider="" old_default_model=""
+  local old_id="" old_default_provider="" old_default_model=""
 
   if [ ! -f "$STATE_FILE" ]; then
-    cp "$models_input" "$models_output"
-    cp "$settings_input" "$settings_output"
+    cp "$models_input" "$models_output" || return 1
+    cp "$settings_input" "$settings_output" || return 1
     return 0
   fi
 
   old_id="$(sed -n '1p' "$STATE_FILE")"
-  old_key="$(sed -n '2p' "$STATE_FILE")"
   old_default_provider="$(sed -n '3p' "$STATE_FILE")"
   old_default_model="$(sed -n '4p' "$STATE_FILE")"
   old_default_provider="${old_default_provider:-$STATE_UNSET}"
   old_default_model="${old_default_model:-$STATE_UNSET}"
   case "$old_id" in
     script-toolbox-*)
-      jq --arg id "$old_id" '
+      if ! jq --arg id "$old_id" '
         del(.providers[$id])
         | if (.providers // {}) == {} then del(.providers) else . end
-      ' "$models_input" > "$models_output"
-      jq \
+      ' "$models_input" > "$models_output"; then
+        return 1
+      fi
+      if ! jq \
         --arg id "$old_id" \
         --arg old_provider "$old_default_provider" \
         --arg old_model "$old_default_model" \
@@ -131,15 +132,22 @@ remove_previous_provider() {
             end
         else .
         end
-      ' "$settings_input" > "$settings_output"
+      ' "$settings_input" > "$settings_output"; then
+        return 1
+      fi
       ;;
     *) die "unexpected provider ID in $STATE_FILE; refusing to remove it" ;;
   esac
+}
 
-  case "$old_key" in
-    "$KEY_DIR"/*.key) rm -f "$old_key" ;;
+previous_key_file() {
+  local path=""
+  [ -f "$STATE_FILE" ] || return 0
+  path="$(sed -n '2p' "$STATE_FILE")"
+  case "$path" in
+    "$KEY_DIR"/*.key) printf '%s' "$path" ;;
     "") ;;
-    *) warn "ignoring unexpected key path in $STATE_FILE" ;;
+    *) die "unexpected key path in $STATE_FILE; refusing to continue" ;;
   esac
 }
 
@@ -169,25 +177,35 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   exit 0
 fi
 
-command -v jq >/dev/null 2>&1 || die "jq is required (apt/brew install jq)"
-mkdir -p "$SETTINGS_DIR"
-[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
-[ -f "$MODELS_FILE" ] || printf '{}\n' > "$MODELS_FILE"
-jq empty "$SETTINGS_FILE" >/dev/null 2>&1 || die "$SETTINGS_FILE is not valid JSON"
-jq empty "$MODELS_FILE" >/dev/null 2>&1 || die "$MODELS_FILE is not valid JSON"
-
 if [ "$UNINSTALL" = 1 ]; then
+  [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
+  [ -f "$MODELS_FILE" ] || die "no models.json at $MODELS_FILE"
   [ -f "$STATE_FILE" ] || die "no $MANAGED_BY state marker; refusing to touch Pi configuration"
-  TMP_MODELS="$(mktemp)"
-  TMP_SETTINGS="$(mktemp)"
-  remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"
-  mv "$TMP_MODELS" "$MODELS_FILE"
-  mv "$TMP_SETTINGS" "$SETTINGS_FILE"
-  chmod 600 "$MODELS_FILE" "$SETTINGS_FILE"
+  ensure_jq
+  require_json_object "$SETTINGS_FILE"
+  require_json_object "$MODELS_FILE"
+  OLD_KEY_FILE="$(previous_key_file)"
+  TMP_MODELS="$(make_temp_near "$MODELS_FILE")"
+  TMP_SETTINGS="$(make_temp_near "$SETTINGS_FILE")"
+  if ! remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"; then
+    rm -f "$TMP_MODELS" "$TMP_SETTINGS"
+    die "failed to update Pi configuration; the original files were left unchanged"
+  fi
+  if ! replace_file_pair "$TMP_MODELS" "$MODELS_FILE" "$TMP_SETTINGS" "$SETTINGS_FILE"; then
+    die "failed to replace Pi configuration; both original files were restored"
+  fi
+  [ -z "$OLD_KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
   rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY provider and credential"
   exit 0
 fi
+
+ensure_jq
+mkdir -p "$SETTINGS_DIR"
+[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
+[ -f "$MODELS_FILE" ] || printf '{}\n' > "$MODELS_FILE"
+require_json_object "$SETTINGS_FILE"
+require_json_object "$MODELS_FILE"
 
 if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
   case "$REGION" in
@@ -463,13 +481,16 @@ else
   ORIGINAL_DEFAULT_MODEL="${ORIGINAL_DEFAULT_MODEL:-$STATE_UNSET}"
 fi
 
-TMP_MODELS="$(mktemp)"
-TMP_SETTINGS="$(mktemp)"
-remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"
-write_secret_file "$KEY_FILE" "$KEY"
+OLD_KEY_FILE="$(previous_key_file)"
+TMP_MODELS="$(make_temp_near "$MODELS_FILE")"
+TMP_SETTINGS="$(make_temp_near "$SETTINGS_FILE")"
+if ! remove_previous_provider "$MODELS_FILE" "$TMP_MODELS" "$SETTINGS_FILE" "$TMP_SETTINGS"; then
+  rm -f "$TMP_MODELS" "$TMP_SETTINGS"
+  die "failed to prepare Pi configuration; the original files were left unchanged"
+fi
 
-TMP_OUT="$(mktemp)"
-jq \
+TMP_MODELS_OUT="$(make_temp_near "$MODELS_FILE")"
+if ! jq \
   --arg id "$PROVIDER_ID" \
   --arg base "$BASE_URL" \
   --arg api "$API_TYPE" \
@@ -490,27 +511,30 @@ jq \
         }
       ]
     }
-' "$TMP_MODELS" > "$TMP_OUT"
-mv "$TMP_OUT" "$MODELS_FILE"
-rm -f "$TMP_MODELS"
+' "$TMP_MODELS" > "$TMP_MODELS_OUT"; then
+  rm -f "$TMP_MODELS" "$TMP_SETTINGS" "$TMP_MODELS_OUT"
+  die "failed to update $MODELS_FILE with jq; the original files were left unchanged"
+fi
 
-jq \
+TMP_SETTINGS_OUT="$(make_temp_near "$SETTINGS_FILE")"
+if ! jq \
   --arg id "$PROVIDER_ID" \
   --arg model "$MODEL" '
   .defaultProvider = $id
   | .defaultModel = $model
-' "$TMP_SETTINGS" > "$TMP_OUT"
-mv "$TMP_OUT" "$SETTINGS_FILE"
-rm -f "$TMP_SETTINGS"
+' "$TMP_SETTINGS" > "$TMP_SETTINGS_OUT"; then
+  rm -f "$TMP_MODELS" "$TMP_SETTINGS" "$TMP_MODELS_OUT" "$TMP_SETTINGS_OUT"
+  die "failed to update $SETTINGS_FILE with jq; the original files were left unchanged"
+fi
+rm -f "$TMP_MODELS" "$TMP_SETTINGS"
 
-chmod 600 "$MODELS_FILE" "$SETTINGS_FILE"
-{
-  printf '%s\n' "$PROVIDER_ID"
-  printf '%s\n' "$KEY_FILE"
-  printf '%s\n' "$ORIGINAL_DEFAULT_PROVIDER"
-  printf '%s\n' "$ORIGINAL_DEFAULT_MODEL"
-} > "$STATE_FILE"
-chmod 600 "$STATE_FILE"
+write_secret_file "$KEY_FILE" "$KEY"
+if ! replace_file_pair "$TMP_MODELS_OUT" "$MODELS_FILE" "$TMP_SETTINGS_OUT" "$SETTINGS_FILE"; then
+  die "failed to replace Pi configuration; both original files were restored"
+fi
+[ -z "$OLD_KEY_FILE" ] || [ "$OLD_KEY_FILE" = "$KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
+write_secret_file "$STATE_FILE" "$(printf '%s\n%s\n%s\n%s' \
+  "$PROVIDER_ID" "$KEY_FILE" "$ORIGINAL_DEFAULT_PROVIDER" "$ORIGINAL_DEFAULT_MODEL")"
 ok "wrote Pi models/settings and a separate chmod-600 credential"
 
 echo

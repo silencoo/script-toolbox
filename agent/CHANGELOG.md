@@ -1,5 +1,19 @@
 # Changelog — agent/
 
+## 2026-07-25 — failure-safe configuration updates
+
+- JSON-based setup and MCP scripts now install `jq` automatically instead of
+  failing after the client has already been installed.
+- Configuration changes use validated, same-directory temporary files and
+  stop without reporting success when a transform fails.
+- OpenCode, Codex, and Pi keep the previous credential until the replacement
+  configuration is ready; Pi stages both JSON files before replacing either.
+- Codex MCP blocks now have explicit ownership boundaries. Refresh and
+  uninstall preserve user-managed MCP tables.
+- Restored executable modes for all setup, MCP, and uninstall entry points.
+- Expanded isolated tests for dependency installation, invalid-JSON rollback,
+  MCP ownership, provider setup, and uninstall.
+
 ## 2026-07-25 — interactive multi-provider setup
 
 - Replaced MiniMax-China defaults with protocol-aware interactive provider and

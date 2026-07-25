@@ -52,6 +52,60 @@ ask_yes_no() {
     esac
   done
 }
+
+detect_pm() {
+  if   command -v apt-get >/dev/null 2>&1; then echo "apt"
+  elif command -v dnf     >/dev/null 2>&1; then echo "dnf"
+  elif command -v yum     >/dev/null 2>&1; then echo "yum"
+  elif command -v brew    >/dev/null 2>&1; then echo "brew"
+  elif command -v apk     >/dev/null 2>&1; then echo "apk"
+  else echo "none"
+  fi
+}
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    die "administrator privileges are required for package installation; install jq manually or add sudo"
+  fi
+}
+
+ensure_jq() {
+  local pm
+  command -v jq >/dev/null 2>&1 && return 0
+  pm="$(detect_pm)"
+  warn "jq not found - installing it because JSON configuration cannot be updated without it"
+  case "$pm" in
+    apt)     run_as_root apt-get install -y jq ;;
+    dnf|yum) run_as_root "$pm" install -y jq ;;
+    brew)    brew install jq ;;
+    apk)     run_as_root apk add --no-cache jq ;;
+    *)       die "jq is required, and no supported package manager was found; install jq manually and re-run" ;;
+  esac
+  command -v jq >/dev/null 2>&1 || die "jq installation finished but jq is still not on PATH"
+}
+
+make_temp_near() {
+  mktemp "${1}.tmp.XXXXXX"
+}
+
+replace_file() {
+  local temporary="$1" target="$2"
+  chmod 600 "$temporary"
+  mv "$temporary" "$target"
+}
+
+require_json_object() {
+  jq -e 'type == "object"' "$1" >/dev/null 2>&1 ||
+    die "$1 is not a valid JSON object; it was left unchanged"
+}
+
+json_quote() {
+  jq -Rn --arg value "$1" '$value'
+}
 # ---------- end inlined common helpers ----------
 
 # ---------- defaults ----------
@@ -182,23 +236,28 @@ echo
 # ---------- uninstall path ----------
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
-  command -v jq >/dev/null 2>&1 || die "jq is required for --uninstall"
+  ensure_jq
+  require_json_object "$SETTINGS_FILE"
   info "Removing MCP entries written by ${MANAGED_BY}..."
-  jq --arg mgr "$MANAGED_BY" '
+  TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+  if ! jq --arg mgr "$MANAGED_BY" '
     .mcpServers = (
       (.mcpServers // {})
       | with_entries(select(.value._managed_by != $mgr))
     )
     | if (.mcpServers // {}) == {} then del(.mcpServers) else . end
-  ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  ' "$SETTINGS_FILE" > "$TMP_OUT"; then
+    rm -f "$TMP_OUT"
+    die "failed to prepare settings.json update"
+  fi
+  replace_file "$TMP_OUT" "$SETTINGS_FILE"
   ok "removed ${MANAGED_BY}-owned entries from $SETTINGS_FILE"
   exit 0
 fi
 
 # ---------- preflight ----------
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
-command -v jq   >/dev/null 2>&1 || die "jq is required (install with apt/brew)"
+ensure_jq
 
 # ---------- resolve provider set ----------
 if [ "$ALL" = 1 ]; then
@@ -357,16 +416,20 @@ TMP_NEW="$(mktemp)"
     key="$(get_key "$p")"
     env_var="$(p_env "$p")"
 
-    printf '    "%s": {\n' "$p"
+    printf '    %s: {\n' "$(json_quote "$p")"
     printf '      "type": "http",\n'
-    printf '      "url": "%s",\n' "$url"
+    printf '      "url": %s' "$(json_quote "$url")"
     if [ -n "$key" ]; then
-      printf '      "headers": { "%s": "%s%s" }' "$hdr" "$prefix" "$key"
+      printf ',\n      "headers": { %s: %s }' \
+        "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
       if [ -n "$env_var" ]; then
-        printf ',\n      "env": { "%s": "%s" }\n' "$env_var" "$key"
+        printf ',\n      "env": { %s: %s }\n' \
+          "$(json_quote "$env_var")" "$(json_quote "$key")"
       else
         printf '\n'
       fi
+    else
+      printf '\n'
     fi
     printf '    }'
   done
@@ -385,6 +448,7 @@ mkdir -p "$SETTINGS_DIR"
 [ -w "$SETTINGS_DIR" ] || die "$SETTINGS_DIR is not writable - fix permissions and re-run"
 
 if [ -f "$SETTINGS_FILE" ]; then
+  require_json_object "$SETTINGS_FILE"
   conflict=0
   for p in "${PROVIDERS[@]}"; do
     new_url="$(p_mcp_url "$p")"
@@ -402,14 +466,16 @@ else
   chmod 600 "$SETTINGS_FILE"
 fi
 
-TMP_OUT="$(mktemp)"
-jq --slurpfile new "$TMP_NEW" --arg mgr "$MANAGED_BY" '
+TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+if ! jq --slurpfile new "$TMP_NEW" --arg mgr "$MANAGED_BY" '
   .mcpServers = (.mcpServers // {})
   | reduce ($new[0].mcpServers | to_entries[]) as $e (.;
       .mcpServers[$e.key] = ($e.value + { _managed_by: $mgr }))
-    )
-' "$SETTINGS_FILE" > "$TMP_OUT" && mv "$TMP_OUT" "$SETTINGS_FILE"
-chmod 600 "$SETTINGS_FILE"
+' "$SETTINGS_FILE" > "$TMP_OUT"; then
+  rm -f "$TMP_NEW" "$TMP_OUT"
+  die "failed to merge MCP entries; settings.json was left unchanged"
+fi
+replace_file "$TMP_OUT" "$SETTINGS_FILE"
 rm -f "$TMP_NEW"
 ok "wrote $SETTINGS_FILE (chmod 600)"
 echo

@@ -112,6 +112,94 @@ detect_pm() {
   fi
 }
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    die "administrator privileges are required for package installation; install jq manually or add sudo"
+  fi
+}
+
+install_jq() {
+  local pm
+  pm="$(detect_pm)"
+  case "$pm" in
+    apt)
+      info "Installing jq via apt..."
+      run_as_root apt-get install -y jq
+      ;;
+    dnf|yum)
+      info "Installing jq via ${pm}..."
+      run_as_root "$pm" install -y jq
+      ;;
+    brew)
+      info "Installing jq via Homebrew..."
+      brew install jq
+      ;;
+    apk)
+      info "Installing jq via apk..."
+      run_as_root apk add --no-cache jq
+      ;;
+    *)
+      die "jq is required, and no supported package manager was found; install jq manually and re-run"
+      ;;
+  esac
+}
+
+ensure_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    warn "jq not found - installing it because JSON configuration cannot be updated without it"
+    install_jq
+  fi
+  command -v jq >/dev/null 2>&1 ||
+    die "jq installation finished but jq is still not on PATH"
+  ok "jq $(jq --version 2>/dev/null || printf installed)"
+}
+
+make_temp_near() {
+  local target="$1"
+  mktemp "${target}.tmp.XXXXXX"
+}
+
+replace_file() {
+  local temporary="$1" target="$2" mode="${3:-600}"
+  chmod "$mode" "$temporary"
+  mv "$temporary" "$target"
+}
+
+replace_file_pair() {
+  local temporary_a="$1" target_a="$2" temporary_b="$3" target_b="$4"
+  local backup_a backup_b
+  backup_a="$(make_temp_near "$target_a")" || return 1
+  if ! backup_b="$(make_temp_near "$target_b")"; then
+    rm -f "$backup_a"
+    return 1
+  fi
+  if ! cp -p "$target_a" "$backup_a" || ! cp -p "$target_b" "$backup_b"; then
+    rm -f "$backup_a" "$backup_b"
+    return 1
+  fi
+  if ! chmod 600 "$temporary_a" "$temporary_b"; then
+    rm -f "$backup_a" "$backup_b"
+    return 1
+  fi
+  if ! mv "$temporary_a" "$target_a" || ! mv "$temporary_b" "$target_b"; then
+    mv "$backup_a" "$target_a" 2>/dev/null || true
+    mv "$backup_b" "$target_b" 2>/dev/null || true
+    rm -f "$temporary_a" "$temporary_b" "$backup_a" "$backup_b"
+    return 1
+  fi
+  rm -f "$backup_a" "$backup_b"
+}
+
+require_json_object() {
+  local path="$1"
+  jq -e 'type == "object"' "$path" >/dev/null 2>&1 ||
+    die "$path is not a valid JSON object; it was left unchanged"
+}
+
 install_node() {
   local pm
   pm="$(detect_pm)"
@@ -239,11 +327,15 @@ validate_model_api() {
 }
 
 write_secret_file() {
-  local path="$1" value="$2"
+  local path="$1" value="$2" temporary
   mkdir -p "$(dirname "$path")"
   umask 077
-  printf '%s\n' "$value" > "$path"
-  chmod 600 "$path"
+  temporary="$(make_temp_near "$path")"
+  if ! printf '%s\n' "$value" > "$temporary"; then
+    rm -f "$temporary"
+    die "failed to write $path; the original file was left unchanged"
+  fi
+  replace_file "$temporary" "$path"
 }
 
 safe_id() {

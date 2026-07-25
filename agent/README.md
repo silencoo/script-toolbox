@@ -44,7 +44,8 @@ backward-compatible shortcut for MiniMax where MiniMax is supported.
 The setup scripts share [`setup-lib.sh`](./setup-lib.sh). When a per-agent
 script is run through `curl ... | bash`, it downloads that helper from the
 same repository; prompts read from `/dev/tty`, so one-shot interactive use
-still works.
+still works. Scripts that update JSON install `jq` automatically through
+apt, dnf/yum, Homebrew, or apk when it is missing.
 
 ## Credentials
 

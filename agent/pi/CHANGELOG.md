@@ -1,5 +1,12 @@
 # Changelog — Pi
 
+## 2026-07-25 — transactional setup
+
+- Missing `jq` is installed automatically on supported package managers.
+- Both Pi JSON updates are generated successfully before either file is
+  replaced, and the previous credential is retained until the new config is
+  ready.
+
 ## 2026-07-25
 
 - Added the current `@earendil-works/pi-coding-agent` installer.

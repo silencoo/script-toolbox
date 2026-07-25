@@ -23,8 +23,28 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$SCRIPT_DIR" -type f -name '*.sh' -print0)
 
+run_dependency_tests() {
+  bash -c '
+    set -euo pipefail
+    # shellcheck source=setup-lib.sh
+    . "$1"
+    installed=0
+    command() {
+      if [ "${1:-}" = "-v" ] && [ "${2:-}" = "jq" ]; then
+        [ "$installed" = 1 ]
+      else
+        builtin command "$@"
+      fi
+    }
+    install_jq() { installed=1; }
+    jq() { printf "jq-test\n"; }
+    ensure_jq >/dev/null
+    [ "$installed" = 1 ]
+  ' bash "$SCRIPT_DIR/setup-lib.sh"
+}
+
 run_config_tests() {
-  local test_root fake_bin test_home system_path
+  local test_root fake_bin test_home bad_home system_path
   command -v jq >/dev/null 2>&1 || {
     echo "skip: isolated provider config tests require jq" >&2
     return 2
@@ -71,6 +91,22 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
 
+  # Invalid JSON must fail closed: --force never authorizes replacing a broken
+  # settings file, and the original bytes must remain untouched.
+  bad_home="${test_root}/bad-home"
+  mkdir -p "$bad_home/.claude"
+  printf '%s\n' '{invalid-json' > "$bad_home/.claude/settings.json"
+  cp "$bad_home/.claude/settings.json" "$bad_home/settings.before"
+  if HOME="$bad_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 --key test-invalid \
+      --skip-validate --force >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
+  cmp -s "$bad_home/settings.before" "$bad_home/.claude/settings.json" || {
+    rm -rf "$test_root"; return 1;
+  }
+
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/claude-code/setup.sh" \
       --provider openrouter --model openrouter/auto --key test-claude-token \
@@ -78,6 +114,29 @@ run_config_tests() {
   jq -e '
     .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
     and .env.ANTHROPIC_API_KEY == null
+    and .model == "openrouter/auto"
+  ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/mcp.sh" \
+      --provider brave --provider context7 --key 'brave=test-"brave\key' \
+      --skip-validate >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+  jq -e '
+    .mcpServers.brave._managed_by == "agent/claude-code/mcp.sh"
+    and .mcpServers.brave.headers["X-Subscription-Token"] == "test-\"brave\\key"
+    and .mcpServers.context7._managed_by == "agent/claude-code/mcp.sh"
+    and .mcpServers.context7.headers == null
+    and .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
+    and .model == "openrouter/auto"
+  ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/mcp.sh" --uninstall >/dev/null || {
+      rm -rf "$test_root"; return 1;
+    }
+  jq -e '
+    .mcpServers == null
+    and .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
 
@@ -91,6 +150,49 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
   [ "$(stat -c '%a' "$test_home/.codex/provider-keys/script_toolbox_openrouter.key" 2>/dev/null || stat -f '%Lp' "$test_home/.codex/provider-keys/script_toolbox_openrouter.key")" = "600" ] || {
+    rm -rf "$test_root"; return 1;
+  }
+
+  # Codex MCP refresh/uninstall must preserve user-owned MCP tables and the
+  # provider/profile tables written by setup.sh.
+  printf '%s\n' \
+    '' \
+    '[mcp_servers.user_owned]' \
+    'url = "https://user.example/mcp"' \
+    >> "$test_home/.codex/config.toml"
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/mcp.sh" \
+      --provider brave --key brave=test-brave --skip-validate >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/mcp.sh" \
+      --provider exa --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+  grep -q '\[mcp_servers.user_owned\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  ! grep -q '\[mcp_servers.brave\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -q '\[mcp_servers.exa\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -qF '"Authorization" = "Bearer test-\"exa\\key"' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -q '\[model_providers.script_toolbox_openrouter\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/mcp.sh" --uninstall >/dev/null || {
+      rm -rf "$test_root"; return 1;
+    }
+  grep -q '\[mcp_servers.user_owned\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  ! grep -q '\[mcp_servers.exa\]' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
 
@@ -109,6 +211,26 @@ run_config_tests() {
   [ "$(stat -c '%a' "$test_home/.config/opencode/provider-keys/script-toolbox-google.key" 2>/dev/null || stat -f '%Lp' "$test_home/.config/opencode/provider-keys/script-toolbox-google.key")" = "600" ] || {
     rm -rf "$test_root"; return 1;
   }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/opencode/mcp.sh" \
+      --provider exa --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+  jq -e '
+    .mcp.exa._managed_by == "agent/opencode/mcp.sh"
+    and .mcp.exa.headers.Authorization == "Bearer test-\"exa\\key"
+    and .provider["script-toolbox-google"].npm == "@ai-sdk/google"
+    and .model == "script-toolbox-google/gemini-3.6-flash"
+  ' "$test_home/.config/opencode/opencode.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/opencode/mcp.sh" --uninstall >/dev/null || {
+      rm -rf "$test_root"; return 1;
+    }
+  jq -e '
+    .mcp == null
+    and .provider["script-toolbox-google"].npm == "@ai-sdk/google"
+    and .model == "script-toolbox-google/gemini-3.6-flash"
+  ' "$test_home/.config/opencode/opencode.json" >/dev/null || { rm -rf "$test_root"; return 1; }
 
   mkdir -p "$test_home/.pi/agent"
   printf '%s\n' \
@@ -181,6 +303,13 @@ run_config_tests() {
 }
 
 config_test_status=0
+if run_dependency_tests; then
+  echo "ok  : missing jq triggers automatic installation"
+else
+  echo "FAIL: missing jq did not trigger automatic installation" >&2
+  fail=1
+fi
+
 run_config_tests || config_test_status=$?
 if [ "$config_test_status" -eq 0 ]; then
   echo "ok  : isolated provider config + uninstall"

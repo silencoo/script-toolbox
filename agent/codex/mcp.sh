@@ -12,7 +12,7 @@
 # What it never touches:
 #   [model_providers.*] - owned by setup.sh
 #   [profiles.*] - owned by setup.sh
-#   Anything not under [mcp_servers.*]
+#   User-managed [mcp_servers.*] entries
 
 set -euo pipefail
 
@@ -67,6 +67,9 @@ SETTINGS_FILE="${SETTINGS_DIR}/config.toml"
 # NOTE: marker string for entries this script owns. Don't change without
 # bumping a migration step.
 MANAGED_BY="agent/codex/mcp.sh"
+BEGIN_MARKER="# >>> ${MANAGED_BY} >>>"
+END_MARKER="# <<< ${MANAGED_BY} <<<"
+LEGACY_MARKER="# Managed by ${MANAGED_BY}"
 
 get_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1" ] && { printf '%s' "${PROVIDER_KEYS[$i]:-}"; return 0; }; done; return 1; }
 set_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1" ] && { PROVIDER_KEYS["$i"]="$2"; return 0; }; done; return 1; }
@@ -103,6 +106,61 @@ p_hdr()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_HDR[$i
 p_prefix()   { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_PREFIX[$i]}"; }
 p_val_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_VAL_URL[$i]}"; }
 p_optional() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_OPTIONAL[$i]}"; }
+
+toml_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+strip_owned_mcp_blocks() {
+  local input="$1" output="$2"
+  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v legacy="$LEGACY_MARKER" '
+    $0 == begin  { in_marked = 1; next }
+    $0 == end && in_marked { in_marked = 0; next }
+    in_marked    { next }
+    $0 == legacy { in_legacy = 1; in_legacy_block = 0; next }
+    /^\[[^]]+\]/ {
+      sec = $0
+      gsub(/^\[/, "", sec); gsub(/\].*$/, "", sec)
+      if (in_legacy && sec ~ /^mcp_servers\.(brave|exa|context7)(\.headers)?$/) {
+        in_legacy_block = 1
+        next
+      }
+      in_legacy = 0
+      in_legacy_block = 0
+      print
+      next
+    }
+    in_legacy || in_legacy_block { next }
+    { print }
+    END { if (in_marked) exit 2 }
+  ' "$input" > "$output"
+}
+
+strip_selected_mcp_blocks() {
+  local input="$1" output="$2" selected="$3"
+  awk -v selected=" $selected " '
+    /^\[[^]]+\]/ {
+      sec = $0
+      gsub(/^\[/, "", sec); gsub(/\].*$/, "", sec)
+      name = sec
+      sub(/^mcp_servers\./, "", name)
+      sub(/\.headers$/, "", name)
+      skip = (sec ~ /^mcp_servers\./ && index(selected, " " name " ") > 0)
+    }
+    skip { next }
+    { print }
+  ' "$input" > "$output"
+}
+
+make_temp_near() {
+  mktemp "${1}.tmp.XXXXXX"
+}
+
+replace_file() {
+  local temporary="$1" target="$2"
+  chmod 600 "$temporary"
+  mv "$temporary" "$target"
+}
 
 # ---------- usage ----------
 usage() {
@@ -156,20 +214,16 @@ echo
 # ---------- uninstall path ----------
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no config.toml at $SETTINGS_FILE"
+  if ! grep -qF "$BEGIN_MARKER" "$SETTINGS_FILE" && ! grep -qF "$LEGACY_MARKER" "$SETTINGS_FILE"; then
+    die "no ${MANAGED_BY} marker; refusing to modify config.toml"
+  fi
   info "Removing [mcp_servers.*] entries written by ${MANAGED_BY}..."
-  awk -v mgr="$MANAGED_BY" '
-    BEGIN { in_block = "" }
-    /^\[[^]]+\]/ {
-      if (in_block != "") { in_block = "" }
-      sec = $0
-      gsub(/^\[/, "", sec); gsub(/\].*$/, "", sec)
-      if (sec ~ /^mcp_servers\./) { in_block = "strip" }
-      next
-    }
-    in_block == "strip" { next }
-    { print }
-  ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-  chmod 600 "$SETTINGS_FILE"
+  TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+  if ! strip_owned_mcp_blocks "$SETTINGS_FILE" "$TMP_OUT"; then
+    rm -f "$TMP_OUT"
+    die "failed to prepare config.toml update"
+  fi
+  replace_file "$TMP_OUT" "$SETTINGS_FILE"
   ok "removed ${MANAGED_BY}-owned entries from $SETTINGS_FILE"
   exit 0
 fi
@@ -325,20 +379,23 @@ echo
 # ---------- build the [mcp_servers.*] TOML block ----------
 TMP_NEW="$(mktemp)"
 {
-  printf '\n# Managed by %s\n' "$MANAGED_BY"
+  printf '\n%s\n' "$BEGIN_MARKER"
   for p in "${PROVIDERS[@]}"; do
     url="$(p_mcp_url "$p")"
     hdr="$(p_hdr "$p")"
     prefix="$(p_prefix "$p")"
     key="$(get_key "$p")"
+    escaped_header="$(toml_escape "$hdr")"
+    escaped_value="$(toml_escape "${prefix}${key}")"
 
     printf '\n[mcp_servers.%s]\n' "$p"
     printf 'url = "%s"\n' "$url"
     if [ -n "$key" ]; then
       printf '\n[mcp_servers.%s.headers]\n' "$p"
-      printf '"%s" = "%s%s"\n' "$hdr" "$prefix" "$key"
+      printf '"%s" = "%s"\n' "$escaped_header" "$escaped_value"
     fi
   done
+  printf '%s\n' "$END_MARKER"
 } > "$TMP_NEW"
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -357,22 +414,42 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   chmod 600 "$SETTINGS_FILE"
 fi
 
-# Strip any prior [mcp_servers.*] blocks written by this script, then append fresh.
-awk -v mgr="$MANAGED_BY" '
-  BEGIN { in_block = "" }
-  /^\[[^]]+\]/ {
-    if (in_block != "") { in_block = "" }
-    sec = $0
-    gsub(/^\[/, "", sec); gsub(/\].*$/, "", sec)
-    if (sec ~ /^mcp_servers\./) { in_block = "strip" }
-    next
-  }
-  in_block == "strip" { next }
-  { print }
-' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-cat "$TMP_NEW" >> "$SETTINGS_FILE"
+# Strip only this script's prior block. User-owned entries survive unless a
+# selected provider has the same table name and --force explicitly authorizes
+# replacing that one entry.
+TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
+if ! strip_owned_mcp_blocks "$SETTINGS_FILE" "$TMP_OUT"; then
+  rm -f "$TMP_NEW" "$TMP_OUT"
+  die "failed to prepare config.toml update"
+fi
+
+conflict=0
+for p in "${PROVIDERS[@]}"; do
+  if grep -qE "^\\[mcp_servers\\.${p}(\\.headers)?\\][[:space:]]*$" "$TMP_OUT"; then
+    warn "mcp_servers.${p} already exists and is not marked as ours"
+    conflict=1
+  fi
+done
+if [ "$conflict" = 1 ]; then
+  if [ "$FORCE" != 1 ]; then
+    rm -f "$TMP_NEW" "$TMP_OUT"
+    die "config.toml has user-managed entries with the same names; re-run with --force to replace only those entries"
+  fi
+  SELECTED="${PROVIDERS[*]}"
+  TMP_FORCE="$(make_temp_near "$SETTINGS_FILE")"
+  if ! strip_selected_mcp_blocks "$TMP_OUT" "$TMP_FORCE" "$SELECTED"; then
+    rm -f "$TMP_NEW" "$TMP_OUT" "$TMP_FORCE"
+    die "failed to replace selected MCP entries"
+  fi
+  mv "$TMP_FORCE" "$TMP_OUT"
+fi
+
+if ! cat "$TMP_NEW" >> "$TMP_OUT"; then
+  rm -f "$TMP_NEW" "$TMP_OUT"
+  die "failed to build config.toml update"
+fi
+replace_file "$TMP_OUT" "$SETTINGS_FILE"
 rm -f "$TMP_NEW"
-chmod 600 "$SETTINGS_FILE"
 ok "wrote $SETTINGS_FILE (chmod 600)"
 echo
 
