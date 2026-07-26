@@ -243,7 +243,7 @@ function Import-SetupConfig {
       }
     }
   }
-  $script:SelectedPackages = @($selected)
+  $script:SelectedPackages = $selected.ToArray()
 }
 
 function Show-Profiles {
