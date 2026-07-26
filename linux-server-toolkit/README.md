@@ -48,6 +48,23 @@ sudo env \
   ./server-toolkit.sh
 ```
 
+SSH 模块在交互模式下可选择将公钥配置给 `root`、已有普通用户，或跳过
+`authorized_keys`。非交互模式默认保持使用 `root`；可通过
+`SSH_KEY_TARGET=root|none|用户名` 显式指定。若目标账户尚无公钥，可同时通过
+`SSH_PUBLIC_KEY` 提供要追加的公钥：
+
+```bash
+sudo env \
+  NON_INTERACTIVE=1 \
+  SSH_KEY_TARGET=deploy \
+  SSH_PUBLIC_KEY="ssh-ed25519 AAAA... admin@example" \
+  INIT_PROFILE=minimal \
+  ./server-toolkit.sh
+```
+
+选择普通用户时，该账户必须已存在、具有可登录 Shell 和有效主目录。脚本只有在
+确认其公钥与 sudo 管理权限后，才会提供禁用 root 登录或所有 SSH 密码认证的选项。
+
 远程脚本默认要求可信 SHA256。可通过 `REMOTE_SCRIPT_SHA256` 提供单次摘要，或使用仅 root 可写的校验文件：
 
 ```text

@@ -11,6 +11,8 @@
 #
 # 环境变量:
 # - NON_INTERACTIVE=1  非交互模式（自动使用默认值）
+# - SSH_KEY_TARGET=root|none|用户名  SSH 公钥目标；非交互模式默认 root
+# - SSH_PUBLIC_KEY="ssh-ed25519 ..."  非交互模式要追加到目标账户的 SSH 公钥
 # - ALLOW_EXTERNAL=1   非交互模式允许外部下载
 # - ALLOW_REMOTE_EXEC=1 非交互模式允许执行远程脚本（比外部下载更高风险）
 # - ALLOW_DANGEROUS=1  非交互模式允许危险操作；未固定摘要的远程脚本还需要此开关
@@ -52,6 +54,8 @@ ROLLBACK_ENABLED="${ROLLBACK_ENABLED:-true}"  # true/false
 ACTION_ROLLBACK_MODE="${ACTION_ROLLBACK_MODE:-auto}"  # auto/prompt/always/never
 RESOURCE_CHECK_STRICT="${RESOURCE_CHECK_STRICT:-0}"  # 1=资源告警返回非零
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"  # 1=非交互模式
+SSH_KEY_TARGET="${SSH_KEY_TARGET:-}"      # root/none/现有用户名；留空时交互选择
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"      # 非交互模式可追加到目标账户的公钥
 ALLOW_EXTERNAL="${ALLOW_EXTERNAL:-0}"    # 1=非交互模式允许外部资源
 ALLOW_REMOTE_EXEC="${ALLOW_REMOTE_EXEC:-0}"  # 1=非交互模式允许执行远程脚本
 ALLOW_DANGEROUS="${ALLOW_DANGEROUS:-0}"  # 1=非交互模式允许危险操作
@@ -4092,6 +4096,36 @@ authorized_keys_has_valid_key() {
     [ -s "$key_file" ] && validate_authorized_keys_candidate "$key_file"
 }
 
+authorized_keys_is_usable_for_user() {
+    local target_user="$1" target_home="$2"
+    local ssh_dir="$target_home/.ssh" key_file="$target_home/.ssh/authorized_keys"
+    local uid key_uid dir_uid home_uid key_mode dir_mode home_mode
+
+    authorized_keys_has_valid_key "$key_file" || return 1
+    uid="$(id -u "$target_user")" || return 1
+    key_uid="$(stat -c '%u' "$key_file" 2>/dev/null)" || return 1
+    dir_uid="$(stat -c '%u' "$ssh_dir" 2>/dev/null)" || return 1
+    home_uid="$(stat -c '%u' "$target_home" 2>/dev/null)" || return 1
+    key_mode="$(stat -c '%a' "$key_file" 2>/dev/null)" || return 1
+    dir_mode="$(stat -c '%a' "$ssh_dir" 2>/dev/null)" || return 1
+    home_mode="$(stat -c '%a' "$target_home" 2>/dev/null)" || return 1
+
+    if [ "$key_uid" -ne "$uid" ] || [ "$dir_uid" -ne "$uid" ]; then
+        log_warning "$target_user 的 .ssh/authorized_keys 所有者不正确"
+        return 1
+    fi
+    if [ "$home_uid" -ne "$uid" ] && [ "$home_uid" -ne 0 ]; then
+        log_warning "$target_user 的主目录所有者既不是该用户也不是 root"
+        return 1
+    fi
+    if [ $((8#$key_mode & 022)) -ne 0 ] || \
+       [ $((8#$dir_mode & 022)) -ne 0 ] || \
+       [ $((8#$home_mode & 022)) -ne 0 ]; then
+        log_warning "$target_user 的主目录、.ssh 或 authorized_keys 可被组/其他用户写入"
+        return 1
+    fi
+}
+
 install_authorized_key() {
     local target_user="$1" target_home="$2" public_key="$3"
     local ssh_dir key_file key_type key_blob uid gid candidate
@@ -4115,6 +4149,122 @@ install_authorized_key() {
     [ -f "$key_file" ] && cp -- "$key_file" "$candidate"
     printf '%s\n' "$public_key" >> "$candidate"
     atomic_install_file "$key_file" "$candidate" "SSH authorized_keys" 600 "$uid" "$gid" validate_authorized_keys_candidate
+}
+
+validate_ssh_key_target_user() {
+    local target_user="$1" require_non_root="${2:-false}"
+    local uid target_home login_shell
+
+    if ! id "$target_user" > /dev/null 2>&1; then
+        log_error "SSH 密钥目标用户不存在: $target_user"
+        return 1
+    fi
+    uid="$(id -u "$target_user")" || return 1
+    if [ "$require_non_root" = true ] && [ "$uid" -eq 0 ]; then
+        log_error "普通用户选项不能使用 UID 0 账户: $target_user"
+        return 1
+    fi
+
+    target_home="$(get_user_home "$target_user")"
+    case "$target_home" in
+        /*) ;;
+        *)
+            log_error "用户 $target_user 的主目录不是绝对路径: $target_home"
+            return 1
+            ;;
+    esac
+    if [ "$target_home" = "/" ] || [ ! -d "$target_home" ]; then
+        log_error "用户 $target_user 的主目录不可用于 SSH 密钥: $target_home"
+        return 1
+    fi
+
+    login_shell="$(getent passwd "$target_user" 2>/dev/null | cut -d: -f7 || true)"
+    case "$login_shell" in
+        */nologin|*/false)
+            log_error "用户 $target_user 使用不可登录 Shell: $login_shell"
+            return 1
+            ;;
+    esac
+}
+
+user_has_sudo_access() {
+    local target_user="$1"
+
+    if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qxE 'sudo|wheel'; then
+        return 0
+    fi
+    command -v sudo > /dev/null 2>&1 && sudo -n -l -U "$target_user" > /dev/null 2>&1
+}
+
+select_ssh_key_target() {
+    local target_spec="${SSH_KEY_TARGET:-}" choice="" preferred_user="" require_non_root=false
+    SSH_SELECTED_USER=""
+    SSH_SELECTED_HOME=""
+
+    if [ -z "$target_spec" ] && [ "$NON_INTERACTIVE" = "1" ]; then
+        target_spec="root"
+        log_info "[非交互] SSH 密钥目标默认使用 root；可通过 SSH_KEY_TARGET 覆盖"
+    fi
+
+    if [ -z "$target_spec" ]; then
+        preferred_user="$(detect_preferred_user)"
+        if [ -n "$preferred_user" ] && id "$preferred_user" > /dev/null 2>&1 && \
+           [ "$(id -u "$preferred_user")" -ne 0 ]; then
+            printf '%b\n' "${CYAN}SSH 公钥目标账户:${PLAIN}"
+            printf '%b\n' "  1) root"
+            printf '%b\n' "  2) 已有普通用户 ${CYAN}[建议: $preferred_user]${PLAIN}"
+            printf '%b\n' "  3) 不处理 authorized_keys，仅配置 SSH 服务"
+            read -r -p "请选择 [1-3，默认 2]: " choice || return 1
+            choice="${choice:-2}"
+        else
+            printf '%b\n' "${CYAN}SSH 公钥目标账户:${PLAIN}"
+            printf '%b\n' "  1) root"
+            printf '%b\n' "  2) 已有普通用户"
+            printf '%b\n' "  3) 不处理 authorized_keys，仅配置 SSH 服务"
+            read -r -p "请选择 [1-3，默认 1]: " choice || return 1
+            choice="${choice:-1}"
+        fi
+
+        case "$choice" in
+            1)
+                target_spec="root"
+                ;;
+            2)
+                read -r -p "请输入已有普通用户名${preferred_user:+ [默认 $preferred_user]}: " target_spec || return 1
+                target_spec="${target_spec:-$preferred_user}"
+                [ -n "$target_spec" ] || {
+                    log_error "普通用户名不能为空"
+                    return 1
+                }
+                require_non_root=true
+                ;;
+            3)
+                target_spec="none"
+                ;;
+            *)
+                log_error "无效的 SSH 公钥目标选项: $choice"
+                return 1
+                ;;
+        esac
+    fi
+
+    case "${target_spec,,}" in
+        none|skip)
+            log_info "已选择不处理任何用户的 authorized_keys"
+            return 0
+            ;;
+        root)
+            target_spec="root"
+            ;;
+        *)
+            require_non_root=true
+            ;;
+    esac
+
+    validate_ssh_key_target_user "$target_spec" "$require_non_root" || return 1
+    SSH_SELECTED_USER="$target_spec"
+    SSH_SELECTED_HOME="$(get_user_home "$target_spec")"
+    log_info "SSH 公钥目标账户: $SSH_SELECTED_USER ($SSH_SELECTED_HOME)"
 }
 
 set_sshd_directive_in_file() {
@@ -4161,7 +4311,7 @@ reload_ssh_service() {
 
 function action_configure_ssh_transactional() {
     local config_file="/etc/ssh/sshd_config" candidate current_port ssh_port user_key
-    local has_key=false disable_password="n" disable_root_password="n" port_changed=false
+    local has_key=false target_has_sudo=false disable_password="n" root_login_change="none" port_changed=false
 
     if [ "$DRY_RUN" = "1" ]; then
         dry_run_action_plan action_configure_ssh
@@ -4174,7 +4324,15 @@ function action_configure_ssh_transactional() {
     cp -- "$config_file" "$candidate" || { rm -f -- "$candidate"; return 1; }
     current_port="$(sshd -T -f "$candidate" 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
     current_port="${current_port:-22}"
-    read -r -p "请输入新的 SSH 端口 [当前 ${current_port}，留空保持]: " ssh_port
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        ssh_port="$current_port"
+        log_info "[非交互] 保持当前 SSH 端口: $ssh_port"
+    else
+        read -r -p "请输入新的 SSH 端口 [当前 ${current_port}，留空保持]: " ssh_port || {
+            rm -f -- "$candidate"
+            return 1
+        }
+    fi
     ssh_port="${ssh_port:-$current_port}"
     validate_port "$ssh_port" || { rm -f -- "$candidate"; log_error "SSH 端口无效"; return 1; }
     if [ "$ssh_port" != "$current_port" ]; then
@@ -4186,33 +4344,104 @@ function action_configure_ssh_transactional() {
         port_changed=true
     fi
 
-    if authorized_keys_has_valid_key /root/.ssh/authorized_keys; then
-        has_key=true
-        log_success "检测到 root 已配置有效 SSH 公钥"
+    if ! select_ssh_key_target; then
+        rm -f -- "$candidate"
+        return 1
     fi
-    read -r -p "粘贴要追加的 root SSH 公钥 [留空跳过]: " user_key
-    if [ -n "$user_key" ]; then
-        install_authorized_key root /root "$user_key" || { rm -f -- "$candidate"; return 1; }
-        has_key=true
+    if [ -n "$SSH_SELECTED_USER" ]; then
+        if authorized_keys_is_usable_for_user "$SSH_SELECTED_USER" "$SSH_SELECTED_HOME"; then
+            has_key=true
+            log_success "检测到 $SSH_SELECTED_USER 已配置可用的 SSH 公钥"
+        fi
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            user_key="$SSH_PUBLIC_KEY"
+            if [ -n "$user_key" ]; then
+                log_info "[非交互] 将验证并追加 SSH_PUBLIC_KEY 到 $SSH_SELECTED_USER"
+            else
+                log_info "[非交互] 未提供 SSH_PUBLIC_KEY，仅检查现有 authorized_keys"
+            fi
+        else
+            read -r -p "粘贴要追加到 $SSH_SELECTED_USER 的 SSH 公钥 [留空跳过]: " user_key || {
+                rm -f -- "$candidate"
+                return 1
+            }
+        fi
+        if [ -n "$user_key" ]; then
+            install_authorized_key "$SSH_SELECTED_USER" "$SSH_SELECTED_HOME" "$user_key" || {
+                rm -f -- "$candidate"
+                return 1
+            }
+            if authorized_keys_is_usable_for_user "$SSH_SELECTED_USER" "$SSH_SELECTED_HOME"; then
+                has_key=true
+            else
+                log_warning "公钥已写入，但目录所有权或权限不满足安全校验"
+            fi
+        fi
+        if [ "$has_key" = true ] && [ "$SSH_SELECTED_USER" != "root" ] && \
+           user_has_sudo_access "$SSH_SELECTED_USER"; then
+            target_has_sudo=true
+            log_success "已确认 $SSH_SELECTED_USER 具备 sudo 管理权限"
+        fi
     fi
 
-    set_sshd_directive_in_file "$candidate" Port "$ssh_port" || return 1
-    set_sshd_directive_in_file "$candidate" PermitEmptyPasswords no || return 1
-    set_sshd_directive_in_file "$candidate" X11Forwarding no || return 1
-    set_sshd_directive_in_file "$candidate" MaxAuthTries 3 || return 1
+    set_sshd_directive_in_file "$candidate" Port "$ssh_port" || { rm -f -- "$candidate"; return 1; }
+    set_sshd_directive_in_file "$candidate" PermitEmptyPasswords no || { rm -f -- "$candidate"; return 1; }
+    set_sshd_directive_in_file "$candidate" X11Forwarding no || { rm -f -- "$candidate"; return 1; }
+    set_sshd_directive_in_file "$candidate" MaxAuthTries 3 || { rm -f -- "$candidate"; return 1; }
     if [ "$has_key" = true ]; then
-        set_sshd_directive_in_file "$candidate" PubkeyAuthentication yes || return 1
-        if confirm_action "是否禁用 root 密码登录（保留 root 公钥登录）?" "y"; then
-            disable_root_password="y"
-            set_sshd_directive_in_file "$candidate" PermitRootLogin prohibit-password || return 1
+        set_sshd_directive_in_file "$candidate" PubkeyAuthentication yes || { rm -f -- "$candidate"; return 1; }
+        if [ "$SSH_SELECTED_USER" = "root" ]; then
+            if confirm_action "是否禁用 root 密码登录（保留 root 公钥登录）?" "y"; then
+                root_login_change="prohibit-password"
+                set_sshd_directive_in_file "$candidate" PermitRootLogin prohibit-password || {
+                    rm -f -- "$candidate"
+                    return 1
+                }
+            fi
+        elif [ "$target_has_sudo" = true ]; then
+            if confirm_action "是否禁用 root SSH 登录（使用 $SSH_SELECTED_USER + sudo 管理）?" "n"; then
+                root_login_change="disabled"
+                set_sshd_directive_in_file "$candidate" PermitRootLogin no || {
+                    rm -f -- "$candidate"
+                    return 1
+                }
+            fi
+        else
+            log_warning "$SSH_SELECTED_USER 没有可确认的 sudo 权限，不提供禁用 root SSH 登录选项"
         fi
-        if confirm_action "是否禁用所有 SSH 密码认证?" "n"; then
-            disable_password="y"
-            set_sshd_directive_in_file "$candidate" PasswordAuthentication no || return 1
-            set_sshd_directive_in_file "$candidate" KbdInteractiveAuthentication no || return 1
+
+        if [ "$SSH_SELECTED_USER" = "root" ] || [ "$target_has_sudo" = true ]; then
+            if confirm_action "是否禁用所有 SSH 密码认证?" "n"; then
+                disable_password="y"
+                set_sshd_directive_in_file "$candidate" PasswordAuthentication no || {
+                    rm -f -- "$candidate"
+                    return 1
+                }
+                set_sshd_directive_in_file "$candidate" KbdInteractiveAuthentication no || {
+                    rm -f -- "$candidate"
+                    return 1
+                }
+            fi
+        else
+            log_warning "缺少已验证的公钥管理账户，不提供禁用所有 SSH 密码认证选项"
         fi
+    elif [ -n "$SSH_SELECTED_USER" ]; then
+        log_warning "未检测到 $SSH_SELECTED_USER 的有效公钥，不提供禁用登录方式的选项"
     else
-        log_warning "未检测到有效 root 公钥，不提供禁用密码登录选项"
+        log_info "未选择 SSH 密钥目标，不修改 PubkeyAuthentication、密码认证或 root 登录策略"
+    fi
+
+    if [ "$disable_password" = "y" ]; then
+        if [ "$SSH_SELECTED_USER" != "root" ] && [ "$target_has_sudo" != true ]; then
+            log_error "安全校验失败：禁用密码认证前必须有可用的公钥管理账户"
+            rm -f -- "$candidate"
+            return 1
+        fi
+        if [ "$SSH_SELECTED_USER" = "root" ] && [ "$root_login_change" = "disabled" ]; then
+            log_error "安全校验失败：不能同时禁用唯一公钥管理账户和密码认证"
+            rm -f -- "$candidate"
+            return 1
+        fi
     fi
 
     if ! validate_sshd_candidate "$candidate" "$config_file"; then
@@ -4237,7 +4466,7 @@ function action_configure_ssh_transactional() {
         reload_ssh_service || true
         return 1
     fi
-    log_success "SSH 配置已安全应用；端口: ${ssh_port}，禁用密码: ${disable_password}，root 密码禁用: $disable_root_password"
+    log_success "SSH 配置已安全应用；端口: ${ssh_port}，密钥账户: ${SSH_SELECTED_USER:-未处理}，禁用密码: ${disable_password}，root 登录调整: $root_login_change"
 }
 
 # 公开入口固定指向事务式实现。
@@ -6635,6 +6864,8 @@ run_script_static_self_check() {
         configure_restic_local_backup
         preview_restic_snapshot
         install_docker_compose_backup_timer
+        select_ssh_key_target
+        authorized_keys_is_usable_for_user
         run_command
         write_file_atomic
         atomic_install_file
@@ -6812,7 +7043,7 @@ profile_module_impact() {
     local module="$1"
     case "$module" in
         essentials) printf 'apt 包: curl/wget/git/vim/tmux 等；不改核心配置。' ;;
-        ssh) printf '文件: /etc/ssh/sshd_config；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
+        ssh) printf '文件: /etc/ssh/sshd_config 与所选账户 authorized_keys；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
         firewall) printf '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
         fail2ban) printf '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
         auto_updates) printf '文件: /etc/apt/apt.conf.d/20auto-upgrades, 50unattended-upgrades。' ;;
@@ -8296,7 +8527,7 @@ dry_run_action_plan() {
     local action="${1:-unknown}"
     case "$action" in
         action_install_essentials) log_info "[DRY RUN] 计划: 安装基础工具、设置时区与时间同步" ;;
-        action_configure_ssh) log_info "[DRY RUN] 计划: 生成并校验 SSH 候选配置，必要时放行新端口后 reload" ;;
+        action_configure_ssh) log_info "[DRY RUN] 计划: 选择并验证 SSH 密钥账户，生成并校验 SSH 候选配置，必要时放行新端口后 reload" ;;
         action_configure_firewall) log_info "[DRY RUN] 计划: 保留现有 UFW 规则，补充 SSH/可选 Web 规则并启用" ;;
         action_configure_fail2ban) log_info "[DRY RUN] 计划: 写入 Fail2ban SSH jail 并启用服务" ;;
         action_configure_auto_updates) log_info "[DRY RUN] 计划: 原子写入 unattended-upgrades 配置" ;;
@@ -8458,7 +8689,7 @@ show_security_menu() {
     local choice
     while true; do
         menu_header "安全与访问" "账号、SSH、防火墙、防暴力破解集中在这里。"
-        printf '%b\n' "${GREEN}1.${PLAIN} SSH 安全配置（端口 / 密钥 / 禁用密码）"
+        printf '%b\n' "${GREEN}1.${PLAIN} SSH 安全配置（端口 / 选择密钥账户 / 禁用密码）"
         printf '%b\n' "${GREEN}2.${PLAIN} 用户管理（新建用户 / SSH / sudo / 禁用 root）"
         printf '%b\n' "${GREEN}3.${PLAIN} UFW 防火墙"
         printf '%b\n' "${GREEN}4.${PLAIN} Fail2ban"
