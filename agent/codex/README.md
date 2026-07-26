@@ -61,8 +61,14 @@ Use `--skip-validate` for gateways without a models endpoint.
 
 ## MCP and uninstall
 
+The interactive MCP menu offers Brave Search, Exa, Context7, and Chrome
+DevTools. Chrome DevTools uses Codex's local STDIO transport through
+`npx -y chrome-devtools-mcp@latest` and requires Node.js LTS, npm, and a
+current Google Chrome installation.
+
 ```bash
 ./mcp.sh
+./mcp.sh --provider chrome-devtools
 ./uninstall.sh
 
 # Or remove only one part:

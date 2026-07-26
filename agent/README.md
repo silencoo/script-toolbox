@@ -36,24 +36,31 @@ backward-compatible shortcut for MiniMax where MiniMax is supported.
 | File | Required | Purpose |
 |---|---:|---|
 | `setup.sh` | yes | Install the client and configure a provider/model. |
-| `mcp.sh` | when supported | Add the Brave / Exa / Context7 MCP pack. Pi has no built-in MCP client. |
+| `mcp.sh` | when supported | Add the Brave / Exa / Context7 / Chrome DevTools MCP pack. Pi has no built-in MCP client. |
 | `uninstall.sh` | yes | Remove setup and MCP entries owned by these scripts. |
 | `README.md` | yes | Usage and compatibility notes. |
 | `CHANGELOG.md` | yes | Per-agent history. |
 
 Run an MCP script without provider flags to open an interactive checklist for
-Brave, Exa, and Context7. Prompts use `/dev/tty`, so this also works with a
-one-shot `curl | bash` install. For automation, repeat `--provider`, or use
-`--all`; each `--key NAME=value` applies only to that named MCP. Missing CLI
-keys fall back to `BRAVE_API_KEY`, `EXA_API_KEY`, or `CONTEXT7_API_KEY`, and
-Context7 can be used anonymously:
+Brave, Exa, Context7, and Chrome DevTools. Prompts use `/dev/tty`, so this also
+works with a one-shot `curl | bash` install. For automation, repeat
+`--provider`, or use `--all`; each `--key NAME=value` applies only to that
+named MCP. Missing CLI keys fall back to `BRAVE_API_KEY`, `EXA_API_KEY`, or
+`CONTEXT7_API_KEY`. Context7 can be used anonymously, while Chrome DevTools
+needs no key and runs locally through `npx`:
 
 ```bash
 ./claude-code/mcp.sh
 
 BRAVE_API_KEY=BSA... EXA_API_KEY=EXA... \
-  ./codex/mcp.sh --provider brave --provider exa --provider context7
+  ./codex/mcp.sh --provider brave --provider exa \
+    --provider context7 --provider chrome-devtools
 ```
+
+[Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+requires Node.js LTS, npm, and a current Google Chrome installation on the same
+machine as the agent. It uses the official
+`npx -y chrome-devtools-mcp@latest` launcher.
 
 The setup scripts share [`setup-lib.sh`](./setup-lib.sh). When a per-agent
 script is run through `curl ... | bash`, it downloads that helper from the

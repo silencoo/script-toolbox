@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# agent/opencode/mcp.sh — add web/docs MCP servers to OpenCode
+# agent/opencode/mcp.sh — add web/docs/browser MCP servers to OpenCode
 #
 # What it writes (in ~/.config/opencode/opencode.json):
 #   mcp.brave      -> https://api.search.brave.com/mcp        (X-Subscription-Token)
 #   mcp.exa        -> https://mcp.exa.ai/mcp                  (Bearer)
 #   mcp.context7   -> https://mcp.context7.com/mcp            (Bearer, optional)
+#   mcp.chrome-devtools -> local npx Chrome DevTools MCP server
 #
-# OpenCode's MCP config is shaped like { "mcp": { "<name>": { type, url, headers? } } }
+# OpenCode's MCP config is shaped like { "mcp": { "<name>": { type, ... } } }
 # (different from Claude Code's "mcpServers" key).
 #
 # What it never touches:
@@ -173,21 +174,24 @@ get_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1
 set_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1" ] && { PROVIDER_KEYS["$i"]="$2"; return 0; }; done; return 1; }
 
 # ---------- provider registry (parallel indexed arrays for bash 3.2) ----------
-P_NAME=(brave exa context7)
-P_DISPLAY=("Brave Search" "Exa" "Context7")
+P_NAME=(brave exa context7 chrome-devtools)
+P_DISPLAY=("Brave Search" "Exa" "Context7" "Chrome DevTools")
+P_TRANSPORT=("http" "http" "http" "stdio")
 P_MCP_URL=(
   "https://api.search.brave.com/mcp"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "npx -y chrome-devtools-mcp@latest"
 )
-P_HDR=("X-Subscription-Token" "Authorization" "Authorization")
-P_PREFIX=("" "Bearer " "Bearer ")
+P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "")
+P_PREFIX=("" "Bearer " "Bearer " "")
 P_VAL_URL=(
   "https://api.search.brave.com/res/v1/web/search?q=ping&count=1"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  ""
 )
-P_OPTIONAL=("no" "no" "yes")
+P_KEY_MODE=("required" "required" "optional" "none")
 
 ALL_PROVIDERS=("${P_NAME[@]}")
 
@@ -199,16 +203,17 @@ p_index() {
   return 1
 }
 p_display()  { local i; i="$(p_index "$1")" || { err "unknown provider: $1"; return 1; }; printf '%s' "${P_DISPLAY[$i]}"; }
+p_transport(){ local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_TRANSPORT[$i]}"; }
 p_mcp_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_MCP_URL[$i]}"; }
 p_hdr()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_HDR[$i]}"; }
 p_prefix()   { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_PREFIX[$i]}"; }
 p_val_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_VAL_URL[$i]}"; }
-p_optional() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_OPTIONAL[$i]}"; }
+p_key_mode() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_KEY_MODE[$i]}"; }
 
 # ---------- usage ----------
 usage() {
   cat <<EOF
-${C_BOLD}agent/opencode/mcp.sh${C_RESET} - add web/docs MCP servers to OpenCode
+${C_BOLD}agent/opencode/mcp.sh${C_RESET} - add web/docs/browser MCP servers to OpenCode
 
 ${C_BOLD}Usage:${C_RESET}
   mcp.sh [options]
@@ -218,7 +223,7 @@ ${C_BOLD}Options:${C_RESET}
                              Default: choose each MCP interactively via /dev/tty.
   --key NAME=value           API key for provider NAME. Repeatable.
                              Falls back to env: BRAVE_API_KEY, EXA_API_KEY, CONTEXT7_API_KEY.
-  --all                      Enable all three providers.
+  --all                      Enable all four providers.
   --force                    Overwrite existing entries without asking.
   --skip-validate            Skip per-provider probes (offline use).
   --dry-run                  Print the would-be JSON, write nothing.
@@ -286,7 +291,6 @@ if [ "$UNINSTALL" = 1 ]; then
 fi
 
 # ---------- preflight ----------
-command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 ensure_jq
 
 # ---------- resolve provider set ----------
@@ -301,13 +305,13 @@ if [ ${#PROVIDERS[@]} -eq 0 ]; then
   info "Interactive MCP selection - choose each service independently."
   for p in "${ALL_PROVIDERS[@]}"; do
     display="$(p_display "$p")"
-    url="$(p_mcp_url "$p")"
-    if [ "$(p_optional "$p")" = "yes" ]; then
-      key_note="API key optional"
-    else
-      key_note="API key required"
-    fi
-    if ask_yes_no "Enable ${display} (${key_note}; ${url})?"; then
+    endpoint="$(p_mcp_url "$p")"
+    case "$(p_key_mode "$p")" in
+      optional) key_note="API key optional" ;;
+      required) key_note="API key required" ;;
+      none)     key_note="no API key; local process" ;;
+    esac
+    if ask_yes_no "Enable ${display} (${key_note}; ${endpoint})?"; then
       PROVIDERS+=("$p")
     fi
   done
@@ -330,6 +334,8 @@ if [ ${#PENDING_KEYS[@]} -gt 0 ]; then
     done
     if [ "$matched" = 0 ]; then
       warn "--key $k=... provided but '$k' isn't in the enabled provider set - ignoring"
+    elif [ "$(p_key_mode "$k")" = "none" ]; then
+      warn "--key $k=... provided but '$k' does not use an API key - ignoring"
     else
       set_key "$k" "${kv#*=}"
     fi
@@ -341,6 +347,12 @@ echo
 info "Collecting API keys (CLI flag -> env var -> hidden prompt)..."
 for p in "${PROVIDERS[@]}"; do
   display="$(p_display "$p")"
+  key_mode="$(p_key_mode "$p")"
+  if [ "$key_mode" = "none" ]; then
+    set_key "$p" ""
+    info "${display}: no API key required"
+    continue
+  fi
   if [ -n "$(get_key "$p")" ]; then
     ok "${display}: using --key value"
     continue
@@ -352,7 +364,7 @@ for p in "${PROVIDERS[@]}"; do
     ok "${display}: using \$${envname_upper}"
     continue
   fi
-  if [ "$(p_optional "$p")" = "yes" ]; then
+  if [ "$key_mode" = "optional" ]; then
     if have_tty && ask_yes_no "${display} key is optional (higher rate limit). Provide one?"; then
       prompt_secret "${display} API key (input hidden)"
       set_key "$p" "$PROMPT_SECRET_REPLY"
@@ -376,14 +388,29 @@ MCP_INIT_BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 validate_provider() {
   local p="$1"
-  local key hdr prefix val_url display
+  local key hdr prefix val_url display transport
+  transport="$(p_transport "$p")"
+  display="$(p_display "$p")"
+
+  info "Validating ${display}..."
+
+  if [ "$transport" = "stdio" ]; then
+    command -v node >/dev/null 2>&1 \
+      || die "${display} requires Node.js LTS"
+    command -v npx >/dev/null 2>&1 \
+      || die "${display} requires npm/npx"
+    npx -y chrome-devtools-mcp@latest --help >/dev/null 2>&1 \
+      || die "${display} failed to start; check Node.js LTS and npm connectivity"
+    ok "${display} launcher is available"
+    return
+  fi
+
+  command -v curl >/dev/null 2>&1 \
+    || die "${display} validation requires curl (or use --skip-validate)"
   key="$(get_key "$p")"
   hdr="$(p_hdr "$p")"
   prefix="$(p_prefix "$p")"
   val_url="$(p_val_url "$p")"
-  display="$(p_display "$p")"
-
-  info "Validating ${display}..."
 
   if [ "$p" = "brave" ]; then
     HTTP="$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -408,7 +435,7 @@ validate_provider() {
   case "$resp" in
     200) ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})" ;;
     401|403)
-      if [ "$(p_optional "$p")" = "yes" ] && [ -z "$key" ]; then
+      if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$key" ]; then
         ok "${display} accepted anonymously"
       else
         die "${display} key rejected (HTTP $resp) - get one at ${p}.ai / context7.com"
@@ -422,7 +449,7 @@ if [ "$SKIP_VALIDATE" = 1 ]; then
   warn "--skip-validate set; skipping per-provider probes"
 else
   for p in "${PROVIDERS[@]}"; do
-    if [ "$(p_optional "$p")" = "yes" ] && [ -z "$(get_key "$p")" ]; then
+    if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$(get_key "$p")" ]; then
       info "Skipping $(p_display "$p") probe (no key provided)"
       continue
     fi
@@ -440,17 +467,23 @@ TMP_NEW="$(mktemp)"
   for p in "${PROVIDERS[@]}"; do
     if [ "$first" -eq 0 ]; then printf ',\n'; fi
     first=0
-    url="$(p_mcp_url "$p")"
-    hdr="$(p_hdr "$p")"
-    prefix="$(p_prefix "$p")"
-    key="$(get_key "$p")"
 
     printf '    %s: {\n' "$(json_quote "$p")"
-    printf '      "type": "http",\n'
-    printf '      "url": %s,\n' "$(json_quote "$url")"
-    if [ -n "$key" ]; then
-      printf '      "headers": { %s: %s },\n' \
-        "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
+    if [ "$(p_transport "$p")" = "stdio" ]; then
+      printf '      "type": "local",\n'
+      printf '      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],\n'
+    else
+      url="$(p_mcp_url "$p")"
+      hdr="$(p_hdr "$p")"
+      prefix="$(p_prefix "$p")"
+      key="$(get_key "$p")"
+
+      printf '      "type": "http",\n'
+      printf '      "url": %s,\n' "$(json_quote "$url")"
+      if [ -n "$key" ]; then
+        printf '      "headers": { %s: %s },\n' \
+          "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
+      fi
     fi
     printf '      "_managed_by": %s\n' "$(json_quote "$MANAGED_BY")"
     printf '    }'
@@ -475,14 +508,26 @@ if [ ! -f "$SETTINGS_FILE" ]; then
 fi
 require_json_object "$SETTINGS_FILE"
 
-# Pre-check: any provider whose URL differs from what's already there?
+# Refuse to replace a differently configured same-name HTTP or local entry
+# unless --force explicitly authorizes it.
 conflict=0
 for p in "${PROVIDERS[@]}"; do
-  new_url="$(p_mcp_url "$p")"
-  existing_url="$(jq -r --arg k "$p" '.mcp[$k].url // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
-  if [ -n "$existing_url" ] && [ "$existing_url" != "$new_url" ]; then
-    warn "mcp.${p} already points to ${existing_url} (this script would change it to ${new_url})"
-    conflict=1
+  existing_entry="$(jq -c --arg k "$p" '.mcp[$k] // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
+  if [ -n "$existing_entry" ]; then
+    if [ "$(p_transport "$p")" = "stdio" ]; then
+      existing_command="$(jq -c --arg k "$p" '.mcp[$k].command // []' "$SETTINGS_FILE")"
+      if [ "$existing_command" != '["npx","-y","chrome-devtools-mcp@latest"]' ]; then
+        warn "mcp.${p} already has a different local command"
+        conflict=1
+      fi
+    else
+      new_url="$(p_mcp_url "$p")"
+      existing_url="$(jq -r --arg k "$p" '.mcp[$k].url // empty' "$SETTINGS_FILE")"
+      if [ "$existing_url" != "$new_url" ]; then
+        warn "mcp.${p} already points to ${existing_url:-a non-HTTP command} (this script would change it to ${new_url})"
+        conflict=1
+      fi
+    fi
   fi
 done
 if [ "$conflict" = 1 ] && [ "$FORCE" != 1 ]; then
@@ -516,6 +561,7 @@ cat <<EOF
      ${C_DIM}"search the web for MiniMax M3 release notes 2026"${C_RESET}   -> brave
      ${C_DIM}"find recent blog posts about Claude Code with MiniMax"${C_RESET}   -> exa
      ${C_DIM}"what's the latest useGSAP hook signature in React?"${C_RESET}     -> context7
+     ${C_DIM}"open example.com and inspect its network requests"${C_RESET}       -> chrome-devtools
 
 4. To uninstall:
      ${C_DIM}$0 --uninstall${C_RESET}

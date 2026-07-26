@@ -1,5 +1,12 @@
 # Changelog — codex (agent)
 
+## 2026-07-26 — Chrome DevTools MCP
+
+- Added keyless Chrome DevTools to the interactive MCP checklist,
+  `--provider chrome-devtools`, and `--all`.
+- The generated `[mcp_servers.chrome-devtools]` table uses Codex's local STDIO
+  `command` and `args` fields.
+
 ## 2026-07-25 — ownership-safe updates
 
 - Setup stages the complete TOML update before rotating credentials.

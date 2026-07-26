@@ -1,5 +1,12 @@
 # Changelog — opencode (agent)
 
+## 2026-07-26 — Chrome DevTools MCP
+
+- Added keyless Chrome DevTools to the interactive MCP checklist,
+  `--provider chrome-devtools`, and `--all`.
+- The generated entry uses OpenCode's native `type: "local"` command-array
+  configuration.
+
 ## 2026-07-25 — failure-safe configuration updates
 
 - Missing `jq` is installed automatically on supported package managers.

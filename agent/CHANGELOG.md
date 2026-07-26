@@ -1,5 +1,13 @@
 # Changelog — agent/
 
+## 2026-07-26 — Chrome DevTools MCP
+
+- Added the official local `chrome-devtools-mcp` server to the interactive and
+  automated MCP flows for Claude Code, Codex, and OpenCode.
+- MCP registries now distinguish keyless local STDIO servers from authenticated
+  remote HTTP servers and serialize each agent's native local-server shape.
+- Expanded isolated tests to cover Chrome DevTools configuration and uninstall.
+
 ## 2026-07-25 — failure-safe configuration updates
 
 - JSON-based setup and MCP scripts now install `jq` automatically instead of

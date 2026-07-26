@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# agent/codex/mcp.sh — add web/docs MCP servers to OpenAI Codex CLI
+# agent/codex/mcp.sh — add web/docs/browser MCP servers to OpenAI Codex CLI
 #
 # What it writes:
 #   [mcp_servers.brave]      -> https://api.search.brave.com/mcp        (X-Subscription-Token header)
 #   [mcp_servers.exa]        -> https://mcp.exa.ai/mcp                  (Bearer)
 #   [mcp_servers.context7]   -> https://mcp.context7.com/mcp            (Bearer, optional)
+#   [mcp_servers.chrome-devtools] -> local npx Chrome DevTools MCP server
 #
 # Codex reads MCP entries from [mcp_servers.<name>] tables inside
 # ~/.codex/config.toml (NOT a separate mcpServers block).
@@ -122,21 +123,24 @@ get_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1
 set_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1" ] && { PROVIDER_KEYS["$i"]="$2"; return 0; }; done; return 1; }
 
 # ---------- provider registry (parallel indexed arrays for bash 3.2) ----------
-P_NAME=(brave exa context7)
-P_DISPLAY=("Brave Search" "Exa" "Context7")
+P_NAME=(brave exa context7 chrome-devtools)
+P_DISPLAY=("Brave Search" "Exa" "Context7" "Chrome DevTools")
+P_TRANSPORT=("http" "http" "http" "stdio")
 P_MCP_URL=(
   "https://api.search.brave.com/mcp"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "npx -y chrome-devtools-mcp@latest"
 )
-P_HDR=("X-Subscription-Token" "Authorization" "Authorization")
-P_PREFIX=("" "Bearer " "Bearer ")
+P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "")
+P_PREFIX=("" "Bearer " "Bearer " "")
 P_VAL_URL=(
   "https://api.search.brave.com/res/v1/web/search?q=ping&count=1"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  ""
 )
-P_OPTIONAL=("no" "no" "yes")
+P_KEY_MODE=("required" "required" "optional" "none")
 
 ALL_PROVIDERS=("${P_NAME[@]}")
 
@@ -148,11 +152,12 @@ p_index() {
   return 1
 }
 p_display()  { local i; i="$(p_index "$1")" || { err "unknown provider: $1"; return 1; }; printf '%s' "${P_DISPLAY[$i]}"; }
+p_transport(){ local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_TRANSPORT[$i]}"; }
 p_mcp_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_MCP_URL[$i]}"; }
 p_hdr()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_HDR[$i]}"; }
 p_prefix()   { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_PREFIX[$i]}"; }
 p_val_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_VAL_URL[$i]}"; }
-p_optional() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_OPTIONAL[$i]}"; }
+p_key_mode() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_KEY_MODE[$i]}"; }
 
 toml_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -168,7 +173,7 @@ strip_owned_mcp_blocks() {
     /^\[[^]]+\]/ {
       sec = $0
       gsub(/^\[/, "", sec); gsub(/\].*$/, "", sec)
-      if (in_legacy && sec ~ /^mcp_servers\.(brave|exa|context7)(\.headers)?$/) {
+      if (in_legacy && sec ~ /^mcp_servers\.(brave|exa|context7|chrome-devtools)(\.headers)?$/) {
         in_legacy_block = 1
         next
       }
@@ -212,7 +217,7 @@ replace_file() {
 # ---------- usage ----------
 usage() {
   cat <<EOF
-${C_BOLD}agent/codex/mcp.sh${C_RESET} - add web/docs MCP servers to Codex CLI
+${C_BOLD}agent/codex/mcp.sh${C_RESET} - add web/docs/browser MCP servers to Codex CLI
 
 ${C_BOLD}Usage:${C_RESET}
   mcp.sh [options]
@@ -222,7 +227,7 @@ ${C_BOLD}Options:${C_RESET}
                              Default: choose each MCP interactively via /dev/tty.
   --key NAME=value           API key for provider NAME. Repeatable.
                              Falls back to env: BRAVE_API_KEY, EXA_API_KEY, CONTEXT7_API_KEY.
-  --all                      Enable all three providers.
+  --all                      Enable all four providers.
   --force                    Overwrite existing entries without asking.
   --skip-validate            Skip per-provider probes (offline use).
   --dry-run                  Print the would-be TOML, write nothing.
@@ -275,9 +280,6 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
-# ---------- preflight ----------
-command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
-
 # ---------- resolve provider set ----------
 if [ "$ALL" = 1 ]; then
   PROVIDERS=("${ALL_PROVIDERS[@]}")
@@ -290,13 +292,13 @@ if [ ${#PROVIDERS[@]} -eq 0 ]; then
   info "Interactive MCP selection - choose each service independently."
   for p in "${ALL_PROVIDERS[@]}"; do
     display="$(p_display "$p")"
-    url="$(p_mcp_url "$p")"
-    if [ "$(p_optional "$p")" = "yes" ]; then
-      key_note="API key optional"
-    else
-      key_note="API key required"
-    fi
-    if ask_yes_no "Enable ${display} (${key_note}; ${url})?"; then
+    endpoint="$(p_mcp_url "$p")"
+    case "$(p_key_mode "$p")" in
+      optional) key_note="API key optional" ;;
+      required) key_note="API key required" ;;
+      none)     key_note="no API key; local process" ;;
+    esac
+    if ask_yes_no "Enable ${display} (${key_note}; ${endpoint})?"; then
       PROVIDERS+=("$p")
     fi
   done
@@ -319,6 +321,8 @@ if [ ${#PENDING_KEYS[@]} -gt 0 ]; then
     done
     if [ "$matched" = 0 ]; then
       warn "--key $k=... provided but '$k' isn't in the enabled provider set - ignoring"
+    elif [ "$(p_key_mode "$k")" = "none" ]; then
+      warn "--key $k=... provided but '$k' does not use an API key - ignoring"
     else
       set_key "$k" "${kv#*=}"
     fi
@@ -330,6 +334,12 @@ echo
 info "Collecting API keys (CLI flag -> env var -> hidden prompt)..."
 for p in "${PROVIDERS[@]}"; do
   display="$(p_display "$p")"
+  key_mode="$(p_key_mode "$p")"
+  if [ "$key_mode" = "none" ]; then
+    set_key "$p" ""
+    info "${display}: no API key required"
+    continue
+  fi
   if [ -n "$(get_key "$p")" ]; then
     ok "${display}: using --key value"
     continue
@@ -344,7 +354,7 @@ for p in "${PROVIDERS[@]}"; do
     ok "${display}: using \$${envname_upper}"
     continue
   fi
-  if [ "$(p_optional "$p")" = "yes" ]; then
+  if [ "$key_mode" = "optional" ]; then
     if have_tty && ask_yes_no "${display} key is optional (higher rate limit). Provide one?"; then
       prompt_secret "${display} API key (input hidden)"
       set_key "$p" "$PROMPT_SECRET_REPLY"
@@ -368,14 +378,29 @@ MCP_INIT_BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 validate_provider() {
   local p="$1"
-  local key hdr prefix val_url display
+  local key hdr prefix val_url display transport
+  transport="$(p_transport "$p")"
+  display="$(p_display "$p")"
+
+  info "Validating ${display}..."
+
+  if [ "$transport" = "stdio" ]; then
+    command -v node >/dev/null 2>&1 \
+      || die "${display} requires Node.js LTS"
+    command -v npx >/dev/null 2>&1 \
+      || die "${display} requires npm/npx"
+    npx -y chrome-devtools-mcp@latest --help >/dev/null 2>&1 \
+      || die "${display} failed to start; check Node.js LTS and npm connectivity"
+    ok "${display} launcher is available"
+    return
+  fi
+
+  command -v curl >/dev/null 2>&1 \
+    || die "${display} validation requires curl (or use --skip-validate)"
   key="$(get_key "$p")"
   hdr="$(p_hdr "$p")"
   prefix="$(p_prefix "$p")"
   val_url="$(p_val_url "$p")"
-  display="$(p_display "$p")"
-
-  info "Validating ${display}..."
 
   if [ "$p" = "brave" ]; then
     HTTP="$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -400,7 +425,7 @@ validate_provider() {
   case "$resp" in
     200) ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})" ;;
     401|403)
-      if [ "$(p_optional "$p")" = "yes" ] && [ -z "$key" ]; then
+      if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$key" ]; then
         ok "${display} accepted anonymously"
       else
         die "${display} key rejected (HTTP $resp) - get one at ${p}.ai / context7.com"
@@ -414,7 +439,7 @@ if [ "$SKIP_VALIDATE" = 1 ]; then
   warn "--skip-validate set; skipping per-provider probes"
 else
   for p in "${PROVIDERS[@]}"; do
-    if [ "$(p_optional "$p")" = "yes" ] && [ -z "$(get_key "$p")" ]; then
+    if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$(get_key "$p")" ]; then
       info "Skipping $(p_display "$p") probe (no key provided)"
       continue
     fi
@@ -428,18 +453,23 @@ TMP_NEW="$(mktemp)"
 {
   printf '\n%s\n' "$BEGIN_MARKER"
   for p in "${PROVIDERS[@]}"; do
-    url="$(p_mcp_url "$p")"
-    hdr="$(p_hdr "$p")"
-    prefix="$(p_prefix "$p")"
-    key="$(get_key "$p")"
-    escaped_header="$(toml_escape "$hdr")"
-    escaped_value="$(toml_escape "${prefix}${key}")"
-
     printf '\n[mcp_servers.%s]\n' "$p"
-    printf 'url = "%s"\n' "$url"
-    if [ -n "$key" ]; then
-      printf '\n[mcp_servers.%s.headers]\n' "$p"
-      printf '"%s" = "%s"\n' "$escaped_header" "$escaped_value"
+    if [ "$(p_transport "$p")" = "stdio" ]; then
+      printf 'command = "npx"\n'
+      printf 'args = ["-y", "chrome-devtools-mcp@latest"]\n'
+    else
+      url="$(p_mcp_url "$p")"
+      hdr="$(p_hdr "$p")"
+      prefix="$(p_prefix "$p")"
+      key="$(get_key "$p")"
+      escaped_header="$(toml_escape "$hdr")"
+      escaped_value="$(toml_escape "${prefix}${key}")"
+
+      printf 'url = "%s"\n' "$url"
+      if [ -n "$key" ]; then
+        printf '\n[mcp_servers.%s.headers]\n' "$p"
+        printf '"%s" = "%s"\n' "$escaped_header" "$escaped_value"
+      fi
     fi
   done
   printf '%s\n' "$END_MARKER"
@@ -513,6 +543,7 @@ cat <<EOF
      ${C_DIM}"search the web for MiniMax M3 release notes 2026"${C_RESET}   -> brave
      ${C_DIM}"find recent blog posts about Claude Code with MiniMax"${C_RESET}   -> exa
      ${C_DIM}"what's the latest useGSAP hook signature in React?"${C_RESET}     -> context7
+     ${C_DIM}"open example.com and inspect its network requests"${C_RESET}       -> chrome-devtools
 
 4. To uninstall:
      ${C_DIM}$0 --uninstall${C_RESET}

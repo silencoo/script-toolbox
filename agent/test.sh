@@ -153,15 +153,20 @@ run_config_tests() {
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     BRAVE_API_KEY='test-"brave\key' \
+    EXA_API_KEY='test-exa' \
     "$SCRIPT_DIR/claude-code/mcp.sh" \
-      --provider brave --provider context7 --skip-validate >/dev/null || {
+      --all --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   jq -e '
     .mcpServers.brave._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers.brave.headers["X-Subscription-Token"] == "test-\"brave\\key"
+    and .mcpServers.exa.headers.Authorization == "Bearer test-exa"
     and .mcpServers.context7._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers.context7.headers == null
+    and .mcpServers["chrome-devtools"].command == "npx"
+    and .mcpServers["chrome-devtools"].args == ["-y", "chrome-devtools-mcp@latest"]
+    and .mcpServers["chrome-devtools"]._managed_by == "agent/claude-code/mcp.sh"
     and .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
@@ -202,7 +207,8 @@ run_config_tests() {
       }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/codex/mcp.sh" \
-      --provider exa --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
+      --provider exa --provider chrome-devtools \
+      --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   grep -q '\[mcp_servers.user_owned\]' "$test_home/.codex/config.toml" || {
@@ -215,6 +221,15 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
   grep -qF '"Authorization" = "Bearer test-\"exa\\key"' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -q '\[mcp_servers.chrome-devtools\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -q 'command = "npx"' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -qF 'args = ["-y", "chrome-devtools-mcp@latest"]' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
   grep -q '\[model_providers.script_toolbox_openrouter\]' "$test_home/.codex/config.toml" || {
@@ -249,12 +264,15 @@ run_config_tests() {
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     EXA_API_KEY='test-"exa\key' \
     "$SCRIPT_DIR/opencode/mcp.sh" \
-      --provider exa --skip-validate >/dev/null || {
+      --provider exa --provider chrome-devtools --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   jq -e '
     .mcp.exa._managed_by == "agent/opencode/mcp.sh"
     and .mcp.exa.headers.Authorization == "Bearer test-\"exa\\key"
+    and .mcp["chrome-devtools"].type == "local"
+    and .mcp["chrome-devtools"].command == ["npx", "-y", "chrome-devtools-mcp@latest"]
+    and .mcp["chrome-devtools"]._managed_by == "agent/opencode/mcp.sh"
     and .provider["script-toolbox-google"].npm == "@ai-sdk/google"
     and .model == "script-toolbox-google/gemini-3.6-flash"
   ' "$test_home/.config/opencode/opencode.json" >/dev/null || { rm -rf "$test_root"; return 1; }

@@ -1,5 +1,12 @@
 # Changelog — claude-code (agent)
 
+## 2026-07-26 — Chrome DevTools MCP
+
+- Added keyless Chrome DevTools to the interactive MCP checklist,
+  `--provider chrome-devtools`, and `--all`.
+- Local configuration uses the official
+  `npx -y chrome-devtools-mcp@latest` command and arguments.
+
 ## 2026-07-25 — reliable JSON updates
 
 - Missing `jq` is installed automatically on supported package managers.

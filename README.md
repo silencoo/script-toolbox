@@ -17,7 +17,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
-| [`agent/`](./agent/) | Interactive multi-provider setup scripts for Claude Code, Codex CLI, OpenCode, and Pi, plus web/docs MCP packs where supported |
+| [`agent/`](./agent/) | Interactive multi-provider setup scripts for Claude Code, Codex CLI, OpenCode, and Pi, plus web/docs/browser MCP packs where supported |
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
@@ -47,7 +47,8 @@ change is merged.
 Interactive setup scripts for AI coding agents. Each installer offers
 protocol-compatible mainstream providers, current model presets, a custom
 provider URL/key/model flow, and non-interactive flags. The same folders also
-ship optional Brave Search, Exa, and Context7 MCP configuration.
+ship optional Brave Search, Exa, Context7, and Chrome DevTools MCP
+configuration.
 
 See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:
