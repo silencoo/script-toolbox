@@ -1024,5 +1024,11 @@ try {
 } catch {
   Write-Host ''
   Write-Host "ERROR $($_.Exception.Message)" -ForegroundColor Red
+  if (-not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+    Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+  }
+  if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+  }
   exit 1
 }
