@@ -789,7 +789,7 @@ function Add-PostInstallFailure {
   try {
     & $Action
   } catch {
-    $message = "$Name: $($_.Exception.Message)"
+    $message = "${Name}: $($_.Exception.Message)"
     $script:Failures.Add($message)
     Write-WarnLine $message
     if ($FailFast) {
@@ -927,7 +927,7 @@ function Invoke-Doctor {
       if ($result.ExitCode -eq 0 -and $result.Text -match $version) {
         Write-Success "Python                         $($result.Text.Trim())"
       } else {
-        $script:Failures.Add("Python $version: exact runtime not found")
+        $script:Failures.Add("Python ${version}: exact runtime not found")
         Write-WarnLine "Exact Python $version runtime not found"
       }
     }
