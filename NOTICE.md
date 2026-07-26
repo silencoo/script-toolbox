@@ -12,6 +12,9 @@ third-party-derived files.
 - Files under `userscripts/123pan-fastlink/` were imported from a local mirror
   of Bao-qing's `123FastLink`. The userscript retains its original author
   attribution, and its GreasyFork distribution identifies it as MIT licensed.
+- Files under `userscripts/sht-helper/` were imported from
+  `silencoo/sht-helper`. The upstream documentation identifies the userscript
+  as MIT licensed.
 
 External services queried by `workers/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those

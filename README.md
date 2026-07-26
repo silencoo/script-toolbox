@@ -16,6 +16,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
+| [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`agent/`](./agent/) | Interactive multi-provider setup scripts for Claude Code, Codex CLI, OpenCode, and Pi, plus web/docs/browser MCP packs where supported |
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
