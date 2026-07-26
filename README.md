@@ -24,6 +24,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
+| [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap an opinionated Windows 10/11 development workstation |
 | [`windows-wsl2/`](./windows-wsl2/) | Initialize, update, inspect, and manage WSL 2 on Windows |
 | [`ghostty/`](./ghostty/) | Install Ghostty on macOS/Linux and configure SSH-safe shell integration |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
@@ -83,10 +84,11 @@ bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh l
 python3 sing-box/generate-client-config.py --help
 ```
 
-On Windows, validate the Docker Sandboxes PowerShell manager with:
+On Windows, validate the PowerShell tools with:
 
 ```powershell
 .\docker-sandboxes\tests\sbx-manager-test.ps1
+.\windows-dev-setup\tests\windows-dev-setup-test.ps1
 .\windows-wsl2\tests\setup-test.ps1
 ```
 

@@ -49,4 +49,5 @@ jobs:
         shell: pwsh
         run: |
           ./docker-sandboxes/tests/sbx-manager-test.ps1
+          ./windows-dev-setup/tests/windows-dev-setup-test.ps1
           ./windows-wsl2/tests/setup-test.ps1
