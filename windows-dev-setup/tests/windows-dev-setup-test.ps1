@@ -61,10 +61,13 @@ try {
     $outputFile = Join-Path $testDirectory "$profileName-plan.txt"
     & $powerShell -NoProfile -ExecutionPolicy Bypass -File $setupScript `
       plan -Profile $profileName *> $outputFile
-    if ($LASTEXITCODE -ne 0) {
-      Stop-Test "Plan command failed for profile '$profileName'."
-    }
     $output = Get-Content -LiteralPath $outputFile -Raw
+    if ($LASTEXITCODE -ne 0) {
+      Stop-Test (
+        "Plan command failed for profile '$profileName':" +
+        [Environment]::NewLine + $output.Trim()
+      )
+    }
     if ($output -notmatch "Plan: $profileName profile") {
       Stop-Test "Plan output did not identify profile '$profileName'."
     }
