@@ -15,6 +15,14 @@ third-party-derived files.
 - Files under `userscripts/sht-helper/` were imported from
   `silencoo/sht-helper`. The upstream documentation identifies the userscript
   as MIT licensed.
+- Files under `agent/promptctl/advanced/claude/` were copied from
+  `silencoo/claude-keysmith`. They retain their bundled MIT license and
+  attribution.
+- Files under `agent/promptctl/advanced/codex/` were copied from
+  a local `Jia-Ethan/codex-keysmith` working tree based on source version
+  `v0.1.2` (`c3f229c`), then adapted for this repository's multi-client
+  Promptctl layout and explicit-`--file` prompt model. They retain their bundled
+  MIT license and attribution.
 
 External services queried by `workers/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those

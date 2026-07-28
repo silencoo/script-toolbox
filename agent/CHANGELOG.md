@@ -1,5 +1,37 @@
 # Changelog — agent/
 
+## 2026-07-29 — Promptctl persistent instructions
+
+- Added `promptctl` as the shared persistent-instruction manager for Claude
+  Code and Codex.
+- Added direct and Agent-guided entrypoints that share one filesystem layout,
+  create user-editable Markdown once, and preserve it on reruns and default
+  uninstall.
+- Moved the imported advanced Claude and Codex deployers under
+  `promptctl/advanced/` while preserving their upstream recovery identifiers.
+- Kept Promptctl state independent from provider and MCP install/uninstall
+  lifecycles.
+
+## 2026-07-28 — task-oriented MCP profiles
+
+- Added `mcpctl`, a separate profile manager that leaves every existing
+  per-agent `mcp.sh` workflow unchanged.
+- Added inherited profiles, target-specific enable/disable overrides, CLI
+  overrides, redacted plans, safe switching, and adapters for Claude Code,
+  Codex, and OpenCode.
+- Added environment-first and SOPS-backed secret resolution. Encrypted values
+  are resolved only for enabled servers; target configs are replaced
+  atomically with mode `0600`.
+- Added an optional opaque Worker/R2 backup service, AES-256-GCM client-side
+  snapshots, one-code recovery, immutable versions, conditional latest-pointer
+  updates, and a locally encrypted restored-secret cache.
+- Store creation uses a separate removable bootstrap secret so a public Worker
+  cannot be used anonymously to consume R2 storage. Existing stores continue
+  after creation is disabled.
+- Added ownership conflict protection, local applied-state tracking, starter
+  profiles, and isolated tests covering all three targets plus a fresh-machine
+  encrypted backup/restore simulation.
+
 ## 2026-07-26 — Chrome DevTools MCP
 
 - Added the official local `chrome-devtools-mcp` server to the interactive and

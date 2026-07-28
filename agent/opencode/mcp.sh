@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# agent/opencode/mcp.sh — add web/docs/browser MCP servers to OpenCode
+# agent/opencode/mcp.sh — add web/docs/browser/repository MCP servers to OpenCode
 #
 # What it writes (in ~/.config/opencode/opencode.json):
 #   mcp.brave      -> https://api.search.brave.com/mcp        (X-Subscription-Token)
 #   mcp.exa        -> https://mcp.exa.ai/mcp                  (Bearer)
 #   mcp.context7   -> https://mcp.context7.com/mcp            (Bearer, optional)
-#   mcp.chrome-devtools -> local npx Chrome DevTools MCP server
+#   mcp.github     -> https://api.githubcopilot.com/mcp/       (Bearer from environment)
+#   mcp.chrome-devtools -> local Chrome DevTools MCP + CloakBrowser
 #
 # OpenCode's MCP config is shaped like { "mcp": { "<name>": { type, ... } } }
 # (different from Claude Code's "mcpServers" key).
@@ -162,6 +163,8 @@ FORCE=0
 SKIP_VALIDATE=0
 UNINSTALL=0
 DRY_RUN=0
+CHROME_BROWSER="cloak"
+CLOAKBROWSER_EXECUTABLE="${CLOAKBROWSER_BINARY_PATH:-}"
 
 SETTINGS_DIR="${HOME}/.config/opencode"
 SETTINGS_FILE="${SETTINGS_DIR}/opencode.json"
@@ -174,24 +177,27 @@ get_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1
 set_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1" ] && { PROVIDER_KEYS["$i"]="$2"; return 0; }; done; return 1; }
 
 # ---------- provider registry (parallel indexed arrays for bash 3.2) ----------
-P_NAME=(brave exa context7 chrome-devtools)
-P_DISPLAY=("Brave Search" "Exa" "Context7" "Chrome DevTools")
-P_TRANSPORT=("http" "http" "http" "stdio")
+P_NAME=(brave exa context7 github chrome-devtools)
+P_DISPLAY=("Brave Search" "Exa" "Context7" "GitHub" "Chrome DevTools")
+P_TRANSPORT=("http" "http" "http" "http" "stdio")
 P_MCP_URL=(
   "https://api.search.brave.com/mcp"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "https://api.githubcopilot.com/mcp/"
   "npx -y chrome-devtools-mcp@latest"
 )
-P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "")
-P_PREFIX=("" "Bearer " "Bearer " "")
+P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "Authorization" "")
+P_PREFIX=("" "Bearer " "Bearer " "Bearer " "")
+P_ENV=("BRAVE_API_KEY" "EXA_API_KEY" "CONTEXT7_API_KEY" "GITHUB_PERSONAL_ACCESS_TOKEN" "")
 P_VAL_URL=(
   "https://api.search.brave.com/res/v1/web/search?q=ping&count=1"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "https://api.githubcopilot.com/mcp/"
   ""
 )
-P_KEY_MODE=("required" "required" "optional" "none")
+P_KEY_MODE=("required" "required" "optional" "required" "none")
 
 ALL_PROVIDERS=("${P_NAME[@]}")
 
@@ -207,13 +213,67 @@ p_transport(){ local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_TRANSP
 p_mcp_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_MCP_URL[$i]}"; }
 p_hdr()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_HDR[$i]}"; }
 p_prefix()   { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_PREFIX[$i]}"; }
+p_env()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_ENV[$i]}"; }
 p_val_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_VAL_URL[$i]}"; }
 p_key_mode() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_KEY_MODE[$i]}"; }
+
+provider_selected() {
+  local wanted="$1" p
+  for p in "${PROVIDERS[@]}"; do
+    [ "$p" = "$wanted" ] && return 0
+  done
+  return 1
+}
+
+resolve_cloakbrowser_executable() {
+  local diagnostics
+
+  provider_selected chrome-devtools || return 0
+  [ "$CHROME_BROWSER" = "cloak" ] || return 0
+
+  command -v node >/dev/null 2>&1 ||
+    die "CloakBrowser requires Node.js 20 or newer"
+  command -v npx >/dev/null 2>&1 ||
+    die "CloakBrowser requires npm/npx"
+
+  if [ -z "$CLOAKBROWSER_EXECUTABLE" ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      die "--dry-run with CloakBrowser requires --cloakbrowser-executable PATH (dry-run will not download a browser)"
+    fi
+    info "Installing/resolving the CloakBrowser Chromium binary..."
+    npx -y cloakbrowser@latest install >/dev/null ||
+      die "CloakBrowser installation failed; run 'npx -y cloakbrowser@latest info' for diagnostics"
+    diagnostics="$(npx -y cloakbrowser@latest info --quick --json)" ||
+      die "CloakBrowser diagnostics failed"
+    CLOAKBROWSER_EXECUTABLE="$(
+      printf '%s' "$diagnostics" | node -e '
+        let input = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", chunk => input += chunk);
+        process.stdin.on("end", () => {
+          try {
+            const value = JSON.parse(input)?.binary?.path;
+            if (typeof value !== "string" || value.length === 0) process.exit(2);
+            process.stdout.write(value);
+          } catch {
+            process.exit(2);
+          }
+        });
+      '
+    )" || die "CloakBrowser did not report its Chromium executable path"
+  fi
+
+  [ -f "$CLOAKBROWSER_EXECUTABLE" ] ||
+    die "CloakBrowser executable not found: $CLOAKBROWSER_EXECUTABLE"
+  [ -x "$CLOAKBROWSER_EXECUTABLE" ] ||
+    die "CloakBrowser executable is not executable: $CLOAKBROWSER_EXECUTABLE"
+  ok "CloakBrowser executable: $CLOAKBROWSER_EXECUTABLE"
+}
 
 # ---------- usage ----------
 usage() {
   cat <<EOF
-${C_BOLD}agent/opencode/mcp.sh${C_RESET} - add web/docs/browser MCP servers to OpenCode
+${C_BOLD}agent/opencode/mcp.sh${C_RESET} - add web/docs/browser/repository MCP servers to OpenCode
 
 ${C_BOLD}Usage:${C_RESET}
   mcp.sh [options]
@@ -221,9 +281,14 @@ ${C_BOLD}Usage:${C_RESET}
 ${C_BOLD}Options:${C_RESET}
   --provider <name>          Add a provider. Repeatable. name in {${ALL_PROVIDERS[*]}}
                              Default: choose each MCP interactively via /dev/tty.
-  --key NAME=value           API key for provider NAME. Repeatable.
-                             Falls back to env: BRAVE_API_KEY, EXA_API_KEY, CONTEXT7_API_KEY.
-  --all                      Enable all four providers.
+  --key NAME=value           API key/PAT for provider NAME. Repeatable.
+                             Falls back to env: BRAVE_API_KEY, EXA_API_KEY,
+                             CONTEXT7_API_KEY, GITHUB_PERSONAL_ACCESS_TOKEN.
+  --all                      Enable all five providers.
+  --cloakbrowser-executable <path>
+                             Use an existing CloakBrowser Chromium binary.
+                             Default: CLOAKBROWSER_BINARY_PATH or install via npx.
+  --stock-chrome             Let Chrome DevTools MCP use stock Google Chrome.
   --force                    Overwrite existing entries without asking.
   --skip-validate            Skip per-provider probes (offline use).
   --dry-run                  Print the would-be JSON, write nothing.
@@ -244,6 +309,12 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --all)             ALL=1; shift ;;
+    --cloakbrowser-executable)
+      CLOAKBROWSER_EXECUTABLE="${2:?}"
+      CHROME_BROWSER="cloak"
+      shift 2
+      ;;
+    --stock-chrome)    CHROME_BROWSER="stock"; shift ;;
     --force)           FORCE=1; shift ;;
     --skip-validate)   SKIP_VALIDATE=1; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
@@ -357,7 +428,7 @@ for p in "${PROVIDERS[@]}"; do
     ok "${display}: using --key value"
     continue
   fi
-  envname_upper="$(echo "$p" | tr '[:lower:]' '[:upper:]')_API_KEY"
+  envname_upper="$(p_env "$p")"
   envval="${!envname_upper:-}"
   if [ -n "$envval" ]; then
     set_key "$p" "$envval"
@@ -381,6 +452,12 @@ for p in "${PROVIDERS[@]}"; do
     set_key "$p" "$PROMPT_SECRET_REPLY"
   fi
 done
+if provider_selected github && [ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
+  warn "GitHub PAT was supplied only for setup/validation; export GITHUB_PERSONAL_ACCESS_TOKEN before starting OpenCode"
+fi
+echo
+
+resolve_cloakbrowser_executable
 echo
 
 # ---------- validate each provider (same probes as claude-code/mcp.sh) ----------
@@ -401,6 +478,10 @@ validate_provider() {
       || die "${display} requires npm/npx"
     npx -y chrome-devtools-mcp@latest --help >/dev/null 2>&1 \
       || die "${display} failed to start; check Node.js LTS and npm connectivity"
+    if [ "$CHROME_BROWSER" = "cloak" ]; then
+      "$CLOAKBROWSER_EXECUTABLE" --version >/dev/null 2>&1 ||
+        die "CloakBrowser Chromium failed to execute: $CLOAKBROWSER_EXECUTABLE"
+    fi
     ok "${display} launcher is available"
     return
   fi
@@ -433,12 +514,21 @@ validate_provider() {
     "$val_url" || echo 000)"
 
   case "$resp" in
-    200) ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})" ;;
+    200)
+      if [ "$p" = "github" ]; then
+        ok "${display} PAT accepted"
+      else
+        ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})"
+      fi
+      ;;
     401|403)
       if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$key" ]; then
         ok "${display} accepted anonymously"
       else
-        die "${display} key rejected (HTTP $resp) - get one at ${p}.ai / context7.com"
+        if [ "$p" = "github" ]; then
+          die "${display} PAT rejected (HTTP $resp) - create a least-privilege token at https://github.com/settings/personal-access-tokens"
+        fi
+        die "${display} key rejected (HTTP $resp)"
       fi
       ;;
     *) die "${display} probe failed (HTTP $resp)" ;;
@@ -471,16 +561,26 @@ TMP_NEW="$(mktemp)"
     printf '    %s: {\n' "$(json_quote "$p")"
     if [ "$(p_transport "$p")" = "stdio" ]; then
       printf '      "type": "local",\n'
-      printf '      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],\n'
+      if [ "$CHROME_BROWSER" = "cloak" ]; then
+        printf '      "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--executablePath", %s],\n' \
+          "$(json_quote "$CLOAKBROWSER_EXECUTABLE")"
+      else
+        printf '      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],\n'
+      fi
     else
       url="$(p_mcp_url "$p")"
       hdr="$(p_hdr "$p")"
       prefix="$(p_prefix "$p")"
       key="$(get_key "$p")"
 
-      printf '      "type": "http",\n'
+      printf '      "type": "remote",\n'
       printf '      "url": %s,\n' "$(json_quote "$url")"
-      if [ -n "$key" ]; then
+      if [ "$p" = "github" ]; then
+        runtime_header="Bearer {env:$(p_env "$p")}"
+        printf '      "oauth": false,\n'
+        printf '      "headers": { %s: %s },\n' \
+          "$(json_quote "$hdr")" "$(json_quote "$runtime_header")"
+      elif [ -n "$key" ]; then
         printf '      "headers": { %s: %s },\n' \
           "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
       fi
@@ -514,9 +614,17 @@ conflict=0
 for p in "${PROVIDERS[@]}"; do
   existing_entry="$(jq -c --arg k "$p" '.mcp[$k] // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
   if [ -n "$existing_entry" ]; then
+    existing_manager="$(jq -r --arg k "$p" '.mcp[$k]._managed_by // empty' "$SETTINGS_FILE")"
+    [ "$existing_manager" = "$MANAGED_BY" ] && continue
     if [ "$(p_transport "$p")" = "stdio" ]; then
       existing_command="$(jq -c --arg k "$p" '.mcp[$k].command // []' "$SETTINGS_FILE")"
-      if [ "$existing_command" != '["npx","-y","chrome-devtools-mcp@latest"]' ]; then
+      if [ "$CHROME_BROWSER" = "cloak" ]; then
+        expected_command="$(jq -cn --arg executable "$CLOAKBROWSER_EXECUTABLE" \
+          '["npx", "-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]')"
+      else
+        expected_command='["npx","-y","chrome-devtools-mcp@latest"]'
+      fi
+      if [ "$existing_command" != "$expected_command" ]; then
         warn "mcp.${p} already has a different local command"
         conflict=1
       fi
@@ -561,7 +669,11 @@ cat <<EOF
      ${C_DIM}"search the web for MiniMax M3 release notes 2026"${C_RESET}   -> brave
      ${C_DIM}"find recent blog posts about Claude Code with MiniMax"${C_RESET}   -> exa
      ${C_DIM}"what's the latest useGSAP hook signature in React?"${C_RESET}     -> context7
+     ${C_DIM}"list my recently merged GitHub pull requests"${C_RESET}           -> github
      ${C_DIM}"open example.com and inspect its network requests"${C_RESET}       -> chrome-devtools
+
+   GitHub reads its PAT from GITHUB_PERSONAL_ACCESS_TOKEN at OpenCode startup.
+   Chrome DevTools launches CloakBrowser by default; pass --stock-chrome to opt out.
 
 4. To uninstall:
      ${C_DIM}$0 --uninstall${C_RESET}

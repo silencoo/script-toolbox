@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "base",
+  "description": "Small shared documentation baseline",
+  "extends": [],
+  "enable": [
+    "context7"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

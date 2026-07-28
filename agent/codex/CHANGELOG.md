@@ -1,5 +1,15 @@
 # Changelog — codex (agent)
 
+## 2026-07-28 — CloakBrowser and GitHub MCP
+
+- Chrome DevTools now resolves CloakBrowser's platform Chromium binary and
+  passes it through `--executablePath`; `--stock-chrome` retains the previous
+  discovery behavior.
+- Added the hosted GitHub MCP provider with PAT validation and Codex-native
+  `bearer_token_env_var` configuration.
+- GitHub PATs remain in `GITHUB_PERSONAL_ACCESS_TOKEN` and are not written to
+  `config.toml`.
+
 ## 2026-07-26 — Chrome DevTools MCP
 
 - Added keyless Chrome DevTools to the interactive MCP checklist,

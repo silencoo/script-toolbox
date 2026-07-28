@@ -1,0 +1,6 @@
+# Plaintext secret material must never be committed.
+secrets.json
+secrets.decrypted.json
+remote.json
+mcpctl-recovery*
+*.plaintext

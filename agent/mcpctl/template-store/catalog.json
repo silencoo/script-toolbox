@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "servers": {
+    "brave": {
+      "description": "Brave Search remote MCP",
+      "transport": "http",
+      "url": "https://api.search.brave.com/mcp",
+      "auth": {
+        "type": "header",
+        "header": "X-Subscription-Token",
+        "prefix": "",
+        "secret": "brave_api_key",
+        "env": "BRAVE_API_KEY",
+        "required": true
+      },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "exa": {
+      "description": "Exa remote MCP",
+      "transport": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "secret": "exa_api_key",
+        "env": "EXA_API_KEY",
+        "required": true
+      },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "context7": {
+      "description": "Context7 documentation MCP with optional higher-limit key",
+      "transport": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "secret": "context7_api_key",
+        "env": "CONTEXT7_API_KEY",
+        "required": false
+      },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "chrome-devtools": {
+      "description": "Local Chrome DevTools MCP",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp@1.6.0"
+      ],
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    }
+  }
+}

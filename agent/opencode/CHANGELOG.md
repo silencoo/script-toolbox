@@ -1,5 +1,15 @@
 # Changelog — opencode (agent)
 
+## 2026-07-28 — CloakBrowser and GitHub MCP
+
+- Chrome DevTools now resolves CloakBrowser's platform Chromium binary and
+  passes it through `--executablePath`; `--stock-chrome` retains the previous
+  discovery behavior.
+- Added the hosted GitHub MCP provider with OpenCode's
+  `{env:GITHUB_PERSONAL_ACCESS_TOKEN}` interpolation and PAT-mode OAuth
+  disabled.
+- Remote MCP entries now use OpenCode's documented `type: "remote"`.
+
 ## 2026-07-26 — Chrome DevTools MCP
 
 - Added keyless Chrome DevTools to the interactive MCP checklist,

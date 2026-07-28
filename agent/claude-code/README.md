@@ -34,6 +34,40 @@ cd agent/claude-code
 ./mcp.sh
 ```
 
+## Persistent instructions
+
+Claude Code `CLAUDE.md` instruction deployment is managed by Promptctl under
+`agent/`, independently from provider and MCP state. For a clean machine or
+sandbox, create a lightweight import and an editable user-owned Markdown file:
+
+```bash
+# Run from the script-toolbox repository root.
+python3 agent/promptctl/promptctl.py install claude
+python3 agent/promptctl/promptctl.py install claude --yes
+python3 agent/promptctl/promptctl.py path claude
+```
+
+An agent can follow
+[`../promptctl/AGENT_SETUP.md`](../promptctl/AGENT_SETUP.md) instead; it calls
+the same program and produces the same layout.
+
+For fixed-source deployment or an existing environment that needs stricter
+backup/restore ownership, use
+[`../promptctl/advanced/claude/`](../promptctl/advanced/claude/):
+
+```bash
+# Preview only
+python3 agent/promptctl/advanced/claude/claude-instruct.py \
+  install --scope user --name personal-rules
+
+# Apply after reviewing the preview
+python3 agent/promptctl/advanced/claude/claude-instruct.py \
+  install --scope user --name personal-rules \
+  --file /path/to/personal-rules.md --yes
+```
+
+Both Promptctl ownership models remain independent of `uninstall.sh`.
+
 ## Automation and custom providers
 
 ```bash
@@ -68,14 +102,23 @@ permission prompts and should stay inside an isolated sandbox.
 
 ## MCP and uninstall
 
-The interactive MCP menu offers Brave Search, Exa, Context7, and Chrome
-DevTools. Chrome DevTools runs locally through
-`npx -y chrome-devtools-mcp@latest` and requires Node.js LTS, npm, and a
-current Google Chrome installation.
+The interactive MCP menu offers Brave Search, Exa, Context7, GitHub, and Chrome
+DevTools. Chrome DevTools runs locally and passes CloakBrowser's Chromium path
+to `npx -y chrome-devtools-mcp@latest --executablePath ...`. The first setup
+can download roughly 200 MB. Set `CLOAKBROWSER_BINARY_PATH`, pass
+`--cloakbrowser-executable PATH`, or use `--stock-chrome` to opt out.
+
+GitHub uses the hosted `https://api.githubcopilot.com/mcp/` endpoint. Its
+header expands `GITHUB_PERSONAL_ACCESS_TOKEN` when Claude Code starts; the PAT
+is not written into `~/.claude.json`. MCP servers live in that official
+user-scoped file, while provider/model settings remain in
+`~/.claude/settings.json`.
 
 ```bash
 ./mcp.sh
 ./mcp.sh --provider chrome-devtools
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
+  ./mcp.sh --provider github --provider chrome-devtools
 ./uninstall.sh
 
 # Or remove only one part:

@@ -11,7 +11,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
-| [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | JPopSuki RSS creation and Autobrr batch-management toolkit |
+| [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
@@ -19,13 +19,14 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
-| [`agent/`](./agent/) | Interactive multi-provider setup scripts for Claude Code, Codex CLI, OpenCode, and Pi, plus web/docs/browser MCP packs where supported |
+| [`agent/`](./agent/) | Provider setup, MCP profiles, and Promptctl persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
 | [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap an opinionated Windows 10/11 development workstation |
+| [`workstation-utils/`](./workstation-utils/) | Install and explicitly uninstall profile-based everyday utilities on Windows and macOS |
 | [`windows-wsl2/`](./windows-wsl2/) | Initialize, update, inspect, and manage WSL 2 on Windows |
 | [`ghostty/`](./ghostty/) | Install Ghostty on macOS/Linux and configure SSH-safe shell integration |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
@@ -50,8 +51,8 @@ change is merged.
 Interactive setup scripts for AI coding agents. Each installer offers
 protocol-compatible mainstream providers, current model presets, a custom
 provider URL/key/model flow, and non-interactive flags. The same folders also
-ship optional Brave Search, Exa, Context7, and Chrome DevTools MCP
-configuration.
+ship optional Brave Search, Exa, Context7, GitHub, and CloakBrowser-backed
+Chrome DevTools MCP configuration.
 
 See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:
@@ -60,6 +61,21 @@ agents. Today:
 - [`agent/codex/`](./agent/codex/) — OpenAI, OpenRouter, or a custom Responses-compatible endpoint.
 - [`agent/opencode/`](./agent/opencode/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider.
 - [`agent/pi/`](./agent/pi/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider through Pi's native API adapters.
+- [`agent/promptctl/`](./agent/promptctl/) — persistent-instruction setup for Claude Code and Codex with direct and Agent-guided entrypoints.
+
+## promptctl
+
+[`agent/promptctl/`](./agent/promptctl/) manages persistent instructions for
+coding agents. Clean workstations and disposable sandboxes can run
+[`promptctl.py`](./agent/promptctl/promptctl.py) directly or let an agent
+follow [`AGENT_SETUP.md`](./agent/promptctl/AGENT_SETUP.md); both routes create
+the same user-editable instruction files and owned links.
+
+Advanced Claude and Codex deployers are kept under
+[`agent/promptctl/advanced/`](./agent/promptctl/advanced/) for fixed-source
+deployment, migration, hook isolation, and recovery. Promptctl belongs to the
+`agent/` product family while retaining an install and uninstall lifecycle
+independent from provider credentials and MCP configuration.
 
 ## Validation
 
@@ -79,16 +95,22 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh
+bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh
 ./ghostty/tests/setup-test.sh
 ./ghostty/tests/ssh-terminfo-test.sh
+./workstation-utils/tests/macos-test.sh
 python3 sing-box/generate-client-config.py --help
+node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
+python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests
+python3 -m pytest agent/promptctl/advanced/claude/tests
+python3 -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
 ```
 
 On Windows, validate the PowerShell tools with:
 
 ```powershell
 .\docker-sandboxes\tests\sbx-manager-test.ps1
+.\workstation-utils\tests\windows-test.ps1
 .\windows-dev-setup\tests\windows-dev-setup-test.ps1
 .\windows-wsl2\tests\setup-test.ps1
 ```

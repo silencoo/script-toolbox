@@ -64,14 +64,23 @@ DEEPSEEK_API_KEY=... \
 
 ## MCP and uninstall
 
-The interactive MCP menu offers Brave Search, Exa, Context7, and Chrome
-DevTools. Chrome DevTools uses OpenCode's local MCP transport through
-`npx -y chrome-devtools-mcp@latest` and requires Node.js LTS, npm, and a
-current Google Chrome installation.
+The interactive MCP menu offers Brave Search, Exa, Context7, GitHub, and Chrome
+DevTools. Chrome DevTools uses OpenCode's local MCP transport and passes
+CloakBrowser's Chromium path to
+`npx -y chrome-devtools-mcp@latest --executablePath ...`. The first setup can
+download roughly 200 MB. Set `CLOAKBROWSER_BINARY_PATH`, pass
+`--cloakbrowser-executable PATH`, or use `--stock-chrome` to opt out.
+
+GitHub uses the hosted `https://api.githubcopilot.com/mcp/` endpoint. Its
+header expands `{env:GITHUB_PERSONAL_ACCESS_TOKEN}` when OpenCode starts, with
+OAuth disabled for the PAT connection; the PAT is not written into
+`opencode.json`.
 
 ```bash
 ./mcp.sh
 ./mcp.sh --provider chrome-devtools
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
+  ./mcp.sh --provider github --provider chrome-devtools
 ./uninstall.sh
 
 # Or remove only one part:

@@ -59,16 +59,59 @@ codex --profile script_toolbox
 
 Use `--skip-validate` for gateways without a models endpoint.
 
+## Persistent instructions
+
+Codex instruction-file deployment is managed by Promptctl under `agent/`,
+independently from provider and MCP state. For a clean machine or sandbox,
+create a lightweight config block and an editable user-owned Markdown file:
+
+```bash
+python3 agent/promptctl/promptctl.py install codex
+python3 agent/promptctl/promptctl.py install codex --yes
+python3 agent/promptctl/promptctl.py path codex
+```
+
+An agent can follow
+[`../promptctl/AGENT_SETUP.md`](../promptctl/AGENT_SETUP.md) instead; it calls
+the same program and produces the same layout.
+
+For fixed-source deployment, migration, hook isolation, recovery, or layered
+uninstall, use the strict
+[`../promptctl/advanced/codex/`](../promptctl/advanced/codex/) tool:
+
+```bash
+python3 agent/promptctl/advanced/codex/codex-instruct.py \
+  --file /path/to/personal-rules.md \
+  --codex-dir ~/.codex \
+  --dry-run
+
+python3 agent/promptctl/advanced/codex/codex-instruct.py \
+  --file /path/to/personal-rules.md \
+  --codex-dir ~/.codex \
+  --yes
+```
+
+Both Promptctl ownership models remain independent of
+`agent/codex/uninstall.sh`.
+
 ## MCP and uninstall
 
-The interactive MCP menu offers Brave Search, Exa, Context7, and Chrome
-DevTools. Chrome DevTools uses Codex's local STDIO transport through
-`npx -y chrome-devtools-mcp@latest` and requires Node.js LTS, npm, and a
-current Google Chrome installation.
+The interactive MCP menu offers Brave Search, Exa, Context7, GitHub, and Chrome
+DevTools. Chrome DevTools uses Codex's local STDIO transport and passes
+CloakBrowser's Chromium path to
+`npx -y chrome-devtools-mcp@latest --executablePath ...`. The first setup can
+download roughly 200 MB. Set `CLOAKBROWSER_BINARY_PATH`, pass
+`--cloakbrowser-executable PATH`, or use `--stock-chrome` to opt out.
+
+GitHub uses the hosted `https://api.githubcopilot.com/mcp/` endpoint. Codex's
+config references `GITHUB_PERSONAL_ACCESS_TOKEN` through
+`bearer_token_env_var`; the PAT is not written into `config.toml`.
 
 ```bash
 ./mcp.sh
 ./mcp.sh --provider chrome-devtools
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
+  ./mcp.sh --provider github --provider chrome-devtools
 ./uninstall.sh
 
 # Or remove only one part:

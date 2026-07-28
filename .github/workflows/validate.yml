@@ -15,14 +15,27 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
       - name: Install shell test dependencies
         run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install Python test dependencies
+        run: python -m pip install pytest
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Test JPopSuki Autobrr toolkit
+        run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Check Bash syntax
-        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh
+        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh
       - name: Test agent setup scripts
         run: ./agent/test.sh
+      - name: Test Promptctl
+        run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
+      - name: Test Promptctl advanced Claude deployer
+        run: python -m pytest agent/promptctl/advanced/claude/tests
+      - name: Test Promptctl advanced Codex deployer
+        run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
       - name: Check zsh kit syntax
         run: |
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.zshrc
@@ -31,6 +44,8 @@ jobs:
         run: |
           ./ghostty/tests/setup-test.sh
           ./ghostty/tests/ssh-terminfo-test.sh
+      - name: Test workstation utility planner
+        run: ./workstation-utils/tests/macos-test.sh
       - name: Install Worker tooling
         run: npm ci
         working-directory: workers/cloudflare-vless
@@ -45,9 +60,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Python test dependencies
+        run: python -m pip install pytest
+      - name: Test Promptctl on Windows
+        run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
+      - name: Test Promptctl advanced Codex deployer on Windows
+        run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
+      - name: Test workstation utilities with Windows PowerShell 5.1
+        shell: powershell
+        run: ./workstation-utils/tests/windows-test.ps1
       - name: Test Windows PowerShell managers
         shell: pwsh
         run: |
           ./docker-sandboxes/tests/sbx-manager-test.ps1
+          ./workstation-utils/tests/windows-test.ps1
           ./windows-dev-setup/tests/windows-dev-setup-test.ps1
           ./windows-wsl2/tests/setup-test.ps1

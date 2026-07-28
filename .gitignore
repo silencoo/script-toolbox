@@ -8,8 +8,5 @@ node_modules/
 .DS_Store
 __pycache__/
 *.py[cod]
-jpopsuki-rss-autobrr/.venv/
-
 # Local JPopSuki data contains account-bound URL credentials and user choices.
 jpopsuki-rss-autobrr/data/subscriptions.json
-jpopsuki-rss-autobrr/data/keywords.txt

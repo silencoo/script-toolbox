@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+if [[ "$1" == 'list' && "$2" == '--cask' &&
+    ( "$4" == 'keepassxc' || "$4" == 'stats' ) ]]; then
+  printf '%s 1.0\n' "$4"
+  exit 0
+fi
+
+exit 1

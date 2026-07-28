@@ -1,165 +1,180 @@
-# Autobrr Batch Import Workflow
+# Browser Reconciliation Workflow
 
-This document describes the API sequence implemented by
-`scripts/import_autobrr.py`. Run the importer with `DRY_RUN=true` first because
-Autobrr API behavior can differ between versions.
-
-## Inputs
-
-The importer reads a private JSON array from `data/subscriptions.json` by
-default:
-
-```json
-[
-  {
-    "label": "Example Artist Album",
-    "url": "https://jpopsuki.eu/feeds.php?feed=torrents_notify_YOUR_USER_ID_YOUR_FEED_TOKEN&user=YOUR_USER_ID&auth=YOUR_AUTH&passkey=YOUR_PASSKEY&authkey=YOUR_AUTHKEY"
-  }
-]
-```
-
-Real JPopSuki RSS URLs contain account credentials. The real file is ignored
-by Git; `data/subscriptions.example.json` is safe to commit.
-
-Required runtime configuration:
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `AUTO_BRR_BASE` | `http://localhost:7474` | Autobrr base URL |
-| `AUTO_BRR_COOKIE` | none | Cookie header value from an authenticated Autobrr session |
-| `AUTO_BRR_QBIT_ID` | `1` | Existing qBittorrent client id in Autobrr |
-| `SAVE_BASE` | `/downloads/jpopsuki` | Root path for generated qBittorrent save paths |
-| `INTERVAL_START` | `600` | Starting point for per-feed prime intervals |
-| `SUB_FILE` | `data/subscriptions.json` | Subscription JSON path |
-| `DRY_RUN` | `false` | Print planned writes without changing Autobrr |
-
-## Per-subscription sequence
-
-For each `{label, url}` entry, the importer performs the following steps.
-
-### 1. Create an RSS indexer template
-
-`POST /api/indexer`
-
-```json
-{
-  "enabled": true,
-  "identifier": "rss",
-  "implementation": "rss",
-  "name": "Example Artist Album",
-  "irc": {},
-  "settings": {},
-  "feed": {
-    "url": "https://jpopsuki.eu/feeds.php?...",
-    "settings": {"download_type": "TORRENT"}
-  }
-}
-```
-
-The returned `id` becomes `indexer_template_id`.
-
-### 2. Create the feed
-
-`POST /api/feeds`
-
-```json
-{
-  "name": "Example Artist Album",
-  "enabled": false,
-  "type": "RSS",
-  "url": "https://jpopsuki.eu/feeds.php?...",
-  "interval": 601,
-  "timeout": 60,
-  "indexer_id": 199,
-  "settings": {"download_type": "TORRENT"}
-}
-```
-
-`indexer_id` is the id returned by step 1. The script generates a different
-prime interval for each feed—601, 607, 613, and so on when
-`INTERVAL_START=600`.
-
-If Autobrr returns a different interval, the importer sends
-`PUT /api/feeds/{feed_id}` with the requested prime interval.
-
-### 3. Enable the feed
-
-`PATCH /api/feeds/{feed_id}/enabled`
-
-```json
-{"enabled": true}
-```
-
-### 4. Create a disabled filter
-
-`POST /api/filters`
-
-```json
-{
-  "name": "Example Artist Album",
-  "enabled": false,
-  "resolutions": [],
-  "codecs": [],
-  "sources": [],
-  "containers": [],
-  "origins": []
-}
-```
-
-The returned `id` becomes `filter_id`.
-
-### 5. Bind the indexer and qBittorrent action
-
-The importer first reads `GET /api/filters/{filter_id}` to preserve an existing
-action id when present, then sends `PUT /api/filters/{filter_id}`.
-
-Important fields:
-
-```json
-{
-  "id": 2195,
-  "name": "Example Artist Album",
-  "enabled": true,
-  "indexers": [
-    {"id": 199, "name": "Example Artist Album"}
-  ],
-  "actions": [
-    {
-      "id": 0,
-      "name": "new action",
-      "type": "QBITTORRENT",
-      "enabled": true,
-      "tags": "Example Artist Album",
-      "save_path": "/downloads/jpopsuki/Example Artist/Album",
-      "client_id": 1,
-      "reannounce_interval": 7,
-      "reannounce_max_attempts": 25
-    }
-  ]
-}
-```
-
-The `indexers` entry uses `indexer_template_id` from step 1. The qBittorrent
-`client_id` comes from `AUTO_BRR_QBIT_ID`.
-
-## Save-path generation
-
-The label is split on its final space:
+The toolkit runs through one privileged userscript in two page modes. There is
+no local service or command-line component.
 
 ```text
-Example Artist Album -> /downloads/jpopsuki/Example Artist/Album
-Example Artist TV-Music -> /downloads/jpopsuki/Example Artist/TV-Music
+JPopSuki page
+├── notification-filter creation
+└── private RSS discovery
+        │
+        │ timestamped userscript staging (24-hour validity)
+        ▼
+Autobrr page
+└── userscript plan/apply engine
+    ├── browser-local managed state
+    └── authenticated Autobrr API client
+        │
+        ▼
+Autobrr
+├── RSS indexer
+├── RSS feed
+└── filter + qBittorrent action
 ```
 
-Labels without a space use `Misc` as the category.
+## Privileged browser APIs
 
-## Safe execution
+The script uses:
 
-1. Confirm `data/subscriptions.json` is ignored by Git.
-2. Load `AUTO_BRR_COOKIE` from the local `.env` file.
-3. Run `DRY_RUN=true python scripts/import_autobrr.py`.
-4. Review every label, save path, client id, and interval.
-5. Test a small real batch before importing the complete list.
+- `GM_xmlhttpRequest` for authenticated JPopSuki form submission and explicit
+  Autobrr API requests;
+- `GM_getValue`, `GM_setValue`, and `GM_deleteValue` for configuration and
+  managed state;
+- `GM_openInTab` to open the configured Autobrr page after RSS staging.
 
-Dry-run logs mask `feed`, `user`, `auth`, `authkey`, and `passkey` URL values.
-Avoid sharing raw Autobrr response bodies or the private subscription JSON.
+Only localhost port 7474 and `127.0.0.1` port 7474 are included as Autobrr
+pages. `@connect self` permits requests only to the page where the script is
+currently running; localhost and `127.0.0.1` are also listed explicitly. A
+remote Autobrr deployment therefore needs only an exact `@include`, while the
+same-origin API-base check prevents it from targeting another host.
+
+The UI is attached through a closed Shadow DOM. The JPopSuki mode never reads
+the Autobrr API token or managed state. It only stages RSS rows and the target
+Autobrr URL. Token entry, API access, managed state, and deletion exist only in
+Autobrr mode.
+
+## Input discovery and validation
+
+RSS subscriptions are extracted from `feeds.php?feed=torrents_notify_...`
+links already present in the notification-page DOM. Before staging, the
+manager verifies:
+
+- normalized, bounded labels without control bytes;
+- HTTPS JPopSuki `/feeds.php` URLs;
+- required feed and account credential parameters;
+- duplicate-label and duplicate-URL conflicts;
+- absolute POSIX or Windows save paths without traversal segments;
+- positive interval and qBittorrent client IDs.
+
+The browser computes SHA-256 label keys and URL fingerprints with Web Crypto.
+Raw RSS URLs are written only to a timestamped userscript staging record. A
+record older than 24 hours is rejected and removed the next time Autobrr mode
+starts. It can also be manually cleared and is removed immediately after a
+fully successful Apply. Raw URLs are never written to managed state.
+
+## Authentication and transport
+
+Autobrr API calls originate from the Autobrr page and send the configured API
+key in `X-API-Token`. The configured API base must have the same origin as the
+current Autobrr page. Requests use a 30-second timeout and anonymous mode so
+browser cookies are not sent.
+
+JPopSuki filter-creation requests are separate same-site form submissions and
+use the current authenticated JPopSuki session. The Autobrr API token is not
+available in that page mode.
+
+Plain HTTP is restricted to `localhost` and `127.0.0.1`. A remote Autobrr
+instance must use HTTPS.
+
+API failures redact RSS query credentials and credential-like JSON fields.
+There are no automatic retries, especially for mutation requests where a
+timeout does not prove the server rejected the write.
+
+## Managed state
+
+The browser storage record uses schema version 1:
+
+```json
+{
+  "schema_version": 1,
+  "items": {
+    "24-character-label-hash": {
+      "label": "Example Artist Album",
+      "url_fingerprint": "64-character-sha256",
+      "interval": 601,
+      "indexer_id": 11,
+      "feed_id": 22,
+      "filter_id": 33,
+      "complete": true
+    }
+  }
+}
+```
+
+The state contains no RSS URL or API token. It is written after each remote ID
+is known, allowing a later page load to resume safely.
+
+For each object type, lookup follows these rules:
+
+1. Prefer the managed ID and verify its current Autobrr name.
+2. If the ID is missing, look for an exact unique name.
+3. Require **Adopt existing** before taking ownership of that name match.
+4. Reject duplicate names and renamed/reused IDs.
+
+## Read-only plan
+
+The manager reads:
+
+```text
+GET /api/download_clients
+GET /api/indexer
+GET /api/feeds
+GET /api/filters
+GET /api/filters/{id}
+```
+
+It verifies the selected download client is a live qBittorrent client and
+computes a row containing indexer, feed, and filter operations plus the final
+save path. Planning never writes managed state or Autobrr.
+
+## Apply sequence
+
+For each subscription:
+
+1. Reuse or create the RSS indexer with `POST /api/indexer`.
+2. Save `indexer_id` to browser state.
+3. Reuse, create, or update the feed through `POST /api/feeds` or
+   `PUT /api/feeds/{id}`.
+4. Save `feed_id`; enable it with `PATCH /api/feeds/{id}/enabled`.
+5. Reuse or create the filter with `POST /api/filters`.
+6. Save `filter_id`.
+7. Read the full filter and reconcile its indexer and qBittorrent action with
+   `PATCH /api/filters/{id}`, falling back to `PUT` only for a server that
+   rejects PATCH with 404 or 405.
+8. Mark the browser-state entry complete.
+
+Known filter rules and non-qBittorrent actions are preserved. Feed intervals
+remain stable across future runs by reusing each managed interval.
+
+Independent subscriptions continue after an item failure. The next Plan shows
+the remaining drift.
+
+## Cleanup and deletion
+
+Cleanup considers only managed:
+
+- filters whose `indexers` array is empty;
+- feeds whose `enabled` value is boolean `false`.
+
+Full bundle deletion uses literal or regex label search in the browser UI,
+then verifies all live ID/name pairs and removes:
+
+```text
+filter → feed → indexer
+```
+
+After each successful deletion the corresponding state ID is removed. Missing
+remote objects are reported and their stale IDs are cleared only as part of a
+confirmed full-bundle deletion.
+
+Neither workflow touches filesystem data or objects outside managed state.
+
+## Backup and recovery
+
+**Export state** downloads the schema above. **Import state** accepts only
+validated schema-version-1 records and requires an `IMPORT` confirmation before
+replacing browser state.
+
+A corrupt browser record blocks Plan, Apply, cleanup, deletion, and state
+export. This prevents an implicit empty-state fallback from creating or
+claiming objects.

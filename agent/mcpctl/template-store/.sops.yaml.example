@@ -1,0 +1,6 @@
+# Rename this file to .sops.yaml and replace both example recipients.
+creation_rules:
+  - path_regex: secrets\.sops\.json$
+    age:
+      - age1-device-public-recipient
+      - age1-offline-recovery-recipient

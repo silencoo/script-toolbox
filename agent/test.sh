@@ -84,7 +84,7 @@ run_config_tests() {
     "$SCRIPT_DIR/opencode/setup.sh" \
       --provider minimax-global --key test-minimax \
       --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
-  jq -e '
+  jq -e --arg executable "${fake_bin}/node" '
     .model == "script-toolbox-minimax-global/MiniMax-M3"
     and .provider["script-toolbox-minimax-global"].models["MiniMax-M3"].name == "MiniMax-M3"
   ' "$minimax_home/.config/opencode/opencode.json" >/dev/null || {
@@ -151,22 +151,47 @@ run_config_tests() {
     and .env.ANTHROPIC_API_KEY == null
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq '
+    .mcpServers.context7 = {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "_managed_by": "agent/claude-code/mcp.sh"
+    }
+  ' "$test_home/.claude/settings.json" > "$test_home/legacy-claude-mcp.json"
+  mv "$test_home/legacy-claude-mcp.json" "$test_home/.claude/settings.json"
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/mcp.sh" \
+      --provider chrome-devtools --stock-chrome --skip-validate >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     BRAVE_API_KEY='test-"brave\key' \
     EXA_API_KEY='test-exa' \
+    GITHUB_PERSONAL_ACCESS_TOKEN='test-github' \
     "$SCRIPT_DIR/claude-code/mcp.sh" \
-      --all --skip-validate >/dev/null || {
+      --all --skip-validate \
+      --cloakbrowser-executable "${fake_bin}/node" >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
-  jq -e '
+  jq -e --arg executable "${fake_bin}/node" '
     .mcpServers.brave._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers.brave.headers["X-Subscription-Token"] == "test-\"brave\\key"
     and .mcpServers.exa.headers.Authorization == "Bearer test-exa"
     and .mcpServers.context7._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers.context7.headers == null
+    and .mcpServers.github.url == "https://api.githubcopilot.com/mcp/"
+    and .mcpServers.github.headers.Authorization == "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    and .mcpServers.github._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers["chrome-devtools"].command == "npx"
-    and .mcpServers["chrome-devtools"].args == ["-y", "chrome-devtools-mcp@latest"]
+    and .mcpServers["chrome-devtools"].args ==
+      ["-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]
     and .mcpServers["chrome-devtools"]._managed_by == "agent/claude-code/mcp.sh"
+  ' "$test_home/.claude.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  ! grep -q 'test-github' "$test_home/.claude.json" || {
+    rm -rf "$test_root"; return 1;
+  }
+  jq -e '
+    .mcpServers == null
     and .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
@@ -174,6 +199,9 @@ run_config_tests() {
     "$SCRIPT_DIR/claude-code/mcp.sh" --uninstall >/dev/null || {
       rm -rf "$test_root"; return 1;
     }
+  jq -e '
+    .mcpServers == null
+  ' "$test_home/.claude.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   jq -e '
     .mcpServers == null
     and .env.ANTHROPIC_AUTH_TOKEN == "test-claude-token"
@@ -202,13 +230,16 @@ run_config_tests() {
     >> "$test_home/.codex/config.toml"
   HOME="$test_home" PATH="${fake_bin}:${system_path}" BRAVE_API_KEY=test-brave \
     "$SCRIPT_DIR/codex/mcp.sh" \
-      --provider brave --skip-validate >/dev/null || {
+      --provider brave --provider chrome-devtools \
+      --stock-chrome --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    GITHUB_PERSONAL_ACCESS_TOKEN='test-github' \
     "$SCRIPT_DIR/codex/mcp.sh" \
-      --provider exa --provider chrome-devtools \
-      --key 'exa=test-"exa\key' --skip-validate >/dev/null || {
+      --provider exa --provider github --provider chrome-devtools \
+      --key 'exa=test-"exa\key' --skip-validate \
+      --cloakbrowser-executable "${fake_bin}/node" >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
   grep -q '\[mcp_servers.user_owned\]' "$test_home/.codex/config.toml" || {
@@ -226,10 +257,21 @@ run_config_tests() {
   grep -q '\[mcp_servers.chrome-devtools\]' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
+  grep -q '\[mcp_servers.github\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -qF 'bearer_token_env_var = "GITHUB_PERSONAL_ACCESS_TOKEN"' \
+    "$test_home/.codex/config.toml" || {
+      rm -rf "$test_root"; return 1;
+    }
+  ! grep -q 'test-github' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
   grep -q 'command = "npx"' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
-  grep -qF 'args = ["-y", "chrome-devtools-mcp@latest"]' "$test_home/.codex/config.toml" || {
+  grep -qF "args = [\"-y\", \"chrome-devtools-mcp@latest\", \"--executablePath\", \"${fake_bin}/node\"]" \
+    "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
   grep -q '\[model_providers.script_toolbox_openrouter\]' "$test_home/.codex/config.toml" || {
@@ -262,20 +304,37 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    EXA_API_KEY='test-"exa\key' \
     "$SCRIPT_DIR/opencode/mcp.sh" \
-      --provider exa --provider chrome-devtools --skip-validate >/dev/null || {
+      --provider chrome-devtools --stock-chrome --skip-validate >/dev/null || {
         rm -rf "$test_root"; return 1;
       }
-  jq -e '
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    EXA_API_KEY='test-"exa\key' \
+    GITHUB_PERSONAL_ACCESS_TOKEN='test-github' \
+    "$SCRIPT_DIR/opencode/mcp.sh" \
+      --provider exa --provider github --provider chrome-devtools \
+      --skip-validate --cloakbrowser-executable "${fake_bin}/node" >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+  jq -e --arg executable "${fake_bin}/node" '
     .mcp.exa._managed_by == "agent/opencode/mcp.sh"
+    and .mcp.exa.type == "remote"
     and .mcp.exa.headers.Authorization == "Bearer test-\"exa\\key"
+    and .mcp.github.type == "remote"
+    and .mcp.github.url == "https://api.githubcopilot.com/mcp/"
+    and .mcp.github.oauth == false
+    and .mcp.github.headers.Authorization == "Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+    and .mcp.github._managed_by == "agent/opencode/mcp.sh"
     and .mcp["chrome-devtools"].type == "local"
-    and .mcp["chrome-devtools"].command == ["npx", "-y", "chrome-devtools-mcp@latest"]
+    and .mcp["chrome-devtools"].command ==
+      ["npx", "-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]
     and .mcp["chrome-devtools"]._managed_by == "agent/opencode/mcp.sh"
     and .provider["script-toolbox-google"].npm == "@ai-sdk/google"
     and .model == "script-toolbox-google/gemini-3.6-flash"
   ' "$test_home/.config/opencode/opencode.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  ! grep -q 'test-github' "$test_home/.config/opencode/opencode.json" || {
+    rm -rf "$test_root"; return 1;
+  }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/opencode/mcp.sh" --uninstall >/dev/null || {
       rm -rf "$test_root"; return 1;
@@ -316,10 +375,35 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
 
+  # Promptctl must coexist with provider/MCP TOML and keep an independent
+  # uninstall lifecycle.
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    python3 "$SCRIPT_DIR/promptctl/promptctl.py" \
+      install codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
+  grep -qF '# script-toolbox-promptctl:start profile=personal' \
+    "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  [ -f "$test_home/.codex/instructions/personal.md" ] || {
+    rm -rf "$test_root"; return 1;
+  }
+
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/codex/setup.sh" --uninstall >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -qF 'agent/codex/setup.sh' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  grep -qF '# script-toolbox-promptctl:start profile=personal' \
+    "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  [ -f "$test_home/.codex/instructions/personal.md" ] || {
+    rm -rf "$test_root"; return 1;
+  }
   [ ! -e "$test_home/.codex/provider-keys/script_toolbox_openrouter.key" ] || {
+    rm -rf "$test_root"; return 1;
+  }
+  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
+    python3 "$SCRIPT_DIR/promptctl/promptctl.py" \
+      uninstall codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
+  ! grep -qF 'script-toolbox-promptctl' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  [ -f "$test_home/.codex/instructions/personal.md" ] || {
     rm -rf "$test_root"; return 1;
   }
 
@@ -374,9 +458,16 @@ else
   fail=1
 fi
 
+if "$SCRIPT_DIR/mcpctl/test.sh"; then
+  :
+else
+  echo "FAIL: mcpctl profile manager tests" >&2
+  fail=1
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "all ${checked} scripts parse cleanly; provider config tests passed."
+  echo "all ${checked} scripts parse cleanly; agent and mcpctl tests passed."
 else
   echo "one or more scripts failed to parse." >&2
 fi

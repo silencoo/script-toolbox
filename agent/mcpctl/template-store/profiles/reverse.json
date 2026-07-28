@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "reverse",
+  "description": "Starter reverse-engineering profile; add private analysis MCPs to the catalog",
+  "extends": [
+    "base"
+  ],
+  "enable": [],
+  "disable": [
+    "chrome-devtools",
+    "brave",
+    "exa"
+  ],
+  "target_overrides": {}
+}

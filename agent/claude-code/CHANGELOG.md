@@ -1,5 +1,16 @@
 # Changelog — claude-code (agent)
 
+## 2026-07-28 — CloakBrowser and GitHub MCP
+
+- Chrome DevTools now resolves CloakBrowser's platform Chromium binary and
+  passes it through `--executablePath`; `--stock-chrome` retains the previous
+  discovery behavior.
+- Added the hosted GitHub MCP provider with a runtime
+  `${GITHUB_PERSONAL_ACCESS_TOKEN}` header reference, keeping the PAT out of
+  `~/.claude.json`.
+- MCP entries now use Claude Code's user-scoped `~/.claude.json`; a refresh
+  removes only this script's obsolete entries from `~/.claude/settings.json`.
+
 ## 2026-07-26 — Chrome DevTools MCP
 
 - Added keyless Chrome DevTools to the interactive MCP checklist,

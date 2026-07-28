@@ -1,0 +1,77 @@
+# This is the source catalog for workstation-utils/macos/setup.sh.
+#
+# Entries are deliberately disabled when this file is passed directly to
+# `brew bundle`: installing the complete catalog would silently bypass profile
+# and optional-package selection. setup.sh reads the adjacent metadata and
+# streams a filtered Brewfile to Homebrew Bundle.
+
+# workstation-package|core|cask|keepassxc|KeePassXC|required
+cask "keepassxc" if false
+# workstation-package|core|brew|sevenzip|7-Zip CLI|required
+brew "sevenzip" if false
+# workstation-package|core|brew|zstd|Zstandard CLI|required
+brew "zstd" if false
+# workstation-package|core|cask|keka|Keka|required
+cask "keka" if false
+# workstation-package|core,desktop|cask|localsend|LocalSend|required
+cask "localsend" if false
+# workstation-package|core|cask|grandperspective|GrandPerspective|required
+cask "grandperspective" if false
+# workstation-package|core|cask|iina|IINA|required
+cask "iina" if false
+# workstation-package|core,desktop|cask|rectangle|Rectangle|required
+cask "rectangle" if false
+
+# workstation-package|media|brew|yt-dlp|yt-dlp|required
+brew "yt-dlp" if false
+# workstation-package|media|brew|ffmpeg|FFmpeg|required
+brew "ffmpeg" if false
+# workstation-package|media|cask|handbrake-app|HandBrake|required
+cask "handbrake-app" if false
+# workstation-package|media|brew|imagemagick|ImageMagick|required
+brew "imagemagick" if false
+# workstation-package|media|brew|exiftool|ExifTool|required
+brew "exiftool" if false
+# workstation-package|media|brew|aria2|aria2|required
+brew "aria2" if false
+# workstation-package|media|brew|mpv|mpv|optional
+brew "mpv" if false
+
+# workstation-package|maintenance|brew|czkawka|Czkawka/Krokiet|required
+brew "czkawka" if false
+# workstation-package|maintenance|brew|qpdf|qpdf|required
+brew "qpdf" if false
+# workstation-package|maintenance|brew|smartmontools|smartmontools|required
+brew "smartmontools" if false
+# workstation-package|maintenance|cask|stats|Stats|required
+cask "stats" if false
+# workstation-package|maintenance|brew|restic|restic|required
+brew "restic" if false
+# workstation-package|maintenance|brew|rclone|rclone|required
+brew "rclone" if false
+# workstation-package|maintenance|cask|appcleaner|AppCleaner|optional
+cask "appcleaner" if false
+
+# workstation-package|desktop|cask|keepingyouawake|KeepingYouAwake|required
+cask "keepingyouawake" if false
+# workstation-package|desktop|cask|maccy|Maccy|optional
+cask "maccy" if false
+# workstation-package|desktop|cask|raycast|Raycast|optional
+cask "raycast" if false
+
+# workstation-package|admin|brew|nmap|Nmap|required
+brew "nmap" if false
+# workstation-package|admin|cask|wireshark-app|Wireshark|required
+cask "wireshark-app" if false
+# workstation-package|admin|cask|tailscale-app|Tailscale|required
+cask "tailscale-app" if false
+# workstation-package|admin|cask|moonlight|Moonlight|required
+cask "moonlight" if false
+# workstation-package|admin|tap|LizardByte/homebrew|LizardByte Homebrew tap|required
+tap "LizardByte/homebrew" if false
+# workstation-package|admin|brew|lizardbyte/homebrew/sunshine|Sunshine|required
+brew "lizardbyte/homebrew/sunshine" if false
+# workstation-package|admin|cask|cryptomator|Cryptomator|required
+cask "cryptomator" if false
+# workstation-package|admin|cask|veracrypt|VeraCrypt|optional
+cask "veracrypt" if false

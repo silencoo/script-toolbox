@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-store",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-27",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "MAX_BLOB_BYTES": "5242880"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MCP_STORE",
+      "bucket_name": "mcp-store"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  }
+}

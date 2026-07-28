@@ -9,10 +9,10 @@ JPopSuki integrations. Account-bound RSS values have been replaced with:
 - `YOUR_AUTHKEY`
 - `YOUR_PASSKEY`
 
-The examples intentionally contain no Cookie or Authorization header. Supply
-Autobrr authentication at runtime through `AUTO_BRR_COOKIE`; do not paste a
-real session into these files.
+The examples intentionally contain no Cookie or Authorization header. Enter
+the Autobrr API token only in the userscript manager UI; do not paste a real
+key or session into these reference files.
 
 Endpoint ids, payload fields, and browser headers may vary between software
-versions. Prefer the Python tools for normal operation and use these requests
-only when diagnosing an API change.
+versions. Prefer the browser manager for normal operation and use these
+requests only when diagnosing an API change.

@@ -1,0 +1,1382 @@
+#!/usr/bin/env bash
+# mcpctl — apply task-oriented MCP profiles to supported coding agents.
+#
+# The existing per-agent mcp.sh scripts remain independent. mcpctl owns only
+# entries marked with MANAGED_BY (JSON clients) or its explicit TOML markers.
+
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MANAGED_BY="agent/mcpctl"
+CODEX_BEGIN="# >>> ${MANAGED_BY} >>>"
+CODEX_END="# <<< ${MANAGED_BY} <<<"
+TEMPLATE_STORE="${SCRIPT_DIR}/template-store"
+
+TMP_FILES=()
+
+cleanup() {
+  local path
+  for path in ${TMP_FILES[@]+"${TMP_FILES[@]}"}; do
+    [ -n "$path" ] && rm -f "$path"
+  done
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+log()  { printf '%s\n' "$*"; }
+info() { printf '▸ %s\n' "$*"; }
+ok()   { printf '✓ %s\n' "$*"; }
+warn() { printf '! %s\n' "$*" >&2; }
+die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+mcpctl — apply task-oriented MCP profiles to coding agents
+
+Usage:
+  mcpctl --target <claude|codex|opencode> --profile <name> [options]
+  mcpctl apply   --target <target> --profile <name> [options]
+  mcpctl plan    --target <target> --profile <name> [options]
+  mcpctl current --target <target> [options]
+  mcpctl init [--store <directory>]
+  mcpctl remote init --endpoint <https-url> [options]
+  mcpctl remote status
+  mcpctl remote recovery
+  mcpctl backup [options]
+  mcpctl restore [--version <id>] [--recovery-file <file>] [--force]
+  mcpctl versions
+  mcpctl profile list [--store <directory>]
+  mcpctl profile show <name> [--target <target>] [--store <directory>]
+  mcpctl server list [--store <directory>]
+  mcpctl server show <name> [--target <target>] [--store <directory>]
+
+Options:
+  --target <name>       Target client: claude, codex, or opencode.
+  --profile <name>      Task profile to resolve and apply.
+  --enable <server>     Enable one extra server after profile resolution.
+                        Repeatable.
+  --disable <server>    Disable one server after profile resolution.
+                        Repeatable; disable wins over enable.
+  --store <directory>   Store containing catalog.json and profiles/.
+  --secrets <file>      SOPS-encrypted JSON secret file.
+  --endpoint <url>      HTTPS endpoint for "remote init".
+  --create-token-file <file>
+                        Read the service's store-creation token from a file.
+  --remote-config <file>
+                        Local mode-0600 remote capability configuration.
+  --version <id>        Restore a specific remote backup version.
+  --recovery-file <file>
+                        Read a recovery code from a file instead of prompting.
+  --force               Replace same-name entries not owned by mcpctl.
+                        For restore, overwrite an existing local store.
+  --dry-run             Alias for plan.
+  -h, --help            Show this help.
+
+Environment:
+  MCPCTL_STORE                  Default store directory.
+  MCPCTL_SECRETS_FILE           Default encrypted secret file.
+  MCPCTL_CREATE_TOKEN_FILE      Store-creation token file for remote init.
+  MCPCTL_REMOTE_CONFIG          Default remote capability configuration.
+  MCPCTL_STATE_FILE             Override local applied-state path.
+  MCPCTL_CLAUDE_CONFIG          Override Claude settings path.
+  MCPCTL_CODEX_CONFIG           Override Codex config path.
+  MCPCTL_OPENCODE_CONFIG        Override OpenCode config path.
+  MCPCTL_SOPS_BIN               SOPS executable (default: sops).
+
+Secrets:
+  An auth entry names a secret and, optionally, an environment variable.
+  The environment variable wins. Otherwise mcpctl reads
+  .secrets["<name>"] from the SOPS-encrypted secrets file, then from the
+  encrypted cache created by remote restore. Secret values are never shown by
+  plan.
+EOF
+}
+
+make_temp() {
+  local path
+  path="$(mktemp "${TMPDIR:-/tmp}/mcpctl.XXXXXX")"
+  chmod 600 "$path"
+  TMP_FILES+=("$path")
+  TEMP_RESULT="$path"
+}
+
+make_temp_near() {
+  local target="$1" path
+  path="$(mktemp "${target}.tmp.XXXXXX")"
+  chmod 600 "$path"
+  TMP_FILES+=("$path")
+  TEMP_RESULT="$path"
+}
+
+require_jq() {
+  command -v jq >/dev/null 2>&1 ||
+    die "jq is required; install jq and re-run"
+}
+
+validate_id() {
+  local kind="$1" value="$2"
+  if [ "$kind" = "server name" ]; then
+    case "$value" in
+      ""|*[!A-Za-z0-9_-]*)
+        die "invalid ${kind} '${value}'; use letters, numbers, underscore, or hyphen"
+        ;;
+    esac
+    return 0
+  fi
+  case "$value" in
+    ""|*[!A-Za-z0-9._-]*)
+      die "invalid ${kind} '${value}'; use letters, numbers, dot, underscore, or hyphen"
+      ;;
+  esac
+}
+
+canonical_target() {
+  case "$1" in
+    claude|claude-code) printf '%s' "claude" ;;
+    codex)              printf '%s' "codex" ;;
+    opencode)           printf '%s' "opencode" ;;
+    *) die "unsupported target '$1'; choose claude, codex, or opencode" ;;
+  esac
+}
+
+json_quote() {
+  printf '%s' "$1" | jq -Rs .
+}
+
+toml_quote() {
+  # JSON and TOML basic strings share the escapes emitted by jq for the values
+  # accepted by this catalog.
+  printf '%s' "$1" | jq -Rs .
+}
+
+array_has() {
+  local wanted="$1" item
+  shift
+  for item in "$@"; do
+    [ "$item" = "$wanted" ] && return 0
+  done
+  return 1
+}
+
+ENABLED=()
+
+enable_server() {
+  local server="$1"
+  array_has "$server" ${ENABLED[@]+"${ENABLED[@]}"} || ENABLED+=("$server")
+}
+
+disable_server() {
+  local server="$1" item
+  local next=()
+  for item in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    [ "$item" = "$server" ] || next+=("$item")
+  done
+  ENABLED=(${next[@]+"${next[@]}"})
+}
+
+COMMAND="apply"
+TARGET=""
+PROFILE=""
+STORE_ARG=""
+SECRETS_ARG=""
+ENDPOINT=""
+REMOTE_CONFIG_ARG=""
+VERSION=""
+RECOVERY_FILE=""
+CREATE_TOKEN_FILE=""
+FORCE=0
+ENTITY_NAME=""
+CLI_ENABLE=()
+CLI_DISABLE=()
+
+if [ $# -gt 0 ]; then
+  case "$1" in
+    apply|plan|current|init)
+      COMMAND="$1"
+      shift
+      ;;
+    backup|restore|versions)
+      COMMAND="$1"
+      shift
+      ;;
+    remote)
+      shift
+      case "${1:-}" in
+        init|status|recovery|backup|restore|versions)
+          COMMAND="remote-${1}"
+          shift
+          ;;
+        *) die "unknown remote command '${1:-}'; choose init, status, recovery, backup, restore, or versions" ;;
+      esac
+      ;;
+    profile)
+      shift
+      case "${1:-list}" in
+        list)
+          COMMAND="profile-list"
+          [ $# -gt 0 ] && shift
+          ;;
+        show)
+          COMMAND="profile-show"
+          shift
+          [ $# -gt 0 ] || die "profile show requires a profile name"
+          ENTITY_NAME="$1"
+          shift
+          ;;
+        *) die "unknown profile command '${1:-}'" ;;
+      esac
+      ;;
+    server)
+      shift
+      case "${1:-list}" in
+        list)
+          COMMAND="server-list"
+          [ $# -gt 0 ] && shift
+          ;;
+        show)
+          COMMAND="server-show"
+          shift
+          [ $# -gt 0 ] || die "server show requires a server name"
+          ENTITY_NAME="$1"
+          shift
+          ;;
+        *) die "unknown server command '${1:-}'" ;;
+      esac
+      ;;
+    help|-h|--help)
+      usage
+      exit 0
+      ;;
+  esac
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target)
+      [ $# -ge 2 ] || die "--target requires a value"
+      TARGET="$2"
+      shift 2
+      ;;
+    --target=*)
+      TARGET="${1#*=}"
+      shift
+      ;;
+    --profile)
+      [ $# -ge 2 ] || die "--profile requires a value"
+      PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    --enable)
+      [ $# -ge 2 ] || die "--enable requires a server name"
+      CLI_ENABLE+=("$2")
+      shift 2
+      ;;
+    --enable=*)
+      CLI_ENABLE+=("${1#*=}")
+      shift
+      ;;
+    --disable)
+      [ $# -ge 2 ] || die "--disable requires a server name"
+      CLI_DISABLE+=("$2")
+      shift 2
+      ;;
+    --disable=*)
+      CLI_DISABLE+=("${1#*=}")
+      shift
+      ;;
+    --store)
+      [ $# -ge 2 ] || die "--store requires a directory"
+      STORE_ARG="$2"
+      shift 2
+      ;;
+    --store=*)
+      STORE_ARG="${1#*=}"
+      shift
+      ;;
+    --secrets)
+      [ $# -ge 2 ] || die "--secrets requires a file"
+      SECRETS_ARG="$2"
+      shift 2
+      ;;
+    --secrets=*)
+      SECRETS_ARG="${1#*=}"
+      shift
+      ;;
+    --endpoint)
+      [ $# -ge 2 ] || die "--endpoint requires a URL"
+      ENDPOINT="$2"
+      shift 2
+      ;;
+    --endpoint=*)
+      ENDPOINT="${1#*=}"
+      shift
+      ;;
+    --create-token-file)
+      [ $# -ge 2 ] || die "--create-token-file requires a file"
+      CREATE_TOKEN_FILE="$2"
+      shift 2
+      ;;
+    --create-token-file=*)
+      CREATE_TOKEN_FILE="${1#*=}"
+      shift
+      ;;
+    --remote-config)
+      [ $# -ge 2 ] || die "--remote-config requires a file"
+      REMOTE_CONFIG_ARG="$2"
+      shift 2
+      ;;
+    --remote-config=*)
+      REMOTE_CONFIG_ARG="${1#*=}"
+      shift
+      ;;
+    --version)
+      [ $# -ge 2 ] || die "--version requires an identifier"
+      VERSION="$2"
+      shift 2
+      ;;
+    --version=*)
+      VERSION="${1#*=}"
+      shift
+      ;;
+    --recovery-file)
+      [ $# -ge 2 ] || die "--recovery-file requires a file"
+      RECOVERY_FILE="$2"
+      shift 2
+      ;;
+    --recovery-file=*)
+      RECOVERY_FILE="${1#*=}"
+      shift
+      ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --dry-run)
+      COMMAND="plan"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument '$1'; use --help"
+      ;;
+  esac
+done
+
+require_jq
+
+DEFAULT_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+DEFAULT_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+STORE_DIR="${STORE_ARG:-${MCPCTL_STORE:-${DEFAULT_CONFIG_HOME}/mcpctl/store}}"
+SECRETS_FILE="${SECRETS_ARG:-${MCPCTL_SECRETS_FILE:-${STORE_DIR}/secrets.sops.json}}"
+REMOTE_CONFIG_FILE="${REMOTE_CONFIG_ARG:-${MCPCTL_REMOTE_CONFIG:-${DEFAULT_CONFIG_HOME}/mcpctl/remote.json}}"
+CREATE_TOKEN_FILE="${CREATE_TOKEN_FILE:-${MCPCTL_CREATE_TOKEN_FILE:-}}"
+STATE_FILE="${MCPCTL_STATE_FILE:-${DEFAULT_STATE_HOME}/mcpctl/applied.json}"
+CATALOG_FILE="${STORE_DIR}/catalog.json"
+REMOTE_CLIENT="${SCRIPT_DIR}/remote-client.mjs"
+REMOTE_SECRETS_FILE="${STORE_DIR}/secrets.remote.enc"
+
+require_remote_node() {
+  command -v node >/dev/null 2>&1 ||
+    die "Node.js 20 or newer is required for encrypted remote backup"
+  node -e '
+    const major = Number(process.versions.node.split(".")[0]);
+    process.exit(Number.isInteger(major) && major >= 20 ? 0 : 1);
+  ' >/dev/null 2>&1 ||
+    die "Node.js 20 or newer is required for encrypted remote backup"
+}
+
+require_private_input_file() {
+  local label="$1" path="$2" mode
+  [ -f "$path" ] || die "$label not found: $path"
+  [ ! -L "$path" ] || die "refusing to read $label through symlink $path"
+  mode="$(stat -f '%Lp' "$path" 2>/dev/null || stat -c '%a' "$path" 2>/dev/null)" ||
+    die "could not inspect permissions for $path"
+  case "$mode" in
+    ?00) ;;
+    *) die "$label must not allow group or other access: $path (use chmod 600)" ;;
+  esac
+}
+
+run_remote_simple() {
+  local action="$1"
+  require_remote_node
+  node "$REMOTE_CLIENT" "$action" \
+    --remote-config "$REMOTE_CONFIG_FILE"
+}
+
+run_remote_restore() {
+  local args recovery_code
+  require_remote_node
+  args=(restore --store "$STORE_DIR" --remote-config "$REMOTE_CONFIG_FILE")
+  [ -z "$VERSION" ] || args+=(--version "$VERSION")
+  [ "$FORCE" -eq 0 ] || args+=(--force)
+
+  if [ -n "$RECOVERY_FILE" ]; then
+    require_private_input_file "recovery file" "$RECOVERY_FILE"
+    args+=(--recovery-stdin)
+    node "$REMOTE_CLIENT" "${args[@]}" < "$RECOVERY_FILE"
+    return 0
+  fi
+
+  if [ -f "$REMOTE_CONFIG_FILE" ]; then
+    node "$REMOTE_CLIENT" "${args[@]}"
+    return 0
+  fi
+
+  [ -r /dev/tty ] ||
+    die "no remote configuration; use --recovery-file in a non-interactive shell"
+  printf 'Recovery code: ' > /dev/tty
+  IFS= read -r -s recovery_code < /dev/tty ||
+    die "could not read recovery code"
+  printf '\n' > /dev/tty
+  [ -n "$recovery_code" ] || die "recovery code must not be empty"
+  args+=(--recovery-stdin)
+  printf '%s\n' "$recovery_code" | node "$REMOTE_CLIENT" "${args[@]}"
+  recovery_code=""
+}
+
+run_remote_init() {
+  local args create_token
+  [ -n "$ENDPOINT" ] || die "remote init requires --endpoint"
+  require_remote_node
+  args=(init
+    --endpoint "$ENDPOINT"
+    --remote-config "$REMOTE_CONFIG_FILE"
+    --create-token-stdin)
+  [ "$FORCE" -eq 0 ] || args+=(--force)
+
+  if [ -n "$CREATE_TOKEN_FILE" ]; then
+    require_private_input_file "store-creation token file" "$CREATE_TOKEN_FILE"
+    node "$REMOTE_CLIENT" "${args[@]}" < "$CREATE_TOKEN_FILE"
+  else
+    [ -r /dev/tty ] ||
+      die "remote init needs --create-token-file in a non-interactive shell"
+    printf 'Store-creation token: ' > /dev/tty
+    IFS= read -r -s create_token < /dev/tty ||
+      die "could not read store-creation token"
+    printf '\n' > /dev/tty
+    [ -n "$create_token" ] || die "store-creation token must not be empty"
+    printf '%s\n' "$create_token" | node "$REMOTE_CLIENT" "${args[@]}"
+    create_token=""
+  fi
+
+  node "$REMOTE_CLIENT" backup \
+    --store "$STORE_DIR" \
+    --remote-config "$REMOTE_CONFIG_FILE" \
+    --sops-file "$SECRETS_FILE"
+}
+
+case "$COMMAND" in
+  remote-status)
+    run_remote_simple status
+    exit 0
+    ;;
+  remote-recovery)
+    run_remote_simple recovery
+    exit 0
+    ;;
+  versions|remote-versions)
+    run_remote_simple versions
+    exit 0
+    ;;
+  restore|remote-restore)
+    run_remote_restore
+    exit 0
+    ;;
+esac
+
+if [ "$COMMAND" = "init" ]; then
+  [ "$STORE_DIR" != "/" ] || die "refusing to initialize the filesystem root"
+  [ ! -e "$STORE_DIR" ] ||
+    die "$STORE_DIR already exists; choose another --store or move it first"
+  mkdir -p "$(dirname "$STORE_DIR")"
+  cp -R "$TEMPLATE_STORE" "$STORE_DIR"
+  chmod 700 "$STORE_DIR" "$STORE_DIR/profiles"
+  chmod 600 "$STORE_DIR/catalog.json" "$STORE_DIR/profiles/"*.json
+  ok "initialized MCP store at $STORE_DIR"
+  log "Next: edit catalog.json and profiles/, then run:"
+  log "  mcpctl plan --target claude --profile frontend --store $(json_quote "$STORE_DIR")"
+  exit 0
+fi
+
+[ -f "$CATALOG_FILE" ] ||
+  die "store not initialized: missing $CATALOG_FILE (run mcpctl init)"
+
+jq -e '
+  type == "object"
+  and .schema == 1
+  and (.servers | type == "object")
+' "$CATALOG_FILE" >/dev/null 2>&1 ||
+  die "$CATALOG_FILE is not a valid schema-1 MCP catalog"
+
+case "$COMMAND" in
+  remote-init)
+    run_remote_init
+    exit 0
+    ;;
+  backup|remote-backup)
+    require_remote_node
+    node "$REMOTE_CLIENT" backup \
+      --store "$STORE_DIR" \
+      --remote-config "$REMOTE_CONFIG_FILE" \
+      --sops-file "$SECRETS_FILE"
+    exit 0
+    ;;
+esac
+
+profile_path() {
+  validate_id "profile name" "$1"
+  printf '%s/profiles/%s.json' "$STORE_DIR" "$1"
+}
+
+validate_profile_file() {
+  local name="$1" path="$2"
+  jq -e --arg expected "$name" '
+    type == "object"
+    and (.schema // 1) == 1
+    and (.name == $expected)
+    and ((.extends // []) | type == "array")
+    and ((.enable // []) | type == "array")
+    and ((.disable // []) | type == "array")
+    and ((.target_overrides // {}) | type == "object")
+    and all((.extends // [])[]; type == "string")
+    and all((.enable // [])[]; type == "string")
+    and all((.disable // [])[]; type == "string")
+    and all((.target_overrides // {})[];
+      type == "object"
+      and ((.enable // []) | type == "array")
+      and ((.disable // []) | type == "array")
+      and all((.enable // [])[]; type == "string")
+      and all((.disable // [])[]; type == "string")
+    )
+  ' "$path" >/dev/null 2>&1 ||
+    die "$path is not a valid profile named '$name'"
+}
+
+PROFILE_ORDER=()
+PROFILE_VISITING=" "
+PROFILE_VISITED=" "
+
+word_set_has() {
+  case "$1" in
+    *" $2 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+collect_profile_order() {
+  local name="$1" path parent old_visiting
+  validate_id "profile name" "$name"
+
+  word_set_has "$PROFILE_VISITING" "$name" &&
+    die "profile inheritance cycle detected at '$name'"
+  word_set_has "$PROFILE_VISITED" "$name" && return 0
+
+  path="$(profile_path "$name")"
+  [ -f "$path" ] || die "unknown profile '$name' (missing $path)"
+  validate_profile_file "$name" "$path"
+
+  old_visiting="$PROFILE_VISITING"
+  PROFILE_VISITING="${PROFILE_VISITING}${name} "
+  while IFS= read -r parent; do
+    [ -n "$parent" ] || continue
+    collect_profile_order "$parent"
+  done < <(jq -r '.extends[]?' "$path")
+  PROFILE_VISITING="$old_visiting"
+
+  PROFILE_VISITED="${PROFILE_VISITED}${name} "
+  PROFILE_ORDER+=("$name")
+}
+
+apply_profile_layer() {
+  local name="$1" path server
+  path="$(profile_path "$name")"
+
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    validate_id "server name" "$server"
+    enable_server "$server"
+  done < <(jq -r '.enable[]?' "$path")
+
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    validate_id "server name" "$server"
+    disable_server "$server"
+  done < <(jq -r '.disable[]?' "$path")
+
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    validate_id "server name" "$server"
+    enable_server "$server"
+  done < <(jq -r --arg target "$TARGET" \
+    '.target_overrides[$target].enable[]?' "$path")
+
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    validate_id "server name" "$server"
+    disable_server "$server"
+  done < <(jq -r --arg target "$TARGET" \
+    '.target_overrides[$target].disable[]?' "$path")
+}
+
+effective_server() {
+  local server="$1"
+  jq -c --arg server "$server" --arg target "$TARGET" '
+    .servers[$server] as $base
+    | if $base == null then
+        error("unknown server: " + $server)
+      else
+        ($base * (($base.target_overrides // {})[$target] // {}))
+        | del(.target_overrides)
+      end
+  ' "$CATALOG_FILE"
+}
+
+validate_effective_server() {
+  local server="$1" definition="$2"
+  if ! printf '%s' "$definition" | jq -e --arg target "$TARGET" '
+    type == "object"
+    and (
+      ((.supported_targets // []) | length) == 0
+      or ((.supported_targets // []) | index($target)) != null
+    )
+    and (
+      (.transport == "http" and (.url | type == "string") and (.url | length > 0))
+      or
+      (.transport == "stdio"
+        and (.command | type == "array")
+        and (.command | length > 0)
+        and all(.command[]; type == "string" and length > 0))
+    )
+    and (
+      (.auth // null) == null
+      or (
+        (.transport == "http")
+        and (.auth.type == "header")
+        and (.auth.header | type == "string" and length > 0)
+        and (.auth.secret | type == "string" and length > 0)
+        and ((.auth.env // "") | type == "string")
+        and ((.auth.prefix // "") | type == "string")
+        and ((if (.auth | has("required")) then .auth.required else true end)
+          | type == "boolean")
+      )
+    )
+  ' >/dev/null 2>&1; then
+    die "server '$server' is invalid or unsupported by target '$TARGET'"
+  fi
+}
+
+resolve_profile() {
+  local layer server definition
+  [ -n "$PROFILE" ] || die "--profile is required"
+  validate_id "profile name" "$PROFILE"
+
+  ENABLED=()
+  PROFILE_ORDER=()
+  PROFILE_VISITING=" "
+  PROFILE_VISITED=" "
+  collect_profile_order "$PROFILE"
+
+  for layer in ${PROFILE_ORDER[@]+"${PROFILE_ORDER[@]}"}; do
+    apply_profile_layer "$layer"
+  done
+
+  for server in ${CLI_ENABLE[@]+"${CLI_ENABLE[@]}"}; do
+    validate_id "server name" "$server"
+    enable_server "$server"
+  done
+  for server in ${CLI_DISABLE[@]+"${CLI_DISABLE[@]}"}; do
+    validate_id "server name" "$server"
+    disable_server "$server"
+  done
+
+  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    if ! definition="$(effective_server "$server" 2>/dev/null)"; then
+      die "profile '$PROFILE' references unknown server '$server'"
+    fi
+    validate_effective_server "$server" "$definition"
+  done
+}
+
+if [ "$COMMAND" = "profile-list" ]; then
+  find "$STORE_DIR/profiles" -maxdepth 1 -type f -name '*.json' -print |
+    LC_ALL=C sort |
+    while IFS= read -r path; do
+      jq -r '"\(.name)\t\(.description // "")"' "$path"
+    done
+  exit 0
+fi
+
+if [ "$COMMAND" = "profile-show" ]; then
+  validate_id "profile name" "$ENTITY_NAME"
+  PROFILE="$ENTITY_NAME"
+  path="$(profile_path "$PROFILE")"
+  [ -f "$path" ] || die "unknown profile '$PROFILE'"
+  validate_profile_file "$PROFILE" "$path"
+  if [ -z "$TARGET" ]; then
+    jq . "$path"
+  else
+    TARGET="$(canonical_target "$TARGET")"
+    resolve_profile
+    printf 'Profile: %s\nTarget: %s\nServers:\n' "$PROFILE" "$TARGET"
+    for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '  %s\n' "$server"; done
+  fi
+  exit 0
+fi
+
+if [ "$COMMAND" = "server-list" ]; then
+  jq -r '.servers | to_entries[] | "\(.key)\t\(.value.description // "")"' \
+    "$CATALOG_FILE"
+  exit 0
+fi
+
+if [ "$COMMAND" = "server-show" ]; then
+  validate_id "server name" "$ENTITY_NAME"
+  if [ -z "$TARGET" ]; then
+    jq --arg server "$ENTITY_NAME" '
+      if .servers[$server] == null then error("unknown server: " + $server)
+      else .servers[$server]
+      end
+    ' "$CATALOG_FILE"
+  else
+    TARGET="$(canonical_target "$TARGET")"
+    effective_server "$ENTITY_NAME" | jq .
+  fi
+  exit 0
+fi
+
+[ -n "$TARGET" ] || die "--target is required"
+TARGET="$(canonical_target "$TARGET")"
+
+case "$TARGET" in
+  claude)
+    CONFIG_FILE="${MCPCTL_CLAUDE_CONFIG:-${HOME}/.claude/settings.json}"
+    ;;
+  codex)
+    CONFIG_FILE="${MCPCTL_CODEX_CONFIG:-${HOME}/.codex/config.toml}"
+    ;;
+  opencode)
+    CONFIG_FILE="${MCPCTL_OPENCODE_CONFIG:-${HOME}/.config/opencode/opencode.json}"
+    ;;
+esac
+
+strip_owned_codex_block() {
+  local input="$1" output="$2"
+  awk -v begin="$CODEX_BEGIN" -v end="$CODEX_END" '
+    $0 == begin { in_owned = 1; next }
+    $0 == end && in_owned { in_owned = 0; next }
+    in_owned { next }
+    { print }
+    END { if (in_owned) exit 2 }
+  ' "$input" > "$output"
+}
+
+codex_has_server() {
+  local input="$1" wanted="$2"
+  awk -v wanted="$wanted" '
+    /^\[[^]]+\][[:space:]]*$/ {
+      section = $0
+      sub(/^[[]/, "", section)
+      sub(/[]][[:space:]]*$/, "", section)
+      if (section ~ /^mcp_servers\./) {
+        name = section
+        sub(/^mcp_servers\./, "", name)
+        sub(/\.headers$/, "", name)
+        if (name == wanted) found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$input"
+}
+
+strip_selected_codex_blocks() {
+  local input="$1" output="$2" selected="$3"
+  awk -v selected=" $selected " '
+    /^\[[^]]+\][[:space:]]*$/ {
+      section = $0
+      sub(/^[[]/, "", section)
+      sub(/[]][[:space:]]*$/, "", section)
+      name = section
+      sub(/^mcp_servers\./, "", name)
+      sub(/\.headers$/, "", name)
+      skip = (section ~ /^mcp_servers\./ && index(selected, " " name " ") > 0)
+    }
+    skip { next }
+    { print }
+  ' "$input" > "$output"
+}
+
+CURRENT=()
+
+load_current_servers() {
+  local server marker_check
+  CURRENT=()
+  [ -f "$CONFIG_FILE" ] || return 0
+
+  if [ "$TARGET" = "codex" ]; then
+    make_temp
+    marker_check="$TEMP_RESULT"
+    strip_owned_codex_block "$CONFIG_FILE" "$marker_check" ||
+      die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
+    while IFS= read -r server; do
+      [ -n "$server" ] || continue
+      array_has "$server" ${CURRENT[@]+"${CURRENT[@]}"} || CURRENT+=("$server")
+    done < <(
+      awk -v begin="$CODEX_BEGIN" -v end="$CODEX_END" '
+        $0 == begin { in_owned = 1; next }
+        $0 == end { in_owned = 0; next }
+        in_owned && /^\[mcp_servers\.[^]]+\][[:space:]]*$/ {
+          section = $0
+          sub(/^[[]mcp_servers\./, "", section)
+          sub(/[]][[:space:]]*$/, "", section)
+          sub(/\.headers$/, "", section)
+          print section
+        }
+      ' "$CONFIG_FILE" | awk '!seen[$0]++'
+    )
+    return 0
+  fi
+
+  jq -e 'type == "object"' "$CONFIG_FILE" >/dev/null 2>&1 ||
+    die "$CONFIG_FILE is not a valid JSON object; it was left unchanged"
+
+  if [ "$TARGET" = "claude" ]; then
+    while IFS= read -r server; do
+      [ -n "$server" ] && CURRENT+=("$server")
+    done < <(jq -r --arg manager "$MANAGED_BY" '
+      (.mcpServers // {})
+      | to_entries[]
+      | select(.value._managed_by? == $manager)
+      | .key
+    ' "$CONFIG_FILE")
+  else
+    while IFS= read -r server; do
+      [ -n "$server" ] && CURRENT+=("$server")
+    done < <(jq -r --arg manager "$MANAGED_BY" '
+      (.mcp // {})
+      | to_entries[]
+      | select(.value._managed_by? == $manager)
+      | .key
+    ' "$CONFIG_FILE")
+  fi
+}
+
+CONFLICTS=()
+
+detect_conflicts() {
+  local server owner stripped
+  CONFLICTS=()
+  [ -f "$CONFIG_FILE" ] || return 0
+
+  if [ "$TARGET" = "codex" ]; then
+    make_temp
+    stripped="$TEMP_RESULT"
+    strip_owned_codex_block "$CONFIG_FILE" "$stripped" ||
+      die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
+    for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+      if codex_has_server "$stripped" "$server"; then
+        CONFLICTS+=("$server")
+      fi
+    done
+    return 0
+  fi
+
+  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    if [ "$TARGET" = "claude" ]; then
+      owner="$(jq -r --arg server "$server" \
+        '.mcpServers[$server] as $entry
+         | if ($entry | type) == "object"
+           then ($entry._managed_by // "__unmanaged__")
+           else "__unmanaged__"
+           end' "$CONFIG_FILE")"
+      jq -e --arg server "$server" '.mcpServers[$server] != null' \
+        "$CONFIG_FILE" >/dev/null 2>&1 || continue
+    else
+      owner="$(jq -r --arg server "$server" \
+        '.mcp[$server] as $entry
+         | if ($entry | type) == "object"
+           then ($entry._managed_by // "__unmanaged__")
+           else "__unmanaged__"
+           end' "$CONFIG_FILE")"
+      jq -e --arg server "$server" '.mcp[$server] != null' \
+        "$CONFIG_FILE" >/dev/null 2>&1 || continue
+    fi
+    [ "$owner" = "$MANAGED_BY" ] || CONFLICTS+=("$server")
+  done
+}
+
+print_named_group() {
+  local label="$1" marker="$2"
+  shift 2
+  [ $# -gt 0 ] || return 0
+  printf '%s\n' "$label"
+  while [ $# -gt 0 ]; do
+    printf '  %s %s\n' "$marker" "$1"
+    shift
+  done
+}
+
+print_plan() {
+  local server
+  local additions=() removals=() unchanged=()
+
+  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    if array_has "$server" ${CURRENT[@]+"${CURRENT[@]}"}; then
+      unchanged+=("$server")
+    else
+      additions+=("$server")
+    fi
+  done
+  for server in ${CURRENT[@]+"${CURRENT[@]}"}; do
+    array_has "$server" ${ENABLED[@]+"${ENABLED[@]}"} || removals+=("$server")
+  done
+
+  printf 'Target:  %s\n' "$TARGET"
+  printf 'Profile: %s\n' "$PROFILE"
+  printf 'Config:  %s\n' "$CONFIG_FILE"
+  print_named_group "Add:" "+" ${additions[@]+"${additions[@]}"}
+  print_named_group "Remove:" "-" ${removals[@]+"${removals[@]}"}
+  print_named_group "Keep:" "=" ${unchanged[@]+"${unchanged[@]}"}
+  if [ ${#ENABLED[@]} -eq 0 ] && [ ${#CURRENT[@]} -eq 0 ]; then
+    log "No managed MCP servers."
+  fi
+  if [ ${#CONFLICTS[@]} -gt 0 ]; then
+    print_named_group "Conflicts:" "!" ${CONFLICTS[@]+"${CONFLICTS[@]}"}
+    if [ "$FORCE" -eq 1 ]; then
+      warn "--force will replace only these same-name entries"
+    else
+      warn "apply will stop; use --force only if mcpctl should replace these names"
+    fi
+  fi
+
+  if [ ${#ENABLED[@]} -gt 0 ]; then
+    log "Secrets:"
+    for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+      describe_secret_source "$server"
+    done
+  fi
+}
+
+SOPS_CACHE_LOADED=0
+SOPS_CACHE=""
+REMOTE_SECRETS_CACHE_LOADED=0
+REMOTE_SECRETS_CACHE=""
+
+load_sops_cache() {
+  local sops_bin
+  [ "$SOPS_CACHE_LOADED" -eq 0 ] || return 0
+  [ -f "$SECRETS_FILE" ] ||
+    die "missing secret and encrypted secret file: $SECRETS_FILE"
+  sops_bin="${MCPCTL_SOPS_BIN:-sops}"
+  command -v "$sops_bin" >/dev/null 2>&1 ||
+    die "sops is required to decrypt $SECRETS_FILE"
+  if ! SOPS_CACHE="$("$sops_bin" decrypt --output-type json "$SECRETS_FILE")"; then
+    die "could not decrypt $SECRETS_FILE"
+  fi
+  printf '%s' "$SOPS_CACHE" | jq -e '
+    type == "object"
+    and (.secrets | type == "object")
+    and all(.secrets[]; type == "string")
+  ' >/dev/null 2>&1 ||
+    die "decrypted $SECRETS_FILE must contain a .secrets object"
+  SOPS_CACHE_LOADED=1
+}
+
+load_remote_secrets_cache() {
+  [ "$REMOTE_SECRETS_CACHE_LOADED" -eq 0 ] || return 0
+  [ -f "$REMOTE_SECRETS_FILE" ] ||
+    die "encrypted remote secret cache not found: $REMOTE_SECRETS_FILE"
+  [ -f "$REMOTE_CONFIG_FILE" ] ||
+    die "remote configuration required to decrypt $REMOTE_SECRETS_FILE"
+  require_remote_node
+  if ! REMOTE_SECRETS_CACHE="$(
+    node "$REMOTE_CLIENT" secrets \
+      --store "$STORE_DIR" \
+      --remote-config "$REMOTE_CONFIG_FILE"
+  )"; then
+    die "could not decrypt $REMOTE_SECRETS_FILE"
+  fi
+  printf '%s' "$REMOTE_SECRETS_CACHE" | jq -e '
+    type == "object"
+    and .schema == 1
+    and (.secrets | type == "object")
+    and all(.secrets[]; type == "string")
+  ' >/dev/null 2>&1 ||
+    die "$REMOTE_SECRETS_FILE decrypted to an invalid secrets document"
+  REMOTE_SECRETS_CACHE_LOADED=1
+}
+
+RESOLVED_SECRET=""
+
+resolve_server_secret() {
+  local server="$1" definition="$2"
+  local env_name secret_name required env_value value
+
+  RESOLVED_SECRET=""
+  [ "$(printf '%s' "$definition" | jq -r '.auth // null | type')" = "object" ] ||
+    return 0
+
+  env_name="$(printf '%s' "$definition" | jq -r '.auth.env // empty')"
+  secret_name="$(printf '%s' "$definition" | jq -r '.auth.secret')"
+  required="$(printf '%s' "$definition" | jq -r '
+    if (.auth | has("required")) then .auth.required else true end
+  ')"
+
+  if [ -n "$env_name" ]; then
+    env_value="$(printenv "$env_name" 2>/dev/null || true)"
+    if [ -n "$env_value" ]; then
+      RESOLVED_SECRET="$env_value"
+      return 0
+    fi
+  fi
+
+  if [ -f "$SECRETS_FILE" ]; then
+    load_sops_cache
+    value="$(printf '%s' "$SOPS_CACHE" |
+      jq -r --arg secret "$secret_name" '.secrets[$secret] // empty')"
+    if [ -n "$value" ]; then
+      RESOLVED_SECRET="$value"
+      return 0
+    fi
+  fi
+
+  if [ -f "$REMOTE_SECRETS_FILE" ]; then
+    load_remote_secrets_cache
+    value="$(printf '%s' "$REMOTE_SECRETS_CACHE" |
+      jq -r --arg secret "$secret_name" '.secrets[$secret] // empty')"
+    if [ -n "$value" ]; then
+      RESOLVED_SECRET="$value"
+      return 0
+    fi
+  fi
+
+  if [ "$required" = "true" ]; then
+    if [ -n "$env_name" ]; then
+      die "no secret '$secret_name' for '$server'; set \$$env_name, add it to $SECRETS_FILE, or restore an encrypted remote cache"
+    fi
+    die "no secret '$secret_name' for '$server' in local encrypted secret sources"
+  fi
+}
+
+describe_secret_source() {
+  local server="$1" definition env_name secret_name required
+  definition="$(effective_server "$server")"
+  if [ "$(printf '%s' "$definition" | jq -r '.auth // null | type')" != "object" ]; then
+    printf '  - %s: none\n' "$server"
+    return 0
+  fi
+
+  env_name="$(printf '%s' "$definition" | jq -r '.auth.env // empty')"
+  secret_name="$(printf '%s' "$definition" | jq -r '.auth.secret')"
+  required="$(printf '%s' "$definition" | jq -r '
+    if (.auth | has("required")) then .auth.required else true end
+  ')"
+  if [ -n "$env_name" ] && [ -n "$(printenv "$env_name" 2>/dev/null || true)" ]; then
+    printf '  - %s: env %s (available)\n' "$server" "$env_name"
+  elif [ -f "$SECRETS_FILE" ]; then
+    printf '  - %s: SOPS key %s (encrypted file present)\n' "$server" "$secret_name"
+  elif [ -f "$REMOTE_SECRETS_FILE" ]; then
+    printf '  - %s: remote key %s (encrypted cache present)\n' "$server" "$secret_name"
+  elif [ "$required" = "true" ]; then
+    printf '  - %s: missing (%s, SOPS key %s, or remote cache)\n' \
+      "$server" "${env_name:-no environment fallback}" "$secret_name"
+  else
+    printf '  - %s: optional; not configured\n' "$server"
+  fi
+}
+
+make_json_entry() {
+  local server="$1" output="$2"
+  local definition transport auth_type header prefix secret_file next
+  definition="$(effective_server "$server")"
+  transport="$(printf '%s' "$definition" | jq -r '.transport')"
+
+  if [ "$transport" = "stdio" ]; then
+    if [ "$TARGET" = "claude" ]; then
+      printf '%s' "$definition" | jq --arg manager "$MANAGED_BY" '
+        {
+          command: .command[0],
+          args: (.command[1:] // []),
+          _managed_by: $manager
+        }
+      ' > "$output"
+    else
+      printf '%s' "$definition" | jq --arg manager "$MANAGED_BY" '
+        {
+          type: "local",
+          command: .command,
+          _managed_by: $manager
+        }
+      ' > "$output"
+    fi
+    return 0
+  fi
+
+  if [ "$TARGET" = "claude" ]; then
+    printf '%s' "$definition" | jq --arg manager "$MANAGED_BY" '
+      {type: "http", url: .url, _managed_by: $manager}
+    ' > "$output"
+  else
+    printf '%s' "$definition" | jq --arg manager "$MANAGED_BY" '
+      {type: "http", url: .url, _managed_by: $manager}
+    ' > "$output"
+  fi
+
+  auth_type="$(printf '%s' "$definition" | jq -r '.auth.type // empty')"
+  [ "$auth_type" = "header" ] || return 0
+  resolve_server_secret "$server" "$definition"
+  [ -n "$RESOLVED_SECRET" ] || return 0
+
+  header="$(printf '%s' "$definition" | jq -r '.auth.header')"
+  prefix="$(printf '%s' "$definition" | jq -r '.auth.prefix // empty')"
+  make_temp
+  secret_file="$TEMP_RESULT"
+  printf '%s' "$RESOLVED_SECRET" > "$secret_file"
+  make_temp
+  next="$TEMP_RESULT"
+  jq --rawfile secret "$secret_file" --arg header "$header" --arg prefix "$prefix" '
+    . + {headers: {($header): ($prefix + $secret)}}
+  ' "$output" > "$next"
+  mv "$next" "$output"
+  rm -f "$secret_file"
+}
+
+build_desired_json() {
+  local desired="$1" server entry next
+  printf '{}\n' > "$desired"
+  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    make_temp
+    entry="$TEMP_RESULT"
+    make_json_entry "$server" "$entry"
+    make_temp
+    next="$TEMP_RESULT"
+    jq --arg server "$server" --slurpfile entry "$entry" \
+      '. + {($server): $entry[0]}' "$desired" > "$next"
+    mv "$next" "$desired"
+  done
+}
+
+build_codex_block() {
+  local output="$1" server definition transport url header prefix command args
+  : > "$output"
+  [ ${#ENABLED[@]} -gt 0 ] || return 0
+
+  printf '\n%s\n' "$CODEX_BEGIN" >> "$output"
+  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    definition="$(effective_server "$server")"
+    transport="$(printf '%s' "$definition" | jq -r '.transport')"
+    printf '\n[mcp_servers.%s]\n' "$server" >> "$output"
+    if [ "$transport" = "stdio" ]; then
+      command="$(printf '%s' "$definition" | jq -r '.command[0]')"
+      args="$(printf '%s' "$definition" | jq -c '.command[1:]')"
+      printf 'command = %s\n' "$(toml_quote "$command")" >> "$output"
+      printf 'args = %s\n' "$args" >> "$output"
+      continue
+    fi
+
+    url="$(printf '%s' "$definition" | jq -r '.url')"
+    printf 'url = %s\n' "$(toml_quote "$url")" >> "$output"
+    if [ "$(printf '%s' "$definition" | jq -r '.auth.type // empty')" = "header" ]; then
+      resolve_server_secret "$server" "$definition"
+      if [ -n "$RESOLVED_SECRET" ]; then
+        header="$(printf '%s' "$definition" | jq -r '.auth.header')"
+        prefix="$(printf '%s' "$definition" | jq -r '.auth.prefix // empty')"
+        printf '\n[mcp_servers.%s.headers]\n' "$server" >> "$output"
+        printf '%s = %s\n' \
+          "$(toml_quote "$header")" \
+          "$(toml_quote "${prefix}${RESOLVED_SECRET}")" >> "$output"
+      fi
+    fi
+  done
+  printf '%s\n' "$CODEX_END" >> "$output"
+}
+
+validate_state_file() {
+  [ ! -L "$STATE_FILE" ] || die "refusing to replace symlink $STATE_FILE"
+  [ -f "$STATE_FILE" ] || return 0
+  jq -e '
+    type == "object"
+    and ((.targets // {}) | type == "object")
+  ' "$STATE_FILE" >/dev/null 2>&1 ||
+    die "$STATE_FILE is invalid; fix or move it before applying"
+}
+
+update_state() {
+  local input output server_json state_dir
+  validate_state_file
+  state_dir="$(dirname "$STATE_FILE")"
+  mkdir -p "$state_dir"
+
+  if [ -f "$STATE_FILE" ]; then
+    input="$STATE_FILE"
+  else
+    make_temp
+    input="$TEMP_RESULT"
+    printf '{"schema":1,"targets":{}}\n' > "$input"
+  fi
+
+  server_json="$(
+    for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '%s\n' "$server"; done |
+      jq -Rsc 'split("\n") | map(select(length > 0))'
+  )"
+  make_temp_near "$STATE_FILE"
+  output="$TEMP_RESULT"
+  jq --arg target "$TARGET" \
+     --arg profile "$PROFILE" \
+     --arg config "$CONFIG_FILE" \
+     --argjson servers "$server_json" '
+    .schema = 1
+    | .targets = (.targets // {})
+    | .targets[$target] = {
+        profile: $profile,
+        servers: $servers,
+        config: $config
+      }
+  ' "$input" > "$output"
+  chmod 600 "$output"
+  mv "$output" "$STATE_FILE"
+}
+
+apply_json_target() {
+  local input desired output config_dir force_json root_key
+  config_dir="$(dirname "$CONFIG_FILE")"
+  mkdir -p "$config_dir"
+  [ ! -L "$CONFIG_FILE" ] || die "refusing to replace symlink $CONFIG_FILE"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    input="$CONFIG_FILE"
+    jq -e 'type == "object"' "$input" >/dev/null 2>&1 ||
+      die "$CONFIG_FILE is not a valid JSON object; it was left unchanged"
+  else
+    make_temp
+    input="$TEMP_RESULT"
+    printf '{}\n' > "$input"
+  fi
+
+  make_temp
+  desired="$TEMP_RESULT"
+  build_desired_json "$desired"
+  make_temp_near "$CONFIG_FILE"
+  output="$TEMP_RESULT"
+  force_json="$FORCE"
+
+  if [ "$TARGET" = "claude" ]; then
+    root_key="mcpServers"
+  else
+    root_key="mcp"
+  fi
+
+  jq --arg root "$root_key" \
+     --arg manager "$MANAGED_BY" \
+     --argjson force "$force_json" \
+     --slurpfile desired "$desired" '
+    .[$root] = (.[$root] // {})
+    | .[$root] |= with_entries(
+        select(
+          (.value | type) != "object"
+          or (.value._managed_by // "") != $manager
+        )
+      )
+    | reduce ($desired[0] | keys[]) as $key (.;
+        if $force == 1 then del(.[$root][$key]) else . end
+      )
+    | .[$root] += $desired[0]
+    | if (.[$root] | length) == 0 then del(.[$root]) else . end
+  ' "$input" > "$output"
+  chmod 600 "$output"
+  mv "$output" "$CONFIG_FILE"
+}
+
+apply_codex_target() {
+  local input stripped selected stripped_forced block output config_dir
+  config_dir="$(dirname "$CONFIG_FILE")"
+  mkdir -p "$config_dir"
+  [ ! -L "$CONFIG_FILE" ] || die "refusing to replace symlink $CONFIG_FILE"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    input="$CONFIG_FILE"
+  else
+    make_temp
+    input="$TEMP_RESULT"
+    printf '# Codex configuration created by mcpctl.\n' > "$input"
+  fi
+
+  make_temp
+  stripped="$TEMP_RESULT"
+  strip_owned_codex_block "$input" "$stripped" ||
+    die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
+
+  if [ "$FORCE" -eq 1 ] && [ ${#CONFLICTS[@]} -gt 0 ]; then
+    selected="${CONFLICTS[*]}"
+    make_temp
+    stripped_forced="$TEMP_RESULT"
+    strip_selected_codex_blocks "$stripped" "$stripped_forced" "$selected"
+    stripped="$stripped_forced"
+  fi
+
+  make_temp
+  block="$TEMP_RESULT"
+  build_codex_block "$block"
+
+  make_temp_near "$CONFIG_FILE"
+  output="$TEMP_RESULT"
+  {
+    cat "$stripped"
+    cat "$block"
+  } > "$output"
+  chmod 600 "$output"
+  mv "$output" "$CONFIG_FILE"
+}
+
+if [ "$COMMAND" = "current" ]; then
+  load_current_servers
+  printf 'Target: %s\nConfig: %s\n' "$TARGET" "$CONFIG_FILE"
+  if [ -f "$STATE_FILE" ] &&
+     jq -e --arg target "$TARGET" '.targets[$target] != null' \
+       "$STATE_FILE" >/dev/null 2>&1; then
+    jq -r --arg target "$TARGET" \
+      '"Profile: \(.targets[$target].profile)"' "$STATE_FILE"
+  else
+    log "Profile: unknown"
+  fi
+  log "Managed servers:"
+  if [ ${#CURRENT[@]} -eq 0 ]; then
+    log "  (none)"
+  else
+    for server in ${CURRENT[@]+"${CURRENT[@]}"}; do printf '  %s\n' "$server"; done
+  fi
+  exit 0
+fi
+
+resolve_profile
+load_current_servers
+detect_conflicts
+print_plan
+
+if [ "$COMMAND" = "plan" ]; then
+  exit 0
+fi
+
+[ "$COMMAND" = "apply" ] || die "internal error: unsupported command '$COMMAND'"
+if [ ${#CONFLICTS[@]} -gt 0 ] && [ "$FORCE" -ne 1 ]; then
+  die "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names"
+fi
+
+validate_state_file
+if [ "$TARGET" = "codex" ]; then
+  apply_codex_target
+else
+  apply_json_target
+fi
+update_state
+ok "applied profile '$PROFILE' to $TARGET"

@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "name": "off",
+  "description": "Disable every MCP entry managed by mcpctl",
+  "extends": [],
+  "enable": [],
+  "disable": [],
+  "target_overrides": {}
+}

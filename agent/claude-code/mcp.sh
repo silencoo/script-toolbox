@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# agent/claude-code/mcp.sh — add web/docs/browser MCP servers to Claude Code
+# agent/claude-code/mcp.sh — add web/docs/browser/repository MCP servers to Claude Code
 #
 # What it writes:
 #   mcpServers.brave       -> https://api.search.brave.com/mcp        (X-Subscription-Token)
 #   mcpServers.exa         -> https://mcp.exa.ai/mcp                  (Bearer)
 #   mcpServers.context7    -> https://mcp.context7.com/mcp            (Bearer, optional)
-#   mcpServers.chrome-devtools -> local npx Chrome DevTools MCP server
+#   mcpServers.github      -> https://api.githubcopilot.com/mcp/       (Bearer from environment)
+#   mcpServers.chrome-devtools -> local Chrome DevTools MCP + CloakBrowser
 #
 # What it never touches:
-#   env   - owned by setup.sh
-#   model - owned by setup.sh
+#   ~/.claude/settings.json env/model - owned by setup.sh
 #   mcpServers entries it didn't write (tracked via _managed_by marker)
 #
 # Why this exists: Anthropic-hosted Claude Code gets WebSearch / WebFetch and
@@ -165,12 +165,40 @@ FORCE=0
 SKIP_VALIDATE=0
 UNINSTALL=0
 DRY_RUN=0
+CHROME_BROWSER="cloak"
+CLOAKBROWSER_EXECUTABLE="${CLOAKBROWSER_BINARY_PATH:-}"
 
-SETTINGS_DIR="${HOME}/.claude"
-SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
-# NOTE: this string is also the marker key inside ~/.claude/settings.json.
+SETTINGS_DIR="${HOME}"
+SETTINGS_FILE="${HOME}/.claude.json"
+LEGACY_SETTINGS_FILE="${HOME}/.claude/settings.json"
+# NOTE: this string is also the marker key inside MCP server entries.
 # Renaming it would orphan existing entries on a user's machine. Don't change.
 MANAGED_BY="agent/claude-code/mcp.sh"
+
+has_owned_mcp_entries() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  jq -e --arg mgr "$MANAGED_BY" '
+    any((.mcpServers // {})[]; ._managed_by == $mgr)
+  ' "$file" >/dev/null 2>&1
+}
+
+remove_owned_mcp_entries() {
+  local file="$1" temporary
+  require_json_object "$file"
+  temporary="$(make_temp_near "$file")"
+  if ! jq --arg mgr "$MANAGED_BY" '
+    .mcpServers = (
+      (.mcpServers // {})
+      | with_entries(select(.value._managed_by != $mgr))
+    )
+    | if (.mcpServers // {}) == {} then del(.mcpServers) else . end
+  ' "$file" > "$temporary"; then
+    rm -f "$temporary"
+    die "failed to remove ${MANAGED_BY}-owned entries from $file"
+  fi
+  replace_file "$temporary" "$file"
+}
 
 # Lookup helpers - bash 3.2 has no associative arrays, so we keep PROVIDERS
 # in a flat array and walk it linearly. With <=10 providers this is negligible.
@@ -180,25 +208,27 @@ set_key()  { local i; for i in "${!PROVIDERS[@]}"; do [ "${PROVIDERS[$i]}" = "$1
 # ---------- provider registry ----------
 # Parallel indexed arrays (no associative arrays) so this works on bash 3.2
 # (macOS /bin/bash). Each provider occupies a contiguous slot.
-P_NAME=(brave exa context7 chrome-devtools)
-P_DISPLAY=("Brave Search" "Exa" "Context7" "Chrome DevTools")
-P_TRANSPORT=("http" "http" "http" "stdio")
+P_NAME=(brave exa context7 github chrome-devtools)
+P_DISPLAY=("Brave Search" "Exa" "Context7" "GitHub" "Chrome DevTools")
+P_TRANSPORT=("http" "http" "http" "http" "stdio")
 P_MCP_URL=(
   "https://api.search.brave.com/mcp"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "https://api.githubcopilot.com/mcp/"
   "npx -y chrome-devtools-mcp@latest"
 )
-P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "")
-P_PREFIX=("" "Bearer " "Bearer " "")
-P_ENV=("BRAVE_API_KEY" "EXA_API_KEY" "CONTEXT7_API_KEY" "")
+P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "Authorization" "")
+P_PREFIX=("" "Bearer " "Bearer " "Bearer " "")
+P_ENV=("BRAVE_API_KEY" "EXA_API_KEY" "CONTEXT7_API_KEY" "GITHUB_PERSONAL_ACCESS_TOKEN" "")
 P_VAL_URL=(
   "https://api.search.brave.com/res/v1/web/search?q=ping&count=1"
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
+  "https://api.githubcopilot.com/mcp/"
   ""
 )
-P_KEY_MODE=("required" "required" "optional" "none")
+P_KEY_MODE=("required" "required" "optional" "required" "none")
 
 ALL_PROVIDERS=("${P_NAME[@]}")
 
@@ -219,10 +249,63 @@ p_env()      { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_ENV[$i
 p_val_url()  { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_VAL_URL[$i]}"; }
 p_key_mode() { local i; i="$(p_index "$1")" || return 1; printf '%s' "${P_KEY_MODE[$i]}"; }
 
+provider_selected() {
+  local wanted="$1" p
+  for p in "${PROVIDERS[@]}"; do
+    [ "$p" = "$wanted" ] && return 0
+  done
+  return 1
+}
+
+resolve_cloakbrowser_executable() {
+  local diagnostics
+
+  provider_selected chrome-devtools || return 0
+  [ "$CHROME_BROWSER" = "cloak" ] || return 0
+
+  command -v node >/dev/null 2>&1 ||
+    die "CloakBrowser requires Node.js 20 or newer"
+  command -v npx >/dev/null 2>&1 ||
+    die "CloakBrowser requires npm/npx"
+
+  if [ -z "$CLOAKBROWSER_EXECUTABLE" ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      die "--dry-run with CloakBrowser requires --cloakbrowser-executable PATH (dry-run will not download a browser)"
+    fi
+    info "Installing/resolving the CloakBrowser Chromium binary..."
+    npx -y cloakbrowser@latest install >/dev/null ||
+      die "CloakBrowser installation failed; run 'npx -y cloakbrowser@latest info' for diagnostics"
+    diagnostics="$(npx -y cloakbrowser@latest info --quick --json)" ||
+      die "CloakBrowser diagnostics failed"
+    CLOAKBROWSER_EXECUTABLE="$(
+      printf '%s' "$diagnostics" | node -e '
+        let input = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", chunk => input += chunk);
+        process.stdin.on("end", () => {
+          try {
+            const value = JSON.parse(input)?.binary?.path;
+            if (typeof value !== "string" || value.length === 0) process.exit(2);
+            process.stdout.write(value);
+          } catch {
+            process.exit(2);
+          }
+        });
+      '
+    )" || die "CloakBrowser did not report its Chromium executable path"
+  fi
+
+  [ -f "$CLOAKBROWSER_EXECUTABLE" ] ||
+    die "CloakBrowser executable not found: $CLOAKBROWSER_EXECUTABLE"
+  [ -x "$CLOAKBROWSER_EXECUTABLE" ] ||
+    die "CloakBrowser executable is not executable: $CLOAKBROWSER_EXECUTABLE"
+  ok "CloakBrowser executable: $CLOAKBROWSER_EXECUTABLE"
+}
+
 # ---------- usage ----------
 usage() {
   cat <<EOF
-${C_BOLD}agent/claude-code/mcp.sh${C_RESET} - add web/docs/browser MCP servers to Claude Code
+${C_BOLD}agent/claude-code/mcp.sh${C_RESET} - add web/docs/browser/repository MCP servers to Claude Code
 
 ${C_BOLD}Usage:${C_RESET}
   mcp.sh [options]
@@ -231,22 +314,27 @@ ${C_BOLD}Options:${C_RESET}
   --provider <name>          Add a provider to the set. Repeatable.
                              name in {${ALL_PROVIDERS[*]}}
                              Default: choose each MCP interactively via /dev/tty.
-  --key NAME=value           API key for provider NAME. Repeatable.
+  --key NAME=value           API key/PAT for provider NAME. Repeatable.
                              e.g. --key brave=BSA... --key exa=EXA...
-                             Falls back to env: BRAVE_API_KEY, EXA_API_KEY, CONTEXT7_API_KEY.
-  --all                      Enable all four providers (Brave and Exa need keys).
+                             Falls back to env: BRAVE_API_KEY, EXA_API_KEY,
+                             CONTEXT7_API_KEY, GITHUB_PERSONAL_ACCESS_TOKEN.
+  --all                      Enable all five providers.
+  --cloakbrowser-executable <path>
+                             Use an existing CloakBrowser Chromium binary.
+                             Default: CLOAKBROWSER_BINARY_PATH or install via npx.
+  --stock-chrome             Let Chrome DevTools MCP use stock Google Chrome.
   --force                    Overwrite existing mcpServers entries without asking.
   --skip-validate            Skip per-provider probes (offline use).
   --dry-run                  Print the would-be JSON, write nothing.
-  --uninstall                Remove the mcpServers block this script wrote.
+  --uninstall                Remove the mcpServers entries this script wrote.
   -h | --help                Show this help.
 
 ${C_BOLD}Examples:${C_RESET}
   # Interactive - choose MCPs, then enter only the keys they need
   ${C_DIM}./mcp.sh${C_RESET}
 
-  # Non-interactive, all four providers
-  ${C_DIM}./mcp.sh --all \\
+  # Non-interactive, all five providers
+  ${C_DIM}GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... ./mcp.sh --all \\
     --key brave=BSA... --key exa=EXA... --key context7=CT7...${C_RESET}
 
   # Just brave + exa, keys from env
@@ -270,6 +358,12 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --all)             ALL=1; shift ;;
+    --cloakbrowser-executable)
+      CLOAKBROWSER_EXECUTABLE="${2:?}"
+      CHROME_BROWSER="cloak"
+      shift 2
+      ;;
+    --stock-chrome)    CHROME_BROWSER="stock"; shift ;;
     --force)           FORCE=1; shift ;;
     --skip-validate)   SKIP_VALIDATE=1; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
@@ -287,23 +381,19 @@ echo
 
 # ---------- uninstall path ----------
 if [ "$UNINSTALL" = 1 ]; then
-  [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
   ensure_jq
-  require_json_object "$SETTINGS_FILE"
   info "Removing MCP entries written by ${MANAGED_BY}..."
-  TMP_OUT="$(make_temp_near "$SETTINGS_FILE")"
-  if ! jq --arg mgr "$MANAGED_BY" '
-    .mcpServers = (
-      (.mcpServers // {})
-      | with_entries(select(.value._managed_by != $mgr))
-    )
-    | if (.mcpServers // {}) == {} then del(.mcpServers) else . end
-  ' "$SETTINGS_FILE" > "$TMP_OUT"; then
-    rm -f "$TMP_OUT"
-    die "failed to prepare settings.json update"
+  removed=0
+  for config_file in "$SETTINGS_FILE" "$LEGACY_SETTINGS_FILE"; do
+    if has_owned_mcp_entries "$config_file"; then
+      remove_owned_mcp_entries "$config_file"
+      ok "removed ${MANAGED_BY}-owned entries from $config_file"
+      removed=1
+    fi
+  done
+  if [ "$removed" = 0 ]; then
+    die "no ${MANAGED_BY}-owned MCP entries found"
   fi
-  replace_file "$TMP_OUT" "$SETTINGS_FILE"
-  ok "removed ${MANAGED_BY}-owned entries from $SETTINGS_FILE"
   exit 0
 fi
 
@@ -398,6 +488,12 @@ for p in "${PROVIDERS[@]}"; do
     set_key "$p" "$PROMPT_SECRET_REPLY"
   fi
 done
+if provider_selected github && [ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
+  warn "GitHub PAT was supplied only for setup/validation; export GITHUB_PERSONAL_ACCESS_TOKEN before starting Claude Code"
+fi
+echo
+
+resolve_cloakbrowser_executable
 echo
 
 # ---------- validate each provider ----------
@@ -418,6 +514,10 @@ validate_provider() {
       || die "${display} requires npm/npx"
     npx -y chrome-devtools-mcp@latest --help >/dev/null 2>&1 \
       || die "${display} failed to start; check Node.js LTS and npm connectivity"
+    if [ "$CHROME_BROWSER" = "cloak" ]; then
+      "$CLOAKBROWSER_EXECUTABLE" --version >/dev/null 2>&1 ||
+        die "CloakBrowser Chromium failed to execute: $CLOAKBROWSER_EXECUTABLE"
+    fi
     ok "${display} launcher is available"
     return
   fi
@@ -450,12 +550,21 @@ validate_provider() {
     "$val_url" || echo 000)"
 
   case "$resp" in
-    200) ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})" ;;
+    200)
+      if [ "$p" = "github" ]; then
+        ok "${display} PAT accepted"
+      else
+        ok "${display} accepted (${key:+with key}${key:+/rate-limit-boost}${key:-anonymous})"
+      fi
+      ;;
     401|403)
       if [ "$(p_key_mode "$p")" = "optional" ] && [ -z "$key" ]; then
         ok "${display} accepted anonymously"
       else
-        die "${display} key rejected (HTTP $resp) - get one at ${p}.ai / context7.com"
+        if [ "$p" = "github" ]; then
+          die "${display} PAT rejected (HTTP $resp) - create a least-privilege token at https://github.com/settings/personal-access-tokens"
+        fi
+        die "${display} key rejected (HTTP $resp)"
       fi
       ;;
     *) die "${display} probe failed (HTTP $resp)" ;;
@@ -488,7 +597,12 @@ TMP_NEW="$(mktemp)"
     printf '    %s: {\n' "$(json_quote "$p")"
     if [ "$(p_transport "$p")" = "stdio" ]; then
       printf '      "command": "npx",\n'
-      printf '      "args": ["-y", "chrome-devtools-mcp@latest"]\n'
+      if [ "$CHROME_BROWSER" = "cloak" ]; then
+        printf '      "args": ["-y", "chrome-devtools-mcp@latest", "--executablePath", %s]\n' \
+          "$(json_quote "$CLOAKBROWSER_EXECUTABLE")"
+      else
+        printf '      "args": ["-y", "chrome-devtools-mcp@latest"]\n'
+      fi
     else
       url="$(p_mcp_url "$p")"
       hdr="$(p_hdr "$p")"
@@ -498,7 +612,11 @@ TMP_NEW="$(mktemp)"
 
       printf '      "type": "http",\n'
       printf '      "url": %s' "$(json_quote "$url")"
-      if [ -n "$key" ]; then
+      if [ "$p" = "github" ]; then
+        runtime_header="Bearer \${${env_var}}"
+        printf ',\n      "headers": { %s: %s }\n' \
+          "$(json_quote "$hdr")" "$(json_quote "$runtime_header")"
+      elif [ -n "$key" ]; then
         printf ',\n      "headers": { %s: %s }' \
           "$(json_quote "$hdr")" "$(json_quote "${prefix}${key}")"
         if [ -n "$env_var" ]; then
@@ -523,7 +641,7 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 
-# ---------- write settings.json (merge with existing, never touch env/model) ----------
+# ---------- write ~/.claude.json (merge with existing user-scoped servers) ----------
 mkdir -p "$SETTINGS_DIR"
 [ -w "$SETTINGS_DIR" ] || die "$SETTINGS_DIR is not writable - fix permissions and re-run"
 
@@ -535,10 +653,18 @@ if [ -f "$SETTINGS_FILE" ]; then
   for p in "${PROVIDERS[@]}"; do
     existing_entry="$(jq -c --arg k "$p" '.mcpServers[$k] // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
     if [ -n "$existing_entry" ]; then
+      existing_manager="$(jq -r --arg k "$p" '.mcpServers[$k]._managed_by // empty' "$SETTINGS_FILE")"
+      [ "$existing_manager" = "$MANAGED_BY" ] && continue
       if [ "$(p_transport "$p")" = "stdio" ]; then
         existing_command="$(jq -r --arg k "$p" '.mcpServers[$k].command // empty' "$SETTINGS_FILE")"
         existing_args="$(jq -c --arg k "$p" '.mcpServers[$k].args // []' "$SETTINGS_FILE")"
-        if [ "$existing_command" != "npx" ] || [ "$existing_args" != '["-y","chrome-devtools-mcp@latest"]' ]; then
+        if [ "$CHROME_BROWSER" = "cloak" ]; then
+          expected_args="$(jq -cn --arg executable "$CLOAKBROWSER_EXECUTABLE" \
+            '["-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]')"
+        else
+          expected_args='["-y","chrome-devtools-mcp@latest"]'
+        fi
+        if [ "$existing_command" != "npx" ] || [ "$existing_args" != "$expected_args" ]; then
           warn "mcpServers.${p} already has a different local command"
           conflict=1
         fi
@@ -553,7 +679,7 @@ if [ -f "$SETTINGS_FILE" ]; then
     fi
   done
   if [ "$conflict" = 1 ] && [ "$FORCE" != 1 ]; then
-    die "settings.json has existing mcpServers with different URLs - re-run with --force to overwrite."
+    die ".claude.json has existing mcpServers with different URLs - re-run with --force to overwrite."
   fi
 else
   printf '{}\n' > "$SETTINGS_FILE"
@@ -567,11 +693,15 @@ if ! jq --slurpfile new "$TMP_NEW" --arg mgr "$MANAGED_BY" '
       .mcpServers[$e.key] = ($e.value + { _managed_by: $mgr }))
 ' "$SETTINGS_FILE" > "$TMP_OUT"; then
   rm -f "$TMP_NEW" "$TMP_OUT"
-  die "failed to merge MCP entries; settings.json was left unchanged"
+  die "failed to merge MCP entries; .claude.json was left unchanged"
 fi
 replace_file "$TMP_OUT" "$SETTINGS_FILE"
 rm -f "$TMP_NEW"
 ok "wrote $SETTINGS_FILE (chmod 600)"
+if has_owned_mcp_entries "$LEGACY_SETTINGS_FILE"; then
+  remove_owned_mcp_entries "$LEGACY_SETTINGS_FILE"
+  ok "removed obsolete ${MANAGED_BY}-owned entries from $LEGACY_SETTINGS_FILE"
+fi
 echo
 
 # ---------- post-install checklist ----------
@@ -588,7 +718,11 @@ cat <<EOF
      ${C_DIM}"search the web for MiniMax M3 release notes 2026"${C_RESET}   -> brave
      ${C_DIM}"find recent blog posts about Claude Code with MiniMax"${C_RESET}   -> exa
      ${C_DIM}"what's the latest useGSAP hook signature in React?"${C_RESET}     -> context7
+     ${C_DIM}"list my recently merged GitHub pull requests"${C_RESET}           -> github
      ${C_DIM}"open example.com and inspect its network requests"${C_RESET}       -> chrome-devtools
+
+   GitHub reads its PAT from GITHUB_PERSONAL_ACCESS_TOKEN at Claude startup.
+   Chrome DevTools launches CloakBrowser by default; pass --stock-chrome to opt out.
 
 4. To uninstall:
      ${C_DIM}$0 --uninstall${C_RESET}
