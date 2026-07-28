@@ -11,7 +11,7 @@ param(
 
   [string[]] $PackageIds = @(),
 
-  [string] $ConfigFile = (Join-Path $PSScriptRoot 'packages.psd1'),
+  [string] $ConfigFile = '',
 
   [switch] $IncludeOptional,
   [switch] $Yes,
@@ -21,6 +21,9 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
+  $ConfigFile = Join-Path $PSScriptRoot 'packages.psd1'
+}
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference `
     -ErrorAction SilentlyContinue) {
   $PSNativeCommandUseErrorActionPreference = $false
