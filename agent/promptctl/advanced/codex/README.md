@@ -42,9 +42,9 @@
 共享 bootstrap：
 
 ```bash
-python3 agent/promptctl/promptctl.py install codex
-python3 agent/promptctl/promptctl.py install codex --yes
-python3 agent/promptctl/promptctl.py path codex
+./agent/promptctl/promptctl install codex
+./agent/promptctl/promptctl install codex --yes
+./agent/promptctl/promptctl path codex
 ```
 
 它只拥有 `config.toml` 中带 marker 的配置块；首次创建的提示词文件随后

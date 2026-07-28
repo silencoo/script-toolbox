@@ -29,9 +29,9 @@ For a clean workstation or disposable sandbox, run the shared bootstrap from
 the script-toolbox root:
 
 ```bash
-python3 agent/promptctl/promptctl.py install codex
-python3 agent/promptctl/promptctl.py install codex --yes
-python3 agent/promptctl/promptctl.py path codex
+./agent/promptctl/promptctl install codex
+./agent/promptctl/promptctl install codex --yes
+./agent/promptctl/promptctl path codex
 ```
 
 It owns only its marked block in `config.toml`. The instruction file it creates

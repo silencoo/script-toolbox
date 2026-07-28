@@ -273,3 +273,8 @@ def test_instruction_symlink_is_rejected_without_touching_target(tmp_path):
     assert run_cli(tmp_path, "install", "codex", "--yes") == 1
     assert outside.read_text(encoding="utf-8") == "# Outside\n"
     assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_engine_without_arguments_points_to_shell_frontend(capsys):
+    assert promptctl.main([]) == 2
+    assert "agent/promptctl/promptctl" in capsys.readouterr().err

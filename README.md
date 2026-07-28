@@ -54,22 +54,37 @@ provider URL/key/model flow, and non-interactive flags. The same folders also
 ship optional Brave Search, Exa, Context7, GitHub, and CloakBrowser-backed
 Chrome DevTools MCP configuration.
 
+From a clone, the three independent Shell controllers are:
+
+```bash
+./agent/agentctl/agentctl
+./agent/mcpctl/mcpctl
+./agent/promptctl/promptctl
+```
+
 See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:
 
+- [`agent/agentctl/`](./agent/agentctl/) — shared client/provider/model setup entrypoint.
 - [`agent/claude-code/`](./agent/claude-code/) — Anthropic, DeepSeek, OpenRouter, MiniMax, or custom Anthropic-compatible endpoint.
 - [`agent/codex/`](./agent/codex/) — OpenAI, OpenRouter, or a custom Responses-compatible endpoint.
 - [`agent/opencode/`](./agent/opencode/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider.
 - [`agent/pi/`](./agent/pi/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider through Pi's native API adapters.
 - [`agent/promptctl/`](./agent/promptctl/) — persistent-instruction setup for Claude Code and Codex with direct and Agent-guided entrypoints.
 
-## promptctl
+## Agent controllers
 
-[`agent/promptctl/`](./agent/promptctl/) manages persistent instructions for
-coding agents. Clean workstations and disposable sandboxes can run
-[`promptctl.py`](./agent/promptctl/promptctl.py) directly or let an agent
-follow [`AGENT_SETUP.md`](./agent/promptctl/AGENT_SETUP.md); both routes create
-the same user-editable instruction files and owned links.
+The three controller entrypoints open a guided menu without arguments:
+
+- [`agentctl`](./agent/agentctl/) installs supported clients and configures
+  providers, models, and owned credentials.
+- [`mcpctl`](./agent/mcpctl/) manages task-oriented MCP profiles.
+- [`promptctl`](./agent/promptctl/) manages persistent instructions and their
+  user-editable Markdown files.
+
+An agent can perform the Promptctl workflow by following
+[`AGENT_SETUP.md`](./agent/promptctl/AGENT_SETUP.md); direct and Agent-guided
+routes create the same files and owned links.
 
 Advanced Claude and Codex deployers are kept under
 [`agent/promptctl/advanced/`](./agent/promptctl/advanced/) for fixed-source

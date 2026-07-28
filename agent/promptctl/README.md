@@ -7,15 +7,23 @@ side effect of changing providers or MCP servers.
 
 ## Choose an entrypoint
 
-For a clean workstation or disposable sandbox, use the shared lightweight
-command:
+For an interactive setup, run Promptctl without arguments:
+
+```bash
+./agent/promptctl/promptctl
+```
+
+The Shell menu lets you configure, inspect, locate, or uninstall instructions.
+Every write is previewed and requires a separate `y` confirmation.
+
+For automation or an Agent-guided workflow, use explicit commands:
 
 ```bash
 # Preview; no writes.
-python3 agent/promptctl/promptctl.py install all
+./agent/promptctl/promptctl install all
 
 # Apply after reviewing the paths and actions.
-python3 agent/promptctl/promptctl.py install all --yes
+./agent/promptctl/promptctl install all --yes
 ```
 
 It configures Claude Code and/or Codex, prints the resulting Markdown paths,
@@ -44,31 +52,33 @@ uninstallers do not remove Promptctl state. This makes these operations safe to
 run independently:
 
 ```bash
-./agent/codex/setup.sh --provider openai --model gpt-5.6
+./agent/agentctl/agentctl setup codex --provider openai --model gpt-5.6
 ./agent/codex/mcp.sh --provider context7
-python3 agent/promptctl/promptctl.py install codex --yes
+./agent/promptctl/promptctl install codex --yes
 ```
 
 ## Commands
 
 ```bash
 # Inspect or print editable paths.
-python3 agent/promptctl/promptctl.py status all
-python3 agent/promptctl/promptctl.py status all --json
-python3 agent/promptctl/promptctl.py path all
+./agent/promptctl/promptctl status all
+./agent/promptctl/promptctl status all --json
+./agent/promptctl/promptctl path all
 
 # Preview, then remove only Promptctl-owned links.
-python3 agent/promptctl/promptctl.py uninstall all
-python3 agent/promptctl/promptctl.py uninstall all --yes
+./agent/promptctl/promptctl uninstall all
+./agent/promptctl/promptctl uninstall all --yes
 
 # Explicitly back up and remove the editable Markdown too.
-python3 agent/promptctl/promptctl.py uninstall all --remove-instructions
-python3 agent/promptctl/promptctl.py uninstall all --remove-instructions --yes
+./agent/promptctl/promptctl uninstall all --remove-instructions
+./agent/promptctl/promptctl uninstall all --remove-instructions --yes
 ```
 
 The default profile name is `personal`. Use `--name NAME` for another safe
 filename and `--template /path/to/file.md` to choose initial content for a
 missing instruction file. A template is never copied over an existing file.
+The Shell entrypoint delegates explicit commands to `promptctl.py`, which is
+an internal, non-interactive engine rather than the user-facing guide.
 
 ## Advanced deployers
 

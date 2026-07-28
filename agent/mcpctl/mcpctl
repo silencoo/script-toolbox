@@ -37,6 +37,8 @@ usage() {
 mcpctl — apply task-oriented MCP profiles to coding agents
 
 Usage:
+  mcpctl
+  mcpctl interactive [--store <directory>]
   mcpctl --target <claude|codex|opencode> --profile <name> [options]
   mcpctl apply   --target <target> --profile <name> [options]
   mcpctl plan    --target <target> --profile <name> [options]
@@ -160,6 +162,222 @@ array_has() {
   done
   return 1
 }
+
+prompt_value() {
+  local label="$1" default_value="${2:-}" input
+  if [ -n "$default_value" ]; then
+    printf '%s [%s]: ' "$label" "$default_value" >&2
+  else
+    printf '%s: ' "$label" >&2
+  fi
+  if ! IFS= read -r input; then
+    die "interactive input ended; use --help for non-interactive commands"
+  fi
+  PROMPT_REPLY="${input:-$default_value}"
+}
+
+choose_menu() {
+  local title="$1" default_index="$2" entry index selected
+  shift 2
+  printf '\n%s\n' "$title" >&2
+  index=1
+  for entry in "$@"; do
+    printf '  %d) %s\n' "$index" "${entry#*|}" >&2
+    index=$((index + 1))
+  done
+  while true; do
+    prompt_value "Choose" "$default_index"
+    selected="$PROMPT_REPLY"
+    case "$selected" in
+      ""|*[!0-9]*)
+        warn "enter a number from 1 to $#"
+        continue
+        ;;
+    esac
+    if [ "$selected" -lt 1 ] 2>/dev/null ||
+       [ "$selected" -gt "$#" ] 2>/dev/null; then
+      warn "enter a number from 1 to $#"
+      continue
+    fi
+    index=1
+    for entry in "$@"; do
+      if [ "$index" -eq "$selected" ]; then
+        MENU_VALUE="${entry%%|*}"
+        return 0
+      fi
+      index=$((index + 1))
+    done
+  done
+}
+
+ask_yes_no() {
+  local label="$1" default_answer="${2:-no}" answer
+  while true; do
+    if [ "$default_answer" = "yes" ]; then
+      prompt_value "$label [Y/n]" ""
+    else
+      prompt_value "$label [y/N]" ""
+    fi
+    answer="$(printf '%s' "$PROMPT_REPLY" | tr '[:upper:]' '[:lower:]')"
+    case "$answer" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      "")
+        if [ "$default_answer" = "yes" ]; then
+          return 0
+        fi
+        return 1
+        ;;
+      *) warn "please answer y or n" ;;
+    esac
+  done
+}
+
+run_interactive() {
+  local store_arg="" default_config_home default_state_home store_dir state_file
+  local action target profile_rows current_profile default_profile_index
+  local name description entry plan_output
+  local profile_names profile_entries command_args force_args
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --store)
+        [ $# -ge 2 ] || die "--store requires a directory"
+        store_arg="$2"
+        shift 2
+        ;;
+      --store=*)
+        store_arg="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "interactive mode accepts only --store; use explicit commands for advanced options"
+        ;;
+    esac
+  done
+
+  require_jq
+  default_config_home="${XDG_CONFIG_HOME:-${HOME}/.config}"
+  default_state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
+  store_dir="${store_arg:-${MCPCTL_STORE:-${default_config_home}/mcpctl/store}}"
+  state_file="${MCPCTL_STATE_FILE:-${default_state_home}/mcpctl/applied.json}"
+
+  printf '%s\n' "mcpctl interactive setup" >&2
+  printf '%s\n' "Every apply is previewed and requires confirmation." >&2
+  printf 'Store: %s\n' "$store_dir" >&2
+
+  if [ ! -f "$store_dir/catalog.json" ]; then
+    [ ! -e "$store_dir" ] ||
+      die "store exists but is incomplete: missing $store_dir/catalog.json"
+    if ! ask_yes_no "Initialize the starter MCP store here?" "yes"; then
+      log "No changes were made."
+      return 0
+    fi
+    "$0" init --store "$store_dir"
+  fi
+
+  choose_menu "What would you like to do?" 1 \
+    "apply|Apply or switch an MCP profile" \
+    "plan|Preview a profile without applying" \
+    "current|Show the currently managed profile" \
+    "list|List available profiles" \
+    "exit|Exit without changes"
+  action="$MENU_VALUE"
+  case "$action" in
+    list)
+      exec "$0" profile list --store "$store_dir"
+      ;;
+    exit)
+      log "No changes were made."
+      return 0
+      ;;
+  esac
+
+  choose_menu "Which agent should mcpctl manage?" 1 \
+    "claude|Claude Code" \
+    "codex|Codex" \
+    "opencode|OpenCode"
+  target="$MENU_VALUE"
+
+  if [ "$action" = "current" ]; then
+    exec "$0" current --target "$target" --store "$store_dir"
+  fi
+
+  if ! profile_rows="$("$0" profile list --store "$store_dir")"; then
+    return 1
+  fi
+  profile_names=()
+  profile_entries=()
+  while IFS=$'\t' read -r name description; do
+    [ -n "$name" ] || continue
+    profile_names+=("$name")
+    profile_entries+=("${name}|${name} — ${description}")
+  done <<< "$profile_rows"
+  [ ${#profile_names[@]} -gt 0 ] ||
+    die "no profiles found in $store_dir/profiles"
+
+  current_profile=""
+  if [ -f "$state_file" ]; then
+    current_profile="$(jq -r --arg target "$target" \
+      '.targets[$target].profile // empty' "$state_file" 2>/dev/null || true)"
+  fi
+  default_profile_index=1
+  for entry in "${!profile_names[@]}"; do
+    if [ -n "$current_profile" ] &&
+       [ "${profile_names[$entry]}" = "$current_profile" ]; then
+      default_profile_index=$((entry + 1))
+      break
+    fi
+    if [ -z "$current_profile" ] &&
+       [ "${profile_names[$entry]}" = "frontend" ]; then
+      default_profile_index=$((entry + 1))
+    fi
+  done
+
+  choose_menu "Which profile?" "$default_profile_index" "${profile_entries[@]}"
+  profile="$MENU_VALUE"
+  command_args=(--target "$target" --profile "$profile" --store "$store_dir")
+
+  if ! plan_output="$("$0" plan "${command_args[@]}")"; then
+    return 1
+  fi
+  printf '\n%s\n' "$plan_output"
+  [ "$action" = "apply" ] || return 0
+
+  if printf '%s\n' "$plan_output" | grep -q ': missing ('; then
+    die "required secrets are missing; configure the reported environment or encrypted secret source, then retry"
+  fi
+
+  force_args=()
+  if printf '%s\n' "$plan_output" | grep -q '^Conflicts:$'; then
+    if ! ask_yes_no "Replace only the reported same-name conflicts?" "no"; then
+      log "No changes were made."
+      return 0
+    fi
+    force_args=(--force)
+  fi
+
+  if ! ask_yes_no "Apply this MCP profile?" "no"; then
+    log "No changes were made."
+    return 0
+  fi
+  exec "$0" apply "${command_args[@]}" \
+    ${force_args[@]+"${force_args[@]}"}
+}
+
+if [ $# -eq 0 ]; then
+  run_interactive
+  exit $?
+fi
+if [ "${1:-}" = "interactive" ]; then
+  shift
+  run_interactive "$@"
+  exit $?
+fi
 
 ENABLED=()
 

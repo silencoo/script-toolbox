@@ -43,13 +43,15 @@ SETTINGS_DIR="${HOME}/.claude"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
 STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider"
 MANAGED_BY="agent/claude-code/setup.sh"
+SETUP_COMMAND="${AGENTCTL_SETUP_COMMAND:-./setup.sh}"
+UNINSTALL_COMMAND="${AGENTCTL_UNINSTALL_COMMAND:-$0 --uninstall}"
 
 usage() {
   cat <<EOF
-${C_BOLD}agent/claude-code/setup.sh${C_RESET} - interactive Claude Code provider setup
+${C_BOLD}${SETUP_COMMAND}${C_RESET} - interactive Claude Code provider setup
 
 ${C_BOLD}Usage:${C_RESET}
-  setup.sh [options]
+  ${SETUP_COMMAND} [options]
 
 ${C_BOLD}Options:${C_RESET}
   --provider <id>            anthropic, deepseek, openrouter, minimax-cn,
@@ -70,10 +72,10 @@ ${C_BOLD}Options:${C_RESET}
   -h | --help                Show this help.
 
 ${C_BOLD}Examples:${C_RESET}
-  ./setup.sh
-  ./setup.sh --provider deepseek --model deepseek-v4-pro
-  OPENROUTER_API_KEY=sk-or-... ./setup.sh --provider openrouter
-  ./setup.sh --provider custom --base-url https://gateway.example.com/anthropic \\
+  ${SETUP_COMMAND}
+  ${SETUP_COMMAND} --provider deepseek --model deepseek-v4-pro
+  OPENROUTER_API_KEY=sk-or-... ${SETUP_COMMAND} --provider openrouter
+  ${SETUP_COMMAND} --provider custom --base-url https://gateway.example.com/anthropic \\
     --model my-model --key-env MY_API_KEY
 EOF
 }
@@ -425,5 +427,5 @@ echo
 printf '%s%s%s\n' "${C_BOLD}" "Ready" "${C_RESET}"
 printf '  %s\n' "Run: claude"
 printf '  %s\n' "Then check /status and /model; expected provider URL: $BASE_URL"
-printf '  %s\n' "Uninstall this provider config: $0 --uninstall"
+printf '  %s\n' "Uninstall this provider config: $UNINSTALL_COMMAND"
 ok "done"

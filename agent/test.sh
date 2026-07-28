@@ -209,7 +209,7 @@ run_config_tests() {
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
 
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    "$SCRIPT_DIR/codex/setup.sh" \
+    "$SCRIPT_DIR/agentctl/agentctl" setup codex \
       --provider openrouter --model openai/gpt-5.6 --key test-codex \
       --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
   grep -q 'wire_api = "responses"' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
@@ -378,7 +378,7 @@ run_config_tests() {
   # Promptctl must coexist with provider/MCP TOML and keep an independent
   # uninstall lifecycle.
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    python3 "$SCRIPT_DIR/promptctl/promptctl.py" \
+    "$SCRIPT_DIR/promptctl/promptctl" \
       install codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
   grep -qF '# script-toolbox-promptctl:start profile=personal' \
     "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
@@ -387,7 +387,8 @@ run_config_tests() {
   }
 
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    "$SCRIPT_DIR/codex/setup.sh" --uninstall >/dev/null || { rm -rf "$test_root"; return 1; }
+    "$SCRIPT_DIR/agentctl/agentctl" \
+      uninstall codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -qF 'agent/codex/setup.sh' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
   grep -qF '# script-toolbox-promptctl:start profile=personal' \
     "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
@@ -398,7 +399,7 @@ run_config_tests() {
     rm -rf "$test_root"; return 1;
   }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    python3 "$SCRIPT_DIR/promptctl/promptctl.py" \
+    "$SCRIPT_DIR/promptctl/promptctl" \
       uninstall codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -qF 'script-toolbox-promptctl' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
@@ -458,6 +459,13 @@ else
   fail=1
 fi
 
+if "$SCRIPT_DIR/agentctl/test.sh"; then
+  :
+else
+  echo "FAIL: agentctl frontend tests" >&2
+  fail=1
+fi
+
 if "$SCRIPT_DIR/mcpctl/test.sh"; then
   :
 else
@@ -465,9 +473,16 @@ else
   fail=1
 fi
 
+if "$SCRIPT_DIR/promptctl/test.sh"; then
+  :
+else
+  echo "FAIL: promptctl Shell frontend tests" >&2
+  fail=1
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "all ${checked} scripts parse cleanly; agent and mcpctl tests passed."
+  echo "all ${checked} backend scripts parse cleanly; agentctl, mcpctl, promptctl, and provider tests passed."
 else
   echo "one or more scripts failed to parse." >&2
 fi

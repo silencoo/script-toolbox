@@ -5,6 +5,8 @@ scripts install the client, let you choose a provider and model, validate the
 key when the provider exposes a models endpoint, and preserve credentials with
 mode `0600`.
 
+- [`agentctl/`](./agentctl/README.md) — shared public Shell entrypoint for
+  installing a client and configuring its provider/model.
 - [`claude-code/`](./claude-code/README.md) — Anthropic, DeepSeek, OpenRouter,
   MiniMax China/global, or a custom Anthropic Messages endpoint.
 - [`codex/`](./codex/README.md) — OpenAI, OpenRouter, or a custom OpenAI
@@ -21,32 +23,48 @@ mode `0600`.
 - [`promptctl/`](./promptctl/README.md) — shared persistent-instruction
   management for Claude Code and Codex, with direct and Agent-guided setup.
 
-Promptctl is part of the `agent/` product family, but provider setup, MCP
-configuration, and persistent instructions intentionally keep independent
-install and uninstall lifecycles. For a clean environment, run
-[`promptctl/promptctl.py`](./promptctl/promptctl.py) directly or let an agent
-follow [`promptctl/AGENT_SETUP.md`](./promptctl/AGENT_SETUP.md).
+Client/provider setup, MCP configuration, and persistent instructions keep
+independent install and uninstall lifecycles.
+
+All three public controllers open a guided Shell menu without arguments:
+
+```bash
+./agentctl/agentctl
+./mcpctl/mcpctl
+./promptctl/promptctl
+```
 
 Every model menu also has a custom model-ID entry. All selections can be
 supplied as flags for automation:
 
 ```bash
-./claude-code/setup.sh
-./codex/setup.sh --provider openai --model gpt-5.6
-./opencode/setup.sh --provider custom --protocol chat \
+./agentctl/agentctl setup claude
+./agentctl/agentctl setup codex --provider openai --model gpt-5.6
+./agentctl/agentctl setup opencode --provider custom --protocol chat \
   --base-url https://gateway.example.com/v1 --model my-model --key-env MY_API_KEY
-./pi/setup.sh --provider openrouter --model openai/gpt-5.6
+./agentctl/agentctl setup pi --provider openrouter --model openai/gpt-5.6
 ```
 
-Use `--list-providers` on any setup script to see its current built-in model
-IDs without installing anything. `--region china|global` remains as a
-backward-compatible shortcut for MiniMax where MiniMax is supported.
+Use `./agentctl/agentctl providers <client>` to see current built-in model IDs
+without installing anything. `--region china|global` remains as a
+backward-compatible setup option for MiniMax where MiniMax is supported.
 
-## Per-agent kit
+## Controller boundaries
+
+| Controller | Owns | Does not own |
+| --- | --- | --- |
+| `agentctl` | Client installation plus provider/model/credential configuration | MCP state, prompt files, CLI removal |
+| `mcpctl` | Task-oriented MCP profiles and their encrypted backup state | Providers, models, persistent instructions |
+| `promptctl` | Persistent instruction links and initial editable Markdown | Clients, providers, credentials, MCP state |
+
+`agentctl uninstall <client>` calls only the selected `setup.sh --uninstall`.
+It intentionally does not call the broader per-client `uninstall.sh`.
+
+## Per-agent backend kit
 
 | File | Required | Purpose |
 |---|---:|---|
-| `setup.sh` | yes | Install the client and configure a provider/model. |
+| `setup.sh` | yes | `agentctl` backend and compatible one-shot setup entrypoint. |
 | `mcp.sh` | when supported | Add the Brave / Exa / Context7 / GitHub / Chrome DevTools MCP pack. Pi has no built-in MCP client. |
 | `uninstall.sh` | yes | Remove setup and MCP entries owned by these scripts. |
 | `README.md` | yes | Usage and compatibility notes. |
@@ -110,6 +128,7 @@ apt, dnf/yum, Homebrew, or apk when it is missing.
 ```bash
 ./test.sh
 
+bash -n agentctl/agentctl
 bash -n claude-code/setup.sh
 bash -n codex/setup.sh
 bash -n opencode/setup.sh
@@ -126,6 +145,9 @@ pack. For personal profiles and encrypted restoration, initialize a separate
 `mcpctl` store:
 
 ```bash
+./mcpctl/mcpctl
+
+# Equivalent explicit commands for automation:
 ./mcpctl/mcpctl init
 ./mcpctl/mcpctl plan --target claude --profile frontend
 ./mcpctl/mcpctl --target codex --profile reverse

@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# agentctl — shared Shell frontend for coding-agent provider setup.
+#
+# Per-client setup.sh files remain the implementation and raw-URL-compatible
+# entrypoints. This command selects one of them without taking ownership of
+# MCP profiles, persistent instructions, or the installed CLI binary.
+
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VERSION="0.1.0"
+
+log()  { printf '%s\n' "$*"; }
+warn() { printf '! %s\n' "$*" >&2; }
+die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+agentctl — install coding agents and configure providers/models
+
+Usage:
+  agentctl
+  agentctl interactive
+  agentctl setup <claude|codex|opencode|pi> [setup options]
+  agentctl providers <claude|codex|opencode|pi>
+  agentctl uninstall <claude|codex|opencode|pi> [--yes]
+  agentctl help <claude|codex|opencode|pi>
+
+Commands:
+  setup       Install the selected CLI when missing, then configure its
+              provider, model, and credential. "init" and "configure" are
+              accepted aliases.
+  providers   Show the selected client's provider/model presets.
+  uninstall   Remove only provider/model/credential state owned by setup.sh.
+              It does not remove MCP state, Promptctl files, or the CLI binary.
+  help        Show the selected client's setup options.
+
+Run without arguments for the guided Shell menu. Setup options after the
+client name are passed unchanged to that client's existing setup.sh backend.
+EOF
+}
+
+resolve_agent_root() {
+  local requested="${AGENTCTL_AGENT_ROOT:-$DEFAULT_AGENT_ROOT}"
+  [ -d "$requested" ] || die "agent backend root does not exist: $requested"
+  AGENT_ROOT="$(cd "$requested" && pwd)"
+}
+
+resolve_client() {
+  if [ -z "${AGENT_ROOT:-}" ]; then
+    resolve_agent_root
+  fi
+  case "$1" in
+    claude|claude-code)
+      CLIENT_ID="claude"
+      CLIENT_DIR="claude-code"
+      CLIENT_LABEL="Claude Code"
+      ;;
+    codex)
+      CLIENT_ID="codex"
+      CLIENT_DIR="codex"
+      CLIENT_LABEL="Codex"
+      ;;
+    opencode|open-code)
+      CLIENT_ID="opencode"
+      CLIENT_DIR="opencode"
+      CLIENT_LABEL="OpenCode"
+      ;;
+    pi)
+      CLIENT_ID="pi"
+      CLIENT_DIR="pi"
+      CLIENT_LABEL="Pi"
+      ;;
+    *)
+      die "unsupported client '$1'; choose claude, codex, opencode, or pi"
+      ;;
+  esac
+
+  SETUP_SCRIPT="${AGENT_ROOT}/${CLIENT_DIR}/setup.sh"
+  [ -f "$SETUP_SCRIPT" ] ||
+    die "setup backend not found for ${CLIENT_LABEL}: $SETUP_SCRIPT"
+  [ -x "$SETUP_SCRIPT" ] ||
+    die "setup backend is not executable: $SETUP_SCRIPT"
+}
+
+prompt_value() {
+  local label="$1" default_value="${2:-}" input
+  if [ -n "$default_value" ]; then
+    printf '%s [%s]: ' "$label" "$default_value" >&2
+  else
+    printf '%s: ' "$label" >&2
+  fi
+  if ! IFS= read -r input; then
+    die "interactive input ended; use --help for explicit commands"
+  fi
+  PROMPT_REPLY="${input:-$default_value}"
+}
+
+choose_menu() {
+  local title="$1" default_index="$2" entry index selected
+  shift 2
+  printf '\n%s\n' "$title" >&2
+  index=1
+  for entry in "$@"; do
+    printf '  %d) %s\n' "$index" "${entry#*|}" >&2
+    index=$((index + 1))
+  done
+
+  while true; do
+    prompt_value "Choose" "$default_index"
+    selected="$PROMPT_REPLY"
+    case "$selected" in
+      ""|*[!0-9]*)
+        warn "enter a number from 1 to $#"
+        continue
+        ;;
+    esac
+    if [ "$selected" -lt 1 ] 2>/dev/null ||
+       [ "$selected" -gt "$#" ] 2>/dev/null; then
+      warn "enter a number from 1 to $#"
+      continue
+    fi
+
+    index=1
+    for entry in "$@"; do
+      if [ "$index" -eq "$selected" ]; then
+        MENU_VALUE="${entry%%|*}"
+        return 0
+      fi
+      index=$((index + 1))
+    done
+  done
+}
+
+ask_yes_no() {
+  local label="$1" default_answer="${2:-no}" answer
+  while true; do
+    if [ "$default_answer" = "yes" ]; then
+      prompt_value "$label [Y/n]" ""
+    else
+      prompt_value "$label [y/N]" ""
+    fi
+    answer="$(printf '%s' "$PROMPT_REPLY" | tr '[:upper:]' '[:lower:]')"
+    case "$answer" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      "")
+        [ "$default_answer" = "yes" ] && return 0
+        return 1
+        ;;
+      *) warn "please answer y or n" ;;
+    esac
+  done
+}
+
+select_client() {
+  choose_menu \
+    "Which coding agent?" 1 \
+    "claude|Claude Code" \
+    "codex|Codex" \
+    "opencode|OpenCode" \
+    "pi|Pi"
+  resolve_client "$MENU_VALUE"
+}
+
+run_setup() {
+  local requested="$1"
+  shift
+  resolve_client "$requested"
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+  log "Opening ${CLIENT_LABEL} provider setup..."
+  AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
+    AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
+    exec "$SETUP_SCRIPT" "$@"
+}
+
+run_providers() {
+  local requested="$1"
+  shift
+  [ $# -eq 0 ] || die "providers accepts only a client name"
+  resolve_client "$requested"
+  exec "$SETUP_SCRIPT" --list-providers
+}
+
+run_client_help() {
+  local requested="$1"
+  shift
+  [ $# -eq 0 ] || die "help accepts only a client name"
+  resolve_client "$requested"
+  AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
+    AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
+    exec "$SETUP_SCRIPT" --help
+}
+
+run_uninstall() {
+  local requested="$1" assume_yes=0
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y)
+        assume_yes=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "uninstall accepts only --yes after the client name"
+        ;;
+    esac
+  done
+
+  resolve_client "$requested"
+  if [ "$assume_yes" -ne 1 ]; then
+    log "This removes only agentctl-managed ${CLIENT_LABEL} provider state."
+    log "MCP configuration, Promptctl instructions, and the CLI stay installed."
+    if ! ask_yes_no "Continue with ${CLIENT_LABEL} provider uninstall?" "no"; then
+      log "[cancelled] no provider configuration was changed"
+      return 0
+    fi
+  fi
+  exec "$SETUP_SCRIPT" --uninstall
+}
+
+run_interactive() {
+  local action
+  if [ $# -gt 0 ]; then
+    [ $# -eq 1 ] || die "interactive mode does not accept options"
+    case "$1" in
+      -h|--help) usage; return 0 ;;
+      *) die "interactive mode does not accept options" ;;
+    esac
+  fi
+
+  log "Agentctl guided Shell setup"
+  log "This controls client/provider setup only; MCP and prompts stay independent."
+
+  choose_menu \
+    "What would you like to do?" 1 \
+    "setup|Install or configure a coding agent" \
+    "providers|List provider and model presets" \
+    "uninstall|Remove managed provider configuration" \
+    "exit|Exit without changes"
+  action="$MENU_VALUE"
+  if [ "$action" = "exit" ]; then
+    log "No changes were made."
+    return 0
+  fi
+
+  select_client
+  case "$action" in
+    setup)
+      log "Opening ${CLIENT_LABEL} provider setup..."
+      AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
+        AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
+        exec "$SETUP_SCRIPT"
+      ;;
+    providers)
+      exec "$SETUP_SCRIPT" --list-providers
+      ;;
+    uninstall)
+      run_uninstall "$CLIENT_ID"
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  "")
+    run_interactive
+    ;;
+  interactive)
+    shift
+    run_interactive "$@"
+    ;;
+  setup|init|configure)
+    [ $# -ge 2 ] || die "$1 requires a client name"
+    shift
+    run_setup "$@"
+    ;;
+  providers|list-providers)
+    [ $# -eq 2 ] || die "$1 requires exactly one client name"
+    shift
+    run_providers "$@"
+    ;;
+  uninstall|remove)
+    [ $# -ge 2 ] || die "$1 requires a client name"
+    shift
+    run_uninstall "$@"
+    ;;
+  help)
+    [ $# -eq 2 ] || die "help requires exactly one client name"
+    shift
+    run_client_help "$@"
+    ;;
+  -h|--help)
+    usage
+    ;;
+  -V|--version)
+    printf 'agentctl %s\n' "$VERSION"
+    ;;
+  *)
+    die "unknown command '$1'; use --help"
+    ;;
+esac

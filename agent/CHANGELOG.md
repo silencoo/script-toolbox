@@ -2,11 +2,20 @@
 
 ## 2026-07-29 — Promptctl persistent instructions
 
+- Added `agentctl` as the no-extension Shell frontend for selecting Claude
+  Code, Codex, OpenCode, or Pi and delegating provider/model setup.
+- Added guided setup, provider listing, provider-only uninstall confirmation,
+  client aliases, and explicit command passthrough while retaining every
+  existing `setup.sh` as a compatibility backend.
 - Added `promptctl` as the shared persistent-instruction manager for Claude
   Code and Codex.
 - Added direct and Agent-guided entrypoints that share one filesystem layout,
   create user-editable Markdown once, and preserve it on reruns and default
   uninstall.
+- Added no-argument Shell-guided menus to Promptctl and `mcpctl`; both preview
+  planned writes and require a separate confirmation before applying.
+- Kept Promptctl's Python module as a non-interactive configuration engine
+  behind the public `promptctl` Shell entrypoint.
 - Moved the imported advanced Claude and Codex deployers under
   `promptctl/advanced/` while preserving their upstream recovery identifiers.
 - Kept Promptctl state independent from provider and MCP install/uninstall

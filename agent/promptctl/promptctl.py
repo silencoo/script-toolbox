@@ -534,7 +534,8 @@ def command_install(args: argparse.Namespace) -> int:
     preview = args.dry_run or not args.yes
     _print_plans(plans, preview)
     if preview:
-        print("\nRun the same command with --yes after reviewing these paths.")
+        if os.environ.get("PROMPTCTL_GUIDED") != "1":
+            print("\nRun the same command with --yes after reviewing these paths.")
         return 0
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -572,7 +573,8 @@ def command_uninstall(args: argparse.Namespace) -> int:
     preview = args.dry_run or not args.yes
     _print_plans(plans, preview)
     if preview:
-        print("\nRun the same command with --yes after reviewing these paths.")
+        if os.environ.get("PROMPTCTL_GUIDED") != "1":
+            print("\nRun the same command with --yes after reviewing these paths.")
         return 0
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -655,6 +657,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=os.environ.get("PROMPTCTL_PROG") or None,
         description=(
             "Configure lightweight, user-editable persistent instructions for "
             "Claude Code and Codex"
@@ -709,7 +712,15 @@ Examples:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments:
+        print(
+            "[error] promptctl.py is the non-interactive engine; "
+            "run agent/promptctl/promptctl for guided setup",
+            file=sys.stderr,
+        )
+        return 2
+    args = build_parser().parse_args(arguments)
     return args.func(args)
 
 

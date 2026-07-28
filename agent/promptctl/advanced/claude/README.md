@@ -29,9 +29,9 @@
 script-toolbox 根目录运行：
 
 ```bash
-python3 agent/promptctl/promptctl.py install claude
-python3 agent/promptctl/promptctl.py install claude --yes
-python3 agent/promptctl/promptctl.py path claude
+./agent/promptctl/promptctl install claude
+./agent/promptctl/promptctl install claude --yes
+./agent/promptctl/promptctl path claude
 ```
 
 该入口只拥有 `CLAUDE.md` 中自己的导入块；首次创建的提示词文件随后

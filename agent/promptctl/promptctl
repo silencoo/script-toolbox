@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# promptctl — guided Shell frontend for persistent Claude/Codex instructions.
+#
+# The Python file beside this script is deliberately a non-interactive engine.
+# Keeping prompts and confirmations here makes the public entrypoint consistent
+# with the other script-toolbox tools while retaining deterministic operations.
+
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENGINE="${SCRIPT_DIR}/promptctl.py"
+PYTHON_BIN=""
+export PROMPTCTL_PROG="promptctl"
+
+log()  { printf '%s\n' "$*"; }
+warn() { printf '! %s\n' "$*" >&2; }
+die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+promptctl — configure persistent, user-editable instructions
+
+Usage:
+  promptctl
+  promptctl interactive [--home <directory>]
+  promptctl install <claude|codex|all> [options]
+  promptctl status <claude|codex|all> [options]
+  promptctl path <claude|codex|all> [options]
+  promptctl uninstall <claude|codex|all> [options]
+
+Run without arguments for the guided Shell setup. Every write is previewed and
+requires confirmation. Explicit subcommands are passed to the deterministic
+Python engine; use "promptctl <command> --help" for their options.
+
+Environment:
+  PROMPTCTL_PYTHON   Python 3.9+ executable used by the internal engine.
+EOF
+}
+
+find_python() {
+  local candidate
+
+  [ -r "$ENGINE" ] || die "internal engine not found: $ENGINE"
+
+  if [ -n "${PROMPTCTL_PYTHON:-}" ]; then
+    candidate="$PROMPTCTL_PYTHON"
+    command -v "$candidate" >/dev/null 2>&1 ||
+      die "PROMPTCTL_PYTHON is not executable: $candidate"
+    "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' \
+      >/dev/null 2>&1 ||
+      die "Promptctl requires Python 3.9 or newer: $candidate"
+    PYTHON_BIN="$candidate"
+    return 0
+  fi
+
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+       "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' \
+         >/dev/null 2>&1; then
+      PYTHON_BIN="$candidate"
+      return 0
+    fi
+  done
+
+  die "Promptctl requires Python 3.9 or newer; install python3 and re-run"
+}
+
+run_engine() {
+  "$PYTHON_BIN" "$ENGINE" "$@"
+}
+
+prompt_value() {
+  local label="$1" default_value="${2:-}" input
+  if [ -n "$default_value" ]; then
+    printf '%s [%s]: ' "$label" "$default_value" >&2
+  else
+    printf '%s: ' "$label" >&2
+  fi
+  if ! IFS= read -r input; then
+    die "interactive input ended; use --help for non-interactive commands"
+  fi
+  PROMPT_REPLY="${input:-$default_value}"
+}
+
+choose_menu() {
+  local title="$1" default_index="$2" entry index selected
+  shift 2
+  printf '\n%s\n' "$title" >&2
+  index=1
+  for entry in "$@"; do
+    printf '  %d) %s\n' "$index" "${entry#*|}" >&2
+    index=$((index + 1))
+  done
+
+  while true; do
+    prompt_value "Choose" "$default_index"
+    selected="$PROMPT_REPLY"
+    case "$selected" in
+      ""|*[!0-9]*)
+        warn "enter a number from 1 to $#"
+        continue
+        ;;
+    esac
+    if [ "$selected" -lt 1 ] 2>/dev/null ||
+       [ "$selected" -gt "$#" ] 2>/dev/null; then
+      warn "enter a number from 1 to $#"
+      continue
+    fi
+
+    index=1
+    for entry in "$@"; do
+      if [ "$index" -eq "$selected" ]; then
+        MENU_VALUE="${entry%%|*}"
+        return 0
+      fi
+      index=$((index + 1))
+    done
+  done
+}
+
+ask_yes_no() {
+  local label="$1" default_answer="${2:-no}" answer
+  while true; do
+    if [ "$default_answer" = "yes" ]; then
+      prompt_value "$label [Y/n]" ""
+    else
+      prompt_value "$label [y/N]" ""
+    fi
+    answer="$(printf '%s' "$PROMPT_REPLY" | tr '[:upper:]' '[:lower:]')"
+    case "$answer" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      "")
+        [ "$default_answer" = "yes" ] && return 0
+        return 1
+        ;;
+      *) warn "please answer y or n" ;;
+    esac
+  done
+}
+
+normalize_profile() {
+  local candidate="$1"
+  case "$candidate" in
+    *.md) candidate="${candidate%.md}" ;;
+  esac
+  case "$candidate" in
+    ""|"."|".."|*/*|*\\*|*..*|*[!A-Za-z0-9._-]*)
+      return 1
+      ;;
+  esac
+  PROFILE_NAME="$candidate"
+}
+
+read_profile() {
+  while true; do
+    prompt_value "Instruction profile name" "personal"
+    if normalize_profile "$PROMPT_REPLY"; then
+      return 0
+    fi
+    warn "use one safe filename: letters, digits, dots, underscores, or hyphens"
+  done
+}
+
+run_profile_engine() {
+  local operation="$1"
+  shift
+  local -a command_args
+  command_args=("$operation" "$GUIDED_CLIENT" "--name" "$PROFILE_NAME")
+  if [ -n "$GUIDED_HOME" ]; then
+    command_args+=("--home" "$GUIDED_HOME")
+  fi
+  command_args+=("$@")
+  PROMPTCTL_GUIDED=1 "$PYTHON_BIN" "$ENGINE" "${command_args[@]}"
+}
+
+run_interactive() {
+  local action
+  local -a remove_args
+  GUIDED_HOME=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --home)
+        [ $# -ge 2 ] || die "--home requires a directory"
+        GUIDED_HOME="$2"
+        shift 2
+        ;;
+      --home=*)
+        GUIDED_HOME="${1#*=}"
+        [ -n "$GUIDED_HOME" ] || die "--home requires a directory"
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "interactive mode accepts only --home; use explicit commands for advanced options"
+        ;;
+    esac
+  done
+
+  log "Promptctl guided Shell setup"
+  log "Every write is previewed and requires a separate confirmation."
+
+  choose_menu \
+    "What would you like to do?" 1 \
+    "install|Configure or update persistent instructions" \
+    "status|Inspect current Promptctl status" \
+    "path|Print editable instruction paths" \
+    "uninstall|Remove Promptctl-managed links" \
+    "exit|Exit without changes"
+  action="$MENU_VALUE"
+  if [ "$action" = "exit" ]; then
+    log "No changes were made."
+    return 0
+  fi
+
+  choose_menu \
+    "Which client?" 1 \
+    "all|Claude Code and Codex" \
+    "claude|Claude Code" \
+    "codex|Codex"
+  GUIDED_CLIENT="$MENU_VALUE"
+  read_profile
+
+  case "$action" in
+    status|path)
+      run_profile_engine "$action"
+      ;;
+    install)
+      run_profile_engine install
+      if ask_yes_no "Apply this Promptctl plan?" "no"; then
+        run_profile_engine install --yes
+      else
+        log "[cancelled] no files were changed"
+      fi
+      ;;
+    uninstall)
+      remove_args=()
+      if ask_yes_no \
+        "Also back up and remove the editable instruction files?" "no"; then
+        remove_args+=("--remove-instructions")
+      fi
+      run_profile_engine uninstall "${remove_args[@]+"${remove_args[@]}"}"
+      if ask_yes_no "Apply this uninstall plan?" "no"; then
+        run_profile_engine \
+          uninstall "${remove_args[@]+"${remove_args[@]}"}" --yes
+      else
+        log "[cancelled] no files were changed"
+      fi
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+find_python
+
+if [ $# -eq 0 ]; then
+  run_interactive
+elif [ "$1" = "interactive" ]; then
+  shift
+  run_interactive "$@"
+else
+  exec "$PYTHON_BIN" "$ENGINE" "$@"
+fi

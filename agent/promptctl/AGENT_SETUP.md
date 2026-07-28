@@ -1,8 +1,8 @@
 # Promptctl Agent Setup
 
 This is the Agent-guided entrypoint for clean workstations and disposable
-sandboxes. It reaches exactly the same state as running `promptctl.py`
-directly.
+sandboxes. It uses the same `promptctl` Shell entrypoint and deterministic
+engine as direct setup.
 
 Promptctl owns one marked import/config block per client. It creates an
 editable instruction file only when that file is missing and never replaces
@@ -13,14 +13,20 @@ its content on later runs.
 Run from the `script-toolbox` repository root:
 
 ```bash
+# Human-friendly menu; every write is previewed and confirmed.
+./agent/promptctl/promptctl
+
 # Preview one client or both.
-python3 agent/promptctl/promptctl.py install claude
-python3 agent/promptctl/promptctl.py install codex
-python3 agent/promptctl/promptctl.py install all
+./agent/promptctl/promptctl install claude
+./agent/promptctl/promptctl install codex
+./agent/promptctl/promptctl install all
 
 # Apply exactly the previewed configuration.
-python3 agent/promptctl/promptctl.py install all --yes
+./agent/promptctl/promptctl install all --yes
 ```
+
+Agents should use the explicit commands below instead of trying to answer the
+human menu.
 
 After installation, edit the paths printed by the command:
 
@@ -32,7 +38,7 @@ After installation, edit the paths printed by the command:
 Print them again at any time:
 
 ```bash
-python3 agent/promptctl/promptctl.py path all
+./agent/promptctl/promptctl path all
 ```
 
 New Claude Code or Codex sessions load the changes. Running sessions are not
@@ -44,8 +50,8 @@ rewritten.
 Configure persistent instructions from this script-toolbox checkout.
 
 1. Read agent/promptctl/AGENT_SETUP.md and agent/promptctl/README.md completely.
-2. Run `python3 agent/promptctl/promptctl.py status all`.
-3. Run `python3 agent/promptctl/promptctl.py install all` without `--yes`.
+2. Run `./agent/promptctl/promptctl status all`.
+3. Run `./agent/promptctl/promptctl install all` without `--yes`.
 4. Report the exact Claude/Codex link files, editable instruction files, and
    planned create/update/preserve actions.
 5. If either client reports a conflict or an existing unowned instruction
@@ -78,16 +84,16 @@ missing instruction file.
 ## Status and uninstall
 
 ```bash
-python3 agent/promptctl/promptctl.py status all
-python3 agent/promptctl/promptctl.py status all --json
+./agent/promptctl/promptctl status all
+./agent/promptctl/promptctl status all --json
 
 # Preview, then remove only Promptctl-owned links.
-python3 agent/promptctl/promptctl.py uninstall all
-python3 agent/promptctl/promptctl.py uninstall all --yes
+./agent/promptctl/promptctl uninstall all
+./agent/promptctl/promptctl uninstall all --yes
 
 # Explicitly back up and remove the editable Markdown too.
-python3 agent/promptctl/promptctl.py uninstall all --remove-instructions
-python3 agent/promptctl/promptctl.py uninstall all --remove-instructions --yes
+./agent/promptctl/promptctl uninstall all --remove-instructions
+./agent/promptctl/promptctl uninstall all --remove-instructions --yes
 ```
 
 `--dry-run` wins over `--yes`. A malformed marker, non-regular target,

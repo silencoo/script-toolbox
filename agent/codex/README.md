@@ -26,26 +26,30 @@ curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/
 curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/mcp.sh | bash
 ```
 
-Or from a clone:
+From a clone, use the shared controller from the repository root:
 
 ```bash
-cd agent/codex
-./setup.sh
-./mcp.sh
+./agent/agentctl/agentctl setup codex
+./agent/codex/mcp.sh
 ```
+
+The Raw URL above and `agent/codex/setup.sh` remain supported compatibility
+entrypoints.
 
 ## Automation and custom providers
 
 ```bash
-./setup.sh --list-providers
+./agent/agentctl/agentctl providers codex
 
 OPENAI_API_KEY=sk-... \
-  ./setup.sh --provider openai --model gpt-5.6
+  ./agent/agentctl/agentctl setup codex \
+    --provider openai --model gpt-5.6
 
 OPENROUTER_API_KEY=sk-or-... \
-  ./setup.sh --provider openrouter --model openai/gpt-5.6
+  ./agent/agentctl/agentctl setup codex \
+    --provider openrouter --model openai/gpt-5.6
 
-./setup.sh --provider custom \
+./agent/agentctl/agentctl setup codex --provider custom \
   --base-url https://gateway.example.com/v1 \
   --models-url https://gateway.example.com/v1/models \
   --model my-model --key-env MY_API_KEY
@@ -66,14 +70,18 @@ independently from provider and MCP state. For a clean machine or sandbox,
 create a lightweight config block and an editable user-owned Markdown file:
 
 ```bash
-python3 agent/promptctl/promptctl.py install codex
-python3 agent/promptctl/promptctl.py install codex --yes
-python3 agent/promptctl/promptctl.py path codex
+# Omit arguments for the guided menu, then choose Codex.
+./agent/promptctl/promptctl
+
+# Equivalent explicit workflow:
+./agent/promptctl/promptctl install codex
+./agent/promptctl/promptctl install codex --yes
+./agent/promptctl/promptctl path codex
 ```
 
 An agent can follow
 [`../promptctl/AGENT_SETUP.md`](../promptctl/AGENT_SETUP.md) instead; it calls
-the same program and produces the same layout.
+the same Shell entrypoint and produces the same layout.
 
 For fixed-source deployment, migration, hook isolation, recovery, or layered
 uninstall, use the strict
@@ -108,15 +116,15 @@ config references `GITHUB_PERSONAL_ACCESS_TOKEN` through
 `bearer_token_env_var`; the PAT is not written into `config.toml`.
 
 ```bash
-./mcp.sh
-./mcp.sh --provider chrome-devtools
+./agent/codex/mcp.sh
+./agent/codex/mcp.sh --provider chrome-devtools
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
-  ./mcp.sh --provider github --provider chrome-devtools
-./uninstall.sh
+  ./agent/codex/mcp.sh --provider github --provider chrome-devtools
+./agent/codex/uninstall.sh
 
 # Or remove only one part:
-./setup.sh --uninstall
-./mcp.sh --uninstall
+./agent/agentctl/agentctl uninstall codex
+./agent/codex/mcp.sh --uninstall
 ```
 
 The setup block is bounded by explicit markers, so unrelated `config.toml`

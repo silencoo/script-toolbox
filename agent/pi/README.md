@@ -23,26 +23,31 @@ with `--ignore-scripts`, matching the upstream installation guidance.
 curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/pi/setup.sh | bash
 ```
 
-Or from a clone:
+From a clone, use the shared controller from the repository root:
 
 ```bash
-cd agent/pi
-./setup.sh
+./agent/agentctl/agentctl setup pi
 ```
+
+The Raw URL above and `agent/pi/setup.sh` remain supported compatibility
+entrypoints.
 
 ## Automation and custom providers
 
 ```bash
-./setup.sh --list-providers
+./agent/agentctl/agentctl providers pi
 
 OPENAI_API_KEY=sk-... \
-  ./setup.sh --provider openai --model gpt-5.6
+  ./agent/agentctl/agentctl setup pi \
+    --provider openai --model gpt-5.6
 
-./setup.sh --provider custom --protocol responses --auth-mode bearer \
+./agent/agentctl/agentctl setup pi \
+  --provider custom --protocol responses --auth-mode bearer \
   --base-url https://gateway.example.com/v1 \
   --model my-model --key-env MY_API_KEY
 
-./setup.sh --provider custom --protocol google --auth-mode google-key \
+./agent/agentctl/agentctl setup pi \
+  --provider custom --protocol google --auth-mode google-key \
   --base-url https://generativelanguage.googleapis.com/v1beta \
   --model my-model --key custom-secret
 ```
@@ -61,10 +66,10 @@ using an extension when MCP is needed, so this folder does not install an MCP
 pack.
 
 ```bash
-./uninstall.sh
+./agent/pi/uninstall.sh
 
 # Or remove only the managed provider:
-./setup.sh --uninstall
+./agent/agentctl/agentctl uninstall pi
 ```
 
 Uninstall preserves all unrelated providers, settings, sessions, packages,

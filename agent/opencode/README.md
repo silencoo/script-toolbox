@@ -28,13 +28,15 @@ curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/
 curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/mcp.sh | bash
 ```
 
-Or from a clone:
+From a clone, use the shared controller from the repository root:
 
 ```bash
-cd agent/opencode
-./setup.sh
-./mcp.sh
+./agent/agentctl/agentctl setup opencode
+./agent/opencode/mcp.sh
 ```
+
+The Raw URL above and `agent/opencode/setup.sh` remain supported compatibility
+entrypoints.
 
 No separate `opencode auth login` step is needed for keys configured by this
 script.
@@ -42,19 +44,23 @@ script.
 ## Automation and custom providers
 
 ```bash
-./setup.sh --list-providers
+./agent/agentctl/agentctl providers opencode
 
 GEMINI_API_KEY=... \
-  ./setup.sh --provider google --model gemini-3.6-flash
+  ./agent/agentctl/agentctl setup opencode \
+    --provider google --model gemini-3.6-flash
 
 DEEPSEEK_API_KEY=... \
-  ./setup.sh --provider deepseek --model deepseek-v4-pro
+  ./agent/agentctl/agentctl setup opencode \
+    --provider deepseek --model deepseek-v4-pro
 
-./setup.sh --provider custom --protocol chat \
+./agent/agentctl/agentctl setup opencode \
+  --provider custom --protocol chat \
   --base-url https://gateway.example.com/v1 \
   --model my-model --key-env MY_API_KEY
 
-./setup.sh --provider custom --protocol anthropic \
+./agent/agentctl/agentctl setup opencode \
+  --provider custom --protocol anthropic \
   --base-url https://gateway.example.com/anthropic/v1 \
   --model my-model --key custom-secret
 ```
@@ -77,15 +83,15 @@ OAuth disabled for the PAT connection; the PAT is not written into
 `opencode.json`.
 
 ```bash
-./mcp.sh
-./mcp.sh --provider chrome-devtools
+./agent/opencode/mcp.sh
+./agent/opencode/mcp.sh --provider chrome-devtools
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
-  ./mcp.sh --provider github --provider chrome-devtools
-./uninstall.sh
+  ./agent/opencode/mcp.sh --provider github --provider chrome-devtools
+./agent/opencode/uninstall.sh
 
 # Or remove only one part:
-./setup.sh --uninstall
-./mcp.sh --uninstall
+./agent/agentctl/agentctl uninstall opencode
+./agent/opencode/mcp.sh --uninstall
 ```
 
 Use `/models` in OpenCode to switch away from the configured default.

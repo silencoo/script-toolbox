@@ -26,13 +26,15 @@ curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/
 The first command remains interactive even in a pipe because it reads answers
 from `/dev/tty`.
 
-From a clone:
+From a clone, use the shared controller from the repository root:
 
 ```bash
-cd agent/claude-code
-./setup.sh
-./mcp.sh
+./agent/agentctl/agentctl setup claude
+./agent/claude-code/mcp.sh
 ```
+
+The Raw URL above and `agent/claude-code/setup.sh` remain supported
+compatibility entrypoints.
 
 ## Persistent instructions
 
@@ -42,14 +44,18 @@ sandbox, create a lightweight import and an editable user-owned Markdown file:
 
 ```bash
 # Run from the script-toolbox repository root.
-python3 agent/promptctl/promptctl.py install claude
-python3 agent/promptctl/promptctl.py install claude --yes
-python3 agent/promptctl/promptctl.py path claude
+# Omit arguments for the guided menu, then choose Claude Code.
+./agent/promptctl/promptctl
+
+# Equivalent explicit workflow:
+./agent/promptctl/promptctl install claude
+./agent/promptctl/promptctl install claude --yes
+./agent/promptctl/promptctl path claude
 ```
 
 An agent can follow
 [`../promptctl/AGENT_SETUP.md`](../promptctl/AGENT_SETUP.md) instead; it calls
-the same program and produces the same layout.
+the same Shell entrypoint and produces the same layout.
 
 For fixed-source deployment or an existing environment that needs stricter
 backup/restore ownership, use
@@ -71,15 +77,16 @@ Both Promptctl ownership models remain independent of `uninstall.sh`.
 ## Automation and custom providers
 
 ```bash
-./setup.sh --list-providers
+./agent/agentctl/agentctl providers claude
 
 DEEPSEEK_API_KEY=... \
-  ./setup.sh --provider deepseek --model deepseek-v4-pro
+  ./agent/agentctl/agentctl setup claude \
+    --provider deepseek --model deepseek-v4-pro
 
 OPENROUTER_API_KEY=sk-or-... \
-  ./setup.sh --provider openrouter
+  ./agent/agentctl/agentctl setup claude --provider openrouter
 
-./setup.sh --provider custom \
+./agent/agentctl/agentctl setup claude --provider custom \
   --base-url https://gateway.example.com/anthropic \
   --models-url https://gateway.example.com/v1/models \
   --model my-model --key-env MY_API_KEY --auth-mode auth-token
@@ -115,15 +122,16 @@ user-scoped file, while provider/model settings remain in
 `~/.claude/settings.json`.
 
 ```bash
-./mcp.sh
-./mcp.sh --provider chrome-devtools
+./agent/claude-code/mcp.sh
+./agent/claude-code/mcp.sh --provider chrome-devtools
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
-  ./mcp.sh --provider github --provider chrome-devtools
-./uninstall.sh
+  ./agent/claude-code/mcp.sh \
+    --provider github --provider chrome-devtools
+./agent/claude-code/uninstall.sh
 
 # Or remove only one part:
-./setup.sh --uninstall
-./mcp.sh --uninstall
+./agent/agentctl/agentctl uninstall claude
+./agent/claude-code/mcp.sh --uninstall
 ```
 
 Claude Code installation tries Anthropic's native installer first and falls

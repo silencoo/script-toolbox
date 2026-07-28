@@ -39,6 +39,79 @@ printf '%s' "$profile_list" | grep -q '^frontend' ||
 printf '%s' "$profile_list" | grep -q '^reverse' ||
   fail "profile list omitted reverse"
 
+# No arguments open the guided menu. Listing is read-only and works with the
+# same store used by explicit commands.
+interactive_list="$(
+  printf '4\n' |
+    HOME="$TEST_HOME" MCPCTL_STORE="$STORE" "$MCPCTL" 2>/dev/null
+)"
+printf '%s' "$interactive_list" | grep -q '^frontend' ||
+  fail "no-argument interactive menu did not list profiles"
+
+# A missing store can be initialized from the menu before choosing another
+# action.
+INTERACTIVE_INIT_STORE="${TEST_ROOT}/interactive-init-store"
+INTERACTIVE_INIT_HOME="${TEST_ROOT}/interactive-init-home"
+mkdir -p "$INTERACTIVE_INIT_HOME"
+printf '\n5\n' |
+  HOME="$INTERACTIVE_INIT_HOME" \
+    "$MCPCTL" interactive --store "$INTERACTIVE_INIT_STORE" \
+      >"$TEST_ROOT/interactive-init.out" 2>&1 ||
+  fail "interactive menu did not initialize a missing store"
+[ -f "$INTERACTIVE_INIT_STORE/catalog.json" ] ||
+  fail "interactive initialization omitted catalog.json"
+
+# Applying from the menu always runs a visible plan first and asks for a
+# separate confirmation. The reverse profile needs no required secret.
+INTERACTIVE_APPLY_HOME="${TEST_ROOT}/interactive-apply-home"
+mkdir -p "$INTERACTIVE_APPLY_HOME"
+printf '1\n2\n5\ny\n' |
+  HOME="$INTERACTIVE_APPLY_HOME" \
+    "$MCPCTL" interactive --store "$STORE" \
+      >"$TEST_ROOT/interactive-apply.out" 2>&1 ||
+  fail "interactive profile apply failed"
+grep -q '^Target:  codex$' "$TEST_ROOT/interactive-apply.out" ||
+  fail "interactive apply did not print its plan"
+grep -qF '# >>> agent/mcpctl >>>' \
+  "$INTERACTIVE_APPLY_HOME/.codex/config.toml" ||
+  fail "interactive apply did not write the owned Codex block"
+jq -e '.targets.codex.profile == "reverse"' \
+  "$INTERACTIVE_APPLY_HOME/.local/state/mcpctl/applied.json" >/dev/null ||
+  fail "interactive apply did not update managed state"
+
+# Declining the final confirmation leaves target configuration untouched.
+INTERACTIVE_CANCEL_HOME="${TEST_ROOT}/interactive-cancel-home"
+mkdir -p "$INTERACTIVE_CANCEL_HOME"
+printf '1\n2\n5\nn\n' |
+  HOME="$INTERACTIVE_CANCEL_HOME" \
+    "$MCPCTL" interactive --store "$STORE" \
+      >"$TEST_ROOT/interactive-cancel.out" 2>&1 ||
+  fail "interactive cancellation returned an error"
+[ ! -e "$INTERACTIVE_CANCEL_HOME/.codex/config.toml" ] ||
+  fail "interactive cancellation changed target configuration"
+
+# A profile with a missing required secret stops after the preview instead of
+# asking for a confirmation that cannot succeed.
+INTERACTIVE_MISSING_HOME="${TEST_ROOT}/interactive-missing-home"
+mkdir -p "$INTERACTIVE_MISSING_HOME"
+if printf '1\n2\n2\n' |
+  HOME="$INTERACTIVE_MISSING_HOME" \
+    "$MCPCTL" interactive --store "$STORE" \
+      >"$TEST_ROOT/interactive-missing.out" 2>&1; then
+  fail "interactive apply accepted a profile with missing required secrets"
+fi
+grep -q 'required secrets are missing' "$TEST_ROOT/interactive-missing.out" ||
+  fail "interactive missing-secret failure was not actionable"
+[ ! -e "$INTERACTIVE_MISSING_HOME/.codex/config.toml" ] ||
+  fail "interactive missing-secret failure changed target configuration"
+
+if HOME="$TEST_HOME" "$MCPCTL" interactive --store "$STORE" \
+  </dev/null >"$TEST_ROOT/interactive-eof.out" 2>&1; then
+  fail "interactive mode accepted missing input"
+fi
+grep -q 'interactive input ended' "$TEST_ROOT/interactive-eof.out" ||
+  fail "interactive EOF did not explain how to use explicit commands"
+
 claude_profile="$(
   HOME="$TEST_HOME" "$MCPCTL" profile show frontend \
     --target claude --store "$STORE"

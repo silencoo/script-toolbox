@@ -45,13 +45,15 @@ MANAGED_BY="agent/codex/setup.sh"
 BEGIN_MARKER="# >>> ${MANAGED_BY} >>>"
 END_MARKER="# <<< ${MANAGED_BY} <<<"
 PROFILE_NAME="script_toolbox"
+SETUP_COMMAND="${AGENTCTL_SETUP_COMMAND:-./setup.sh}"
+UNINSTALL_COMMAND="${AGENTCTL_UNINSTALL_COMMAND:-$0 --uninstall}"
 
 usage() {
   cat <<EOF
-${C_BOLD}agent/codex/setup.sh${C_RESET} - interactive Codex provider setup
+${C_BOLD}${SETUP_COMMAND}${C_RESET} - interactive Codex provider setup
 
 ${C_BOLD}Usage:${C_RESET}
-  setup.sh [options]
+  ${SETUP_COMMAND} [options]
 
 ${C_BOLD}Options:${C_RESET}
   --provider <id>            openai, openrouter, or custom. Omit for a menu.
@@ -73,10 +75,10 @@ ${C_BOLD}Important:${C_RESET}
   cannot be made compatible by setting wire_api = "chat".
 
 ${C_BOLD}Examples:${C_RESET}
-  ./setup.sh
-  OPENAI_API_KEY=sk-... ./setup.sh --provider openai --model gpt-5.6
-  OPENROUTER_API_KEY=sk-or-... ./setup.sh --provider openrouter
-  ./setup.sh --provider custom --base-url https://gateway.example.com/v1 \\
+  ${SETUP_COMMAND}
+  OPENAI_API_KEY=sk-... ${SETUP_COMMAND} --provider openai --model gpt-5.6
+  OPENROUTER_API_KEY=sk-or-... ${SETUP_COMMAND} --provider openrouter
+  ${SETUP_COMMAND} --provider custom --base-url https://gateway.example.com/v1 \\
     --model my-model --key-env MY_API_KEY
 EOF
 }
@@ -350,5 +352,5 @@ echo
 printf '%s%s%s\n' "${C_BOLD}" "Ready" "${C_RESET}"
 printf '  %s\n' "Run: codex --profile $PROFILE_NAME"
 printf '  %s\n' "Provider: $DISPLAY_NAME; model: $MODEL"
-printf '  %s\n' "Uninstall this provider config: $0 --uninstall"
+printf '  %s\n' "Uninstall this provider config: $UNINSTALL_COMMAND"
 ok "done"

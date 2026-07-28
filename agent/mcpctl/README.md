@@ -19,7 +19,18 @@ requirements, such as Node.js for Chrome DevTools MCP.
 
 ## Quick start
 
-Initialize a personal store:
+Run without arguments for the guided local workflow:
+
+```bash
+./agent/mcpctl/mcpctl
+```
+
+The menu can initialize the starter store, select Claude Code, Codex, or
+OpenCode, choose a profile, show the resolved plan, and apply only after a
+separate confirmation. Missing required secrets stop before the confirmation;
+set the environment variables reported by the plan and rerun.
+
+For automation, initialize a personal store explicitly:
 
 ```bash
 ./agent/mcpctl/mcpctl init
@@ -51,8 +62,8 @@ EXA_API_KEY=... \
   --target codex --profile reverse
 ```
 
-The command with no subcommand is shorthand for `apply`. The explicit form is
-also available:
+Supplying `--target` and `--profile` without a subcommand remains shorthand for
+`apply`. The explicit form is also available:
 
 ```bash
 mcpctl apply --target claude --profile frontend
