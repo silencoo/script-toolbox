@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 $setupDir = Split-Path -Parent $PSScriptRoot
 $setupScript = Join-Path $setupDir 'setup.ps1'
+$wslScript = Join-Path $setupDir 'wsl.ps1'
 $configFile = Join-Path $setupDir 'packages.psd1'
 $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) (
@@ -26,6 +27,17 @@ try {
   ) | Out-Null
   if ($errors.Count -gt 0) {
     Stop-Test "PowerShell parser reported $($errors.Count) error(s)."
+  }
+
+  $wslTokens = $null
+  $wslErrors = $null
+  [Management.Automation.Language.Parser]::ParseFile(
+    $wslScript,
+    [ref] $wslTokens,
+    [ref] $wslErrors
+  ) | Out-Null
+  if ($wslErrors.Count -gt 0) {
+    Stop-Test "PowerShell parser reported $($wslErrors.Count) WSL error(s)."
   }
 
   $config = Import-PowerShellDataFile -LiteralPath $configFile
@@ -82,7 +94,20 @@ try {
     Stop-Test 'Default plan did not include JDK 25 LTS.'
   }
 
-  Write-Output 'PASS: Windows dev setup parser, catalog, and plans'
+  $wslPlanFile = Join-Path $testDirectory 'wsl-plan.txt'
+  & $powerShell -NoProfile -ExecutionPolicy Bypass -File $setupScript `
+    plan -Profile default -IncludeWSL -WSLDistro Debian *> $wslPlanFile
+  $wslPlan = Get-Content -LiteralPath $wslPlanFile -Raw
+  if ($LASTEXITCODE -ne 0) {
+    Stop-Test (
+      'WSL plan failed:' + [Environment]::NewLine + $wslPlan.Trim()
+    )
+  }
+  if ($wslPlan -notmatch 'WSL 2 \+ Debian:\s+enabled') {
+    Stop-Test 'WSL plan did not show the selected distribution.'
+  }
+
+  Write-Output 'PASS: Windows dev setup, WSL parser, catalog, and plans'
 } finally {
   if (Test-Path -LiteralPath $testDirectory) {
     Remove-Item -LiteralPath $testDirectory -Recurse -Force
