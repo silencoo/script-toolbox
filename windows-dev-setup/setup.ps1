@@ -16,6 +16,10 @@ param(
   [switch] $Yes,
   [switch] $DryRun,
   [switch] $IncludeWSL,
+  [ValidateNotNullOrEmpty()]
+  [string] $WSLDistro = 'Ubuntu-24.04',
+  [switch] $WSLWebDownload,
+  [switch] $WSLSkipUpdate,
   [switch] $EnableLongPaths,
   [switch] $NoGitConfig,
   [switch] $NoShellConfig,
@@ -261,7 +265,8 @@ function Show-Profiles {
 
   Write-Host ''
   Write-Host 'Optional system changes:'
-  Write-Host '  -IncludeWSL       Install WSL 2 with Ubuntu (admin/reboot possible)'
+  Write-Host '  -IncludeWSL       Initialize WSL 2 and Ubuntu 24.04'
+  Write-Host '  -WSLDistro NAME   Select a different WSL distribution'
   Write-Host '  -EnableLongPaths  Enable Win32 long paths (admin required)'
 }
 
@@ -295,7 +300,7 @@ function Show-Plan {
   )
   Write-Host "  Workspace directory:                  ~\$($script:Config.WorkspaceDirectory)"
   Write-Host (
-    '  WSL 2 + Ubuntu:                       ' +
+    "  WSL 2 + ${WSLDistro}:".PadRight(43) +
     $(if ($IncludeWSL) { 'enabled' } else { 'disabled' })
   )
   Write-Host (
@@ -749,35 +754,78 @@ function Enable-WindowsLongPaths {
   Write-Success 'Win32 long paths enabled'
 }
 
-function Install-WSL {
+function Invoke-WslManager {
+  param(
+    [ValidateSet('setup', 'doctor')]
+    [string] $Action = 'setup'
+  )
+
   if (-not $IncludeWSL) {
     return
   }
 
-  Write-Section 'Installing WSL 2 and Ubuntu'
-  if ($DryRun) {
-    Write-NativePreview 'wsl.exe' @('--install', '-d', 'Ubuntu')
+  $manager = Join-Path $PSScriptRoot 'wsl.ps1'
+  if (-not (Test-Path -LiteralPath $manager -PathType Leaf)) {
+    Stop-Setup "WSL manager not found: $manager"
+  }
+
+  $arguments = @()
+  if ($Action -eq 'setup') {
+    if ($Yes) {
+      $arguments += '--yes'
+    }
+    $arguments += @('--distro', $WSLDistro)
+    if ($WSLWebDownload) {
+      $arguments += '--web-download'
+    }
+    if ($WSLSkipUpdate) {
+      $arguments += '--skip-update'
+    }
+  }
+  $arguments += $Action
+
+  Write-Section "WSL 2 $Action"
+  $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
+  $hostArguments = @(
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', $manager
+  ) + $arguments
+  if ($DryRun -and $Action -eq 'setup') {
+    Write-NativePreview -FilePath $powerShell -ArgumentList $hostArguments
     return
   }
 
-  $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-  if ([int] $os.BuildNumber -lt 19041) {
-    Stop-Setup 'WSL setup requires Windows build 19041 or newer.'
+  Write-NativePreview -FilePath $powerShell -ArgumentList $hostArguments
+  $embeddedVariable = 'WINDOWS_DEV_SETUP_WSL_EMBEDDED'
+  $previousEmbedded = [Environment]::GetEnvironmentVariable(
+    $embeddedVariable,
+    [EnvironmentVariableTarget]::Process
+  )
+  try {
+    [Environment]::SetEnvironmentVariable(
+      $embeddedVariable,
+      '1',
+      [EnvironmentVariableTarget]::Process
+    )
+    & $powerShell @hostArguments
+    $exitCode = $LASTEXITCODE
+  } finally {
+    [Environment]::SetEnvironmentVariable(
+      $embeddedVariable,
+      $previousEmbedded,
+      [EnvironmentVariableTarget]::Process
+    )
   }
 
-  $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe'
-  $listed = Invoke-NativeCapture -FilePath $wsl `
-    -ArgumentList @('--list', '--quiet')
-  if ($listed.ExitCode -eq 0 -and $listed.Text -match '(?im)^Ubuntu') {
-    Write-Skip 'Ubuntu is already registered in WSL'
+  if ($exitCode -eq 3010) {
+    $script:RestartRequired = $true
+    Write-WarnLine 'WSL platform changes require a Windows restart.'
     return
   }
-
-  Invoke-NativeChecked -FilePath $wsl `
-    -ArgumentList @('--install', '-d', 'Ubuntu') `
-    -Description 'Installing WSL and Ubuntu'
-  $script:RestartRequired = $true
-  Write-Success 'WSL installation requested'
+  if ($exitCode -ne 0) {
+    Stop-Setup "WSL 2 $Action failed with exit code $exitCode."
+  }
 }
 
 function Add-PostInstallFailure {
@@ -950,7 +998,9 @@ function Show-Summary {
   }
 
   if ($script:RestartRequired) {
-    Write-WarnLine 'Restart Windows, launch Ubuntu once, then rerun doctor.'
+    Write-WarnLine (
+      "Restart Windows, rerun setup, then launch $WSLDistro once."
+    )
   } elseif (-not $DryRun -and $Command -eq 'setup') {
     Write-Host 'Open a new PowerShell 7 terminal, then run:'
     Write-Host "  .\setup.ps1 doctor -Profile $Profile"
@@ -974,6 +1024,9 @@ try {
       Refresh-ProcessPath
       $winget = Get-WingetPath
       Invoke-Doctor -WingetPath $winget
+      Add-PostInstallFailure 'WSL doctor' {
+        Invoke-WslManager -Action doctor
+      }
       Show-Summary
       if ($script:Failures.Count -gt 0) {
         exit 1
@@ -982,11 +1035,10 @@ try {
     }
     'setup' {
       Assert-WindowsHost
-      if (($IncludeWSL -or $EnableLongPaths) -and
-          -not $DryRun -and -not (Test-IsAdministrator)) {
+      if ($EnableLongPaths -and -not $DryRun -and
+          -not (Test-IsAdministrator)) {
         Stop-Setup (
-          '-IncludeWSL and -EnableLongPaths require an Administrator ' +
-          'PowerShell window.'
+          '-EnableLongPaths requires an Administrator PowerShell window.'
         )
       }
 
@@ -1012,7 +1064,9 @@ try {
       Add-PostInstallFailure 'Win32 long paths' {
         Enable-WindowsLongPaths
       }
-      Add-PostInstallFailure 'WSL' { Install-WSL }
+      Add-PostInstallFailure 'WSL' {
+        Invoke-WslManager -Action setup
+      }
 
       Show-Summary
       if ($script:Failures.Count -gt 0) {

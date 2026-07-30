@@ -1,4 +1,4 @@
-# setup.ps1
+# wsl.ps1
 # Install, initialize, inspect, and maintain WSL 2 on Windows.
 # Compatible with Windows PowerShell 5.1 and PowerShell 7+.
 
@@ -841,7 +841,14 @@ function Invoke-Main {
 
 try {
   Invoke-Main $Arguments
-  $setupExitCode = 0
+  $setupExitCode = if (
+    $script:RestartRequired -and
+    $env:WINDOWS_DEV_SETUP_WSL_EMBEDDED -eq '1'
+  ) {
+    3010
+  } else {
+    0
+  }
 } catch {
   [Console]::Error.WriteLine(
     "$($script:ColorRed)ERROR$($script:ColorReset) $($_.Exception.Message)"

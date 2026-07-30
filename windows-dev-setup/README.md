@@ -2,7 +2,9 @@
 
 `setup.ps1` bootstraps a repeatable development workstation on Windows 10 or
 Windows 11. It uses WinGet for applications, the official Python Install
-Manager for CPython, `fnm` for Node.js, and `rustup` for Rust.
+Manager for CPython, `fnm` for Node.js, and `rustup` for Rust. The companion
+`wsl.ps1` owns WSL 2 initialization, inspection, distribution management, and
+maintenance.
 
 The script is intentionally rerunnable: an installed WinGet package is skipped,
 managed PowerShell profile blocks are replaced in place, and exact runtime
@@ -42,12 +44,17 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1 setup -Profile default
 ```
 
-The setup shows the full package list and asks once before it starts. For
-unattended package agreement prompts:
+The setup shows the full package list and asks once before it starts. WSL may
+ask separately before enabling Windows features or converting an existing WSL
+1 distribution. For unattended setup:
 
 ```powershell
 .\setup.ps1 setup -Profile default -Yes
 ```
+
+With `-IncludeWSL`, `-Yes` also accepts the WSL feature-enable and WSL 1
+conversion prompts. Back up important distribution data before using that
+combination on a machine with WSL 1.
 
 Preview every command without changing the machine:
 
@@ -63,16 +70,76 @@ Run the health check from a new PowerShell 7 terminal:
 
 ## Optional Windows features
 
-WSL and the Win32 long-path registry setting are explicit because they require
-an Administrator terminal and WSL can require a reboot:
+WSL and the Win32 long-path registry setting are explicit because their first
+setup can require an Administrator terminal, and WSL can require a reboot:
 
 ```powershell
 .\setup.ps1 setup -Profile full -IncludeWSL -EnableLongPaths
 ```
 
-`-IncludeWSL` installs WSL 2 and Ubuntu. It requires Windows 10 version 2004
-(build 19041) or newer, or Windows 11. Docker Desktop is included only in the
-`full` profile.
+`-IncludeWSL` runs the bundled WSL lifecycle manager and installs
+`Ubuntu-24.04` without launching it. Select another distribution, use the
+direct web download path, or skip the WSL update:
+
+```powershell
+.\setup.ps1 setup -IncludeWSL -WSLDistro Debian
+.\setup.ps1 setup -IncludeWSL -WSLWebDownload
+.\setup.ps1 setup -IncludeWSL -WSLSkipUpdate
+```
+
+WSL requires Windows 11 or Windows 10 version 2004/build 19041 or newer, a
+64-bit Intel, AMD, or Arm system, and CPU virtualization enabled in BIOS/UEFI.
+The initial platform installation enables `VirtualMachinePlatform` and
+`Microsoft-Windows-Subsystem-Linux`, which normally requires elevation and may
+require a reboot. Rerun the same command after restarting.
+
+After installation, launch the distribution once to create its Linux user:
+
+```powershell
+wsl.exe --distribution Ubuntu-24.04
+```
+
+Docker Desktop is included only in the `full` profile.
+
+### WSL inspection and maintenance
+
+The merged `wsl.ps1` command handles operations that are independent of a full
+workstation setup:
+
+```powershell
+.\wsl.ps1 info
+.\wsl.ps1 doctor
+.\wsl.ps1 distros --online
+.\wsl.ps1 update
+.\wsl.ps1 install-distro Debian
+.\wsl.ps1 set-default Debian
+.\wsl.ps1 shutdown
+```
+
+Initialize only WSL, select a different distribution, omit distribution
+installation, or bypass Microsoft Store:
+
+```powershell
+.\wsl.ps1 setup
+.\wsl.ps1 --distro Debian setup
+.\wsl.ps1 --no-distro setup
+.\wsl.ps1 --web-download setup
+```
+
+The WSL setup is idempotent: an installed distribution is preserved, and an
+existing WSL 2 distribution is not converted or reinstalled. Converting WSL 1
+is an explicit operation because it can take time and important data should be
+backed up first:
+
+```powershell
+.\wsl.ps1 convert Ubuntu
+```
+
+Use `--yes` for intentional non-interactive feature enable or conversion:
+
+```powershell
+.\wsl.ps1 --yes setup
+```
 
 ## Configuration performed after package installation
 
@@ -83,6 +150,7 @@ Unless disabled, setup:
 - installs the latest Node.js LTS through `fnm`, makes it the default, and
   enables Corepack;
 - selects Rust stable and installs `rustfmt` and `clippy`;
+- initializes WSL 2 and the selected distribution when `-IncludeWSL` is used;
 - configures Git for `main`, fast-forward-only pulls, pruning, LF commits,
   Windows long Git paths, Git Credential Manager, and `delta`;
 - adds a clearly marked block to both Windows PowerShell and PowerShell 7
@@ -109,6 +177,9 @@ setup.ps1 [setup|plan|list|doctor] [options]
   -Yes
   -DryRun
   -IncludeWSL
+  -WSLDistro NAME
+  -WSLWebDownload
+  -WSLSkipUpdate
   -EnableLongPaths
   -NoGitConfig
   -NoShellConfig
@@ -254,6 +325,7 @@ configuration:
 ```text
 windows-dev-setup/
 ├── setup.ps1
+├── wsl.ps1
 ├── packages.psd1
 ├── extensions.psd1
 └── stacks/
@@ -286,4 +358,15 @@ Parse and exercise the non-mutating plan commands on Windows:
 
 ```powershell
 .\tests\windows-dev-setup-test.ps1
+.\tests\wsl-test.ps1
 ```
+
+The WSL regression test uses a simulated `wsl.exe`; it does not enable Windows
+features, install a distribution, reboot, or modify the real WSL
+configuration.
+
+Official WSL references:
+
+- [Install WSL](https://learn.microsoft.com/windows/wsl/install)
+- [Basic WSL commands](https://learn.microsoft.com/windows/wsl/basic-commands)
+- [WSL troubleshooting](https://learn.microsoft.com/windows/wsl/troubleshooting)

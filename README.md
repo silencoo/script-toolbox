@@ -25,9 +25,8 @@ documentation so scripts can evolve without crowding the repository root.
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
-| [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap an opinionated Windows 10/11 development workstation |
+| [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap a Windows 10/11 development workstation and manage WSL 2 |
 | [`workstation-utils/`](./workstation-utils/) | Install and explicitly uninstall profile-based everyday utilities on Windows and macOS |
-| [`windows-wsl2/`](./windows-wsl2/) | Initialize, update, inspect, and manage WSL 2 on Windows |
 | [`ghostty/`](./ghostty/) | Install Ghostty on macOS/Linux and configure SSH-safe shell integration |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
@@ -42,6 +41,7 @@ Moving the scripts into categories changes their GitHub raw URLs:
 | `substore-ios-adapter.js` | `sub-store/ios-adapter.js` |
 | `quanx.js` | `quantumult-x/resource-parser.js` |
 | `workers.js` | `workers/cloudflare-vless/worker.js` |
+| `windows-wsl2/setup.ps1` | `windows-dev-setup/wsl.ps1` |
 
 Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
@@ -127,7 +127,7 @@ On Windows, validate the PowerShell tools with:
 .\docker-sandboxes\tests\sbx-manager-test.ps1
 .\workstation-utils\tests\windows-test.ps1
 .\windows-dev-setup\tests\windows-dev-setup-test.ps1
-.\windows-wsl2\tests\setup-test.ps1
+.\windows-dev-setup\tests\wsl-test.ps1
 ```
 
 ## License

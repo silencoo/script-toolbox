@@ -2,7 +2,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $rootDir = Split-Path -Parent $PSScriptRoot
-$setupScript = Join-Path $rootDir 'setup.ps1'
+$setupScript = Join-Path $rootDir 'wsl.ps1'
 $fixture = Join-Path $PSScriptRoot 'fixtures\wsl.ps1'
 $testTmpDir = Join-Path ([IO.Path]::GetTempPath()) (
   'wsl2-setup-test-' + [guid]::NewGuid().ToString('N')
@@ -10,6 +10,7 @@ $testTmpDir = Join-Path ([IO.Path]::GetTempPath()) (
 $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
 $managedEnvironment = @(
   'NO_COLOR',
+  'WINDOWS_DEV_SETUP_WSL_EMBEDDED',
   'WSL2_MANAGER_TEST_MODE',
   'WSL2_MANAGER_WSL_COMMAND',
   'WSL2_TEST_LOG',
@@ -132,6 +133,22 @@ try {
   Assert-LogContains $platform '--install --no-distribution'
   Assert-LogExcludes $platform '--update'
   Assert-LogExcludes $platform '--set-default-version 2'
+
+  # The parent workstation setup receives the standard Windows
+  # restart-required exit code when platform features change.
+  $embedded = Initialize-Case -Name 'embedded' `
+    -WslFeature 'Disabled' -VmFeature 'Disabled'
+  $env:WINDOWS_DEV_SETUP_WSL_EMBEDDED = '1'
+  $embeddedExitCode = Invoke-SetupCase $embedded @(
+    '--yes', '--no-distro', 'setup'
+  )
+  $env:WINDOWS_DEV_SETUP_WSL_EMBEDDED = $null
+  if ($embeddedExitCode -ne 3010) {
+    Stop-Test (
+      'embedded platform initialization did not request a restart; exit ' +
+      "code was $embeddedExitCode"
+    )
+  }
 
   # A fresh ready platform updates WSL, selects WSL 2, installs without
   # launching, and chooses the requested default distro.
