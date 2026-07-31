@@ -23,6 +23,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
+| [`mihomo-subscription-manager/`](./mihomo-subscription-manager/) | Safe switching and automatic updates for complete Mihomo subscription profiles |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap a Windows 10/11 development workstation and manage WSL 2 |
@@ -111,11 +112,12 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh
+bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh mihomo-subscription-manager/setup.sh
 ./linux-server-toolkit/tests/test_init_safety.sh
 ./ghostty/tests/setup-test.sh
 ./ghostty/tests/ssh-terminfo-test.sh
 ./workstation-utils/tests/macos-test.sh
+python3 mihomo-subscription-manager/test_manager.py
 python3 sing-box/generate-client-config.py --help
 node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
 python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests

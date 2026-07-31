@@ -1,0 +1,18 @@
+[Unit]
+Description=Update the active Mihomo subscription profile
+Documentation=file:/usr/local/share/doc/mihomo-subscription-manager/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/sbin/mihomo-subscription-manager update-active
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/mihomo /run/lock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
