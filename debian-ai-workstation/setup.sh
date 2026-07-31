@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# Debian 13 GPU development and AI workstation bootstrap.
+
 # build tool
 sudo apt install build-essential cmake pkg-config libssl-dev zlib1g-dev \
 libbz2-dev libreadline-dev libsqlite-dev llvm libncurses5-dev libncursesw5-dev \

@@ -14,9 +14,9 @@ checks happen before installation.
 
 | Profile | Contents |
 | --- | --- |
-| `core` | PowerShell 7, Windows Terminal, Git, GitHub CLI, VS Code, 7-Zip, and modern command-line tools |
+| `core` | PowerShell 7, Windows Terminal, Git, GitHub CLI, VS Code, NanaZip, and modern command-line tools |
 | `default` | Everything in `core`, plus Python 3.14.6, uv, Temurin JDK 25 LTS, Node.js LTS, Go, Rust, .NET 10 LTS, CMake, Ninja, Visual Studio C++ Build Tools, and LLVM |
-| `full` | Everything in `default`, plus Docker Desktop, kubectl, Helm, Terraform, Bruno, DBeaver, JetBrains Toolbox, and PowerToys |
+| `full` | Everything in `default`, plus Docker Desktop, kubectl, Helm, Terraform, Bruno, DBeaver, and JetBrains Toolbox |
 
 The default profile deliberately pins Python to `3.14.6`. Java follows the
 Temurin `25` LTS package line so rerunning WinGet upgrades can receive security
@@ -33,6 +33,14 @@ Java projects should commit and use Maven Wrapper (`mvnw`) or Gradle Wrapper
 The package catalog and profiles are plain PowerShell data in
 [`packages.psd1`](packages.psd1). Edit that file to add, remove, or regroup
 packages without changing the installer logic.
+
+Everyday applications—including PowerToys, media utilities, backup tools, and
+system inspection software—belong to
+[`workstation-utils`](../workstation-utils/). NanaZip is the deliberate shared
+exception: a graphical archive handler is useful in both a general workstation
+and this GUI-oriented Windows development environment. Both installers skip it
+when already installed. The utility catalog's alternative `power-archive`
+profile still requires manually removing NanaZip first.
 
 ## Quick start
 

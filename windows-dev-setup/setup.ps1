@@ -317,7 +317,7 @@ function Show-Plan {
   if ($Profile -eq 'full') {
     Write-WarnLine (
       'The full profile also includes Docker Desktop, DevOps CLIs, and ' +
-      'desktop apps.'
+      'developer desktop apps.'
     )
   }
 }

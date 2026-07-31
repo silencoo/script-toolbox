@@ -25,6 +25,8 @@
 # - INIT_PROFILE=docker-host  按预设 Profile 生成计划/执行
 # - PROFILE_FILE=/path/profile.env  导入 Profile 文件
 # - PLAN_ONLY=1        仅展示 Profile 执行计划
+# - SYSTEM_TIMEZONE=Etc/UTC  设置系统/PHP/Compose 时区；留空保留系统当前时区
+# - SWAP_SIZE_MB=2048  非交互执行显式选择的 Swap 模块时指定大小
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 #
 # 使用示例:
@@ -63,6 +65,8 @@ DRY_RUN="${DRY_RUN:-0}"                  # 1=仅展示命令不执行
 INIT_PROFILE="${INIT_PROFILE:-}"         # Profile 预设名称
 PROFILE_FILE="${PROFILE_FILE:-}"         # Profile 文件路径
 PLAN_ONLY="${PLAN_ONLY:-0}"              # 1=仅展示 Profile 计划
+SYSTEM_TIMEZONE="${SYSTEM_TIMEZONE:-}"   # IANA 时区；留空时不修改系统时区
+SWAP_SIZE_MB="${SWAP_SIZE_MB:-}"         # 显式执行 Swap 模块时可指定大小
 EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permissive
 REMOTE_SCRIPT_SHA256="${REMOTE_SCRIPT_SHA256:-}"
 REMOTE_SCRIPT_CHECKSUM_FILE="${REMOTE_SCRIPT_CHECKSUM_FILE:-/root/init-remote-scripts.sha256}"
@@ -145,6 +149,47 @@ log_error() {
     log "ERROR" "$*"
 }
 
+timezone_name_is_valid() {
+    local timezone_name="${1:-}"
+    [ -n "$timezone_name" ] || return 1
+    case "$timezone_name" in
+        /*|*..*|*' '*|*$'\t'*|*$'\n'*|*$'\r'*) return 1 ;;
+    esac
+    [[ "$timezone_name" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]] || return 1
+    [ -e "/usr/share/zoneinfo/$timezone_name" ]
+}
+
+effective_system_timezone() {
+    local detected_timezone=""
+    if [ -n "$SYSTEM_TIMEZONE" ]; then
+        printf '%s' "$SYSTEM_TIMEZONE"
+        return 0
+    fi
+    if command -v timedatectl > /dev/null 2>&1; then
+        detected_timezone="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
+    fi
+    if [ -z "$detected_timezone" ] && [ -r /etc/timezone ]; then
+        IFS= read -r detected_timezone < /etc/timezone || true
+    fi
+    if timezone_name_is_valid "$detected_timezone"; then
+        printf '%s' "$detected_timezone"
+    else
+        printf '%s' "Etc/UTC"
+    fi
+}
+
+configure_system_timezone() {
+    if [ -z "$SYSTEM_TIMEZONE" ]; then
+        log_info "SYSTEM_TIMEZONE 未设置，保留系统当前时区: $(effective_system_timezone)"
+        return 0
+    fi
+    if ! timezone_name_is_valid "$SYSTEM_TIMEZONE"; then
+        log_error "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
+        return 1
+    fi
+    run_command "设置时区为 $SYSTEM_TIMEZONE" timedatectl set-timezone "$SYSTEM_TIMEZONE"
+}
+
 validate_runtime_modes() {
     case "$EXTERNAL_TRUST_MODE" in
         strict|standard|permissive) ;;
@@ -174,6 +219,14 @@ validate_runtime_modes() {
             return 1
             ;;
     esac
+    if [ -n "$SYSTEM_TIMEZONE" ] && ! timezone_name_is_valid "$SYSTEM_TIMEZONE"; then
+        log_error "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
+        return 1
+    fi
+    if [ -n "$SWAP_SIZE_MB" ] && { [[ ! "$SWAP_SIZE_MB" =~ ^[0-9]+$ ]] || [ "$SWAP_SIZE_MB" -lt 512 ]; }; then
+        log_error "无效的 SWAP_SIZE_MB: ${SWAP_SIZE_MB}（最小 512MB）"
+        return 1
+    fi
 }
 
 # --- 临时文件管理 ---
@@ -1784,8 +1837,8 @@ function action_install_essentials() {
         log_warning "software-properties-common 安装失败 (非关键错误)"
     
     
-    # 时区设置
-    run_command "设置时区为 Asia/Shanghai" timedatectl set-timezone Asia/Shanghai || log_warning "时区设置失败"
+    # 仅在 SYSTEM_TIMEZONE 显式设置时修改系统时区。
+    configure_system_timezone || return 1
     
     # 时间同步（优先使用 systemd-timesyncd）
     if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
@@ -2033,7 +2086,17 @@ function action_configure_swap() {
     log_info "系统内存: ${mem_total}MB"
     log_info "推荐 Swap 大小: ${recommended_swap}MB"
     
-    read -r -p "请输入 Swap 大小 (MB，留空使用推荐值 ${recommended_swap}MB): " swap_input
+    local swap_input=""
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        swap_input="$SWAP_SIZE_MB"
+        if [ -n "$swap_input" ]; then
+            log_info "[非交互] 使用 SWAP_SIZE_MB=${swap_input}MB"
+        else
+            log_info "[非交互] SWAP_SIZE_MB 未设置，使用推荐值 ${recommended_swap}MB"
+        fi
+    else
+        read -r -p "请输入 Swap 大小 (MB，留空使用推荐值 ${recommended_swap}MB): " swap_input
+    fi
     
     local swap_size_mb=${swap_input:-$recommended_swap}
     
@@ -3390,8 +3453,14 @@ function install_php() {
 # --- PHP 配置函数 ---
 function configure_php() {
     local version=$1
+    local php_timezone
     
     log_info "配置 PHP $version..."
+    php_timezone="$(effective_system_timezone)"
+    if ! timezone_name_is_valid "$php_timezone"; then
+        log_error "无法确定有效的 PHP 时区: $php_timezone"
+        return 1
+    fi
     
     # 配置时区
     local php_ini="/etc/php/${version}/cli/php.ini"
@@ -3399,13 +3468,13 @@ function configure_php() {
     
     if [ -f "$php_ini" ]; then
         create_backup "$php_ini" "PHP CLI 配置" >/dev/null
-        sed -i 's/;date.timezone =/date.timezone = Asia\/Shanghai/' "$php_ini"
-        log_success "已设置时区: Asia/Shanghai"
+        sed -i "s#^[;[:space:]]*date.timezone[[:space:]]*=.*#date.timezone = ${php_timezone}#" "$php_ini"
+        log_success "已设置时区: $php_timezone"
     fi
     
     if [ -f "$php_fpm_ini" ]; then
         create_backup "$php_fpm_ini" "PHP-FPM 配置" >/dev/null
-        sed -i 's/;date.timezone =/date.timezone = Asia\/Shanghai/' "$php_fpm_ini"
+        sed -i "s#^[;[:space:]]*date.timezone[[:space:]]*=.*#date.timezone = ${php_timezone}#" "$php_fpm_ini"
     fi
     
     # 配置内存限制
@@ -5314,10 +5383,15 @@ function action_setup_cd2_docker_compose() {
             media_dir=""
         fi
 
-        local tz_default="Asia/Shanghai"
+        local tz_default
+        tz_default="$(effective_system_timezone)"
         local tz=""
         read -e -p "时区 TZ (默认: $tz_default): " tz
         if [ -z "$tz" ]; then tz="$tz_default"; fi
+        if ! timezone_name_is_valid "$tz"; then
+            log_error "无效的 IANA 时区: $tz"
+            return 1
+        fi
 
         run_command "创建部署目录" mkdir -p "$base_dir"
         run_command "创建 CloudDrive2 目录" mkdir -p "$cloud_dir" "$config_dir"
@@ -6977,7 +7051,7 @@ profile_modules_for_preset() {
     local profile="$1"
     case "$profile" in
         minimal)
-            printf '%s\n' "essentials ssh firewall fail2ban auto_updates swap module_status report"
+            printf '%s\n' "essentials ssh firewall fail2ban auto_updates module_status report"
             ;;
         docker-host)
             printf '%s\n' "essentials ssh firewall fail2ban auto_updates docker reverse_proxy compose_backup monitoring backup_restore docker_security docker_image_check port_exposure report"
@@ -6997,7 +7071,7 @@ profile_modules_for_preset() {
 profile_description() {
     local profile="$1"
     case "$profile" in
-        minimal) printf '最小服务器基线：基础工具、SSH、防火墙、Fail2ban、自动安全更新、Swap。' ;;
+        minimal) printf '最小服务器基线：基础工具、SSH、防火墙、Fail2ban 和自动安全更新。' ;;
         docker-host) printf 'Docker 应用主机：Docker、反代、Compose 备份、监控、备份与安全基线。' ;;
         dev-box) printf '开发机：语言运行时、终端环境、网络工具、rclone、croc。' ;;
         secure-server) printf '安全服务器基线：主动配置 SSH/UFW/Fail2ban/自动更新与维护窗口，并附带只读审计报告。' ;;
@@ -7042,7 +7116,7 @@ profile_module_description() {
 profile_module_impact() {
     local module="$1"
     case "$module" in
-        essentials) printf 'apt 包: curl/wget/git/vim/tmux 等；不改核心配置。' ;;
+        essentials) printf 'apt 包: curl/wget/git/vim/tmux 等；仅在设置 SYSTEM_TIMEZONE 时修改系统时区。' ;;
         ssh) printf '文件: /etc/ssh/sshd_config 与所选账户 authorized_keys；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
         firewall) printf '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
         fail2ban) printf '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
@@ -7100,6 +7174,13 @@ validate_profile_modules() {
     local modules="$1"
     local module ok=0
     for module in $modules; do
+        case "$module" in
+            dd_reinstall|clean_traces|action_dd_reinstall|action_clean_traces)
+                log_error "危险操作禁止加入 Profile: $module"
+                ok=1
+                continue
+                ;;
+        esac
         if ! is_profile_module_known "$module"; then
             log_warning "未知 Profile 模块: $module"
             ok=1
@@ -7833,8 +7914,6 @@ function action_clean_traces() {
 function task_init_no_mirror() {
     log_info "开始初始化流程（不换源）..."
     invoke_action action_install_essentials || return 1
-    invoke_action action_optimize_system || return 1
-    invoke_action action_configure_swap || return 1
     invoke_action action_configure_ssh || return 1
     invoke_action action_configure_firewall || return 1
     invoke_action action_configure_fail2ban || return 1
@@ -7846,8 +7925,6 @@ function task_init_with_mirror() {
     log_info "开始初始化流程（换源）..."
     invoke_action action_change_mirrors || return 1
     invoke_action action_install_essentials || return 1
-    invoke_action action_optimize_system || return 1
-    invoke_action action_configure_swap || return 1
     invoke_action action_configure_ssh || return 1
     invoke_action action_configure_firewall || return 1
     invoke_action action_configure_fail2ban || return 1
@@ -8526,7 +8603,7 @@ menu_invalid_choice() {
 dry_run_action_plan() {
     local action="${1:-unknown}"
     case "$action" in
-        action_install_essentials) log_info "[DRY RUN] 计划: 安装基础工具、设置时区与时间同步" ;;
+        action_install_essentials) log_info "[DRY RUN] 计划: 安装基础工具、按 SYSTEM_TIMEZONE 配置时区并启用时间同步" ;;
         action_configure_ssh) log_info "[DRY RUN] 计划: 选择并验证 SSH 密钥账户，生成并校验 SSH 候选配置，必要时放行新端口后 reload" ;;
         action_configure_firewall) log_info "[DRY RUN] 计划: 保留现有 UFW 规则，补充 SSH/可选 Web 规则并启用" ;;
         action_configure_fail2ban) log_info "[DRY RUN] 计划: 写入 Fail2ban SSH jail 并启用服务" ;;
@@ -8639,8 +8716,9 @@ show_recommended_modules() {
     printf '%b\n' "  2) SSH 安全配置"
     printf '%b\n' "  3) UFW 防火墙 + Fail2ban"
     printf '%b\n' "  4) 自动安全更新"
-    printf '%b\n' "  5) Swap + 系统资源检查"
+    printf '%b\n' "  5) 系统资源检查"
     printf '%b\n' "  6) 可导出的 minimal Profile"
+    printf '%b\n' "  可选: 按实际负载单独配置 Swap 或 sysctl 性能预设"
     printf '%b\n' ""
     printf '%b\n' "${GREEN}Docker / 应用主机:${PLAIN}"
     printf '%b\n' "  Docker 官方 apt 安装、Docker 管理器、应用市场、证书/反代、Compose 项目备份、Docker 安全基线、镜像更新检查、服务健康检查"

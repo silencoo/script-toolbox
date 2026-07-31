@@ -4,13 +4,13 @@
 
 ## 功能范围
 
-- 基础初始化、APT 换源、常用工具和系统参数优化
+- 基础初始化、APT 换源、常用工具，以及按需启用的 Swap/sysctl 优化
 - 用户、SSH、UFW、Fail2ban、安全更新和安全审计
 - Docker Engine、Compose、应用管理、反向代理和容器安全
 - Node.js、Python、PHP、Java、Go 和 .NET 运行时
 - 磁盘、云盘、备份恢复、监控、诊断和服务器测试
 - `minimal`、`docker-host`、`dev-box`、`secure-server` 内置 Profile
-- DD 重装和痕迹清理等需要额外确认的高风险操作
+- 仅位于“高级 / 高风险”菜单、且需要输入确认的 DD 重装和痕迹清理
 
 ## 使用方法
 
@@ -19,6 +19,23 @@
 ```bash
 chmod +x server-toolkit.sh
 sudo ./server-toolkit.sh
+```
+
+## 怎么选
+
+| 你的用途 | 建议入口 | 说明 |
+| --- | --- | --- |
+| 第一次初始化普通 VPS | `minimal` | 基础工具、SSH、UFW、Fail2ban 和自动安全更新 |
+| 部署 Docker 应用 | `docker-host` | 在服务器基线上增加 Docker、反向代理、备份、监控和容器安全 |
+| 把 VPS 当远程开发机 | `dev-box` | 安装语言运行时、终端和网络工具 |
+| 强化公网服务器 | `secure-server` | 增加安全审计、SSH 审计、端口检查和维护窗口 |
+| 还不确定需要什么 | 直接运行脚本 | 从“快速开始”查看计划，再按用途选择 |
+
+例如，先查看计划，再执行相同 Profile：
+
+```bash
+PLAN_ONLY=1 INIT_PROFILE=minimal ./server-toolkit.sh
+sudo env INIT_PROFILE=minimal ./server-toolkit.sh
 ```
 
 ## 安全预览
@@ -34,6 +51,22 @@ sudo env NON_INTERACTIVE=1 DRY_RUN=1 ./server-toolkit.sh
 ```bash
 PLAN_ONLY=1 INIT_PROFILE=docker-host ./server-toolkit.sh
 ```
+
+## 时区、Swap 与 sysctl
+
+默认不会修改服务器现有时区。需要统一时区时，传入有效的 IANA 时区名：
+
+```bash
+sudo env SYSTEM_TIMEZONE=Etc/UTC INIT_PROFILE=minimal ./server-toolkit.sh
+```
+
+PHP 配置和新生成的 CloudDrive2 Compose 配置会使用同一个时区；未设置
+`SYSTEM_TIMEZONE` 时使用服务器当前时区。
+
+标准快速初始化和四个内置 Profile 都不会自动创建 Swap，也不会应用宽泛的
+sysctl 调优。需要时，在“系统与维护”或“自定义初始化”中明确选择相应模块。
+非交互执行显式选择的 Swap 模块时，可用 `SWAP_SIZE_MB=2048` 指定大小；未指定
+则使用脚本根据内存计算的建议值。
 
 ## 非交互执行
 
@@ -79,6 +112,9 @@ SHA256 URL
 
 不建议使用 `ALLOW_UNVERIFIED_REMOTE=1` 绕过摘要校验。
 
+DD 重装和痕迹清理不能加入内置或自定义 Profile。它们只保留在
+“高级 / 高风险”菜单中，并继续要求输入原有的文字确认。
+
 ## Profile
 
 可直接应用内置 Profile：
@@ -97,6 +133,7 @@ sudo env PROFILE_FILE=/root/init-profile-secure-server.env ./server-toolkit.sh
 
 ```bash
 bash -n server-toolkit.sh
+./tests/test_init_safety.sh
 ```
 
 脚本菜单中的“脚本与运维”还提供静态自检、ShellCheck、安全测试、外部资源信任清单和系统变更报告。

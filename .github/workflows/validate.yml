@@ -27,7 +27,9 @@ jobs:
       - name: Test JPopSuki Autobrr toolkit
         run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Check Bash syntax
-        run: bash -n docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh
+        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh
+      - name: Test Linux server toolkit safety
+        run: ./linux-server-toolkit/tests/test_init_safety.sh
       - name: Test agent setup scripts
         run: ./agent/test.sh
       - name: Test Promptctl

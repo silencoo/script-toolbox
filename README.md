@@ -20,7 +20,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
 | [`agent/`](./agent/) | Provider setup, MCP profiles, and Promptctl persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
-| [`debian-13/`](./debian-13/) | Debian 13 development and AI workstation setup |
+| [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
@@ -42,6 +42,7 @@ Moving the scripts into categories changes their GitHub raw URLs:
 | `quanx.js` | `quantumult-x/resource-parser.js` |
 | `workers.js` | `workers/cloudflare-vless/worker.js` |
 | `windows-wsl2/setup.ps1` | `windows-dev-setup/wsl.ps1` |
+| `debian-13/setup.sh` | `debian-ai-workstation/setup.sh` |
 
 Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
@@ -110,7 +111,8 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-13/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh
+bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh
+./linux-server-toolkit/tests/test_init_safety.sh
 ./ghostty/tests/setup-test.sh
 ./ghostty/tests/ssh-terminfo-test.sh
 ./workstation-utils/tests/macos-test.sh

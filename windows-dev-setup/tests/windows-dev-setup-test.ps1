@@ -5,6 +5,9 @@ $setupDir = Split-Path -Parent $PSScriptRoot
 $setupScript = Join-Path $setupDir 'setup.ps1'
 $wslScript = Join-Path $setupDir 'wsl.ps1'
 $configFile = Join-Path $setupDir 'packages.psd1'
+$utilityConfigFile = Join-Path (
+  Split-Path -Parent $setupDir
+) 'workstation-utils\windows\packages.psd1'
 $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) (
   'windows-dev-setup-test-' + [guid]::NewGuid().ToString('N')
@@ -62,10 +65,33 @@ try {
       'Microsoft.DotNet.SDK.10',
       'Rustlang.Rustup',
       'Schniz.fnm',
-      'astral-sh.uv'
+      'astral-sh.uv',
+      'M2Team.NanaZip'
     )) {
     if (-not $identifiers.ContainsKey($required)) {
       Stop-Test "Required package is missing: $required"
+    }
+  }
+
+  $utilityConfig = Import-PowerShellDataFile -LiteralPath $utilityConfigFile
+  $allowedSharedIdentifiers = @{
+    'M2Team.NanaZip' = $true
+  }
+  foreach ($id in $identifiers.Keys) {
+    $isAllowedShared = $allowedSharedIdentifiers.ContainsKey($id)
+    if ($utilityConfig.Packages.ContainsKey($id) -and
+        -not $isAllowedShared) {
+      Stop-Test "Package is owned by both setup catalogs: $id"
+    }
+    foreach ($utilityId in $utilityConfig.Packages.Keys) {
+      $utilityPackage = $utilityConfig.Packages[$utilityId]
+      if (-not $isAllowedShared -and
+          $utilityPackage.ContainsKey('Conflicts') -and
+          @($utilityPackage.Conflicts) -contains $id) {
+        Stop-Test (
+          "Developer package '$id' conflicts with utility '$utilityId'."
+        )
+      }
     }
   }
 

@@ -28,7 +28,7 @@
       'native'
       'containers'
       'devops'
-      'desktop'
+      'dev-apps'
     )
   }
 
@@ -60,10 +60,8 @@
         Command = 'code'
       }
       @{
-        Id = '7zip.7zip'
-        Name = '7-Zip'
-        Command = '7z'
-        VersionArguments = @()
+        Id = 'M2Team.NanaZip'
+        Name = 'NanaZip'
       }
     )
 
@@ -219,7 +217,7 @@
       }
     )
 
-    desktop = @(
+    'dev-apps' = @(
       @{
         Id = 'Bruno.Bruno'
         Name = 'Bruno API client'
@@ -231,10 +229,6 @@
       @{
         Id = 'JetBrains.Toolbox'
         Name = 'JetBrains Toolbox'
-      }
-      @{
-        Id = 'Microsoft.PowerToys'
-        Name = 'Microsoft PowerToys'
       }
     )
   }
