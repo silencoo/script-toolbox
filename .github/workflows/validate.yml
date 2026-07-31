@@ -21,13 +21,15 @@ jobs:
       - name: Install shell test dependencies
         run: sudo apt-get update && sudo apt-get install -y zsh
       - name: Install Python test dependencies
-        run: python -m pip install pytest
+        run: python -m pip install pytest pyyaml
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
       - name: Test JPopSuki Autobrr toolkit
         run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Check Bash syntax
-        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh
+        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-subscription-manager/setup.sh
+      - name: Test Mihomo subscription manager
+        run: python mihomo-subscription-manager/test_manager.py
       - name: Test Linux server toolkit safety
         run: ./linux-server-toolkit/tests/test_init_safety.sh
       - name: Test agent setup scripts
