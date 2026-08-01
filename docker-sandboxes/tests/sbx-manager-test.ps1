@@ -316,6 +316,11 @@ try {
   )
   Assert-LogContains $reattachLog 'kit-line-endings lf'
   Assert-LogContains $reattachLog 'kit-static-files absent'
+  Assert-TextContains $reattachLog (
+    'kit-name zsh-shell-refresh-' +
+    (($shellKitVersion.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')) +
+    '-'
+  )
   Assert-TextContains $reattachLog 'files\home test-claude:/tmp/sbx-manager-zsh-shell-refresh/'
   Assert-LogContains $reattachLog 'run --name test-claude'
   $wrongReattach = @(

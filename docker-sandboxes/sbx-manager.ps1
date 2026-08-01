@@ -1286,6 +1286,32 @@ function Get-DefaultShellKitPath {
   return $temporaryKit
 }
 
+function Get-ShellKitRefreshName {
+  param([string] $Version)
+
+  $namePrefix = 'zsh-shell-refresh-'
+  $hash = $null
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($Version))
+    $hash = [BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+  $hash = $hash.Substring(0, 12)
+
+  $versionSlug = $Version.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+  $versionSlug = $versionSlug.Trim('-')
+  if (-not $versionSlug) {
+    $versionSlug = 'revision'
+  }
+  $maxSlugLength = 64 - $namePrefix.Length - $hash.Length - 1
+  if ($versionSlug.Length -gt $maxSlugLength) {
+    $versionSlug = $versionSlug.Substring(0, $maxSlugLength).TrimEnd('-')
+  }
+  return "$namePrefix$versionSlug-$hash"
+}
+
 function Get-ShellKitRefreshView {
   param(
     [string] $ShellKitPath,
@@ -1298,10 +1324,30 @@ function Get-ShellKitRefreshView {
   $refreshKit = Join-Path $script:ConfigDir (
     "kits\zsh-shell-refresh\$Version"
   )
+  $refreshName = Get-ShellKitRefreshName $Version
   try {
     New-Item -ItemType Directory -Path $refreshKit -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $ShellKitPath 'spec.yaml') `
-      -Destination (Join-Path $refreshKit 'spec.yaml') -Force
+    $sourceSpec = Join-Path $ShellKitPath 'spec.yaml'
+    $specContent = [IO.File]::ReadAllText($sourceSpec)
+    $namePattern = [regex]::new('(?m)^name:[^\r\n]*$')
+    if ($namePattern.Matches($specContent).Count -ne 1) {
+      throw "Expected exactly one top-level name in $sourceSpec"
+    }
+
+    # kit add appends to the sandbox's existing composition. Give this
+    # install-only revision its own name so it does not collide with the
+    # original zsh-shell kit already attached to the sandbox.
+    $specContent = $namePattern.Replace(
+      $specContent,
+      "name: $refreshName",
+      1
+    )
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText(
+      (Join-Path $refreshKit 'spec.yaml'),
+      $specContent,
+      $utf8NoBom
+    )
   } catch {
     if (Test-Path -LiteralPath $refreshKit) {
       Remove-Item -LiteralPath $refreshKit -Recurse -Force `
@@ -1690,10 +1736,9 @@ function Invoke-Main {
   }
 
   $command = $remaining[0]
-  $commandArguments = if ($remaining.Count -gt 1) {
-    @($remaining[1..($remaining.Count - 1)])
-  } else {
-    @()
+  $commandArguments = @()
+  if ($remaining.Count -gt 1) {
+    $commandArguments = @($remaining[1..($remaining.Count - 1)])
   }
 
   switch ($command) {

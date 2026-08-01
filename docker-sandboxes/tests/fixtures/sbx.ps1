@@ -42,6 +42,30 @@ function Assert-KitLineEndings {
   )
 }
 
+function Assert-RefreshKitNameIsUnique {
+  param([string] $KitPath)
+
+  $specPath = Join-Path $KitPath 'spec.yaml'
+  $nameLines = @(
+    Get-Content -LiteralPath $specPath |
+      Where-Object { $_ -match '^name:\s*\S+\s*$' }
+  )
+  if ($nameLines.Count -ne 1) {
+    Write-Error -ErrorAction Continue (
+      "refresh kit must declare exactly one top-level name: $specPath"
+    )
+    exit 92
+  }
+  $kitName = ($nameLines[0] -replace '^name:\s*', '').Trim()
+  if ($kitName -eq 'zsh-shell') {
+    Write-Error -ErrorAction Continue (
+      'compose: duplicate kit name "zsh-shell"'
+    )
+    exit 92
+  }
+  Add-Content -LiteralPath $env:SBX_TEST_LOG -Value "kit-name $kitName"
+}
+
 switch ($command) {
   'version' {
     Write-Output 'sbx version: test'
@@ -165,6 +189,7 @@ switch ($command) {
       exit 95
     }
     Assert-KitLineEndings $args[3]
+    Assert-RefreshKitNameIsUnique $args[3]
     Write-Output 'kit added'
   }
   'run' {
