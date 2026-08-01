@@ -30,6 +30,11 @@ if [[ -r "$HOME/.config/sbx-manager/enter-workspace.zsh" ]]; then
   source "$HOME/.config/sbx-manager/enter-workspace.zsh"
 fi
 
+# Both the Bash and PowerShell managers install this shared entry banner.
+if [[ -r "$HOME/.config/sbx-manager/show-motd.zsh" ]]; then
+  source "$HOME/.config/sbx-manager/show-motd.zsh"
+fi
+
 # Persistent, shared command history.
 HISTFILE="$HOME/.zsh_history"
 HISTSIZE=50000

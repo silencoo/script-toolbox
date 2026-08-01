@@ -47,15 +47,20 @@ run_setup() {
 
 [ -f "$SHELL_KIT/spec.yaml" ] || fail "default shell kit spec is missing"
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
+[ -f "$SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh" ] \
+  || fail "default sandbox MOTD is missing"
 [ -f "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
   || fail "default workspace entry helper is missing"
 [ -s "$SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version" ] \
   || fail "default shell kit version marker is missing or empty"
 [ -f "$SHELL_KIT/files/home/.config/starship.toml" ] \
   || fail "default Starship config is missing"
-grep -Fq 'bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh' \
-  "$SHELL_KIT/spec.yaml" \
-  || fail "default shell kit is missing modern CLI packages"
+for package in bat btop build-essential ca-certificates cmake curl fd-find \
+  file fzf gdb git jq neovim netcat-openbsd ninja-build pkg-config ripgrep \
+  shellcheck shfmt sqlite3 strace tmux xz-utils zip zoxide zsh; do
+  grep -Eq "^[[:space:]]+${package}([[:space:]]|$)" "$SHELL_KIT/spec.yaml" \
+    || fail "default shell kit is missing package: $package"
+done
 grep -Fq 'LANG: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LANG"
 grep -Fq 'LC_ALL: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
@@ -96,6 +101,9 @@ grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
 grep -Fq 'source "$HOME/.config/sbx-manager/enter-workspace.zsh"' \
   "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit does not load the workspace entry helper"
+grep -Fq 'source "$HOME/.config/sbx-manager/show-motd.zsh"' \
+  "$SHELL_KIT/files/home/.zshrc" \
+  || fail "default shell kit does not load the sandbox MOTD"
 grep -Fq 'setopt print_eight_bit' "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit does not enable literal non-ASCII completion output"
 grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
@@ -103,6 +111,34 @@ grep -Fq 'source /usr/share/doc/fzf/examples/key-bindings.zsh' \
   || fail "default shell kit is missing fzf key bindings"
 grep -Fq "alias ll='eza " "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing eza aliases"
+
+motd="$SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh"
+motd_home="$TEST_TMP_DIR/motd-home"
+mkdir -p "$motd_home"
+motd_output="$(
+  HOME="$motd_home" NO_COLOR=1 zsh -fic \
+    'source "$1"; source "$1"' zsh "$motd"
+)"
+[ "$(printf '%s\n' "$motd_output" | grep -Fc 'Docker Sandbox')" -eq 1 ] \
+  || fail "sandbox MOTD was not shown exactly once per interactive entry"
+for label in Time User System Kernel Resources Shell Terminal Workspace \
+  'Host font' Fallback; do
+  printf '%s\n' "$motd_output" | grep -Fq "| $label" \
+    || fail "sandbox MOTD is missing the $label row"
+done
+printf '%s\n' "$motd_output" | grep -Fq 'Use a Nerd Font for eza file icons.' \
+  || fail "sandbox MOTD is missing the Nerd Font guidance"
+noninteractive_motd="$(
+  HOME="$motd_home" NO_COLOR=1 zsh -fc 'source "$1"' zsh "$motd"
+)"
+[ -z "$noninteractive_motd" ] \
+  || fail "sandbox MOTD polluted a non-interactive shell"
+touch "$motd_home/.hushlogin"
+hushed_motd="$(
+  HOME="$motd_home" NO_COLOR=1 zsh -fic 'source "$1"' zsh "$motd"
+)"
+[ -z "$hushed_motd" ] \
+  || fail "~/.hushlogin did not suppress the sandbox MOTD"
 grep -Fq 'format = "${env_var.IS_SANDBOX}$username' \
   "$SHELL_KIT/files/home/.config/starship.toml" \
   || fail "Starship sandbox marker is not using the named env-var syntax"

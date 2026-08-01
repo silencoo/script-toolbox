@@ -29,7 +29,32 @@ commands:
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
         apt-get install -y --no-install-recommends \
-          bat ca-certificates curl fd-find fzf git jq ripgrep zoxide zsh
+          bat \
+          btop \
+          build-essential \
+          ca-certificates \
+          cmake \
+          curl \
+          fd-find \
+          file \
+          fzf \
+          gdb \
+          git \
+          jq \
+          neovim \
+          netcat-openbsd \
+          ninja-build \
+          pkg-config \
+          ripgrep \
+          shellcheck \
+          shfmt \
+          sqlite3 \
+          strace \
+          tmux \
+          xz-utils \
+          zip \
+          zoxide \
+          zsh
         rm -rf /var/lib/apt/lists/*
 
         # Debian and Ubuntu avoid package-name collisions by exposing these

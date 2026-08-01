@@ -149,6 +149,14 @@ The same kit also installs:
 - `eza` as the colorful `ls`, `l`, `ll`, `la`, and `lt` implementation
 - `bat`, `fd`, `jq`, and `ripgrep` (`rg`) for structured data, highlighted file
   viewing, and fast file and content searches
+- Neovim plus `tmux` for persistent terminal-native editing sessions
+- `build-essential`, CMake, Ninja, pkg-config, and GDB for native builds and
+  debugging
+- ShellCheck and shfmt for checking and formatting shell scripts
+- SQLite, `file`, `strace`, and netcat for data, artifact, process, and network
+  inspection
+- `btop` for an interactive CPU, memory, disk, network, and process dashboard
+- ZIP and XZ tools for creating and extracting common development archives
 - a UTF-8 locale for literal Chinese and other non-ASCII filename completion
 - a Claude Code completion entry for
   `claude --dangerously-skip-permissions`, also seeded as an autosuggestion;
@@ -159,6 +167,13 @@ The same kit also installs:
 - global `agentctl`, `mcpctl`, `promptctl`, and `skillsctl` commands in
   `/usr/local/bin`,
   linked to that sparse checkout so they can be run from any directory
+
+Every interactive entry through either `sbx-manager.sh` or `sbx-manager.ps1`
+shows the same compact sandbox MOTD. It includes the current time, user and
+host, OS and kernel, CPU/memory/disk summary, shell and terminal, workspace,
+available toolbox commands, and the host Nerd Font reminder. Nested shells do
+not repeat it, non-interactive commands stay quiet, and `touch ~/.hushlogin`
+disables it for users who prefer a silent entry.
 
 `fzf` uses `fd` for traversal and `bat`/`eza` for previews. The kit normalizes
 Debian and Ubuntu's `batcat` and `fdfind` binary names to `bat` and `fd`.

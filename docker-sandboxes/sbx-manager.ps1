@@ -1214,6 +1214,9 @@ function Test-DefaultShellKit {
       'files\home\.config\sbx-manager\enter-workspace.zsh'
     )),
     (Join-Path $script:DefaultShellKit (
+      'files\home\.config\sbx-manager\show-motd.zsh'
+    )),
+    (Join-Path $script:DefaultShellKit (
       'files\home\.config\sbx-manager\zsh-shell.version'
     )),
     (Join-Path $script:DefaultShellKit 'files\home\.config\starship.toml')

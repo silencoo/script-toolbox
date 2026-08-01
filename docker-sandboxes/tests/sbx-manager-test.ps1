@@ -181,6 +181,7 @@ try {
   foreach ($path in @(
     (Join-Path $shellKit 'spec.yaml'),
     (Join-Path $shellKit 'files\home\.zshrc'),
+    (Join-Path $shellKit 'files\home\.config\sbx-manager\show-motd.zsh'),
     (Join-Path $shellKit 'files\home\.config\starship.toml')
   )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

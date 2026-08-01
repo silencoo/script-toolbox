@@ -1105,6 +1105,8 @@ require_default_shell_kit() {
     || die "The default zsh configuration is missing: $DEFAULT_SHELL_KIT/files/home/.zshrc"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
     || die "The default workspace entry helper is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh" ] \
+    || die "The default sandbox MOTD is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version" ] \
     || die "The default shell kit version marker is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/starship.toml" ] \
