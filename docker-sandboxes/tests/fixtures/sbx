@@ -22,6 +22,34 @@ assert_kit_line_endings() {
   fi
 }
 
+assert_refresh_kit_name_is_unique() {
+  local kit_path="$1"
+  local kit_name=''
+
+  kit_name="$(
+    awk '
+      /^name:[[:space:]]*/ {
+        count++
+        sub(/^name:[[:space:]]*/, "")
+        name=$0
+      }
+      END {
+        if (count != 1) exit 1
+        print name
+      }
+    ' "$kit_path/spec.yaml"
+  )" || {
+    printf 'refresh kit must declare exactly one top-level name: %s\n' \
+      "$kit_path/spec.yaml" >&2
+    exit 92
+  }
+  if [ "$kit_name" = zsh-shell ]; then
+    printf '%s\n' 'compose: duplicate kit name "zsh-shell"' >&2
+    exit 92
+  fi
+  printf 'kit-name %s\n' "$kit_name" >> "$SBX_TEST_LOG"
+}
+
 case "${1:-}" in
   version)
     printf 'sbx version: test\n'
@@ -140,6 +168,15 @@ case "${1:-}" in
     case "${2:-}" in
       add)
         assert_kit_line_endings "${4:?kit path is required}"
+        assert_refresh_kit_name_is_unique "$4"
+        if [ -n "${SBX_TEST_KIT_ADD_TRANSIENT_STATE:-}" ] \
+          && [ ! -e "$SBX_TEST_KIT_ADD_TRANSIENT_STATE" ]; then
+          : > "$SBX_TEST_KIT_ADD_TRANSIENT_STATE"
+          printf '%s\n' 'commands.install[0] (set -eu; hidden-test-command)'
+          printf '%s\n' \
+            'curl: (35) TLS connect error: unexpected eof while reading' >&2
+          exit 1
+        fi
         printf '%s\n' 'kit added'
         ;;
       *)

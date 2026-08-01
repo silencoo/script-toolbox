@@ -218,9 +218,18 @@ function Invoke-NativeCapture {
     [string[]] $ArgumentList = @()
   )
 
-  $global:LASTEXITCODE = 0
-  $output = @(& $FilePath @ArgumentList 2>&1)
-  $exitCode = $LASTEXITCODE
+  $previousPreference = $ErrorActionPreference
+  try {
+    # Windows PowerShell 5.1 promotes native stderr to NativeCommandError.
+    # sbx writes informational messages there while starting a stopped
+    # sandbox, so capture them and use the process exit code as the authority.
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
+    $output = @(& $FilePath @ArgumentList 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
   $lines = @($output | ForEach-Object { $_.ToString() })
   return [pscustomobject] @{
     ExitCode = $exitCode
@@ -261,6 +270,162 @@ function Invoke-SbxBestEffort {
 function Invoke-SbxCapture {
   param([string[]] $ArgumentList = @())
   return Invoke-NativeCapture -FilePath (Get-SbxCommand) -ArgumentList $ArgumentList
+}
+
+function Test-TransientKitAddFailure {
+  param([string] $Text)
+
+  return $Text -match (
+    '(?i)(curl:\s*\((5|6|7|18|28|35|52|55|56|92)\)|' +
+    'TLS[^\r\n]*error|unexpected eof|connection (reset|refused)|' +
+    'timed out|temporary failure|could not resolve (host|proxy))'
+  )
+}
+
+function Get-KitAddFailureSummary {
+  param(
+    [string] $Text,
+    [int] $ExitCode
+  )
+
+  $curlMatches = [regex]::Matches(
+    $Text,
+    '(?im)curl:\s*\((?<Code>\d+)\)\s*(?<Detail>[^\r\n]*)'
+  )
+  if ($curlMatches.Count -gt 0) {
+    $failure = $curlMatches[$curlMatches.Count - 1]
+    $curlCode = [int] $failure.Groups['Code'].Value
+    $detail = $failure.Groups['Detail'].Value
+    $description = switch ($curlCode) {
+      5 { 'proxy name resolution failed' }
+      6 { 'host name resolution failed' }
+      7 { 'connection failed' }
+      18 { 'download ended before all data was received' }
+      28 { 'download timed out' }
+      35 {
+        if ($detail -match '(?i)unexpected eof') {
+          'TLS connection ended unexpectedly'
+        } else {
+          'TLS connection failed'
+        }
+      }
+      52 { 'server returned an empty response' }
+      55 { 'network send failed' }
+      56 { 'network receive failed' }
+      92 { 'HTTP/2 stream failed' }
+      default { 'download failed' }
+    }
+    return "Shell-kit download failed: curl exit $curlCode ($description)."
+  }
+
+  $installExit = [regex]::Match(
+    $Text,
+    '(?im)commands\.install\[\d+\][^\r\n]*exited\s+(?<Code>\d+)'
+  )
+  if ($installExit.Success) {
+    return (
+      'A shell-kit install command failed with exit code ' +
+      "$($installExit.Groups['Code'].Value)."
+    )
+  }
+  return "sbx kit add failed with exit code $ExitCode."
+}
+
+function Add-KitAddDiagnostic {
+  param(
+    [AllowEmptyString()][string] $Path,
+    [string] $SandboxName,
+    [int] $Attempt,
+    [int] $ExitCode,
+    [string] $Text
+  )
+
+  try {
+    if (-not $Path) {
+      $logDirectory = Join-Path $script:ConfigDir 'logs'
+      New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+      $safeName = $SandboxName.ToLowerInvariant() -replace '[^a-z0-9._-]+', '-'
+      $safeName = $safeName.Trim('-')
+      if (-not $safeName) {
+        $safeName = 'sandbox'
+      }
+      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+      $suffix = [guid]::NewGuid().ToString('N').Substring(0, 8)
+      $Path = Join-Path $logDirectory (
+        "kit-add-$safeName-$stamp-$suffix.log"
+      )
+    }
+
+    $entry = @(
+      "Attempt: $Attempt",
+      "Sandbox: $SandboxName",
+      "Exit code: $ExitCode",
+      '------------------------------------------------------------',
+      $Text,
+      '',
+      ''
+    ) -join [Environment]::NewLine
+    [IO.File]::AppendAllText(
+      $Path,
+      $entry,
+      [Text.UTF8Encoding]::new($false)
+    )
+    return $Path
+  } catch {
+    Write-WarnLine "Could not save full kit-add diagnostics: $($_.Exception.Message)"
+    return ''
+  }
+}
+
+function Invoke-SbxKitAddWithRetry {
+  param(
+    [string] $SandboxName,
+    [string] $KitPath
+  )
+
+  $sbx = Get-SbxCommand
+  $maximumAttempts = 3
+  $diagnosticPath = ''
+  for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
+    Write-InfoLine (
+      "Applying shell-kit install steps to '$SandboxName' " +
+      "(attempt $attempt/$maximumAttempts)..."
+    )
+    $result = Invoke-NativeCapture -FilePath $sbx -ArgumentList @(
+      'kit', 'add', $SandboxName, $KitPath
+    )
+    if ($result.ExitCode -eq 0) {
+      Write-Success "Shell-kit install steps applied to '$SandboxName'."
+      return
+    }
+
+    $summary = Get-KitAddFailureSummary `
+      -Text $result.Text -ExitCode $result.ExitCode
+    $diagnosticPath = Add-KitAddDiagnostic `
+      -Path $diagnosticPath `
+      -SandboxName $SandboxName `
+      -Attempt $attempt `
+      -ExitCode $result.ExitCode `
+      -Text $result.Text
+    Write-WarnLine $summary
+    if ($diagnosticPath) {
+      Write-Line "Full diagnostic output: $diagnosticPath"
+    }
+
+    if ($attempt -ge $maximumAttempts -or
+        -not (Test-TransientKitAddFailure $result.Text)) {
+      Stop-Manager "Could not apply shell-kit install steps to '$SandboxName'."
+    }
+
+    $nextAttempt = $attempt + 1
+    Write-WarnLine (
+      "The failure appears transient; retrying kit add " +
+      "($nextAttempt/$maximumAttempts)."
+    )
+    if ($env:SBX_MANAGER_TEST_MODE -ne '1') {
+      Start-Sleep -Seconds (2 * $attempt)
+    }
+  }
 }
 
 function Test-IsAdministrator {
@@ -1416,7 +1581,7 @@ function Update-ExistingShellKit {
   )
   $refreshKit = Get-ShellKitRefreshView -ShellKitPath $shellKitPath `
     -Version $expectedVersion
-  Invoke-Sbx @('kit', 'add', $SandboxName, $refreshKit)
+  Invoke-SbxKitAddWithRetry -SandboxName $SandboxName -KitPath $refreshKit
   Copy-ShellKitHomeFiles -SandboxName $SandboxName `
     -ShellKitPath $shellKitPath
 }

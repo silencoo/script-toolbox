@@ -30,6 +30,21 @@ assert_not_contains() {
   fi
 }
 
+assert_text_contains() {
+  local file="$1"
+  local expected="$2"
+  grep -Fq "$expected" "$file" \
+    || fail "expected text '$expected' in $file"
+}
+
+assert_text_excludes() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fq "$unexpected" "$file"; then
+    fail "did not expect text '$unexpected' in $file"
+  fi
+}
+
 run_setup() {
   local name="$1"
   shift
@@ -544,10 +559,39 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/stale-kit/auth-state" \
   SBX_TEST_SANDBOX_NAMES='stale-shell' \
   SBX_TEST_SHELL_KIT_CURRENT=0 \
+  SBX_TEST_KIT_ADD_TRANSIENT_STATE="$TEST_TMP_DIR/stale-kit/kit-add-failed" \
   "$ROOT_DIR/sbx-manager.sh" run --name stale-shell \
   > "$TEST_TMP_DIR/stale-kit/output" 2>&1
 assert_contains "$TEST_TMP_DIR/stale-kit/log" \
   "kit add stale-shell $TEST_TMP_DIR/stale-kit/config/sbx-manager/kits/zsh-shell-refresh/$SHELL_KIT_VERSION"
+kit_add_count="$(
+  grep -Fxc \
+    "kit add stale-shell $TEST_TMP_DIR/stale-kit/config/sbx-manager/kits/zsh-shell-refresh/$SHELL_KIT_VERSION" \
+    "$TEST_TMP_DIR/stale-kit/log"
+)"
+[ "$kit_add_count" -eq 2 ] \
+  || fail "transient kit-add failure was not retried exactly once"
+assert_text_contains "$TEST_TMP_DIR/stale-kit/output" \
+  'Shell-kit download failed: curl exit 35 (TLS connection ended unexpectedly).'
+assert_text_contains "$TEST_TMP_DIR/stale-kit/output" 'retrying kit add (2/3)'
+assert_text_contains "$TEST_TMP_DIR/stale-kit/output" 'Full diagnostic output:'
+assert_text_excludes "$TEST_TMP_DIR/stale-kit/output" 'hidden-test-command'
+diagnostic_count="$(
+  find "$TEST_TMP_DIR/stale-kit/config/sbx-manager/logs" -type f \
+    -name 'kit-add-stale-shell-*.log' -print \
+    | wc -l \
+    | tr -d ' '
+)"
+[ "$diagnostic_count" -eq 1 ] \
+  || fail "transient kit-add failure should create exactly one diagnostic log"
+diagnostic_log="$(
+  find "$TEST_TMP_DIR/stale-kit/config/sbx-manager/logs" -type f \
+    -name 'kit-add-stale-shell-*.log' -print
+)"
+assert_text_contains "$diagnostic_log" 'hidden-test-command'
+grep -Fq 'kit-name zsh-shell-refresh-2026-08-01-4-' \
+  "$TEST_TMP_DIR/stale-kit/log" \
+  || fail "refresh kit did not receive a unique versioned name"
 assert_contains "$TEST_TMP_DIR/stale-kit/log" 'kit-static-files absent'
 assert_contains "$TEST_TMP_DIR/stale-kit/log" \
   "cp $SHELL_KIT/files/home stale-shell:/tmp/sbx-manager-zsh-shell-refresh/"

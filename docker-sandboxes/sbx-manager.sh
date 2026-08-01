@@ -1115,12 +1115,187 @@ require_default_shell_kit() {
     || die "The default Starship configuration is missing: $DEFAULT_SHELL_KIT/files/home/.config/starship.toml"
 }
 
+shell_kit_refresh_name() {
+  local version="$1"
+  local version_slug=''
+  local version_hash=''
+
+  version_slug="$(
+    printf '%s' "$version" \
+      | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+      | LC_ALL=C sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//' \
+      | cut -c 1-33 \
+      | sed 's/-$//'
+  )"
+  [ -n "$version_slug" ] || version_slug=revision
+
+  if has sha256sum; then
+    version_hash="$(
+      printf '%s' "$version" | sha256sum | awk '{print substr($1, 1, 12)}'
+    )"
+  elif has shasum; then
+    version_hash="$(
+      printf '%s' "$version" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+    )"
+  else
+    die "A SHA-256 tool is required to name the shell-kit refresh artifact."
+  fi
+
+  printf 'zsh-shell-refresh-%s-%s\n' "$version_slug" "$version_hash"
+}
+
+prepare_shell_kit_refresh_view() {
+  local refresh_kit="$1"
+  local refresh_name="$2"
+  local temporary_spec="$refresh_kit/spec.yaml.tmp.$$"
+
+  mkdir -p "$refresh_kit"
+  if ! awk -v refresh_name="$refresh_name" '
+      /^name:[[:space:]]*/ {
+        name_count++
+        if (name_count == 1) {
+          print "name: " refresh_name
+          next
+        }
+      }
+      { print }
+      END { if (name_count != 1) exit 42 }
+    ' "$DEFAULT_SHELL_KIT/spec.yaml" > "$temporary_spec"; then
+    rm -f -- "$temporary_spec"
+    die "The shell kit must declare exactly one top-level name."
+  fi
+  mv -f "$temporary_spec" "$refresh_kit/spec.yaml"
+}
+
+kit_add_failure_summary() {
+  local output_file="$1"
+  local exit_code="$2"
+  local curl_line=''
+  local curl_code=''
+  local description=''
+  local install_code=''
+
+  curl_line="$(grep -E 'curl: \([0-9]+\)' "$output_file" | tail -n 1 || :)"
+  if [ -n "$curl_line" ]; then
+    curl_code="$(
+      printf '%s\n' "$curl_line" \
+        | sed -nE 's/.*curl: \(([0-9]+)\).*/\1/p'
+    )"
+  fi
+  if [ -n "$curl_code" ]; then
+    case "$curl_code" in
+      5) description='proxy name resolution failed' ;;
+      6) description='host name resolution failed' ;;
+      7) description='connection failed' ;;
+      18) description='download ended before all data was received' ;;
+      28) description='download timed out' ;;
+      35)
+        if printf '%s\n' "$curl_line" | grep -Eiq 'unexpected eof'; then
+          description='TLS connection ended unexpectedly'
+        else
+          description='TLS connection failed'
+        fi
+        ;;
+      52) description='server returned an empty response' ;;
+      55) description='network send failed' ;;
+      56) description='network receive failed' ;;
+      92) description='HTTP/2 stream failed' ;;
+      *) description='download failed' ;;
+    esac
+    printf 'Shell-kit download failed: curl exit %s (%s).\n' \
+      "$curl_code" "$description"
+    return 0
+  fi
+
+  install_code="$(
+    sed -nE 's/.*exited[[:space:]]+([0-9]+)([[:space:]].*)?$/\1/p' \
+      "$output_file" | head -n 1
+  )"
+  if [ -n "$install_code" ]; then
+    printf 'A shell-kit install command failed with exit code %s.\n' \
+      "$install_code"
+    return 0
+  fi
+  printf 'sbx kit add failed with exit code %s.\n' "$exit_code"
+}
+
+is_transient_kit_add_failure() {
+  grep -Eiq \
+    'curl: \((5|6|7|18|28|35|52|55|56|92)\)|TLS.*error|unexpected eof|connection (reset|refused)|timed out|temporary failure|could not resolve (host|proxy)' \
+    "$1"
+}
+
+add_shell_kit_with_retry() {
+  local sandbox_name="$1"
+  local refresh_kit="$2"
+  local maximum_attempts=3
+  local attempt=1
+  local next_attempt=0
+  local exit_code=0
+  local output_file=''
+  local diagnostic_path=''
+  local safe_name=''
+  local stamp=''
+  local summary=''
+
+  mkdir -p "$CONFIG_DIR/logs"
+  while [ "$attempt" -le "$maximum_attempts" ]; do
+    info "Applying shell-kit install steps to '$sandbox_name' (attempt $attempt/$maximum_attempts)..."
+    output_file="$(mktemp "$CONFIG_DIR/logs/.kit-add-attempt.XXXXXX")"
+    if sbx kit add "$sandbox_name" "$refresh_kit" \
+        > "$output_file" 2>&1; then
+      rm -f -- "$output_file"
+      success "Shell-kit install steps applied to '$sandbox_name'."
+      return 0
+    else
+      exit_code=$?
+    fi
+
+    if [ -z "$diagnostic_path" ]; then
+      safe_name="$(
+        printf '%s' "$sandbox_name" \
+          | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+          | LC_ALL=C sed 's/[^a-z0-9._-][^a-z0-9._-]*/-/g; s/^-//; s/-$//'
+      )"
+      [ -n "$safe_name" ] || safe_name=sandbox
+      stamp="$(date '+%Y%m%d-%H%M%S')"
+      diagnostic_path="$CONFIG_DIR/logs/kit-add-$safe_name-$stamp-$$.log"
+    fi
+    {
+      printf 'Attempt: %s\nSandbox: %s\nExit code: %s\n' \
+        "$attempt" "$sandbox_name" "$exit_code"
+      printf '%s\n' '------------------------------------------------------------'
+      cat "$output_file"
+      printf '\n\n'
+    } >> "$diagnostic_path"
+
+    summary="$(kit_add_failure_summary "$output_file" "$exit_code")"
+    warn "$summary"
+    say "Full diagnostic output: $diagnostic_path"
+
+    if [ "$attempt" -ge "$maximum_attempts" ] \
+      || ! is_transient_kit_add_failure "$output_file"; then
+      rm -f -- "$output_file"
+      die "Could not apply shell-kit install steps to '$sandbox_name'."
+    fi
+    rm -f -- "$output_file"
+
+    next_attempt=$((attempt + 1))
+    warn "The failure appears transient; retrying kit add ($next_attempt/$maximum_attempts)."
+    if [ "${SBX_MANAGER_TEST_MODE:-0}" != 1 ]; then
+      sleep $((2 * attempt))
+    fi
+    attempt=$next_attempt
+  done
+}
+
 refresh_existing_shell_kit() {
   local sandbox_name="$1"
   local local_version_file="$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
   local remote_version_file="/home/agent/.config/sbx-manager/zsh-shell.version"
   local expected_version=''
   local refresh_kit=''
+  local refresh_name=''
   local remote_stage='/tmp/sbx-manager-zsh-shell-refresh'
 
   require_default_shell_kit
@@ -1148,10 +1323,9 @@ refresh_existing_shell_kit() {
   # and copy the LF-only home payload after the recreated container is ready.
   # Keep the view because sbx records kit sources for later recreations.
   refresh_kit="$CONFIG_DIR/kits/zsh-shell-refresh/$expected_version"
-  mkdir -p "$refresh_kit"
-  cp "$DEFAULT_SHELL_KIT/spec.yaml" "$refresh_kit/spec.yaml"
-  sbx kit add "$sandbox_name" "$refresh_kit" \
-    || die "Could not apply the install portion of shell kit $expected_version to '$sandbox_name'."
+  refresh_name="$(shell_kit_refresh_name "$expected_version")"
+  prepare_shell_kit_refresh_view "$refresh_kit" "$refresh_name"
+  add_shell_kit_with_retry "$sandbox_name" "$refresh_kit"
 
   sbx exec -u root "$sandbox_name" /bin/sh -c \
     'set -eu; stage="$1"; rm -rf -- "$stage"; mkdir -p "$stage"' \

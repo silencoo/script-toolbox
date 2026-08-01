@@ -53,6 +53,17 @@ function Assert-TextContains {
   }
 }
 
+function Assert-TextExcludes {
+  param(
+    [string] $Path,
+    [string] $Unexpected
+  )
+  $content = Get-Content -LiteralPath $Path -Raw
+  if ($content.Contains($Unexpected)) {
+    Stop-Test "did not expect text '$Unexpected' in $Path"
+  }
+}
+
 function Initialize-Case {
   param([string] $Name)
 
@@ -75,6 +86,7 @@ function Set-CaseEnvironment {
   $env:SBX_TEST_AUTH_STATE = Join-Path $CaseDir 'auth-state'
   $env:SBX_TEST_SANDBOX_NAMES = ''
   $env:SBX_TEST_SHELL_KIT_CURRENT = '1'
+  $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE = $null
   $env:SBX_MANAGER_TEST_MODE = '1'
   $env:SBX_MANAGER_SHELL_KIT = $null
 }
@@ -106,6 +118,7 @@ $originalNoColor = $env:NO_COLOR
 $originalTestMode = $env:SBX_MANAGER_TEST_MODE
 $originalShellKit = $env:SBX_MANAGER_SHELL_KIT
 $originalShellKitCurrent = $env:SBX_TEST_SHELL_KIT_CURRENT
+$originalKitAddTransientState = $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE
 
 try {
   $env:Path = "$fixtureDir;$originalPath"
@@ -298,6 +311,7 @@ try {
   Set-CaseEnvironment $reattach
   $env:SBX_TEST_SANDBOX_NAMES = 'test-claude'
   $env:SBX_TEST_SHELL_KIT_CURRENT = '0'
+  $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE = Join-Path $reattach 'kit-add-failed'
   $env:SBX_MANAGER_SHELL_KIT = $crlfShellKit
   $reattachWorkspace = Join-Path $reattach 'workspace'
   New-Item -ItemType Directory -Path $reattachWorkspace -Force | Out-Null
@@ -311,6 +325,30 @@ try {
   }
   $reattachLog = Join-Path $reattach 'log'
   Assert-TextContains $reattachLog 'kit add test-claude '
+  $kitAddCount = @(
+    Get-Content -LiteralPath $reattachLog |
+      Where-Object { $_ -like 'kit add test-claude *' }
+  ).Count
+  if ($kitAddCount -ne 2) {
+    Stop-Test 'transient kit-add failure was not retried exactly once'
+  }
+  $reattachOutput = Join-Path $reattach 'output'
+  Assert-TextContains $reattachOutput (
+    'Shell-kit download failed: curl exit 35 ' +
+    '(TLS connection ended unexpectedly).'
+  )
+  Assert-TextContains $reattachOutput 'retrying kit add (2/3)'
+  Assert-TextContains $reattachOutput 'Full diagnostic output:'
+  Assert-TextExcludes $reattachOutput 'hidden-test-command'
+  $diagnosticLogs = @(
+    Get-ChildItem -LiteralPath (
+      Join-Path $env:LOCALAPPDATA 'sbx-manager\logs'
+    ) -Filter 'kit-add-test-claude-*.log' -File
+  )
+  if ($diagnosticLogs.Count -ne 1) {
+    Stop-Test 'transient kit-add failure did not create one diagnostic log'
+  }
+  Assert-TextContains $diagnosticLogs[0].FullName 'hidden-test-command'
   Assert-TextContains $reattachLog (
     "kits\zsh-shell-refresh\$shellKitVersion"
   )
@@ -339,6 +377,7 @@ try {
   $env:SBX_MANAGER_TEST_MODE = $originalTestMode
   $env:SBX_MANAGER_SHELL_KIT = $originalShellKit
   $env:SBX_TEST_SHELL_KIT_CURRENT = $originalShellKitCurrent
+  $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE = $originalKitAddTransientState
   if (Test-Path -LiteralPath $testTmpDir) {
     Remove-Item -LiteralPath $testTmpDir -Recurse -Force
   }

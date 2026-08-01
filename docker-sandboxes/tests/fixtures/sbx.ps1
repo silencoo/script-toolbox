@@ -190,6 +190,17 @@ switch ($command) {
     }
     Assert-KitLineEndings $args[3]
     Assert-RefreshKitNameIsUnique $args[3]
+    if ($env:SBX_TEST_KIT_ADD_TRANSIENT_STATE -and
+        -not (Test-Path -LiteralPath $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE)) {
+      New-Item -ItemType File `
+        -Path $env:SBX_TEST_KIT_ADD_TRANSIENT_STATE -Force | Out-Null
+      Write-Output 'commands.install[0] (set -eu; hidden-test-command)'
+      Write-Error -ErrorAction Continue (
+        'curl: (35) TLS connect error: unexpected eof while reading'
+      )
+      $global:LASTEXITCODE = 1
+      return
+    }
     Write-Output 'kit added'
   }
   'run' {
