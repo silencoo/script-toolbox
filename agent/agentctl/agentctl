@@ -19,7 +19,7 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.4.0"
+VERSION="0.5.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 
@@ -39,7 +39,7 @@ Usage:
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl help <claude|codex|opencode|pi>
   agentctl workspace <command> [options]
-  agentctl preset <list|show|create|delete|plan|apply|current|rollback> ...
+  agentctl preset <list|show|create|delete|plan|apply|current|rollback|push|pull> ...
   agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Commands:

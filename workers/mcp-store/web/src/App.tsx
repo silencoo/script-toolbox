@@ -40,8 +40,9 @@ const initialState: AppState = {
   workspaceConfig: null,
   workspaceSnapshot: null,
   workspaceVersion: null,
+  workspaceDirty: false,
   sections: {},
-  activeType: "mcp",
+  activeView: "mcp",
 }
 
 const TAB_RECOVERY_CODE_KEY = "toolbox-store-recovery-code"
@@ -93,7 +94,8 @@ export function App() {
   const [restoringSession, setRestoringSession] = useState(true)
   const restorePromise = useRef<Promise<void> | null>(null)
   const connected = state.mode !== null
-  const hasDirtySession = Object.values(state.sections).some((session) => session?.dirty)
+  const hasDirtySession = state.workspaceDirty ||
+    Object.values(state.sections).some((session) => session?.dirty)
 
   useEffect(() => {
     const recoveryCode = readTabRecoveryCode()
@@ -181,7 +183,7 @@ export function App() {
       }
     }))
 
-    const activeType: SectionType = sectionOrder.find((type) => sections[type]?.snapshot) ||
+    const activeView: SectionType = sectionOrder.find((type) => sections[type]?.snapshot) ||
       sectionOrder.find((type) => workspaceSnapshot.stores[type]) ||
       "mcp"
 
@@ -190,8 +192,9 @@ export function App() {
       workspaceConfig: config,
       workspaceSnapshot,
       workspaceVersion: status.latest.version,
+      workspaceDirty: false,
       sections,
-      activeType,
+      activeView,
     }
   }
 
@@ -203,7 +206,7 @@ export function App() {
       ...initialState,
       mode: "isolated",
       sections: { [type]: session },
-      activeType: type,
+      activeView: type,
     }
   }
 

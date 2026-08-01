@@ -1,4 +1,5 @@
 export type SectionType = "mcp" | "skills" | "prompts"
+export type WorkspaceView = SectionType | "presets"
 export type WorkspaceMode = "workspace" | "isolated" | null
 
 export interface Protocol {
@@ -136,17 +137,30 @@ export interface PromptsSession extends SessionBase {
 export type StoreSession = McpSession | SkillsSession | PromptsSession
 
 export interface WorkspaceAttachment {
-  schema: number
+  schema: 2
   type: SectionType
   protocol: string
+  attached_at: string
   config: RemoteConfig
 }
 
+export interface DevelopmentPreset {
+  schema: 2
+  name: string
+  description: string
+  mcp: string
+  skills: string
+  prompt: string
+}
+
 export interface WorkspaceSnapshot {
-  schema: number
+  schema: 2
   kind: "agentctl-workspace"
   name: string
+  created_at: string
+  updated_at: string
   stores: Partial<Record<SectionType, WorkspaceAttachment>>
+  presets: Record<string, DevelopmentPreset>
 }
 
 export interface AppState {
@@ -154,8 +168,9 @@ export interface AppState {
   workspaceConfig: RemoteConfig | null
   workspaceSnapshot: WorkspaceSnapshot | null
   workspaceVersion: string | null
+  workspaceDirty: boolean
   sections: Partial<Record<SectionType, StoreSession>>
-  activeType: SectionType
+  activeView: WorkspaceView
 }
 
 export interface VersionMetadata {

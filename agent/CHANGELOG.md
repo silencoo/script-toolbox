@@ -2,6 +2,10 @@
 
 ## 2026-08-02 — denser Toolbox Workspace UI
 
+- Added a fourth Presets view that composes MCP profiles, Skills packs, and
+  Prompt profiles, validates live child-Store references, and writes versioned
+  encrypted Workspace updates. `agentctl preset push/pull` synchronizes the
+  strict schema 2 catalog without exposing credentials or applying local files.
 - Removed the repeated MCP, Skills, and Prompts title/summary banners from the
   unlocked Worker UI.
 - Moved Versions and Lock beside the section tabs and tightened the surrounding

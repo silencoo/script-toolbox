@@ -5,8 +5,9 @@ import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promis
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadWorkspace, saveWorkspace } from "./workspace-client.mjs";
 
-const SCHEMA = 1;
+const SCHEMA = 2;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const REFERENCE_PATTERN = /^[A-Za-z0-9._-]+$/;
 const TARGETS = ["claude", "codex"];
@@ -34,6 +35,8 @@ Usage:
   agentctl preset apply <name> --target <claude|codex> --yes [--json]
   agentctl preset current --target <claude|codex> [--json]
   agentctl preset rollback --target <claude|codex> --yes [--json]
+  agentctl preset push --yes [--workspace-config <path>] [--json]
+  agentctl preset pull --yes [--workspace-config <path>] [--json]
   agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Environment:
@@ -42,6 +45,7 @@ Environment:
   AGENTCTL_MCPCTL             mcpctl executable override.
   AGENTCTL_SKILLSCTL          skillsctl executable override.
   AGENTCTL_PROMPTCTL          promptctl executable override.
+  AGENTCTL_WORKSPACE_CONFIG   Workspace capability used by preset push/pull.
 `);
 }
 
@@ -58,7 +62,9 @@ function parseArguments(argv) {
     catalog: resolve(process.env.AGENTCTL_PRESETS_FILE ||
       join(homedir(), ".config", "agentctl", "presets.json")),
     state: resolve(process.env.AGENTCTL_PRESET_STATE_FILE ||
-      join(homedir(), ".local", "state", "agentctl", "presets.json"))
+      join(homedir(), ".local", "state", "agentctl", "presets.json")),
+    workspaceConfig: resolve(process.env.AGENTCTL_WORKSPACE_CONFIG ||
+      join(homedir(), ".config", "agentctl", "workspace-remote.json"))
   };
   while (argv.length > 0) {
     const argument = argv.shift();
@@ -70,6 +76,7 @@ function parseArguments(argv) {
       case "--description": options.description = takeValue(argv, argument); break;
       case "--yes": case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
+      case "--workspace-config": options.workspaceConfig = resolve(takeValue(argv, argument)); break;
       case "--help": case "-h": options.help = true; break;
       default:
         if (argument.startsWith("--")) throw new OrchestratorError(`unknown option: ${argument}`);
@@ -150,11 +157,12 @@ async function writeJsonAtomic(path, value) {
 function validateCatalog(value) {
   if (!value || value.schema !== SCHEMA || !value.presets ||
       typeof value.presets !== "object" || Array.isArray(value.presets)) {
-    throw new OrchestratorError("preset catalog must contain a schema-1 presets object");
+    throw new OrchestratorError("preset catalog must contain a schema-2 presets object");
   }
   for (const [name, preset] of Object.entries(value.presets)) {
     validateName(name, "preset name");
-    if (!preset || typeof preset.description !== "string") {
+    if (!preset || preset.schema !== SCHEMA || preset.name !== name ||
+        typeof preset.description !== "string" || preset.description.length > 500) {
       throw new OrchestratorError(`preset '${name}' has invalid metadata`);
     }
     validateReference(preset.mcp, `${name}.mcp`);
@@ -168,7 +176,7 @@ function validateState(value) {
   if (!value || value.schema !== SCHEMA || !value.current ||
       typeof value.current !== "object" || Array.isArray(value.current) ||
       !Array.isArray(value.history)) {
-    throw new OrchestratorError("preset state must contain schema-1 current and history values");
+    throw new OrchestratorError("preset state must contain schema-2 current and history values");
   }
   return value;
 }
@@ -318,7 +326,33 @@ function printPlan(plan) {
 
 async function runPreset(positional, options) {
   const action = positional.shift() || "list";
+  if (action === "pull") {
+    if (positional.length > 0) throw new OrchestratorError("preset pull accepts no name");
+    if (!options.yes) throw new OrchestratorError("preset pull requires --yes");
+    const workspace = await loadWorkspace(options.workspaceConfig);
+    const next = validateCatalog({ schema: SCHEMA, presets: workspace.presets });
+    await writeJsonAtomic(options.catalog, next);
+    const payload = { ok: true, presets: Object.keys(next.presets).sort() };
+    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else process.stdout.write(`Pulled ${payload.presets.length} development preset(s) from Workspace.\n`);
+    return;
+  }
   const catalog = await loadCatalog(options.catalog);
+  if (action === "push") {
+    if (positional.length > 0) throw new OrchestratorError("preset push accepts no name");
+    if (!options.yes) throw new OrchestratorError("preset push requires --yes");
+    const workspace = await loadWorkspace(options.workspaceConfig);
+    workspace.presets = structuredClone(catalog.presets);
+    const result = await saveWorkspace(options.workspaceConfig, workspace);
+    const payload = {
+      ok: true,
+      version: result.version,
+      presets: Object.keys(catalog.presets).sort()
+    };
+    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else process.stdout.write(`Pushed ${payload.presets.length} development preset(s) as ${result.version}.\n`);
+    return;
+  }
   if (action === "list") {
     if (positional.length > 0) throw new OrchestratorError("preset list accepts no name");
     if (options.json) process.stdout.write(`${JSON.stringify(catalog.presets, null, 2)}\n`);
@@ -336,6 +370,8 @@ async function runPreset(positional, options) {
     validateReference(options.prompt, "prompt");
     if (catalog.presets[name]) throw new OrchestratorError(`preset already exists: ${name}`);
     const preset = {
+      schema: SCHEMA,
+      name,
       description: options.description,
       mcp: options.mcp, skills: options.skills, prompt: options.prompt
     };

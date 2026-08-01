@@ -24,7 +24,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const SCHEMA = 1;
+const SCHEMA = 2;
 const WORKSPACE_KIND = "agentctl-workspace";
 const STORE_TYPES = Object.freeze(["mcp", "skills", "prompts"]);
 const TYPE_ALIASES = Object.freeze({ prompt: "prompts", promptctl: "prompts" });
@@ -42,7 +42,7 @@ class WorkspaceError extends Error {
 }
 
 function usage() {
-  process.stdout.write(`agentctl workspace — one recovery code for MCP, Skills, and Prompts
+  process.stdout.write(`agentctl workspace — one recovery code for MCP, Skills, Prompts, and Presets
 
 Usage:
   agentctl workspace init --endpoint <url> [--create-token-file <file>] [--force]
@@ -59,8 +59,9 @@ Options:
                              ~/.config/agentctl/workspace-remote.json)
   --remote-config <file>     Isolated child Store capability to attach.
 
-The Workspace snapshot stores child Store capabilities only inside its own
-end-to-end encrypted payload. Existing isolated recovery codes remain valid.
+The Workspace snapshot stores child Store capabilities and development preset
+definitions only inside its own end-to-end encrypted payload. Existing
+isolated recovery codes remain valid.
 `);
 }
 
@@ -161,7 +162,8 @@ function newWorkspace() {
     name: "Personal agent workspace",
     created_at: now,
     updated_at: now,
-    stores: {}
+    stores: {},
+    presets: {}
   };
 }
 
@@ -176,7 +178,9 @@ function validateWorkspace(snapshot) {
   if (!snapshot || snapshot.schema !== SCHEMA || snapshot.kind !== WORKSPACE_KIND ||
       typeof snapshot.name !== "string" || snapshot.name.length < 1 ||
       snapshot.name.length > 200 || !snapshot.stores ||
-      typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores)) {
+      typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) ||
+      !snapshot.presets || typeof snapshot.presets !== "object" ||
+      Array.isArray(snapshot.presets)) {
     throw new WorkspaceError("remote snapshot is not a valid agentctl Workspace");
   }
   validateTimestamp(snapshot.created_at, "Workspace created_at");
@@ -193,7 +197,28 @@ function validateWorkspace(snapshot) {
     validateTimestamp(child.attached_at, `${type} attached_at`);
     child.config = validateRemoteConfig(child.config);
   }
+  for (const [name, preset] of Object.entries(snapshot.presets)) {
+    validatePreset(name, preset);
+  }
   return snapshot;
+}
+
+function validatePreset(name, preset) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64 ||
+      !preset || preset.schema !== SCHEMA || preset.name !== name ||
+      typeof preset.description !== "string" || preset.description.length > 500 ||
+      !validPresetReference(preset.mcp) ||
+      !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(preset.skills || "") ||
+      preset.skills.length > 64 || !validPresetReference(preset.prompt)) {
+    throw new WorkspaceError(`Workspace development preset '${name}' is invalid`);
+  }
+  return preset;
+}
+
+function validPresetReference(value) {
+  return typeof value === "string" && value.length <= 64 &&
+    /^[A-Za-z0-9._-]+$/.test(value) && !value.includes("..") &&
+    value !== "." && value !== "..";
 }
 
 async function readPrivateLine(filePath, label) {
@@ -287,7 +312,8 @@ async function status(options) {
     store_id: config.store_id,
     latest: remote.latest,
     web_ui_enabled: remote.web_ui_enabled,
-    stores
+    stores,
+    presets: Object.keys(workspace.presets).sort()
   };
   if (options.json) {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -299,6 +325,7 @@ async function status(options) {
   for (const type of STORE_TYPES) {
     process.stdout.write(`${type.padEnd(9)} ${stores[type].attached ? "attached" : "not attached"}\n`);
   }
+  process.stdout.write(`presets   ${output.presets.length}\n`);
 }
 
 async function attach(type, options) {
@@ -436,11 +463,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 }
 
 export {
+  SCHEMA,
   WORKSPACE_KIND,
   attach,
   init,
+  loadWorkspace,
   newWorkspace,
   normalizeType,
+  saveWorkspace,
   ui,
+  validatePreset,
   validateWorkspace
 };

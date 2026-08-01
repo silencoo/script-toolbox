@@ -11,6 +11,7 @@ import {
 } from "@/lib/mcp-model.js"
 
 export const SECTION_ORDER = ["mcp", "skills", "prompts"]
+export const WORKSPACE_VIEW_ORDER = [...SECTION_ORDER, "presets"]
 
 export const SECTION_META = Object.freeze({
   mcp: {
@@ -92,19 +93,31 @@ export async function loadSection(type, config, protocol) {
 }
 
 export function validateWorkspaceSnapshot(snapshot, masterConfig) {
-  if (!snapshot || snapshot.schema !== 1 || snapshot.kind !== "agentctl-workspace" ||
-      typeof snapshot.name !== "string" || !isObject(snapshot.stores)) {
+  if (!snapshot || snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" ||
+      typeof snapshot.name !== "string" || snapshot.name.length < 1 ||
+      snapshot.name.length > 200 || !isObject(snapshot.stores) ||
+      !validTimestamp(snapshot.created_at) || !validTimestamp(snapshot.updated_at) ||
+      !isObject(snapshot.presets)) {
     throw new Error("Encrypted Workspace manifest is invalid.")
   }
   for (const [type, attachment] of Object.entries(snapshot.stores)) {
-    if (!SECTION_ORDER.includes(type) || attachment?.schema !== 1 ||
+    if (!SECTION_ORDER.includes(type) || attachment?.schema !== 2 ||
         attachment.type !== type ||
-        attachment.protocol !== SECTION_META[type].protocol.id) {
+        attachment.protocol !== SECTION_META[type].protocol.id ||
+        !validTimestamp(attachment.attached_at)) {
       throw new Error("Workspace contains an invalid " + type + " attachment.")
     }
     attachment.config = validateRemoteConfig(attachment.config)
     if (attachment.config.endpoint !== masterConfig.endpoint) {
       throw new Error("Workspace child Stores must share the Workspace endpoint.")
+    }
+  }
+  for (const [name, preset] of Object.entries(snapshot.presets)) {
+    if (!validName(name) || preset?.schema !== 2 || preset.name !== name ||
+        typeof preset.description !== "string" || preset.description.length > 500 ||
+        !safePresetReference(preset.mcp) || !validName(preset.skills) ||
+        !safePresetReference(preset.prompt)) {
+      throw new Error("Workspace development preset '" + name + "' is invalid.")
     }
   }
   return snapshot
@@ -276,6 +289,26 @@ export async function saveEncryptedSession(session) {
   return result.version
 }
 
+export async function saveEncryptedWorkspace(config, snapshot, version) {
+  validateWorkspaceSnapshot(snapshot, config)
+  const status = await apiFor(config, PROTOCOLS.workspace, "")
+  const remoteVersion = status.latest?.version || "none"
+  if (version && remoteVersion !== version) {
+    throw new Error("A newer Workspace version exists. Unlock it before saving your changes.")
+  }
+  const envelope = await encryptEnvelope(config, PROTOCOLS.workspace, snapshot)
+  const result = await apiFor(config, PROTOCOLS.workspace, "/versions", {
+    method: "PUT",
+    expected: [201],
+    headers: {
+      "Content-Type": PROTOCOLS.workspace.contentType,
+      [PROTOCOLS.workspace.baseHeader]: remoteVersion,
+    },
+    body: JSON.stringify(envelope),
+  })
+  return result.version
+}
+
 async function sha256Hex(value) {
   const digest = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
@@ -292,9 +325,17 @@ function validName(value) {
     /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 64
 }
 
+function validTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+}
+
 function safeProfileName(value) {
   return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value) &&
     !value.includes("..") && value !== "." && value !== ".."
+}
+
+function safePresetReference(value) {
+  return safeProfileName(value) && value.length <= 64
 }
 
 function safeServerName(value) {

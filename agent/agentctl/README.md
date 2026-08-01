@@ -62,8 +62,9 @@ files containing exactly one non-empty line (normally mode `0600`).
 ## Development presets
 
 A development preset binds one named MCP profile, Skills pack, and Prompt
-profile. The catalog is local and contains names only; credentials remain in
-their existing ctl-specific stores.
+profile. Presets contain names only; credentials remain in their existing
+ctl-specific stores. The same catalog can be edited locally or inside the
+encrypted Workspace Web UI.
 
 ```bash
 agentctl preset create web-research \
@@ -78,6 +79,22 @@ agentctl preset apply web-research --target codex --yes
 agentctl preset current --target codex
 ```
 
+Synchronize the whole local preset catalog with the encrypted Workspace:
+
+```bash
+# Replace Workspace presets with the local catalog.
+agentctl preset push --yes
+
+# Replace the local catalog with Workspace presets edited in the browser.
+agentctl preset pull --yes
+```
+
+Both directions deliberately require `--yes` because they replace the
+destination catalog. Use `--workspace-config PATH` or
+`AGENTCTL_WORKSPACE_CONFIG` when the master capability is not at the default
+`~/.config/agentctl/workspace-remote.json` path. The Web UI defines presets;
+only local `agentctl preset plan/apply` writes agent configuration files.
+
 `plan` runs all three component plans without writing anything. `apply`
 starts only after every plan succeeds. If a later component fails, agentctl
 reconstructs the previous MCP and Skills selections—including target-local
@@ -90,7 +107,7 @@ agentctl preset rollback --target codex --yes
 
 The default catalog is `~/.config/agentctl/presets.json`; the last 20 applied
 transactions are kept in `~/.local/state/agentctl/presets.json`. Both formats
-are schema-versioned JSON and contain no secret values. Presets currently
+use strict schema 2 JSON and contain no secret values. Presets currently
 target Claude Code and Codex because those are the clients shared by all
 three component controllers.
 
@@ -112,8 +129,12 @@ fail.
 
 The default recovery experience uses one `toolbox1_…` Workspace code. Its
 encrypted manifest contains the capabilities for attached MCP, Skills, and
-Prompts Stores. Unlocking the Worker UI once then opens three tabs. Child
+Prompts Stores plus the shared development-preset catalog. Unlocking the
+Worker UI once opens MCP, Skills, Prompts, and Presets tabs. Child
 capabilities are never sent to the Worker in plaintext.
+
+Workspace manifests and development-preset catalogs use strict schema 2.
+Schema 1 manifests are rejected rather than migrated implicitly.
 
 Existing isolated modes remain available for compartmentalization and
 break-glass recovery:
@@ -189,10 +210,12 @@ transactions, and the optional master Workspace manifest:
 - It configures provider, model, and owned credential state.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.
 - Its `workspace` commands attach or detach encrypted child Store capabilities;
-  they do not rewrite the child snapshots.
+  they do not rewrite the child snapshots. The Workspace also owns the shared
+  development-preset definitions.
 - Its `preset` command deliberately invokes the three child controllers only
-  for plan/apply/status/rollback; each controller retains ownership of its
-  files and validation rules.
+  for plan/apply/status/rollback, while `push` and `pull` replace only preset
+  definitions in the encrypted Workspace; each controller retains ownership
+  of its files and validation rules.
 
 Outside an explicit preset or doctor command, it does not invoke `mcpctl`,
 Promptctl, a per-client `mcp.sh`, or a full `uninstall.sh`. It also does not

@@ -17,7 +17,14 @@ import {
   readRemoteConfig,
   uploadRemoteSnapshot
 } from "../remote-store.mjs";
-import { attach, init, ui } from "./workspace-client.mjs";
+import {
+  attach,
+  init,
+  loadWorkspace,
+  saveWorkspace,
+  ui,
+  validateWorkspace
+} from "./workspace-client.mjs";
 import worker from "../../workers/mcp-store/worker.js";
 import { MemoryR2Bucket } from "../../workers/mcp-store/test-memory-r2.mjs";
 
@@ -100,6 +107,17 @@ test("one Workspace capability attaches and controls all isolated Stores", async
       });
     }
 
+    const editableWorkspace = await loadWorkspace(workspaceConfig);
+    editableWorkspace.presets.dev = {
+      schema: 2,
+      name: "dev",
+      description: "Test development preset",
+      mcp: "base",
+      skills: "off",
+      prompt: "work"
+    };
+    await saveWorkspace(workspaceConfig, editableWorkspace);
+
     const workspaceStatus = await getRemoteStatus(
       workspaceConfig,
       WORKSPACE_REMOTE_PROTOCOL
@@ -110,8 +128,11 @@ test("one Workspace capability attaches and controls all isolated Stores", async
       workspaceConfig,
       WORKSPACE_REMOTE_PROTOCOL
     );
+    assert.equal(manifest.schema, 2);
     assert.deepEqual(Object.keys(manifest.stores).sort(), ["mcp", "prompts", "skills"]);
     assert.equal(manifest.stores.mcp.config.store_id, childConfigs.mcp.store_id);
+    assert.equal(manifest.stores.mcp.schema, 2);
+    assert.deepEqual(manifest.presets.dev, editableWorkspace.presets.dev);
 
     const storedBlobs = [...environment.MCP_STORE.records.values()]
       .filter((record) => record.httpMetadata?.contentType ===
@@ -122,6 +143,7 @@ test("one Workspace capability attaches and controls all isolated Stores", async
       for (const child of Object.values(childConfigs)) {
         assert.equal(blob.includes(child.root_key), false);
       }
+      assert.equal(blob.includes("Test development preset"), false);
     }
 
     await ui("disable", { workspaceConfig });
@@ -157,4 +179,18 @@ test("one Workspace capability attaches and controls all isolated Stores", async
     globalThis.fetch = originalFetch;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Workspace schema 1 is rejected instead of migrated implicitly", () => {
+  assert.throws(
+    () => validateWorkspace({
+      schema: 1,
+      kind: "agentctl-workspace",
+      name: "Old workspace",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      stores: {}
+    }),
+    /not a valid agentctl Workspace/
+  );
 });

@@ -27,7 +27,9 @@ import {
 import { toast } from "sonner"
 
 import { StoreInspector, type MutateSession } from "@/components/store-inspector"
+import { PresetWorkspace } from "@/components/preset-workspace"
 import { VersionsDialog } from "@/components/versions-dialog"
+import { WorkspaceTabs } from "@/components/workspace-tabs"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -66,7 +68,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
   mergeRedactedMcpImport,
@@ -76,7 +77,7 @@ import {
 } from "@/lib/mcp-model.js"
 import {
   SECTION_META,
-  SECTION_ORDER,
+  WORKSPACE_VIEW_ORDER,
   collectionNamesFor,
   resolvePack,
   safeMessage,
@@ -90,6 +91,7 @@ import type {
   SelectableCollection,
   StoreSession,
   StoreSnapshot,
+  WorkspaceView,
 } from "@/lib/types"
 
 interface StoreWorkspaceProps {
@@ -112,14 +114,17 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
-  const session = state.sections[state.activeType]
+  const session = state.activeView === "presets"
+    ? undefined
+    : state.sections[state.activeView]
 
   function updateActiveSession(
     mutator: (next: StoreSession) => void,
     { dirty = false }: { dirty?: boolean } = {},
   ) {
     setState((current) => {
-      const active = current.activeType
+      const active = current.activeView
+      if (active === "presets") return current
       const existing = current.sections[active]
       if (!existing) return current
       const next = { ...existing } as StoreSession
@@ -139,17 +144,29 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
     updateActiveSession(mutator, { dirty: true })
   }
 
-  function changeSection(value: string) {
-    if (!SECTION_ORDER.includes(value)) return
+  function changeSection(value: WorkspaceView) {
+    if (!WORKSPACE_VIEW_ORDER.includes(value)) return
     setQuery("")
-    setState((current) => ({ ...current, activeType: value as SectionType }))
+    setState((current) => ({ ...current, activeView: value }))
+  }
+
+  if (state.mode === "workspace" && state.activeView === "presets") {
+    return (
+      <PresetWorkspace
+        state={state}
+        setState={setState}
+        onLock={onLock}
+        onViewChange={changeSection}
+      />
+    )
   }
 
   if (!session?.snapshot) {
+    const type = state.activeView as SectionType
     return (
       <main id="main" className="mx-auto min-h-[calc(100svh-3.5rem)] w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
-        <SectionTabs state={state} value={state.activeType} onValueChange={changeSection} />
-        <UnavailableState state={state} session={session} onLock={onLock} />
+        <WorkspaceTabs state={state} value={state.activeView} onValueChange={changeSection} />
+        <UnavailableState state={state} type={type} session={session} onLock={onLock} />
       </main>
     )
   }
@@ -314,7 +331,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
-          <SectionTabs state={state} value={state.activeType} onValueChange={changeSection} />
+          <WorkspaceTabs state={state} value={state.activeView} onValueChange={changeSection} />
         </div>
         <div className="flex shrink-0 justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setVersionsOpen(true)}>
@@ -497,45 +514,6 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
         onLoad={loadVersion}
       />
     </main>
-  )
-}
-
-function SectionTabs({
-  state,
-  value,
-  onValueChange,
-}: {
-  state: AppState
-  value: SectionType
-  onValueChange: (value: string) => void
-}) {
-  const visible = (state.mode === "workspace" ? SECTION_ORDER : [state.activeType]) as SectionType[]
-  return (
-    <Tabs value={value} onValueChange={onValueChange}>
-      <TabsList
-        className={`grid w-full items-stretch gap-1 rounded-xl p-1 group-data-horizontal/tabs:h-12 ${
-          visible.length === 1 ? "grid-cols-1 sm:max-w-72" : "grid-cols-3"
-        }`}
-      >
-        {visible.map((type) => {
-          const session = state.sections[type]
-          const attached = state.mode !== "workspace" || Boolean(state.workspaceSnapshot?.stores[type])
-          const status = session?.dirty ? "Unsaved" : session?.error ? "Unavailable" : attached ? "Connected" : "Not attached"
-          return (
-            <TabsTrigger
-              key={type}
-              value={type}
-              className="h-full min-w-0 justify-center gap-1 px-2 py-0 leading-none data-[state=inactive]:hover:bg-background/60 sm:justify-between sm:px-3"
-            >
-              <span className="truncate leading-none">{SECTION_META[type].label}</span>
-              <span className="hidden shrink-0 text-[10px] leading-none font-normal text-muted-foreground sm:inline">
-                {status}
-              </span>
-            </TabsTrigger>
-          )
-        })}
-      </TabsList>
-    </Tabs>
   )
 }
 
@@ -759,14 +737,16 @@ function DeleteCollectionDialog({
 
 function UnavailableState({
   state,
+  type,
   session,
   onLock,
 }: {
   state: AppState
+  type: SectionType
   session: StoreSession | undefined
   onLock: () => void
 }) {
-  const attached = Boolean(state.workspaceSnapshot?.stores[state.activeType])
+  const attached = Boolean(state.workspaceSnapshot?.stores[type])
   return (
     <Card className="mt-6 border-dashed">
       <CardContent className="grid min-h-80 place-items-center p-8 text-center">
@@ -775,7 +755,7 @@ function UnavailableState({
             <Box className="size-5" aria-hidden="true" />
           </span>
           <h1 className="mt-4 text-xl font-semibold tracking-tight">
-            {attached ? `${SECTION_META[state.activeType].label} could not be opened` : `Connect ${SECTION_META[state.activeType].label}`}
+            {attached ? `${SECTION_META[type].label} could not be opened` : `Connect ${SECTION_META[type].label}`}
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {attached
@@ -783,7 +763,7 @@ function UnavailableState({
               : "Attach an existing isolated Store. Its recovery code remains valid as a break-glass option."}
           </p>
           <code className="mt-4 inline-block rounded-md border bg-muted px-3 py-2 text-xs">
-            agentctl workspace attach {state.activeType}
+            agentctl workspace attach {type}
           </code>
           <div className="mt-5"><Button type="button" variant="outline" onClick={onLock}>Lock Workspace</Button></div>
         </div>

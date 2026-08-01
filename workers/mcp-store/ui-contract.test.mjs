@@ -9,6 +9,8 @@ const [
   builtHtml,
   app,
   workspace,
+  presetWorkspace,
+  workspaceTabs,
   inspector,
   modeToggle,
   themeProvider,
@@ -20,11 +22,14 @@ const [
   tabs,
   toggle,
   mcpModel,
+  storeClient,
 ] = await Promise.all([
   read("./web/index.html"),
   read("./ui/index.html"),
   read("./web/src/App.tsx"),
   read("./web/src/components/store-workspace.tsx"),
+  read("./web/src/components/preset-workspace.tsx"),
+  read("./web/src/components/workspace-tabs.tsx"),
   read("./web/src/components/store-inspector.tsx"),
   read("./web/src/components/mode-toggle.tsx"),
   read("./web/src/components/theme-provider.tsx"),
@@ -36,6 +41,7 @@ const [
   read("./web/src/components/ui/tabs.tsx"),
   read("./web/src/components/ui/switch.tsx"),
   read("./web/src/lib/mcp-model.js"),
+  read("./web/src/lib/store-client.js"),
 ]);
 
 test("Workspace UI is built from real shadcn/ui source with neutral theming", () => {
@@ -51,13 +57,13 @@ test("Workspace UI is built from real shadcn/ui source with neutral theming", ()
     assert.match(component, /from "radix-ui"/);
   }
   assert.match(workspace, /@\/components\/ui\/switch/);
-  assert.match(workspace, /@\/components\/ui\/tabs/);
+  assert.match(workspaceTabs, /@\/components\/ui\/tabs/);
   assert.match(workspace, /@\/components\/ui\/select/);
   assert.match(workspace, /@\/components\/ui\/dialog/);
-  assert.match(workspace, /group-data-horizontal\/tabs:h-12/);
-  assert.match(workspace, /grid w-full items-stretch gap-1/);
-  assert.match(workspace, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-3"/);
-  assert.match(workspace, /className="h-full min-w-0 justify-center/);
+  assert.match(workspaceTabs, /grid w-full items-stretch gap-1/);
+  assert.match(workspaceTabs, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-2 sm:grid-cols-4"/);
+  assert.match(workspaceTabs, /className="h-10 min-w-0 justify-center/);
+  assert.match(workspaceTabs, /presets: "Presets"/);
   assert.match(workspace, /aria-label={`\$\{SECTION_META\[session\.type\]\.label\} configuration`}/);
   assert.doesNotMatch(workspace, /Unified Workspace ·/);
   assert.doesNotMatch(workspace, /meta\.(title|summary)/);
@@ -93,6 +99,21 @@ test("theme, encrypted Store actions, and redacted MCP controls remain present",
   assert.match(inspector, /OAuth tokens stay in each MCP client/);
   assert.match(mcpModel, /variant_group/);
   assert.match(mcpModel, /secrets: "redacted"/);
+});
+
+test("Workspace presets compose all three controllers and save only encrypted versions", () => {
+  assert.match(presetWorkspace, /Development presets/);
+  assert.match(presetWorkspace, /\["mcp", "skills", "prompt"\]/);
+  assert.match(presetWorkspace, /missingReferences/);
+  assert.match(presetWorkspace, /saveEncryptedWorkspace/);
+  assert.match(presetWorkspace, /Save encrypted Workspace/);
+  assert.match(presetWorkspace, /agentctl preset pull --yes/);
+  assert.match(presetWorkspace, /Names are immutable/);
+  assert.match(app, /workspaceDirty/);
+  assert.match(app, /activeView/);
+  assert.match(storeClient, /snapshot\.schema !== 2/);
+  assert.match(storeClient, /isObject\(snapshot\.presets\)/);
+  assert.match(storeClient, /newer Workspace version exists/);
 });
 
 test("Vite emits a CSP-compatible static shell without inline code", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,21 @@ run(agentctl, [
   "preset", "create", "dev", "--mcp", "off", "--skills", "off",
   "--prompt", "work", "--description", "Isolated development preset", "--yes"
 ]);
+const catalog = JSON.parse(await readFile(env.AGENTCTL_PRESETS_FILE, "utf8"));
+assert.equal(catalog.schema, 2);
+assert.deepEqual(catalog.presets.dev, {
+  schema: 2,
+  name: "dev",
+  description: "Isolated development preset",
+  mcp: "off",
+  skills: "off",
+  prompt: "work"
+});
+for (const action of ["push", "pull"]) {
+  const refused = spawnSync(agentctl, ["preset", action], { encoding: "utf8", env });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, new RegExp(`preset ${action} requires --yes`));
+}
 const plan = JSON.parse(run(agentctl, ["preset", "plan", "dev", "--target", "codex", "--json"]));
 assert.equal(plan.ok, true);
 assert.deepEqual(plan.results.map((result) => result.component), ["mcp", "skills", "prompt"]);

@@ -7,7 +7,7 @@ no-migration upgrade, but the product-neutral service now backs:
 - `skillsctl` skill directories, inherited packs, and target overrides;
 - `promptctl` persistent Claude/Codex Markdown; and
 - `agentctl workspace` encrypted manifests that bind those three Store types
-  behind one master recovery code.
+  and shared development presets behind one master recovery code.
 
 Each logical store has a separate random ID, write capability, encryption
 root, and recovery code. The Worker is product-neutral: it stores immutable,
@@ -17,7 +17,8 @@ snapshot decryption key.
 The bundled Web UI serves from the same Worker. It is a Vite/React application
 built from the actual shadcn/ui component source under `web/src/components/ui`,
 with Tailwind CSS design tokens and persisted Light, Dark, and System themes. A
-`toolbox1_…` code unlocks one Workspace with MCP, Skills, and Prompts tabs;
+`toolbox1_…` code unlocks one Workspace with MCP, Skills, Prompts, and Presets
+tabs;
 the three isolated recovery-code formats still open a single Store directly.
 Decryption and encryption use Web Crypto in the browser, and recovery material
 is kept in current-tab `sessionStorage`: it survives a refresh, but clicking
@@ -29,6 +30,12 @@ MCP provider inspection, masked MCP Secret editing, version restore, and JSON
 import/export. MCP exports are redacted by default and preserve the current
 tab's encrypted Secret values when re-imported. Skills and Prompt exports are
 still decrypted plaintext and must be handled as sensitive data.
+
+The Presets tab composes one MCP profile, Skills pack, and Prompt profile. It
+validates every reference against the attached child Stores before saving a
+new encrypted Workspace version. After browser edits, run
+`agentctl preset pull --yes`, review with `agentctl preset plan`, and apply it
+locally; the browser never writes agent configuration files.
 
 Keenable and Tavily appear as normal catalog entries after `mcpctl sync` and
 backup. Selecting a server shows its authentication mode and Secret fields.
@@ -77,8 +84,9 @@ The Worker:
 
 Anyone with an isolated recovery code can decrypt and update that child Store.
 Anyone with the master Workspace code can recover the capabilities for every
-attached child Store, so keep it offline with the same care as all three child
-codes combined. The `CREATE_TOKEN` cannot read or decrypt any Store. Remove it
+attached child Store and edit shared preset definitions, so keep it offline
+with the same care as all three child codes combined. The `CREATE_TOKEN`
+cannot read or decrypt any Store. Remove it
 after creating all required Stores, and temporarily recreate it only while
 provisioning another one.
 
@@ -181,6 +189,10 @@ agentctl workspace attach skills
 agentctl workspace attach prompts
 agentctl workspace status
 ```
+
+The current Workspace manifest is strict schema 2 and includes an encrypted
+`presets` object. This pre-adoption format intentionally does not migrate or
+accept schema 1 manifests.
 
 The child Stores and their version histories are not migrated or duplicated.
 Confirm all backups before disabling new-Store creation:
