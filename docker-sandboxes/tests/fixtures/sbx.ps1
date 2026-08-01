@@ -31,6 +31,15 @@ function Assert-KitLineEndings {
     }
   }
   Add-Content -LiteralPath $env:SBX_TEST_LOG -Value 'kit-line-endings lf'
+  $filesPath = Join-Path $KitPath 'files'
+  $filesState = if (Test-Path -LiteralPath $filesPath -PathType Container) {
+    'present'
+  } else {
+    'absent'
+  }
+  Add-Content -LiteralPath $env:SBX_TEST_LOG -Value (
+    "kit-static-files $filesState"
+  )
 }
 
 switch ($command) {
@@ -139,9 +148,15 @@ switch ($command) {
     }
   }
   'exec' {
+    if ($args.Count -gt 1 -and $args[1] -eq '-u') {
+      exit 0
+    }
     if ($env:SBX_TEST_SHELL_KIT_CURRENT -eq '0') {
       exit 1
     }
+  }
+  'cp' {
+    Write-Output 'files copied'
   }
   'kit' {
     $subcommand = if ($args.Count -gt 1) { $args[1] } else { '' }

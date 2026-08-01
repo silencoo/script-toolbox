@@ -1107,6 +1107,8 @@ require_default_shell_kit() {
     || die "The default workspace entry helper is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh" ] \
     || die "The default sandbox MOTD is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh"
+  [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/apply-home-files.sh" ] \
+    || die "The default shell-kit refresh helper is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/apply-home-files.sh"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version" ] \
     || die "The default shell kit version marker is missing: $DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
   [ -f "$DEFAULT_SHELL_KIT/files/home/.config/starship.toml" ] \
@@ -1118,11 +1120,18 @@ refresh_existing_shell_kit() {
   local local_version_file="$DEFAULT_SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version"
   local remote_version_file="/home/agent/.config/sbx-manager/zsh-shell.version"
   local expected_version=''
+  local refresh_kit=''
+  local remote_stage='/tmp/sbx-manager-zsh-shell-refresh'
 
   require_default_shell_kit
   expected_version="$(sed -n '1p' "$local_version_file")"
   [ -n "$expected_version" ] \
     || die "The default shell kit version marker is empty: $local_version_file"
+  case "$expected_version" in
+    *[!A-Za-z0-9._-]*)
+      die "The default shell kit version is not safe for a cache path: $expected_version"
+      ;;
+  esac
 
   if sbx exec "$sandbox_name" /bin/sh -c \
     'actual="$(sed -n "1p" "$1" 2>/dev/null || :)"; [ "$actual" = "$2" ]' \
@@ -1132,9 +1141,29 @@ refresh_existing_shell_kit() {
 
   section "Refreshing shell kit"
   say "The existing sandbox '$sandbox_name' is missing shell kit $expected_version."
-  say "Applying the current kit before reattaching."
-  sbx kit add "$sandbox_name" "$DEFAULT_SHELL_KIT" \
-    || die "Could not refresh the shell kit for '$sandbox_name'. Recreate it or run: sbx kit add $sandbox_name $DEFAULT_SHELL_KIT"
+  say "Applying install steps, then copying the current home files before reattaching."
+
+  # sbx v0.37's kit-add recreate flow applies install commands, environment,
+  # and policy, but refuses static files. Give it a persistent spec-only view
+  # and copy the LF-only home payload after the recreated container is ready.
+  # Keep the view because sbx records kit sources for later recreations.
+  refresh_kit="$CONFIG_DIR/kits/zsh-shell-refresh/$expected_version"
+  mkdir -p "$refresh_kit"
+  cp "$DEFAULT_SHELL_KIT/spec.yaml" "$refresh_kit/spec.yaml"
+  sbx kit add "$sandbox_name" "$refresh_kit" \
+    || die "Could not apply the install portion of shell kit $expected_version to '$sandbox_name'."
+
+  sbx exec -u root "$sandbox_name" /bin/sh -c \
+    'set -eu; stage="$1"; rm -rf -- "$stage"; mkdir -p "$stage"' \
+    sh "$remote_stage" \
+    || die "Could not prepare the shell-kit staging directory in '$sandbox_name'."
+  sbx cp "$DEFAULT_SHELL_KIT/files/home" \
+    "${sandbox_name}:$remote_stage/" \
+    || die "Could not copy the shell-kit home files into '$sandbox_name'."
+  sbx exec -u root "$sandbox_name" /bin/sh \
+    "$remote_stage/home/.config/sbx-manager/apply-home-files.sh" \
+    "$remote_stage" \
+    || die "Could not install the shell-kit home files in '$sandbox_name'."
 }
 
 default_sandbox_name() {

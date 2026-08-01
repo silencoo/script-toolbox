@@ -5,6 +5,11 @@ $rootDir = Split-Path -Parent $PSScriptRoot
 $manager = Join-Path $rootDir 'sbx-manager.ps1'
 $fixtureDir = Join-Path $PSScriptRoot 'fixtures'
 $shellKit = Join-Path $rootDir 'kits\zsh-shell'
+$shellKitVersion = (
+  Get-Content -LiteralPath (
+    Join-Path $shellKit 'files\home\.config\sbx-manager\zsh-shell.version'
+  ) -Raw
+).Trim()
 $testTmpDir = Join-Path ([IO.Path]::GetTempPath()) (
   'sbx-manager-test-' + [guid]::NewGuid().ToString('N')
 )
@@ -181,6 +186,7 @@ try {
   foreach ($path in @(
     (Join-Path $shellKit 'spec.yaml'),
     (Join-Path $shellKit 'files\home\.zshrc'),
+    (Join-Path $shellKit 'files\home\.config\sbx-manager\apply-home-files.sh'),
     (Join-Path $shellKit 'files\home\.config\sbx-manager\show-motd.zsh'),
     (Join-Path $shellKit 'files\home\.config\starship.toml')
   )) {
@@ -285,6 +291,7 @@ try {
   )
   Assert-TextContains (Join-Path $launch 'log') " shell $resolvedWorkspace"
   Assert-LogContains (Join-Path $launch 'log') 'kit-line-endings lf'
+  Assert-LogContains (Join-Path $launch 'log') 'kit-static-files present'
 
   # Existing names use reattach-only syntax.
   $reattach = Initialize-Case 'reattach'
@@ -304,7 +311,12 @@ try {
   }
   $reattachLog = Join-Path $reattach 'log'
   Assert-TextContains $reattachLog 'kit add test-claude '
+  Assert-TextContains $reattachLog (
+    "kits\zsh-shell-refresh\$shellKitVersion"
+  )
   Assert-LogContains $reattachLog 'kit-line-endings lf'
+  Assert-LogContains $reattachLog 'kit-static-files absent'
+  Assert-TextContains $reattachLog 'files\home test-claude:/tmp/sbx-manager-zsh-shell-refresh/'
   Assert-LogContains $reattachLog 'run --name test-claude'
   $wrongReattach = @(
     Get-Content -LiteralPath $reattachLog |

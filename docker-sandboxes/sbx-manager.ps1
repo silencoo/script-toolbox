@@ -1217,6 +1217,9 @@ function Test-DefaultShellKit {
       'files\home\.config\sbx-manager\show-motd.zsh'
     )),
     (Join-Path $script:DefaultShellKit (
+      'files\home\.config\sbx-manager\apply-home-files.sh'
+    )),
+    (Join-Path $script:DefaultShellKit (
       'files\home\.config\sbx-manager\zsh-shell.version'
     )),
     (Join-Path $script:DefaultShellKit 'files\home\.config\starship.toml')
@@ -1283,6 +1286,57 @@ function Get-DefaultShellKitPath {
   return $temporaryKit
 }
 
+function Get-ShellKitRefreshView {
+  param(
+    [string] $ShellKitPath,
+    [string] $Version
+  )
+
+  if ($Version -notmatch '^[A-Za-z0-9._-]+$') {
+    Stop-Manager "The default shell kit version is not safe for a cache path: $Version"
+  }
+  $refreshKit = Join-Path $script:ConfigDir (
+    "kits\zsh-shell-refresh\$Version"
+  )
+  try {
+    New-Item -ItemType Directory -Path $refreshKit -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $ShellKitPath 'spec.yaml') `
+      -Destination (Join-Path $refreshKit 'spec.yaml') -Force
+  } catch {
+    if (Test-Path -LiteralPath $refreshKit) {
+      Remove-Item -LiteralPath $refreshKit -Recurse -Force `
+        -ErrorAction SilentlyContinue
+    }
+    Stop-Manager "Could not prepare the install-only shell kit: $($_.Exception.Message)"
+  }
+
+  return $refreshKit
+}
+
+function Copy-ShellKitHomeFiles {
+  param(
+    [string] $SandboxName,
+    [string] $ShellKitPath
+  )
+
+  $remoteStage = '/tmp/sbx-manager-zsh-shell-refresh'
+  $homeFiles = Join-Path $ShellKitPath 'files\home'
+  Invoke-Sbx @(
+    'exec', '-u', 'root', $SandboxName, '/bin/sh', '-c',
+    'set -eu; stage="$1"; rm -rf -- "$stage"; mkdir -p "$stage"',
+    'sh', $remoteStage
+  )
+  Invoke-Sbx @(
+    'cp', $homeFiles, "${SandboxName}:$remoteStage/"
+  )
+
+  Invoke-Sbx @(
+    'exec', '-u', 'root', $SandboxName, '/bin/sh',
+    "$remoteStage/home/.config/sbx-manager/apply-home-files.sh",
+    $remoteStage
+  )
+}
+
 function Update-ExistingShellKit {
   param([string] $SandboxName)
 
@@ -1310,8 +1364,15 @@ function Update-ExistingShellKit {
     "The existing sandbox '$SandboxName' is missing shell kit " +
     "$expectedVersion."
   )
-  Write-Line 'Applying the current LF-only kit before reattaching.'
-  Invoke-Sbx @('kit', 'add', $SandboxName, $shellKitPath)
+  Write-Line (
+    'Applying install steps, then copying the current LF-only home files ' +
+    'before reattaching.'
+  )
+  $refreshKit = Get-ShellKitRefreshView -ShellKitPath $shellKitPath `
+    -Version $expectedVersion
+  Invoke-Sbx @('kit', 'add', $SandboxName, $refreshKit)
+  Copy-ShellKitHomeFiles -SandboxName $SandboxName `
+    -ShellKitPath $shellKitPath
 }
 
 function Format-CommandArgument {

@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURE_DIR="$ROOT_DIR/tests/fixtures"
 SHELL_KIT="$ROOT_DIR/kits/zsh-shell"
+SHELL_KIT_VERSION="$(sed -n '1p' \
+  "$SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version")"
 TEST_TMP_DIR="$(mktemp -d /tmp/sbx-manager-test.XXXXXX)"
 trap 'rm -rf -- "$TEST_TMP_DIR"' EXIT
 
@@ -47,6 +49,8 @@ run_setup() {
 
 [ -f "$SHELL_KIT/spec.yaml" ] || fail "default shell kit spec is missing"
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
+[ -f "$SHELL_KIT/files/home/.config/sbx-manager/apply-home-files.sh" ] \
+  || fail "default shell-kit refresh helper is missing"
 [ -f "$SHELL_KIT/files/home/.config/sbx-manager/show-motd.zsh" ] \
   || fail "default sandbox MOTD is missing"
 [ -f "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" ] \
@@ -140,6 +144,32 @@ hushed_motd="$(
 )"
 [ -z "$hushed_motd" ] \
   || fail "~/.hushlogin did not suppress the sandbox MOTD"
+
+# The shared refresh helper installs every staged home file, fixes executable
+# modes, and removes only its guarded /tmp staging directory.
+home_stage="$(mktemp -d /tmp/sbx-manager-zsh-shell-refresh-test.XXXXXX)"
+home_target="$TEST_TMP_DIR/applied-shell-home"
+mkdir -p "$home_stage/home" "$home_target"
+cp -R "$SHELL_KIT/files/home/." "$home_stage/home/"
+SBX_SHELL_KIT_AGENT_UID="$(id -u)" /bin/sh \
+  "$home_stage/home/.config/sbx-manager/apply-home-files.sh" \
+  "$home_stage" "$home_target" \
+  || fail "shell-kit refresh helper could not install the staged home payload"
+[ ! -e "$home_stage" ] \
+  || fail "shell-kit refresh helper did not remove its staging directory"
+[ -f "$home_target/.zshrc" ] \
+  || fail "shell-kit refresh helper did not install .zshrc"
+[ -x "$home_target/.config/sbx-manager/apply-home-files.sh" ] \
+  || fail "shell-kit refresh helper did not preserve its executable mode"
+[ "$(sed -n '1p' \
+  "$home_target/.config/sbx-manager/zsh-shell.version")" = \
+  "$SHELL_KIT_VERSION" ] \
+  || fail "shell-kit refresh helper installed the wrong version marker"
+if SBX_SHELL_KIT_AGENT_UID="$(id -u)" /bin/sh \
+    "$home_target/.config/sbx-manager/apply-home-files.sh" \
+    '/tmp/unrelated-payload' "$home_target" >/dev/null 2>&1; then
+  fail "shell-kit refresh helper accepted an unrelated staging path"
+fi
 grep -Fq 'format = "${env_var.IS_SANDBOX}$username' \
   "$SHELL_KIT/files/home/.config/starship.toml" \
   || fail "Starship sandbox marker is not using the named env-var syntax"
@@ -443,7 +473,10 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   "$ROOT_DIR/sbx-manager.sh" run "$TEST_TMP_DIR/generated-name/grok_reg" \
   > "$TEST_TMP_DIR/generated-name/output" 2>&1
 assert_contains "$TEST_TMP_DIR/generated-name/log" \
-  "kit add shell-grok-reg $SHELL_KIT"
+  "kit add shell-grok-reg $TEST_TMP_DIR/generated-name/config/sbx-manager/kits/zsh-shell-refresh/$SHELL_KIT_VERSION"
+assert_contains "$TEST_TMP_DIR/generated-name/log" 'kit-static-files absent'
+assert_contains "$TEST_TMP_DIR/generated-name/log" \
+  "cp $SHELL_KIT/files/home shell-grok-reg:/tmp/sbx-manager-zsh-shell-refresh/"
 assert_contains "$TEST_TMP_DIR/generated-name/log" \
   'run --name shell-grok-reg'
 
@@ -514,7 +547,10 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   "$ROOT_DIR/sbx-manager.sh" run --name stale-shell \
   > "$TEST_TMP_DIR/stale-kit/output" 2>&1
 assert_contains "$TEST_TMP_DIR/stale-kit/log" \
-  "kit add stale-shell $SHELL_KIT"
+  "kit add stale-shell $TEST_TMP_DIR/stale-kit/config/sbx-manager/kits/zsh-shell-refresh/$SHELL_KIT_VERSION"
+assert_contains "$TEST_TMP_DIR/stale-kit/log" 'kit-static-files absent'
+assert_contains "$TEST_TMP_DIR/stale-kit/log" \
+  "cp $SHELL_KIT/files/home stale-shell:/tmp/sbx-manager-zsh-shell-refresh/"
 assert_contains "$TEST_TMP_DIR/stale-kit/log" 'run --name stale-shell'
 
 # The opt-out flag also prevents an existing custom sandbox from being
@@ -537,6 +573,9 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
 assert_contains "$TEST_TMP_DIR/no-refresh/log" 'run --name custom-shell'
 if grep -Fq 'kit add custom-shell' "$TEST_TMP_DIR/no-refresh/log"; then
   fail "--no-shell-kit unexpectedly refreshed an existing sandbox"
+fi
+if grep -Fq 'cp ' "$TEST_TMP_DIR/no-refresh/log"; then
+  fail "--no-shell-kit unexpectedly copied shell files into an existing sandbox"
 fi
 
 printf '%s\n' 'PASS: sbx-manager setup, run, and shell-kit flow'

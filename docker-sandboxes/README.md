@@ -212,24 +212,26 @@ installed. Update it later from inside the sandbox with:
 git -C ~/.local/share/sbx-manager/script-toolbox pull --ff-only
 ```
 
-Docker applies `--kit` only while creating a sandbox. To add the shell kit to
-an existing sandbox manually, run:
-
-```bash
-sbx kit add project-shell ./kits/zsh-shell
-```
+Docker applies `--kit` only while creating a sandbox. The current experimental
+`sbx kit add` recreate flow does not replay static files, startup commands, or
+runtime `initFiles`, so do not pass the full `zsh-shell` directory to it
+manually. The managers handle an existing sandbox safely by applying a cached,
+versioned, spec-only view with `kit add`, then copying the LF-only home payload
+with `sbx cp` and correcting its ownership before reattaching. The cached view
+remains available because sbx records kit sources for later recreations.
 
 On Windows, the PowerShell manager detects CRLF in a checked-out shell kit and
 passes `sbx` a temporary LF-only copy. This keeps `.zshrc` and the other Linux
 dotfiles valid even when the repository was cloned with `core.autocrlf=true`.
 When a named sandbox already exists, rerunning the same manager command checks
-the installed kit version and reapplies the LF-only copy before reattaching if
-the version is missing or stale. `--no-shell-kit` skips this repair.
+the installed kit version and runs this split refresh before reattaching if the
+version is missing or stale. `--no-shell-kit` skips this repair.
 
 When `--name` identifies an existing sandbox, the manager automatically switches
 to sbx's reattach syntax and preserves the sandbox's original agent and
 workspace. Before reconnecting, it checks the bundled shell-kit version inside
-the sandbox and applies the current kit once when the installed copy is stale.
+the sandbox and applies the install steps plus home files when the installed
+copy is stale.
 Pass `--no-shell-kit` to skip this refresh for a custom sandbox.
 When `--name` is omitted, the manager now derives Docker's stable
 `<agent>-<workspace>` name itself, so repeating the same path-only command can

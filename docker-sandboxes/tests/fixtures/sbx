@@ -15,6 +15,11 @@ assert_kit_line_endings() {
     exit 93
   fi
   printf '%s\n' 'kit-line-endings lf' >> "$SBX_TEST_LOG"
+  if [ -d "$kit_path/files" ]; then
+    printf '%s\n' 'kit-static-files present' >> "$SBX_TEST_LOG"
+  else
+    printf '%s\n' 'kit-static-files absent' >> "$SBX_TEST_LOG"
+  fi
 }
 
 case "${1:-}" in
@@ -120,10 +125,16 @@ case "${1:-}" in
     fi
     ;;
   exec)
+    if [ "${2:-}" = '-u' ]; then
+      exit 0
+    fi
     if [ "${SBX_TEST_SHELL_KIT_CURRENT:-1}" -eq 1 ]; then
       exit 0
     fi
     exit 1
+    ;;
+  cp)
+    printf '%s\n' 'files copied'
     ;;
   kit)
     case "${2:-}" in
