@@ -22,6 +22,7 @@ $script:CatalogDate = '2026-07-20'
 $script:AssumeYes = $false
 $script:SkipLogin = $false
 $script:RestartRequired = $false
+$script:TemporaryDirectories = [Collections.Generic.List[string]]::new()
 $script:ManagedEnvironmentNames = @(
   'DOCKER_SANDBOXES_PROXY',
   'DOCKER_SANDBOXES_NO_PROXY',
@@ -177,7 +178,7 @@ $($script:ColorBold)Run helper$($script:ColorReset)
     -t, --template IMAGE     Use an explicit template image.
     -d, --detached           Create/start without attaching.
     --docker-size SIZE       Set internal Docker volume size, e.g. 10g.
-    --no-shell-kit           Do not install the default zsh shell kit.
+    --no-shell-kit           Do not install or refresh the default zsh shell kit.
 
   PowerShell consumes an unquoted -- token. Quote the separator when passing
   agent arguments: '--' --resume session-123
@@ -519,6 +520,20 @@ function Load-DaemonEnvironment {
 }
 
 function Restore-ManagerEnvironment {
+  foreach ($directory in @($script:TemporaryDirectories)) {
+    try {
+      if (Test-Path -LiteralPath $directory) {
+        Remove-Item -LiteralPath $directory -Recurse -Force
+      }
+    } catch {
+      Write-WarnLine (
+        "Could not remove temporary shell kit '$directory': " +
+        $_.Exception.Message
+      )
+    }
+  }
+  $script:TemporaryDirectories.Clear()
+
   foreach ($name in $script:ManagedEnvironmentNames) {
     [Environment]::SetEnvironmentVariable(
       $name,
@@ -1195,6 +1210,12 @@ function Test-DefaultShellKit {
   $required = @(
     (Join-Path $script:DefaultShellKit 'spec.yaml'),
     (Join-Path $script:DefaultShellKit 'files\home\.zshrc'),
+    (Join-Path $script:DefaultShellKit (
+      'files\home\.config\sbx-manager\enter-workspace.zsh'
+    )),
+    (Join-Path $script:DefaultShellKit (
+      'files\home\.config\sbx-manager\zsh-shell.version'
+    )),
     (Join-Path $script:DefaultShellKit 'files\home\.config\starship.toml')
   )
   foreach ($path in $required) {
@@ -1202,6 +1223,92 @@ function Test-DefaultShellKit {
       Stop-Manager "The default zsh shell kit is missing a required file: $path"
     }
   }
+}
+
+function Get-DefaultShellKitPath {
+  Test-DefaultShellKit
+
+  $sourceFiles = @(
+    Get-ChildItem -LiteralPath $script:DefaultShellKit -File -Recurse -Force
+  )
+  $requiresNormalization = $false
+  foreach ($file in $sourceFiles) {
+    $bytes = [IO.File]::ReadAllBytes($file.FullName)
+    if ($bytes -contains [byte] 13) {
+      $requiresNormalization = $true
+      break
+    }
+  }
+  if (-not $requiresNormalization) {
+    return $script:DefaultShellKit
+  }
+
+  $temporaryKit = Join-Path ([IO.Path]::GetTempPath()) (
+    'sbx-manager-zsh-shell-' + [guid]::NewGuid().ToString('N')
+  )
+  try {
+    New-Item -ItemType Directory -Path $temporaryKit -Force | Out-Null
+    foreach ($entry in @(
+      Get-ChildItem -LiteralPath $script:DefaultShellKit -Force
+    )) {
+      Copy-Item -LiteralPath $entry.FullName -Destination $temporaryKit `
+        -Recurse -Force
+    }
+
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    foreach ($file in @(
+      Get-ChildItem -LiteralPath $temporaryKit -File -Recurse -Force
+    )) {
+      $bytes = [IO.File]::ReadAllBytes($file.FullName)
+      if ($bytes -contains [byte] 13) {
+        # The bundled kit consists of UTF-8 text files. Remove both Windows
+        # CRLF and stray CR line endings without adding a UTF-8 BOM.
+        $content = [IO.File]::ReadAllText($file.FullName)
+        $content = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+        [IO.File]::WriteAllText($file.FullName, $content, $utf8NoBom)
+      }
+    }
+  } catch {
+    if (Test-Path -LiteralPath $temporaryKit) {
+      Remove-Item -LiteralPath $temporaryKit -Recurse -Force `
+        -ErrorAction SilentlyContinue
+    }
+    Stop-Manager "Could not prepare an LF-only shell kit: $($_.Exception.Message)"
+  }
+
+  $script:TemporaryDirectories.Add($temporaryKit)
+  return $temporaryKit
+}
+
+function Update-ExistingShellKit {
+  param([string] $SandboxName)
+
+  $shellKitPath = Get-DefaultShellKitPath
+  $localVersionFile = Join-Path $shellKitPath (
+    'files\home\.config\sbx-manager\zsh-shell.version'
+  )
+  $remoteVersionFile = '/home/agent/.config/sbx-manager/zsh-shell.version'
+  $expectedVersion = [IO.File]::ReadAllText($localVersionFile).Trim()
+  if ([string]::IsNullOrWhiteSpace($expectedVersion)) {
+    Stop-Manager "The default shell kit version marker is empty: $localVersionFile"
+  }
+
+  $versionCheck = Invoke-SbxCapture @(
+    'exec', $SandboxName, '/bin/sh', '-c',
+    'actual="$(sed -n "1p" "$1" 2>/dev/null || :)"; [ "$actual" = "$2" ]',
+    'sh', $remoteVersionFile, $expectedVersion
+  )
+  if ($versionCheck.ExitCode -eq 0) {
+    return
+  }
+
+  Write-Section 'Refreshing shell kit'
+  Write-Line (
+    "The existing sandbox '$SandboxName' is missing shell kit " +
+    "$expectedVersion."
+  )
+  Write-Line 'Applying the current LF-only kit before reattaching.'
+  Invoke-Sbx @('kit', 'add', $SandboxName, $shellKitPath)
 }
 
 function Format-CommandArgument {
@@ -1306,6 +1413,14 @@ function Invoke-RunCommand {
     $reattach = $sandboxNames -contains $name
   }
 
+  if ($reattach) {
+    if ($shellKit) {
+      Update-ExistingShellKit $name
+    } else {
+      Write-InfoLine "Skipping shell kit refresh for existing sandbox '$name'."
+    }
+  }
+
   $sbxArguments = [Collections.Generic.List[string]]::new()
   $sbxArguments.Add('run')
 
@@ -1384,9 +1499,9 @@ function Invoke-RunCommand {
       $sbxArguments.Add($template)
     }
     if ($shellKit) {
-      Test-DefaultShellKit
+      $shellKitPath = Get-DefaultShellKitPath
       $sbxArguments.Add('--kit')
-      $sbxArguments.Add($script:DefaultShellKit)
+      $sbxArguments.Add($shellKitPath)
     }
     $sbxArguments.Add($agent)
     $sbxArguments.Add($workspace)

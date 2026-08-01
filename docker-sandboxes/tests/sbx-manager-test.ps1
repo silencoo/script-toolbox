@@ -69,7 +69,9 @@ function Set-CaseEnvironment {
   $env:SBX_TEST_POLICY_STATE = Join-Path $CaseDir 'policy-state'
   $env:SBX_TEST_AUTH_STATE = Join-Path $CaseDir 'auth-state'
   $env:SBX_TEST_SANDBOX_NAMES = ''
+  $env:SBX_TEST_SHELL_KIT_CURRENT = '1'
   $env:SBX_MANAGER_TEST_MODE = '1'
+  $env:SBX_MANAGER_SHELL_KIT = $null
 }
 
 function Invoke-ManagerCase {
@@ -97,6 +99,8 @@ $originalPath = $env:Path
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalNoColor = $env:NO_COLOR
 $originalTestMode = $env:SBX_MANAGER_TEST_MODE
+$originalShellKit = $env:SBX_MANAGER_SHELL_KIT
+$originalShellKitCurrent = $env:SBX_TEST_SHELL_KIT_CURRENT
 
 try {
   $env:Path = "$fixtureDir;$originalPath"
@@ -247,6 +251,18 @@ try {
   # Creation keeps Windows paths intact and applies the shared shell kit.
   $launch = Initialize-Case 'launch'
   Set-CaseEnvironment $launch
+  $crlfShellKit = Join-Path $launch 'crlf-zsh-shell'
+  Copy-Item -LiteralPath $shellKit -Destination $crlfShellKit -Recurse
+  $utf8NoBom = [Text.UTF8Encoding]::new($false)
+  foreach ($file in @(
+    Get-ChildItem -LiteralPath $crlfShellKit -File -Recurse -Force
+  )) {
+    $content = [IO.File]::ReadAllText($file.FullName)
+    $content = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+    $content = $content.Replace("`n", "`r`n")
+    [IO.File]::WriteAllText($file.FullName, $content, $utf8NoBom)
+  }
+  $env:SBX_MANAGER_SHELL_KIT = $crlfShellKit
   $workspace = Join-Path $launch 'workspace with spaces'
   New-Item -ItemType Directory -Path $workspace -Force | Out-Null
   if ((Invoke-ManagerCase $launch @(
@@ -254,15 +270,20 @@ try {
       )) -ne 0) {
     Stop-Test 'sandbox launch helper failed'
   }
+  $env:SBX_MANAGER_SHELL_KIT = $null
   $resolvedWorkspace = (Resolve-Path -LiteralPath $workspace).ProviderPath
-  Assert-LogContains (Join-Path $launch 'log') (
-    "run --name test-shell --kit $shellKit shell $resolvedWorkspace"
+  Assert-TextContains (Join-Path $launch 'log') (
+    'run --name test-shell --kit '
   )
+  Assert-TextContains (Join-Path $launch 'log') " shell $resolvedWorkspace"
+  Assert-LogContains (Join-Path $launch 'log') 'kit-line-endings lf'
 
   # Existing names use reattach-only syntax.
   $reattach = Initialize-Case 'reattach'
   Set-CaseEnvironment $reattach
   $env:SBX_TEST_SANDBOX_NAMES = 'test-claude'
+  $env:SBX_TEST_SHELL_KIT_CURRENT = '0'
+  $env:SBX_MANAGER_SHELL_KIT = $crlfShellKit
   $reattachWorkspace = Join-Path $reattach 'workspace'
   New-Item -ItemType Directory -Path $reattachWorkspace -Force | Out-Null
   $reattachArguments = @(
@@ -274,6 +295,8 @@ try {
     Stop-Test 'sandbox reattach helper failed'
   }
   $reattachLog = Join-Path $reattach 'log'
+  Assert-TextContains $reattachLog 'kit add test-claude '
+  Assert-LogContains $reattachLog 'kit-line-endings lf'
   Assert-LogContains $reattachLog 'run --name test-claude'
   $wrongReattach = @(
     Get-Content -LiteralPath $reattachLog |
@@ -289,6 +312,8 @@ try {
   $env:LOCALAPPDATA = $originalLocalAppData
   $env:NO_COLOR = $originalNoColor
   $env:SBX_MANAGER_TEST_MODE = $originalTestMode
+  $env:SBX_MANAGER_SHELL_KIT = $originalShellKit
+  $env:SBX_TEST_SHELL_KIT_CURRENT = $originalShellKitCurrent
   if (Test-Path -LiteralPath $testTmpDir) {
     Remove-Item -LiteralPath $testTmpDir -Recurse -Force
   }

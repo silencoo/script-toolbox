@@ -17,6 +17,22 @@ if (-not $env:SBX_TEST_AUTH_STATE) {
 Add-Content -LiteralPath $env:SBX_TEST_LOG -Value ($args -join ' ')
 $command = if ($args.Count -gt 0) { $args[0] } else { '' }
 
+function Assert-KitLineEndings {
+  param([string] $KitPath)
+
+  foreach ($file in @(
+    Get-ChildItem -LiteralPath $KitPath -File -Recurse -Force
+  )) {
+    if ([IO.File]::ReadAllBytes($file.FullName) -contains [byte] 13) {
+      Write-Error -ErrorAction Continue (
+        "kit contains a carriage return: $($file.FullName)"
+      )
+      exit 93
+    }
+  }
+  Add-Content -LiteralPath $env:SBX_TEST_LOG -Value 'kit-line-endings lf'
+}
+
 switch ($command) {
   'version' {
     Write-Output 'sbx version: test'
@@ -122,7 +138,30 @@ switch ($command) {
       Write-Output 'no sandboxes'
     }
   }
+  'exec' {
+    if ($env:SBX_TEST_SHELL_KIT_CURRENT -eq '0') {
+      exit 1
+    }
+  }
+  'kit' {
+    $subcommand = if ($args.Count -gt 1) { $args[1] } else { '' }
+    if ($subcommand -ne 'add' -or $args.Count -lt 4) {
+      Write-Error -ErrorAction Continue "unsupported kit command: $subcommand"
+      exit 95
+    }
+    Assert-KitLineEndings $args[3]
+    Write-Output 'kit added'
+  }
   'run' {
+    $kitIndex = [Array]::IndexOf([object[]] $args, '--kit')
+    if ($kitIndex -ge 0) {
+      if ($kitIndex + 1 -ge $args.Count) {
+        Write-Error -ErrorAction Continue '--kit is missing its path'
+        exit 94
+      }
+      $kitPath = $args[$kitIndex + 1]
+      Assert-KitLineEndings $kitPath
+    }
     Write-Output 'sandbox started'
   }
   default {

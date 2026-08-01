@@ -203,6 +203,13 @@ an existing sandbox manually, run:
 sbx kit add project-shell ./kits/zsh-shell
 ```
 
+On Windows, the PowerShell manager detects CRLF in a checked-out shell kit and
+passes `sbx` a temporary LF-only copy. This keeps `.zshrc` and the other Linux
+dotfiles valid even when the repository was cloned with `core.autocrlf=true`.
+When a named sandbox already exists, rerunning the same manager command checks
+the installed kit version and reapplies the LF-only copy before reattaching if
+the version is missing or stale. `--no-shell-kit` skips this repair.
+
 When `--name` identifies an existing sandbox, the manager automatically switches
 to sbx's reattach syntax and preserves the sandbox's original agent and
 workspace. Before reconnecting, it checks the bundled shell-kit version inside

@@ -8,6 +8,15 @@ set -u
 
 printf '%s\n' "$*" >> "$SBX_TEST_LOG"
 
+assert_kit_line_endings() {
+  local kit_path="$1"
+  if grep -r $'\r' "$kit_path" >/dev/null 2>&1; then
+    printf 'kit contains a carriage return: %s\n' "$kit_path" >&2
+    exit 93
+  fi
+  printf '%s\n' 'kit-line-endings lf' >> "$SBX_TEST_LOG"
+}
+
 case "${1:-}" in
   version)
     printf 'sbx version: test\n'
@@ -119,6 +128,7 @@ case "${1:-}" in
   kit)
     case "${2:-}" in
       add)
+        assert_kit_line_endings "${4:?kit path is required}"
         printf '%s\n' 'kit added'
         ;;
       *)
@@ -128,6 +138,18 @@ case "${1:-}" in
     esac
     ;;
   run)
+    kit_path=''
+    previous_argument=''
+    for argument in "$@"; do
+      if [ "$previous_argument" = '--kit' ]; then
+        kit_path="$argument"
+        break
+      fi
+      previous_argument="$argument"
+    done
+    if [ -n "$kit_path" ]; then
+      assert_kit_line_endings "$kit_path"
+    fi
     printf '%s\n' 'sandbox started'
     ;;
   *)
