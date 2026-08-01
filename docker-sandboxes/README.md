@@ -195,11 +195,11 @@ for an incompatible custom image:
 ```
 
 Docker sbx mounts the primary workspace at its absolute host path and currently
-does not expose a destination-path option. The kit records sbx's primary
-`WORKDIR`, creates `~/workspace` as a stable link to it, and switches an
-interactive zsh session to that logical path. The shell creates the link
-synchronously without a kit startup command, keeping the same kit compatible
-with both sandbox creation and `sbx kit add` refreshes. As a result,
+does not expose a destination-path option. On first entry, the shell records
+sbx's restored working directory, creates `~/workspace` as a stable link to it,
+and switches the interactive zsh session to that logical path. This avoids both
+startup commands and runtime `initFiles`, which the current `sbx kit add`
+recreate flow cannot apply. As a result,
 `run /path/to/project` opens at `~/workspace` without changing whether the
 underlying workspace is a direct host mount or a private `--clone`.
 If the base image already contains an empty `~/workspace` directory, the kit

@@ -65,8 +65,8 @@ grep -Fq 'LANG: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LANG"
 grep -Fq 'LC_ALL: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LC_ALL"
-if grep -Eq '^[[:space:]]+startup:' "$SHELL_KIT/spec.yaml"; then
-  fail "default shell kit uses commands.startup, which sbx kit add cannot refresh"
+if grep -Eq '^[[:space:]]+(startup|initFiles):' "$SHELL_KIT/spec.yaml"; then
+  fail "default shell kit uses lifecycle commands that sbx kit add cannot refresh"
 fi
 grep -Fq 'eza_version=0.23.5' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing the pinned eza release"
@@ -91,9 +91,6 @@ grep -Fq 'command_link="/usr/local/bin/$command_name"' \
 grep -Fq 'Refusing to replace existing command: $command_link' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not preserve global command conflicts"
-grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
-  "$SHELL_KIT/spec.yaml" \
-  || fail "default shell kit does not record the primary workspace"
 grep -Fq 'ln -sfn "$_sbx_workspace_target" "$HOME/workspace"' \
   "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
   || fail "default shell kit does not create the workspace alias"
@@ -161,8 +158,40 @@ utf8_quoted="$(
 [ "$utf8_quoted" = "$utf8_filename" ] \
   || fail "UTF-8 locale did not preserve a Chinese filename in zsh"
 
-# The zsh entry helper must not depend on the asynchronous kit startup command:
-# it creates or refreshes ~/workspace itself and enters that logical path.
+# The zsh entry helper must not depend on kit startup or initFiles commands: it
+# discovers the restored working directory, records it, and enters its link.
+workspace_discovery_case="$TEST_TMP_DIR/workspace-discovery"
+workspace_discovery_home="$workspace_discovery_case/home"
+workspace_discovery_target="$workspace_discovery_case/restored workspace"
+mkdir -p "$workspace_discovery_home/.config/sbx-manager" \
+  "$workspace_discovery_target"
+HOME="$workspace_discovery_home" zsh -f -c '
+  cd "$1"
+  source "$2"
+  expected="${1:A}"
+  [[ "$PWD" == "$HOME/workspace" ]]
+  [[ "$(readlink "$HOME/workspace")" == "$expected" ]]
+  [[ "$(sed -n "1p" "$HOME/.config/sbx-manager/workspace")" == "$expected" ]]
+' zsh "$workspace_discovery_target" \
+  "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
+  || fail "workspace entry helper did not discover and record the workspace"
+
+# A managed link can recover the marker even when entry starts in $HOME.
+workspace_link_case="$TEST_TMP_DIR/workspace-link-recovery"
+workspace_link_home="$workspace_link_case/home"
+workspace_link_target="$workspace_link_case/restored workspace"
+mkdir -p "$workspace_link_home/.config/sbx-manager" "$workspace_link_target"
+ln -s "$workspace_link_target" "$workspace_link_home/workspace"
+HOME="$workspace_link_home" zsh -f -c '
+  cd "$HOME"
+  source "$1"
+  expected="${HOME}/workspace"
+  expected="${expected:A}"
+  [[ "$(sed -n "1p" "$HOME/.config/sbx-manager/workspace")" == "$expected" ]]
+' zsh "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
+  || fail "workspace entry helper did not recover a missing workspace marker"
+
+# An existing marker remains authoritative and refreshes a stale managed link.
 workspace_entry_case="$TEST_TMP_DIR/workspace-entry"
 workspace_entry_home="$workspace_entry_case/home"
 workspace_entry_target="$workspace_entry_case/original workspace"

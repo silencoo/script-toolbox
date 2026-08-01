@@ -268,10 +268,3 @@ commands:
           ln -s "$command_target" "$command_link"
         done
       description: Expose agentctl, mcpctl, promptctl, and skillsctl on the sandbox PATH
-
-  initFiles:
-    - path: /home/agent/.config/sbx-manager/workspace
-      content: "${WORKDIR}\n"
-      mode: "0644"
-      onlyIfMissing: false
-      description: Record the primary workspace path for a stable home-directory link

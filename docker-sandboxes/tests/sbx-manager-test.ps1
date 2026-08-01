@@ -189,10 +189,10 @@ try {
     }
   }
   if ((Get-Content -LiteralPath (Join-Path $shellKit 'spec.yaml')) -match (
-      '^\s+startup:'
+      '^\s+(startup|initFiles):'
     )) {
     Stop-Test (
-      'default shell kit uses commands.startup, which sbx kit add cannot refresh'
+      'default shell kit uses lifecycle commands that sbx kit add cannot refresh'
     )
   }
 
