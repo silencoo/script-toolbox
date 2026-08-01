@@ -70,9 +70,9 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.3.0" ] ||
+  "agentctl 0.3.1" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.3.0" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.3.1" ] ||
   fail "version output is incorrect"
 
 [ "$(run_agentctl providers claude)" = "claude-code-provider" ] ||
@@ -98,12 +98,13 @@ grep -qF 'setup pi <--provider> <anthropic>' "$LOG_FILE" ||
 mkdir -p "$TEST_HOME/.codex/provider-keys"
 cat > "$TEST_HOME/.codex/config.toml" <<'EOF'
 # >>> agent/codex/setup.sh >>>
-[model_providers.script_toolbox_openai]
-name = "OpenAI"
-
-[profiles.script_toolbox]
 model = "gpt-test"
 model_provider = "script_toolbox_openai"
+# <<< agent/codex/setup.sh <<<
+
+# >>> agent/codex/setup.sh >>>
+[model_providers.script_toolbox_openai]
+name = "OpenAI"
 # <<< agent/codex/setup.sh <<<
 EOF
 printf '%s\n' 'STATUS-SECRET-MUST-NOT-APPEAR' \

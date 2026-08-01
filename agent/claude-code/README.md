@@ -13,8 +13,10 @@ Anthropic-Messages-compatible provider. Presets:
 
 The script writes `~/.claude/settings.json`, uses `ANTHROPIC_API_KEY` for
 standard Anthropic-style authentication and `ANTHROPIC_AUTH_TOKEN` for bearer
-gateways such as OpenRouter and MiniMax, and preserves the file as mode `0600`.
-It writes exactly one of those two credential fields, never both.
+gateways such as DeepSeek, OpenRouter, and MiniMax, and preserves the file as
+mode `0600`. All third-party presets use `ANTHROPIC_AUTH_TOKEN`; only direct
+Anthropic API access uses `ANTHROPIC_API_KEY` and its required `x-api-key`
+header. The script writes exactly one credential field, never both.
 
 ## Install
 

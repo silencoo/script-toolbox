@@ -34,7 +34,7 @@ for name in agentctl mcpctl promptctl skillsctl; do
 done
 [ "$(mode_of "$PREFIX/.script-toolbox-agent-commands")" = "600" ] ||
   fail "command manifest is not mode 600"
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.3.0" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.3.1" ] ||
   fail "agentctl did not work through its installed symlink"
 "$PREFIX/mcpctl" --help >/dev/null ||
   fail "mcpctl did not work through its installed symlink"

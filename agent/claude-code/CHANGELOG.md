@@ -1,5 +1,12 @@
 # Changelog — claude-code (agent)
 
+## 2026-08-01 — non-interactive gateway authentication
+
+- DeepSeek now uses `ANTHROPIC_AUTH_TOKEN`, matching its official Claude Code
+  integration and avoiding Claude Code's interactive API-key confirmation.
+- Direct Anthropic access remains on `ANTHROPIC_API_KEY` because the official
+  API requires the `x-api-key` header.
+
 ## 2026-07-28 — CloakBrowser and GitHub MCP
 
 - Chrome DevTools now resolves CloakBrowser's platform Chromium binary and

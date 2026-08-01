@@ -17,7 +17,9 @@ offered as broken presets.
 Credentials are stored under `~/.codex/provider-keys/` with mode `0600`.
 `config.toml` uses Codex's command-backed provider auth to read that file; it
 does not require a permanent shell export and does not place the key directly
-in TOML.
+in TOML. The selected model and provider become user-level defaults, so a
+plain `codex` invocation uses them without opening OpenAI's login chooser.
+Any previous top-level model/provider defaults are restored on uninstall.
 
 ## Install
 
@@ -67,8 +69,13 @@ OPENROUTER_API_KEY=sk-or-... \
 After setup:
 
 ```bash
-codex --profile script_toolbox
+codex
 ```
+
+Setup automatically migrates the obsolete `[profiles.script_toolbox]` block
+written by older versions. Codex 0.134.0 and later only load profiles from
+separate `~/.codex/<name>.config.toml` files, so the provider selected by this
+tool now lives in the base user configuration instead.
 
 Use `--skip-validate` for gateways without a models endpoint. `--key-file`
 refuses symlinks, group/other-readable files, empty files, and multi-line

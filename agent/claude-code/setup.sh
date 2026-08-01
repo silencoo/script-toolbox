@@ -202,7 +202,7 @@ case "$PROVIDER" in
     MODELS_URL="https://api.deepseek.com/models"
     KEY_ENV="DEEPSEEK_API_KEY"
     KEY_DOC_URL="https://platform.deepseek.com/api_keys"
-    AUTH_MODE="api-key"
+    AUTH_MODE="auth-token"
     VALIDATION_AUTH="bearer"
     DEFAULT_MODEL="deepseek-v4-pro"
     MODEL_CHOICES="deepseek"

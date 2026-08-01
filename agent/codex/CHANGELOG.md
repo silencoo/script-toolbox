@@ -1,5 +1,16 @@
 # Changelog — codex (agent)
 
+## 2026-08-01 — default provider activation
+
+- The selected model and custom provider are now written as top-level user
+  defaults, so launching plain `codex` no longer falls back to OpenAI login.
+- Removed the obsolete `[profiles.script_toolbox]` output, which Codex 0.134.0
+  and later no longer reads from `config.toml`.
+- Existing user-level model/provider defaults are backed up during setup and
+  restored when the managed provider is uninstalled.
+- Command-backed authentication no longer emits the mutually exclusive
+  `requires_openai_auth` setting.
+
 ## 2026-07-28 — CloakBrowser and GitHub MCP
 
 - Chrome DevTools now resolves CloakBrowser's platform Chromium binary and

@@ -19,7 +19,7 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.3.0"
+VERSION="0.3.1"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 
 # shellcheck source=../ctl-lib.sh
@@ -164,13 +164,12 @@ status_json_value() {
   jq -r "$filter" "$path" 2>/dev/null || true
 }
 
-status_toml_profile_value() {
+status_toml_top_level_value() {
   local path="$1" wanted="$2"
   [ -f "$path" ] || return 0
   awk -v wanted="$wanted" '
-    $0 == "[profiles.script_toolbox]" { inside = 1; next }
-    inside && /^\[/ { exit }
-    inside {
+    /^[[:space:]]*\[[^]]+\]/ { exit }
+    {
       line = $0
       if (line ~ "^[[:space:]]*" wanted "[[:space:]]*=") {
         sub(/^[^=]*=[[:space:]]*/, "", line)
@@ -328,10 +327,10 @@ status_prepare() {
          [ "$STATE_EXISTS" = true ]; then
         OWNERSHIP_MARKER=true
       fi
-      raw_value="$(status_toml_profile_value "$CONFIG_FILE_1" model_provider)"
+      raw_value="$(status_toml_top_level_value "$CONFIG_FILE_1" model_provider)"
       status_safe_provider "$raw_value"
       STATUS_PROVIDER="$STATUS_SAFE_VALUE"
-      STATUS_MODEL="$(status_toml_profile_value "$CONFIG_FILE_1" model)"
+      STATUS_MODEL="$(status_toml_top_level_value "$CONFIG_FILE_1" model)"
       if [ "$OWNERSHIP_MARKER" = true ] &&
          { [ -z "$STATUS_PROVIDER" ] || [ -z "$STATUS_MODEL" ]; }; then
         CONFIG_VALID=false

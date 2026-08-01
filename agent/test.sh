@@ -222,8 +222,8 @@ run_config_tests() {
       --skip-validate --clean-shell-env --force >/dev/null || { rm -rf "$test_root"; return 1; }
   jq -e '
     .env.ANTHROPIC_BASE_URL == "https://api.deepseek.com/anthropic"
-    and .env.ANTHROPIC_API_KEY == "test-claude"
-    and .env.ANTHROPIC_AUTH_TOKEN == null
+    and .env.ANTHROPIC_AUTH_TOKEN == "test-claude"
+    and .env.ANTHROPIC_API_KEY == null
     and .model == "deepseek-v4-pro"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -q 'ANTHROPIC_AUTH_TOKEN' "$test_home/.zshrc" || { rm -rf "$test_root"; return 1; }
@@ -317,12 +317,40 @@ run_config_tests() {
     and .model == "openrouter/auto"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
 
+  # Codex setup makes the selected model/provider the defaults used by a plain
+  # `codex` invocation. Existing user defaults are preserved for uninstall.
+  mkdir -p "$test_home/.codex"
+  cat > "$test_home/.codex/config.toml" <<'EOF'
+model = "user-model"
+model_provider = "user_provider"
+approval_policy = "on-request"
+
+[model_providers.user_provider]
+name = "User provider"
+base_url = "http://localhost:1234/v1"
+EOF
+
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/agentctl/agentctl" setup codex \
       --provider openrouter --model openai/gpt-5.6 --key test-codex \
       --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
   grep -q 'wire_api = "responses"' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
   grep -q '\[model_providers.script_toolbox_openrouter.auth\]' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  awk '
+    /^\[[^]]+\]/ { exit }
+    $0 == "model = \"openai/gpt-5.6\"" { model = 1 }
+    $0 == "model_provider = \"script_toolbox_openrouter\"" { provider = 1 }
+    END { exit !(model && provider) }
+  ' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  ! grep -q '\[profiles.script_toolbox\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  grep -q '\[model_providers.user_provider\]' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
+  ! grep -q 'requires_openai_auth' "$test_home/.codex/config.toml" || {
+    rm -rf "$test_root"; return 1;
+  }
   [ "$(cat "$test_home/.codex/provider-keys/script_toolbox_openrouter.key")" = "test-codex" ] || {
     rm -rf "$test_root"; return 1;
   }
@@ -331,7 +359,7 @@ run_config_tests() {
   }
 
   # Codex MCP refresh/uninstall must preserve user-owned MCP tables and the
-  # provider/profile tables written by setup.sh.
+  # provider/default configuration written by setup.sh.
   printf '%s\n' \
     '' \
     '[mcp_servers.user_owned]' \
@@ -499,6 +527,16 @@ run_config_tests() {
     "$SCRIPT_DIR/agentctl/agentctl" \
       uninstall codex --yes >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -qF 'agent/codex/setup.sh' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  awk '
+    /^\[[^]]+\]/ { exit }
+    $0 == "model = \"user-model\"" { model = 1 }
+    $0 == "model_provider = \"user_provider\"" { provider = 1 }
+    $0 == "approval_policy = \"on-request\"" { approval = 1 }
+    END { exit !(model && provider && approval) }
+  ' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  [ ! -e "$test_home/.codex/.script-toolbox-defaults-backup.toml" ] || {
+    rm -rf "$test_root"; return 1;
+  }
   grep -qF '# script-toolbox-promptctl:start profile=personal' \
     "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
   [ -f "$test_home/.codex/instructions/personal.md" ] || {

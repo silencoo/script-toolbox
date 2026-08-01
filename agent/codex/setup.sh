@@ -42,11 +42,11 @@ DRY_RUN=0
 SETTINGS_DIR="${HOME}/.codex"
 SETTINGS_FILE="${SETTINGS_DIR}/config.toml"
 STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider-key"
+DEFAULTS_BACKUP_FILE="${SETTINGS_DIR}/.script-toolbox-defaults-backup.toml"
 KEY_DIR="${SETTINGS_DIR}/provider-keys"
 MANAGED_BY="agent/codex/setup.sh"
 BEGIN_MARKER="# >>> ${MANAGED_BY} >>>"
 END_MARKER="# <<< ${MANAGED_BY} <<<"
-PROFILE_NAME="script_toolbox"
 SETUP_COMMAND="${AGENTCTL_SETUP_COMMAND:-./setup.sh}"
 UNINSTALL_COMMAND="${AGENTCTL_UNINSTALL_COMMAND:-$0 --uninstall}"
 
@@ -70,7 +70,7 @@ ${C_BOLD}Options:${C_RESET}
   --skip-validate            Skip the models endpoint probe.
   --dry-run                  Preview resolution without network/install/writes.
   --force                    Replace this script's previous/legacy block.
-  --uninstall                Remove this script's provider/profile and key file.
+  --uninstall                Remove this script's provider/defaults and key file.
   -h | --help                Show this help.
 
 ${C_BOLD}Important:${C_RESET}
@@ -118,6 +118,23 @@ strip_legacy_minimax() {
     }
     skip { next }
     index($0, mgr) { next }
+    { print }
+  ' "$input" > "$output"
+}
+
+extract_top_level_defaults() {
+  local input="$1" output="$2"
+  awk '
+    /^[[:space:]]*\[[^]]+\]/ { in_table = 1 }
+    !in_table && /^[[:space:]]*(model|model_provider)[[:space:]]*=/ { print }
+  ' "$input" > "$output"
+}
+
+strip_top_level_defaults() {
+  local input="$1" output="$2"
+  awk '
+    /^[[:space:]]*\[[^]]+\]/ { in_table = 1 }
+    !in_table && /^[[:space:]]*(model|model_provider)[[:space:]]*=/ { next }
     { print }
   ' "$input" > "$output"
 }
@@ -184,10 +201,22 @@ if [ "$UNINSTALL" = 1 ]; then
     fi
     mv "$TMP_LEGACY" "$TMP"
   fi
+  if [ -f "$DEFAULTS_BACKUP_FILE" ]; then
+    TMP_RESTORED="$(make_temp_near "$SETTINGS_FILE")"
+    if ! {
+      cat "$DEFAULTS_BACKUP_FILE"
+      cat "$TMP"
+    } > "$TMP_RESTORED"; then
+      rm -f "$TMP" "$TMP_RESTORED"
+      die "failed to restore the previous Codex defaults"
+    fi
+    rm -f "$TMP"
+    TMP="$TMP_RESTORED"
+  fi
   replace_file "$TMP" "$SETTINGS_FILE"
   [ -z "$OLD_KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
-  rm -f "$STATE_FILE"
-  ok "removed $MANAGED_BY provider/profile and credential"
+  rm -f "$STATE_FILE" "$DEFAULTS_BACKUP_FILE"
+  ok "removed $MANAGED_BY provider/defaults and credential"
   exit 0
 fi
 
@@ -319,8 +348,6 @@ if grep -qF "$BEGIN_MARKER" "$SETTINGS_FILE"; then
   info "refreshing the existing $MANAGED_BY block"
 elif grep -q "$MANAGED_BY" "$SETTINGS_FILE"; then
   warn "upgrading the legacy MiniMax-only Codex block"
-elif grep -q "\\[profiles.${PROFILE_NAME}\\]" "$SETTINGS_FILE" 2>/dev/null && [ "$FORCE" != 1 ]; then
-  die "profile '$PROFILE_NAME' already exists but is not marked as ours; use --force"
 fi
 
 OLD_KEY_FILE="$(previous_key_file)"
@@ -338,30 +365,55 @@ if grep -q "$MANAGED_BY" "$TMP" 2>/dev/null; then
   mv "$TMP_LEGACY" "$TMP"
 fi
 
+if [ ! -f "$DEFAULTS_BACKUP_FILE" ]; then
+  TMP_DEFAULTS_BACKUP="$(make_temp_near "$DEFAULTS_BACKUP_FILE")"
+  if ! extract_top_level_defaults "$TMP" "$TMP_DEFAULTS_BACKUP"; then
+    rm -f "$TMP" "$TMP_DEFAULTS_BACKUP"
+    die "failed to preserve the previous Codex defaults"
+  fi
+else
+  TMP_DEFAULTS_BACKUP=""
+fi
+
+TMP_WITHOUT_DEFAULTS="$(make_temp_near "$SETTINGS_FILE")"
+if ! strip_top_level_defaults "$TMP" "$TMP_WITHOUT_DEFAULTS"; then
+  rm -f "$TMP" "$TMP_WITHOUT_DEFAULTS"
+  [ -z "$TMP_DEFAULTS_BACKUP" ] || rm -f "$TMP_DEFAULTS_BACKUP"
+  die "failed to replace the default Codex model/provider"
+fi
+rm -f "$TMP"
+TMP="$TMP_WITHOUT_DEFAULTS"
+
 ESC_DISPLAY="$(toml_escape "$DISPLAY_NAME")"
 ESC_BASE="$(toml_escape "$BASE_URL")"
 ESC_MODEL="$(toml_escape "$MODEL")"
 ESC_KEY_FILE="$(toml_escape "$KEY_FILE")"
 {
+  printf '%s\n' "$BEGIN_MARKER"
+  printf 'model = "%s"\n' "$ESC_MODEL"
+  printf 'model_provider = "%s"\n' "$PROVIDER_ID"
+  printf '%s\n' "$END_MARKER"
+  cat "$TMP"
   printf '\n%s\n' "$BEGIN_MARKER"
   printf '[model_providers.%s]\n' "$PROVIDER_ID"
   printf 'name = "%s"\n' "$ESC_DISPLAY"
   printf 'base_url = "%s"\n' "$ESC_BASE"
   printf 'wire_api = "responses"\n'
-  printf 'requires_openai_auth = false\n'
   printf 'request_max_retries = 4\n'
   printf 'stream_max_retries = 10\n'
   printf 'stream_idle_timeout_ms = 300000\n'
   printf '\n[model_providers.%s.auth]\n' "$PROVIDER_ID"
   printf 'command = "cat"\n'
   printf 'args = ["%s"]\n' "$ESC_KEY_FILE"
-  printf '\n[profiles.%s]\n' "$PROFILE_NAME"
-  printf 'model = "%s"\n' "$ESC_MODEL"
-  printf 'model_provider = "%s"\n' "$PROVIDER_ID"
   printf '%s\n' "$END_MARKER"
-} >> "$TMP"
+} > "${TMP}.complete"
+rm -f "$TMP"
+TMP="${TMP}.complete"
 
 write_secret_file "$KEY_FILE" "$KEY"
+if [ -n "$TMP_DEFAULTS_BACKUP" ]; then
+  replace_file "$TMP_DEFAULTS_BACKUP" "$DEFAULTS_BACKUP_FILE"
+fi
 replace_file "$TMP" "$SETTINGS_FILE"
 [ -z "$OLD_KEY_FILE" ] || [ "$OLD_KEY_FILE" = "$KEY_FILE" ] || rm -f "$OLD_KEY_FILE"
 write_secret_file "$STATE_FILE" "$KEY_FILE"
@@ -369,7 +421,7 @@ ok "wrote $SETTINGS_FILE and a separate chmod-600 credential"
 
 echo
 printf '%s%s%s\n' "${C_BOLD}" "Ready" "${C_RESET}"
-printf '  %s\n' "Run: codex --profile $PROFILE_NAME"
+printf '  %s\n' "Run: codex"
 printf '  %s\n' "Provider: $DISPLAY_NAME; model: $MODEL"
 printf '  %s\n' "Uninstall this provider config: $UNINSTALL_COMMAND"
 ok "done"
