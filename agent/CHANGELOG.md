@@ -1,5 +1,22 @@
 # Changelog — agent/
 
+## 2026-08-02 — denser Toolbox Workspace UI
+
+- Removed the repeated MCP, Skills, and Prompts title/summary banners from the
+  unlocked Worker UI.
+- Moved Versions and Lock beside the section tabs and tightened the surrounding
+  vertical spacing so profiles, packs, and editors appear immediately.
+- Kept unlocked recovery material in current-tab session storage so a refresh
+  restores the latest encrypted Workspace automatically. Locking clears the
+  stored code, failed restoration falls back safely, and unsaved edits now
+  trigger a leave-page warning.
+- Added target-local `skillsctl skill enable/disable` custom selections so an
+  installed Skill can be hidden from one agent without changing its saved pack
+  or canonical Store copy.
+- Made `skillsctl import --write` safely adopt existing user-level Skills: the
+  original target entries move to a manifested, recoverable backup before
+  managed links replace them, with rollback on partial migration failure.
+
 ## 2026-08-01 — unified Toolbox Workspace and Prompt Store
 
 - Added a `toolbox1_` master Workspace protocol and `agentctl workspace`

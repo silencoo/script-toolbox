@@ -20,7 +20,10 @@ with Tailwind CSS design tokens and persisted Light, Dark, and System themes. A
 `toolbox1_…` code unlocks one Workspace with MCP, Skills, and Prompts tabs;
 the three isolated recovery-code formats still open a single Store directly.
 Decryption and encryption use Web Crypto in the browser, and recovery material
-remains only in the current tab.
+is kept in current-tab `sessionStorage`: it survives a refresh, but clicking
+Lock or closing the tab clears it. It is never written to persistent
+`localStorage` or sent to the Worker. Unsaved decrypted edits trigger the
+browser's leave-page confirmation before a refresh or tab close.
 The UI supports search, sorting, profile/pack membership, prompt editing,
 MCP provider inspection, masked MCP Secret editing, version restore, and JSON
 import/export. MCP exports are redacted by default and preserve the current

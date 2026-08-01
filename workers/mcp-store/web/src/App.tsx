@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { LoaderCircle } from "lucide-react"
+import { toast } from "sonner"
 
 import { AppHeader } from "@/components/app-header"
 import { StoreWorkspace } from "@/components/store-workspace"
@@ -42,13 +44,93 @@ const initialState: AppState = {
   activeType: "mcp",
 }
 
+const TAB_RECOVERY_CODE_KEY = "toolbox-store-recovery-code"
+
+function readTabRecoveryCode() {
+  try {
+    return window.sessionStorage.getItem(TAB_RECOVERY_CODE_KEY) || ""
+  } catch {
+    return ""
+  }
+}
+
+function rememberTabRecoveryCode(recoveryCode: string) {
+  try {
+    window.sessionStorage.setItem(TAB_RECOVERY_CODE_KEY, recoveryCode)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function forgetTabRecoveryCode() {
+  try {
+    window.sessionStorage.removeItem(TAB_RECOVERY_CODE_KEY)
+  } catch {
+    // The browser may deny storage access; the in-memory session is still cleared below.
+  }
+}
+
+function SessionRestoreView() {
+  return (
+    <main
+      id="main"
+      className="grid min-h-[calc(100svh-3.5rem)] place-items-center px-4"
+      aria-busy="true"
+      aria-label="Restoring this tab's Store session"
+    >
+      <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
+        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+        <span>Restoring this tab’s Store session…</span>
+      </div>
+    </main>
+  )
+}
+
 export function App() {
   const [state, setState] = useState<AppState>(initialState)
   const [confirmLock, setConfirmLock] = useState(false)
+  const [restoringSession, setRestoringSession] = useState(true)
+  const restorePromise = useRef<Promise<void> | null>(null)
   const connected = state.mode !== null
   const hasDirtySession = Object.values(state.sections).some((session) => session?.dirty)
 
-  async function unlock(recoveryCode: string) {
+  useEffect(() => {
+    const recoveryCode = readTabRecoveryCode()
+    if (!recoveryCode) {
+      setRestoringSession(false)
+      return
+    }
+
+    let active = true
+    restorePromise.current ??= unlock(recoveryCode, false)
+    void restorePromise.current
+      .catch((error) => {
+        if (!active) return
+        forgetTabRecoveryCode()
+        toast.error(`This tab’s saved session could not be restored. ${safeMessage(error)}`)
+      })
+      .finally(() => {
+        if (active) setRestoringSession(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasDirtySession) return
+
+    const confirmDiscard = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", confirmDiscard)
+    return () => window.removeEventListener("beforeunload", confirmDiscard)
+  }, [hasDirtySession])
+
+  async function unlock(recoveryCode: string, remember = true) {
     const parsed = parseRecoveryCode(recoveryCode) as {
       config: RemoteConfig
       protocol: Protocol
@@ -57,6 +139,9 @@ export function App() {
       ? await unlockWorkspace(parsed.config)
       : await unlockIsolated(parsed.config, parsed.protocol)
     setState(nextState)
+    if (remember && !rememberTabRecoveryCode(recoveryCode)) {
+      toast.warning("Unlocked, but this browser blocked tab storage. Refreshing will require the recovery code again.")
+    }
   }
 
   async function unlockWorkspace(config: RemoteConfig): Promise<AppState> {
@@ -128,11 +213,14 @@ export function App() {
   }
 
   function lockNow() {
+    forgetTabRecoveryCode()
     setConfirmLock(false)
     setState(initialState)
   }
 
-  const connectionLabel = !connected
+  const connectionLabel = restoringSession
+    ? "Restoring session"
+    : !connected
     ? "Locked"
     : state.mode === "workspace"
       ? "Workspace connected"
@@ -147,7 +235,9 @@ export function App() {
         Skip to content
       </a>
       <AppHeader connected={connected} connectionLabel={connectionLabel} />
-      {connected ? (
+      {restoringSession ? (
+        <SessionRestoreView />
+      ) : connected ? (
         <StoreWorkspace state={state} setState={setState} onLock={requestLock} />
       ) : (
         <UnlockView onUnlock={unlock} />

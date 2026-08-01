@@ -16,20 +16,14 @@ export const SECTION_META = Object.freeze({
   mcp: {
     label: "MCP",
     protocol: PROTOCOLS.mcp,
-    title: "MCP profiles",
-    summary: "Choose exactly which servers each agent workflow should use.",
   },
   skills: {
     label: "Skills",
     protocol: PROTOCOLS.skills,
-    title: "Skill packs",
-    summary: "Compose focused capabilities for frontend, backend, or any workflow.",
   },
   prompts: {
     label: "Prompts",
     protocol: PROTOCOLS.prompts,
-    title: "Persistent prompts",
-    summary: "Edit the durable instructions shared with Claude Code and Codex.",
   },
 })
 

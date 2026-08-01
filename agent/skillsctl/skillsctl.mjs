@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import {
   chmod,
+  cp,
   copyFile,
   lstat,
   mkdir,
@@ -35,7 +36,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -71,6 +72,7 @@ Usage:
 
   skillsctl skill add <directory> [--name <name>] [--store <dir>] --yes
   skillsctl skill remove <name> [--store <dir>] [--force] --yes
+  skillsctl skill enable|disable <name> --target <target> [--store <dir>] [--yes]
 
   skillsctl pack list [--store <dir>]
   skillsctl pack show <name> [--target <target>] [--store <dir>]
@@ -434,7 +436,12 @@ async function showStatus(options) {
   process.stdout.write(`Packs:  ${packs.size}\n`);
   for (const target of TARGETS) {
     const state = await readTargetState(options.store, target);
-    process.stdout.write(`${target}: ${Object.keys(state.links).length} managed links\n`);
+    const selection = state.selection_mode === "manual"
+      ? `custom${state.base_pack ? ` based on ${state.base_pack}` : ""}`
+      : state.pack || "unknown selection";
+    process.stdout.write(
+      `${target}: ${Object.keys(state.links).length} managed links (${selection})\n`
+    );
   }
 }
 
@@ -482,7 +489,17 @@ async function runSkillCommand(positional, options) {
     await removeSkill(name, options);
     return;
   }
-  throw new SkillsError("skill command must be add or remove");
+  if (action === "enable" || action === "disable") {
+    const name = positional.shift();
+    if (!name || positional.length > 0 || !options.target) {
+      throw new SkillsError(
+        `usage: skillsctl skill ${action} <name> --target <target> [--yes]`
+      );
+    }
+    await toggleTargetSkill(name, options, action === "enable");
+    return;
+  }
+  throw new SkillsError("skill command must be add, remove, enable, or disable");
 }
 
 async function addSkill(source, options) {
@@ -567,6 +584,55 @@ async function removeSkill(name, options) {
   delete store.catalog.skills[name];
   await writeJsonAtomic(join(options.store, "catalog.json"), store.catalog);
   process.stdout.write(`Removed skill '${name}' (recoverable at ${backup})\n`);
+}
+
+async function toggleTargetSkill(name, options, enable) {
+  validateName(name, "skill");
+  validateTarget(options.target, false);
+  const store = await loadStore(options.store);
+  if (!store.catalog.skills[name]) throw new SkillsError(`unknown skill: ${name}`);
+
+  const state = await readTargetState(options.store, options.target);
+  const desired = new Set(Object.keys(state.links));
+  if (enable) {
+    desired.add(name);
+  } else if (!desired.delete(name)) {
+    const unmanagedPath = join(targetRoot(options.target), name);
+    if (await pathExists(unmanagedPath, true)) {
+      throw new SkillsError(
+        `skill '${name}' exists for ${options.target} but is not managed by skillsctl; ` +
+        `run 'skillsctl import --target ${options.target} --write' first`
+      );
+    }
+    process.stdout.write(`Skill '${name}' is already disabled for ${options.target}\n`);
+    return;
+  }
+
+  const plan = await buildTargetPlan(options.store, options.target, desired);
+  printTargetPlan(options.target, plan);
+  if (plan.conflicts > 0) {
+    throw new SkillsError(`${options.target} has ${plan.conflicts} unowned conflict(s)`);
+  }
+  const changed = plan.items.some((item) => item.action !== "keep");
+  if (!changed) {
+    process.stdout.write(`Skill '${name}' is already enabled for ${options.target}\n`);
+    return;
+  }
+  if (!options.yes) {
+    process.stdout.write("\n[preview] re-run with --yes to change managed links\n");
+    return;
+  }
+
+  const basePack = state.selection_mode === "manual"
+    ? state.base_pack || ""
+    : state.pack || "";
+  await applyTargetPlan(options.store, options.target, plan, {
+    selection_mode: "manual",
+    ...(basePack ? { base_pack: basePack } : {})
+  });
+  process.stdout.write(
+    `${enable ? "Enabled" : "Disabled"} skill '${name}' for ${options.target}\n`
+  );
 }
 
 async function runPackCommand(positional, options) {
@@ -699,6 +765,9 @@ async function importTarget(options) {
   validateTarget(options.target, false);
   const store = await loadStore(options.store);
   const root = targetRoot(options.target);
+  if (pathsOverlap(root, options.store)) {
+    throw new SkillsError("target skill directory and canonical store must not overlap");
+  }
   if (!await pathExists(root)) {
     throw new SkillsError(`target skill directory does not exist: ${root}`);
   }
@@ -717,10 +786,16 @@ async function importTarget(options) {
       : existing.sha256 === inspected.sha256
         ? "keep"
         : "conflict";
-    candidates.push({ name: entry.name, source, inspected, action });
+    const targetAction = await managedLinkMatches(
+      source,
+      skillPath(options.store, entry.name)
+    ) ? "managed" : "adopt";
+    candidates.push({ name: entry.name, source, inspected, action, targetAction });
   }
   for (const candidate of candidates) {
-    process.stdout.write(`${candidate.action.padEnd(8)} ${candidate.name}\n`);
+    process.stdout.write(
+      `${candidate.action.padEnd(8)} ${candidate.targetAction.padEnd(8)} ${candidate.name}\n`
+    );
   }
   const conflicts = candidates.filter((candidate) => candidate.action === "conflict");
   if (conflicts.length > 0 && !options.force) {
@@ -728,8 +803,16 @@ async function importTarget(options) {
       `${conflicts.length} import conflict(s); inspect the plan and use --force --write`
     );
   }
+  const packName = options.pack || `imported-${options.target}`;
+  validateName(packName, "pack");
+  const existingPack = store.packs.get(packName);
+  if (existingPack && existingPack.managed_by !== "agent/skillsctl/import" && !options.force) {
+    throw new SkillsError(`refusing to replace user-owned pack '${packName}'`);
+  }
   if (!options.write) {
-    process.stdout.write("[preview] no skills were imported; re-run with --write\n");
+    process.stdout.write(
+      "[preview] no skills were imported or adopted; re-run with --write\n"
+    );
     return;
   }
   for (const candidate of candidates) {
@@ -741,19 +824,144 @@ async function importTarget(options) {
       force: candidate.action === "conflict"
     });
   }
-  const packName = options.pack || `imported-${options.target}`;
-  validateName(packName, "pack");
   const refreshed = await loadStore(options.store);
   let pack = refreshed.packs.get(packName);
-  if (pack && pack.managed_by !== "agent/skillsctl/import" && !options.force) {
-    throw new SkillsError(`refusing to replace user-owned pack '${packName}'`);
-  }
   pack = pack || packDocument(packName, `Skills imported from ${options.target}`);
   pack.managed_by = "agent/skillsctl/import";
   pack.enable = candidates.map((candidate) => candidate.name).sort();
   pack.disable = [];
   await writeJsonAtomic(packPath(options.store, packName), pack);
   process.stdout.write(`Updated imported pack '${packName}'\n`);
+  const backup = await adoptImportedTarget(options, candidates, packName);
+  process.stdout.write(`Adopted ${candidates.length} ${options.target} skill(s)\n`);
+  if (backup) process.stdout.write(`Preserved original target entries at ${backup}\n`);
+}
+
+async function adoptImportedTarget(options, candidates, packName) {
+  const backupRoot = join(
+    options.store,
+    "backups",
+    `import-${options.target}-${Date.now()}-${process.pid}`
+  );
+  const completed = [];
+  const links = {};
+  let backupCreated = false;
+
+  try {
+    for (const candidate of candidates) {
+      const expectedTarget = skillPath(options.store, candidate.name);
+      const current = await inspectSkillDirectory(candidate.source, candidate.name);
+      if (current.sha256 !== candidate.inspected.sha256) {
+        throw new SkillsError(
+          `target skill '${candidate.name}' changed after the import plan; re-run import`
+        );
+      }
+      if (await managedLinkMatches(candidate.source, expectedTarget)) {
+        links[candidate.name] = { link: candidate.source, target: expectedTarget };
+        continue;
+      }
+
+      if (!backupCreated) {
+        await mkdir(backupRoot, { mode: 0o700 });
+        backupCreated = true;
+      }
+      const backup = join(backupRoot, candidate.name);
+      await movePath(candidate.source, backup);
+      const adoption = {
+        name: candidate.name,
+        link: candidate.source,
+        target: expectedTarget,
+        backup
+      };
+      completed.push(adoption);
+      await symlink(
+        expectedTarget,
+        candidate.source,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      links[candidate.name] = { link: candidate.source, target: expectedTarget };
+    }
+
+    if (backupCreated) {
+      await writeJsonAtomic(join(backupRoot, "manifest.json"), {
+        schema: SCHEMA,
+        kind: "skillsctl-import-backup",
+        target: options.target,
+        created_at: new Date().toISOString(),
+        entries: completed
+      });
+    }
+    await writeTargetState(options.store, options.target, links, {
+      selection_mode: "pack",
+      pack: packName
+    });
+  } catch (error) {
+    let rollbackError = null;
+    for (const item of completed.reverse()) {
+      try {
+        if (await managedLinkMatches(item.link, item.target)) {
+          await rm(item.link);
+        } else if (await pathExists(item.link, true)) {
+          throw new SkillsError(`target path changed during rollback: ${item.link}`);
+        }
+        await movePath(item.backup, item.link);
+      } catch (caught) {
+        rollbackError ||= caught;
+      }
+    }
+    if (backupCreated && !rollbackError) {
+      await rm(backupRoot, { recursive: true, force: true });
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (rollbackError) {
+      const rollbackMessage = rollbackError instanceof Error
+        ? rollbackError.message
+        : String(rollbackError);
+      throw new SkillsError(
+        `${message}; rollback needs attention (${rollbackMessage}); originals remain under ${backupRoot}`
+      );
+    }
+    throw error;
+  }
+  return backupCreated ? backupRoot : "";
+}
+
+async function managedLinkMatches(link, expectedTarget) {
+  if (!await pathExists(link, true)) return false;
+  const details = await lstat(link);
+  if (!details.isSymbolicLink()) return false;
+  return resolve(dirname(link), await readlink(link)) === expectedTarget;
+}
+
+async function movePath(source, destination) {
+  try {
+    await rename(source, destination);
+    return;
+  } catch (error) {
+    if (error?.code !== "EXDEV") throw error;
+  }
+  await cp(source, destination, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    verbatimSymlinks: true
+  });
+  try {
+    await rm(source, { recursive: true });
+  } catch (error) {
+    await rm(destination, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function pathsOverlap(left, right) {
+  const a = resolve(left);
+  const b = resolve(right);
+  const aToB = relative(a, b);
+  const bToA = relative(b, a);
+  return aToB === "" || bToA === "" ||
+    (!aToB.startsWith(`..${sep}`) && aToB !== ".." && !isAbsolute(aToB)) ||
+    (!bToA.startsWith(`..${sep}`) && bToA !== ".." && !isAbsolute(bToA));
 }
 
 async function planOrApply(options, apply) {
@@ -765,16 +973,25 @@ async function planOrApply(options, apply) {
   for (const target of targets) {
     const desired = resolvePack(store, options.pack, target);
     const plan = await buildTargetPlan(options.store, target, desired);
-    process.stdout.write(`\n${target} (${targetRoot(target)})\n`);
-    for (const item of plan.items) {
-      process.stdout.write(`  ${item.action.padEnd(9)} ${item.name}\n`);
-    }
+    printTargetPlan(target, plan);
     if (plan.conflicts > 0) {
       throw new SkillsError(`${target} has ${plan.conflicts} unowned conflict(s)`);
     }
-    if (apply) await applyTargetPlan(options.store, target, plan);
+    if (apply) {
+      await applyTargetPlan(options.store, target, plan, {
+        selection_mode: "pack",
+        pack: options.pack
+      });
+    }
   }
   if (!apply) process.stdout.write("\n[preview] re-run with apply --yes to change links\n");
+}
+
+function printTargetPlan(target, plan) {
+  process.stdout.write(`\n${target} (${targetRoot(target)})\n`);
+  for (const item of plan.items) {
+    process.stdout.write(`  ${item.action.padEnd(9)} ${item.name}\n`);
+  }
 }
 
 async function buildTargetPlan(store, target, desired) {
@@ -822,7 +1039,7 @@ async function buildTargetPlan(store, target, desired) {
   return { root, items, conflicts };
 }
 
-async function applyTargetPlan(store, target, plan) {
+async function applyTargetPlan(store, target, plan, selection = {}) {
   await mkdir(plan.root, { recursive: true, mode: 0o700 });
   const nextLinks = {};
   for (const item of plan.items) {
@@ -835,13 +1052,18 @@ async function applyTargetPlan(store, target, plan) {
       await rm(item.link);
     }
   }
+  await writeTargetState(store, target, nextLinks, selection);
+  process.stdout.write(`Applied ${target} skill links\n`);
+}
+
+async function writeTargetState(store, target, links, selection = {}) {
   await writeJsonAtomic(statePath(store, target), {
     schema: SCHEMA,
     target,
-    links: nextLinks,
+    links,
+    ...selection,
     updated_at: new Date().toISOString()
   });
-  process.stdout.write(`Applied ${target} skill links\n`);
 }
 
 async function readTargetState(store, target) {
@@ -852,6 +1074,19 @@ async function readTargetState(store, target) {
   if (!value || value.schema !== SCHEMA || value.target !== target ||
       !value.links || typeof value.links !== "object" || Array.isArray(value.links)) {
     throw new SkillsError(`invalid target state: ${path}`);
+  }
+  if (value.selection_mode !== undefined &&
+      !["pack", "manual"].includes(value.selection_mode)) {
+    throw new SkillsError(`invalid target selection mode: ${path}`);
+  }
+  if (value.pack !== undefined) validateName(value.pack, "state pack");
+  if (value.base_pack !== undefined) validateName(value.base_pack, "state base pack");
+  for (const [name, record] of Object.entries(value.links)) {
+    validateName(name, "state skill");
+    if (!record || record.link !== join(targetRoot(target), name) ||
+        record.target !== skillPath(store, name)) {
+      throw new SkillsError(`invalid managed link '${name}' in ${path}`);
+    }
   }
   return value;
 }

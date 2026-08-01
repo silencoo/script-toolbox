@@ -39,6 +39,20 @@ Pack documents support `extends`, `enable`, `disable`, and target-specific
 overrides. Parent rules are resolved first, then the child and selected target
 override.
 
+Temporarily change only one agent's current managed selection without editing
+the saved pack:
+
+```bash
+# Preview first; omit --yes to leave the target unchanged.
+skillsctl skill disable frontend-dev --target codex
+skillsctl skill disable frontend-dev --target codex --yes
+skillsctl skill enable frontend-dev --target codex --yes
+```
+
+This records a target-local custom selection based on the last applied pack.
+The canonical Skill remains installed in the Store; disabling only removes the
+managed target link. Applying a named pack later replaces the custom selection.
+
 ## Store and targets
 
 The default canonical store is `~/.config/skillsctl/store`. `skillsctl`
@@ -61,8 +75,17 @@ user target in preview or write mode:
 
 ```bash
 skillsctl import --target codex
-skillsctl import --target codex --pack frontend --write
+skillsctl import --target codex --write
 ```
+
+Preview reports both the Store action (`add`, `keep`, or `conflict`) and target
+action (`adopt` or `managed`). On `--write`, every candidate is fully validated
+and copied into the canonical Store before the user-level target entry is
+replaced by a managed link. Original directories or links are moved into a
+timestamped `store/backups/import-<target>-…/` directory with a manifest. A
+failed target migration rolls back entries already moved. Content conflicts
+still require an explicit `--force --write`; unrelated and project-scoped
+entries remain untouched.
 
 ## Safety and portability
 

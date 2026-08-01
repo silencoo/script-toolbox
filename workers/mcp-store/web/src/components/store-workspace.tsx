@@ -177,7 +177,6 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
       }
       return nameA.localeCompare(nameB)
     })
-  const meta = SECTION_META[session.type]
   const skills = session.type === "skills"
   const prompts = session.type === "prompts"
 
@@ -308,18 +307,16 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   }
 
   return (
-    <main id="main" className="mx-auto min-h-[calc(100svh-3.5rem)] w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
-      <SectionTabs state={state} value={state.activeType} onValueChange={changeSection} />
-
-      <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            {state.mode === "workspace" ? `Unified Workspace · ${meta.label}` : `${meta.label} Store`}
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">{meta.title}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{meta.summary}</p>
+    <main
+      id="main"
+      aria-label={`${SECTION_META[session.type].label} configuration`}
+      className="mx-auto min-h-[calc(100svh-3.5rem)] w-full max-w-[1440px] px-4 py-4 sm:px-6 sm:py-5 lg:px-8"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <SectionTabs state={state} value={state.activeType} onValueChange={changeSection} />
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex shrink-0 justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setVersionsOpen(true)}>
             <Clock3 />
             Versions
@@ -332,7 +329,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
       </div>
 
       {session.dirty && (
-        <Alert className="mt-5 border-foreground/20 bg-muted/50">
+        <Alert className="mt-4 border-foreground/20 bg-muted/50">
           <Save />
           <AlertTitle>Local changes are not backed up</AlertTitle>
           <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -345,7 +342,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
         </Alert>
       )}
 
-      <Card className="mt-5">
+      <Card className="mt-4">
         <CardContent className="grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_180px_220px_auto]">
           <div className="space-y-2">
             <Label htmlFor="catalog-search" className="text-xs">Search</Label>

@@ -58,6 +58,9 @@ test("Workspace UI is built from real shadcn/ui source with neutral theming", ()
   assert.match(workspace, /grid w-full items-stretch gap-1/);
   assert.match(workspace, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-3"/);
   assert.match(workspace, /className="h-full min-w-0 justify-center/);
+  assert.match(workspace, /aria-label={`\$\{SECTION_META\[session\.type\]\.label\} configuration`}/);
+  assert.doesNotMatch(workspace, /Unified Workspace ·/);
+  assert.doesNotMatch(workspace, /meta\.(title|summary)/);
   assert.match(app, /@\/components\/ui\/alert-dialog/);
 });
 
@@ -75,6 +78,12 @@ test("theme, encrypted Store actions, and redacted MCP controls remain present",
 
   assert.match(app, /parseRecoveryCode/);
   assert.match(app, /loadSection/);
+  assert.match(app, /sessionStorage\.getItem/);
+  assert.match(app, /sessionStorage\.setItem/);
+  assert.match(app, /sessionStorage\.removeItem/);
+  assert.match(app, /beforeunload/);
+  assert.match(app, /Restoring this tab’s Store session/);
+  assert.doesNotMatch(app, /localStorage/);
   assert.match(workspace, /saveEncryptedSession/);
   assert.match(workspace, /redactMcpSnapshot/);
   assert.match(workspace, /mergeRedactedMcpImport/);

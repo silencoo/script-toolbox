@@ -107,7 +107,7 @@ export function UnlockView({ onUnlock }: UnlockViewProps) {
                 </Button>
               </div>
               <p id="recovery-help" className="text-xs leading-5 text-muted-foreground">
-                The endpoint, Store ID, and encryption root stay in this browser tab.
+                The endpoint, Store ID, and encryption root stay in this browser tab until you lock or close it.
               </p>
             </div>
             {error && (
