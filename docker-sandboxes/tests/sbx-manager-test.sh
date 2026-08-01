@@ -65,6 +65,9 @@ grep -Fq 'LANG: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LANG"
 grep -Fq 'LC_ALL: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LC_ALL"
+if grep -Eq '^[[:space:]]+startup:' "$SHELL_KIT/spec.yaml"; then
+  fail "default shell kit uses commands.startup, which sbx kit add cannot refresh"
+fi
 grep -Fq 'eza_version=0.23.5' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit is missing the pinned eza release"
 grep -Fq 'https://github.com/silencoo/script-toolbox.git' \
@@ -91,10 +94,11 @@ grep -Fq 'Refusing to replace existing command: $command_link' \
 grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not record the primary workspace"
-grep -Fq 'description: Link the primary sbx workspace at ~/workspace' \
-  "$SHELL_KIT/spec.yaml" \
+grep -Fq 'ln -sfn "$_sbx_workspace_target" "$HOME/workspace"' \
+  "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
   || fail "default shell kit does not create the workspace alias"
-grep -Fq 'rmdir -- "$HOME/workspace"' "$SHELL_KIT/spec.yaml" \
+grep -Fq 'rmdir -- "$HOME/workspace"' \
+  "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
   || fail "default shell kit does not replace the image's empty workspace directory"
 grep -Fq 'eval "$(zoxide init zsh)"' "$SHELL_KIT/files/home/.zshrc" \
   || fail "default shell kit is missing zoxide initialization"

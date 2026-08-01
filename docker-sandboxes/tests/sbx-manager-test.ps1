@@ -188,6 +188,13 @@ try {
       Stop-Test "default shell kit file is missing: $path"
     }
   }
+  if ((Get-Content -LiteralPath (Join-Path $shellKit 'spec.yaml')) -match (
+      '^\s+startup:'
+    )) {
+    Stop-Test (
+      'default shell kit uses commands.startup, which sbx kit add cannot refresh'
+    )
+  }
 
   # Fresh setup initializes policy before diagnose/login.
   $fresh = Initialize-Case 'fresh'

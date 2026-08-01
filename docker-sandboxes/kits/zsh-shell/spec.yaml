@@ -275,29 +275,3 @@ commands:
       mode: "0644"
       onlyIfMissing: false
       description: Record the primary workspace path for a stable home-directory link
-
-  startup:
-    - command:
-        - /bin/sh
-        - -c
-        - |
-          set -eu
-          workspace_file="$HOME/.config/sbx-manager/workspace"
-          [ -r "$workspace_file" ] || exit 0
-          workspace="$(sed -n '1p' "$workspace_file")"
-          [ -n "$workspace" ] || exit 0
-
-          if [ -L "$HOME/workspace" ]; then
-            ln -sfn "$workspace" "$HOME/workspace"
-          elif [ -d "$HOME/workspace" ] \
-            && rmdir -- "$HOME/workspace" 2>/dev/null; then
-            # The shell image may seed an empty directory at this path.
-            # rmdir deliberately refuses to replace a non-empty directory.
-            ln -sfn "$workspace" "$HOME/workspace"
-          elif [ ! -e "$HOME/workspace" ]; then
-            ln -s "$workspace" "$HOME/workspace"
-          else
-            echo "Keeping existing path instead of linking ~/workspace" >&2
-          fi
-      user: "1000"
-      description: Link the primary sbx workspace at ~/workspace
