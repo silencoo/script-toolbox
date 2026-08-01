@@ -37,6 +37,17 @@ function Assert-LogExcludes {
   }
 }
 
+function Assert-TextContains {
+  param(
+    [string] $Path,
+    [string] $Expected
+  )
+  $content = Get-Content -LiteralPath $Path -Raw
+  if (-not $content.Contains($Expected)) {
+    Stop-Test "expected text '$Expected' in $Path"
+  }
+}
+
 function Initialize-Case {
   param([string] $Name)
 
@@ -100,6 +111,33 @@ try {
   if ($errors.Count -gt 0) {
     Stop-Test "PowerShell parser reported $($errors.Count) error(s)"
   }
+
+  # A no-argument invocation must guide a new user to setup without starting
+  # installation. Commands that require sbx should give the same next step.
+  $firstRun = Initialize-Case 'first-run'
+  Set-CaseEnvironment $firstRun
+  $env:Path = $firstRun
+  if ((Invoke-ManagerCase $firstRun @()) -ne 0) {
+    Stop-Test 'first-run guidance failed'
+  }
+  $firstRunOutput = Join-Path $firstRun 'output'
+  Assert-TextContains $firstRunOutput 'First-time setup'
+  Assert-TextContains $firstRunOutput (
+    '.\sbx-manager.ps1 setup balanced'
+  )
+  Assert-TextContains $firstRunOutput 'Usage'
+
+  $missingSbx = Initialize-Case 'missing-sbx'
+  Set-CaseEnvironment $missingSbx
+  $env:Path = $missingSbx
+  if ((Invoke-ManagerCase $missingSbx @('login')) -eq 0) {
+    Stop-Test 'sbx-dependent command succeeded without sbx'
+  }
+  Assert-TextContains (Join-Path $missingSbx 'output') (
+    '.\sbx-manager.ps1 setup balanced'
+  )
+
+  $env:Path = "$fixtureDir;$originalPath"
 
   foreach ($path in @(
     (Join-Path $shellKit 'spec.yaml'),

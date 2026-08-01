@@ -50,6 +50,13 @@ OPENAI_API_KEY=sk-... \
   --provider custom --protocol google --auth-mode google-key \
   --base-url https://generativelanguage.googleapis.com/v1beta \
   --model my-model --key custom-secret
+
+./agent/agentctl/agentctl setup pi \
+  --provider openai --model gpt-5.6 --dry-run
+
+./agent/agentctl/agentctl setup pi \
+  --provider openai --model gpt-5.6 \
+  --key-file /secure/openai-api-key
 ```
 
 The script writes a script-toolbox-owned entry to
@@ -57,7 +64,9 @@ The script writes a script-toolbox-owned entry to
 stores the key separately under `~/.pi/agent/provider-keys/` with mode `0600`.
 Pi resolves that key through its documented command-backed `apiKey` syntax.
 
-Use `--skip-validate` for a custom gateway without a models endpoint.
+Use `--skip-validate` for a custom gateway without a models endpoint. Dry-run
+does not require a key or create the Pi settings directory. Key files must be
+non-symlinked, owner-only, and contain exactly one non-empty line.
 
 ## MCP and uninstall
 

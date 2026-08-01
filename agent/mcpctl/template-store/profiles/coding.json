@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "coding",
+  "description": "Documentation plus GitHub repository workflows",
+  "extends": [
+    "base"
+  ],
+  "enable": [
+    "github"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

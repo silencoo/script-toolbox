@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "reverse-ghidra",
+  "description": "Ghidra GUI decompilation and analysis",
+  "extends": [],
+  "enable": [
+    "ghidra"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

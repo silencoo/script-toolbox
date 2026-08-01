@@ -53,6 +53,15 @@ OPENROUTER_API_KEY=sk-or-... \
   --base-url https://gateway.example.com/v1 \
   --models-url https://gateway.example.com/v1/models \
   --model my-model --key-env MY_API_KEY
+
+# Preview without a key, validation request, install, or file change.
+./agent/agentctl/agentctl setup codex \
+  --provider openai --model gpt-5.6 --dry-run
+
+# For automation, prefer a mode-0600 single-line file over --key.
+./agent/agentctl/agentctl setup codex \
+  --provider openai --model gpt-5.6 \
+  --key-file /secure/openai-api-key
 ```
 
 After setup:
@@ -61,7 +70,9 @@ After setup:
 codex --profile script_toolbox
 ```
 
-Use `--skip-validate` for gateways without a models endpoint.
+Use `--skip-validate` for gateways without a models endpoint. `--key-file`
+refuses symlinks, group/other-readable files, empty files, and multi-line
+values.
 
 ## Persistent instructions
 

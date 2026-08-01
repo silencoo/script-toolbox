@@ -140,9 +140,10 @@ $($script:ColorBold)Global options$($script:ColorReset)
       --version              Show the manager version.
 
 $($script:ColorBold)Main commands$($script:ColorReset)
-  install                    Check Windows and install sbx with WinGet.
+  install                    Check Windows and install sbx; skip policy/login.
   setup [open|balanced|locked]
-                             Install if needed, sign in, set policy, show info.
+                             Recommended first command: install if needed,
+                             sign in, set policy, and show info.
   login                      Sign in to Docker using sbx OAuth.
   info                       Show host, daemon, policy, sandbox, and cache info.
   doctor                     Run Windows checks plus 'sbx diagnose'.
@@ -194,6 +195,22 @@ Official documentation: $($script:DocsRoot)
 "@
 }
 
+function Show-FirstRunHint {
+  Write-Section 'First-time setup'
+  Write-Line 'Docker sbx is not installed yet.'
+  Write-Line 'Start with the recommended setup command:'
+  Write-Line "  .\$($script:ScriptName) setup balanced"
+  Write-Line
+  Write-Line (
+    'This installs sbx, configures a balanced network policy, and signs in ' +
+    'to Docker.'
+  )
+  Write-Line (
+    "Use '.\$($script:ScriptName) install' only to install sbx without " +
+    'completing setup.'
+  )
+}
+
 function Invoke-NativeCapture {
   param(
     [Parameter(Mandatory = $true)][string] $FilePath,
@@ -214,7 +231,10 @@ function Invoke-NativeCapture {
 function Get-SbxCommand {
   $command = Get-Command 'sbx' -ErrorAction SilentlyContinue
   if ($null -eq $command) {
-    Stop-Manager "sbx is not installed. Run: .\$($script:ScriptName) install"
+    Stop-Manager (
+      'sbx is not installed. Run the first-time setup: ' +
+      ".\$($script:ScriptName) setup balanced"
+    )
   }
   return $command.Source
 }
@@ -1477,7 +1497,15 @@ function Invoke-Main {
   }
   $remaining = @($parsed.Remaining)
 
-  $command = if ($remaining.Count -gt 0) { $remaining[0] } else { 'help' }
+  if ($remaining.Count -eq 0) {
+    if (-not (Test-Command 'sbx')) {
+      Show-FirstRunHint
+    }
+    Show-Usage
+    return
+  }
+
+  $command = $remaining[0]
   $commandArguments = if ($remaining.Count -gt 1) {
     @($remaining[1..($remaining.Count - 1)])
   } else {

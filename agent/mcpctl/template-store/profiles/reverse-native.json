@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "reverse-native",
+  "description": "Native static analysis and dynamic debugging with Radare2 and LLDB",
+  "extends": [],
+  "enable": [
+    "radare2",
+    "lldb"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

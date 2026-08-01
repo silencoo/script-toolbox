@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "reverse-android",
+  "description": "Android APK analysis with JADX and Apktool",
+  "extends": [],
+  "enable": [
+    "jadx",
+    "apktool"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

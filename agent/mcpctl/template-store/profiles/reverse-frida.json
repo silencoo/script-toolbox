@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "reverse-frida",
+  "description": "Frida dynamic instrumentation for local, remote, and mobile targets",
+  "extends": [],
+  "enable": [
+    "frida"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

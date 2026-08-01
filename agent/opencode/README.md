@@ -63,10 +63,20 @@ DEEPSEEK_API_KEY=... \
   --provider custom --protocol anthropic \
   --base-url https://gateway.example.com/anthropic/v1 \
   --model my-model --key custom-secret
+
+./agent/agentctl/agentctl setup opencode \
+  --provider openai --model gpt-5.6 --dry-run
+
+./agent/agentctl/agentctl setup opencode \
+  --provider openai --model gpt-5.6 \
+  --key-file /secure/openai-api-key
 ```
 
 `--region china|global` remains a MiniMax compatibility shortcut. Use
-`--skip-validate` for a custom gateway without a models endpoint.
+`--skip-validate` for a custom gateway without a models endpoint. Dry-run does
+not require a key and performs no validation, install, migration, or file
+change. Key files must be non-symlinked, owner-only, and contain one non-empty
+line.
 
 ## MCP and uninstall
 

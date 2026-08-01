@@ -1,5 +1,104 @@
 # Changelog — agent/
 
+## 2026-08-01 — unified Toolbox Workspace and Prompt Store
+
+- Added a `toolbox1_` master Workspace protocol and `agentctl workspace`
+  commands for initialization, status, attach/detach, recovery, versions, and
+  one-switch Web UI access across MCP, Skills, and Prompts.
+- Preserved the existing isolated `mcpstore1_` and `skillstore1_` modes and
+  added `promptstore1_`; attaching a Store never migrates or deletes its data,
+  versions, local capability file, or isolated recovery route.
+- Added Promptctl encrypted backup/restore for per-client editable Markdown,
+  including conflict-safe local restoration and per-Store Web UI controls.
+- Refactored the deployed Worker UI into a real three-tab Workspace with
+  profile, pack, and Markdown editors, while retaining direct isolated-Store
+  login, JSON import/export, and immutable version restore.
+- Added Keenable anonymous/optional-key search plus Tavily keyless, API-key,
+  and client-owned OAuth profiles. Tavily auth variants are mutually exclusive
+  in both the guided CLI and Worker editor.
+- Added masked MCP Secret editing to the real Worker UI. MCP JSON export now
+  removes Secret values by default, and redacted imports preserve credentials
+  already held in the encrypted browser snapshot.
+- Extended Worker media-type allowlisting, browser/CLI crypto compatibility
+  tests, and end-to-end Workspace tests for all four encrypted protocols.
+- Expanded the reverse-engineering catalog with display-free PyGhidra,
+  headless Playwright, GDB, Frida, Cutter/Rizin, and Windows x64dbg adapters.
+  Added separate Debian Headless, Xvfb GUI, Android/Frida, and Windows VM
+  profiles while keeping the existing narrow presets compatible.
+- Added authenticated Anything Analyzer capture plus persistent, isolated, and
+  CloakBrowser JS Reverse MCP variants. Documented the separate JADX, Apktool,
+  ADB/apksigner, Frida, and Radare2 host CLI roles without inventing fake MCP
+  endpoints.
+- Added `mcpctl server doctor/install/uninstall/status/start/stop/restart` and
+  target-aware `server enable/disable`. Supported npm/uv MCP packages now use
+  isolated, ownership-marked installs with lazy-runner fallback and recoverable
+  uninstall, while licensed, GUI, debugger, and system tools remain externally
+  owned and detection-only.
+
+## 2026-07-31 — portable skill packs and shared Toolbox Store
+
+- Added `skillsctl` with a checksummed canonical store, safe skill adoption,
+  inherited frontend/backend/fullstack packs, target-specific rules, and
+  owned-link application across Codex, Claude Code, OpenCode, and Pi.
+- Added guarded plaintext export/restore plus client-side encrypted backup,
+  immutable versions, and one-code recovery through the existing Worker/R2
+  deployment.
+- Generalized the Worker into a backward-compatible Toolbox Store that keeps
+  legacy MCP headers and data while accepting independent skills stores.
+- Added a same-origin Web UI for local browser decryption, searching, sorting,
+  pack/profile editing, JSON import/export, encrypted saves, and version
+  restore.
+- Added `skillsctl` to the reversible command installer and Docker sandbox
+  `/usr/local/bin` command links.
+
+## 2026-07-30 — interactive MCP selection and research presets
+
+- Added a guided per-server MCP selector with repeatable toggles, a redacted
+  plan, one-time overrides, and reusable target-specific child profiles.
+- Added an interactive configuration center for remembered store/Secret/remote
+  paths, redacted Secret status, SOPS editing and age-recipient setup, plus
+  remote initialization, status, backup, and version actions.
+- Missing required Secrets can now be entered without echo for one apply
+  process; values are never written to preferences or printed by the plan.
+- Added `mcpctl profile create` for the same saved-profile workflow in
+  automation.
+- Added `mcpctl sync` and a matching menu action to merge newly bundled
+  servers and profiles into an older store without overwriting personal
+  same-name entries.
+- Expanded the starter catalog with GitHub, Playwright, CloakBrowser-backed
+  DevTools and Playwright, Radare2, LLDB, Ghidra, JADX, Apktool, IDA/idalib,
+  and the official Burp MCP bridge.
+- Added narrow browser, native/Ghidra/Android/IDA reverse-engineering, coding,
+  and web-reverse presets instead of one oversized research profile.
+- Added repository-relative host adapters for CloakBrowser CDP, Ghidra,
+  JADX/Apktool, and Burp, plus setup notes that remain outside generated client
+  configuration.
+- Added safe-by-default Claude/Codex user MCP import. Static environment,
+  Header, and credential-argument values are replaced by Secret references and
+  written directly to the AES-encrypted cache without plaintext staging.
+- Added the target-aware importer-owned `imported` profile, redacted conflict
+  plans, explicit `--write`/`--force` adoption, and idempotent repeated import.
+- Claude profile application now uses the actual user MCP registry at
+  `~/.claude.json`; Codex import delegates TOML parsing to
+  `codex mcp list --json` and generated HTTP configuration uses the official
+  `http_headers` table.
+
+## 2026-07-29 — controller status and safe automation
+
+- Added redacted `agentctl status <client|all>` output, including a JSON mode
+  for CLI version, provider/model, ownership, config, and credential-file
+  metadata.
+- Added mutation-free `--dry-run` provider plans and private one-line
+  `--key-file` input to the Claude Code, Codex, OpenCode, and Pi backends.
+- Added a reversible `install-commands.sh` symlink installer for `agentctl`,
+  `mcpctl`, and `promptctl`, with tracked conflict backups and guarded
+  uninstall.
+- Extracted the repository-backed controllers' menus and confirmations into
+  `ctl-lib.sh` while leaving Raw URL setup backends independent.
+- Added isolated tests for redaction, dry-run purity, key-file permissions,
+  symlink recovery, and a macOS CI job that runs the agent suite with system
+  Bash 3.2.
+
 ## 2026-07-29 — Promptctl persistent instructions
 
 - Added `agentctl` as the no-extension Shell frontend for selecting Claude

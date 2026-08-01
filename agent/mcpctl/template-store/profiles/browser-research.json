@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "browser-research",
+  "description": "CloakBrowser-backed DevTools research session",
+  "extends": [],
+  "enable": [
+    "chrome-devtools-cloak"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

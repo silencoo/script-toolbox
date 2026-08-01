@@ -222,6 +222,28 @@ commands:
       user: "1000"
       description: Install the shell environment and sparse agent helpers
 
+    - command: |
+        set -eu
+        toolbox_agent=/home/agent/.local/share/sbx-manager/script-toolbox/agent
+        for command_name in agentctl mcpctl promptctl skillsctl; do
+          command_target="$toolbox_agent/$command_name/$command_name"
+          command_link="/usr/local/bin/$command_name"
+          if [ ! -x "$command_target" ]; then
+            echo "Missing agent controller: $command_target" >&2
+            exit 1
+          fi
+          if [ -L "$command_link" ] \
+            && [ "$(readlink "$command_link")" = "$command_target" ]; then
+            continue
+          fi
+          if [ -e "$command_link" ] || [ -L "$command_link" ]; then
+            echo "Refusing to replace existing command: $command_link" >&2
+            exit 1
+          fi
+          ln -s "$command_target" "$command_link"
+        done
+      description: Expose agentctl, mcpctl, promptctl, and skillsctl on the sandbox PATH
+
   initFiles:
     - path: /home/agent/.config/sbx-manager/workspace
       content: "${WORKDIR}\n"

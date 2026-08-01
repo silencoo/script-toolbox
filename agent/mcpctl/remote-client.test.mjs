@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +16,8 @@ import test from "node:test";
 
 import {
   backupStore,
+  collectCatalogSecretReferences,
+  collectSnapshot,
   decryptValue,
   encryptValue,
   initializeRemote,
@@ -122,6 +132,104 @@ test("snapshot authentication rejects tampering and cross-store replay", () => {
     ),
     /authentication failed/
   );
+});
+
+test("backup discovers imported Secret references in base and target overrides", () => {
+  const references = collectCatalogSecretReferences({
+    schema: 1,
+    servers: {
+      local: {
+        transport: "stdio",
+        command: [
+          "node",
+          "server.mjs",
+          "--token",
+          {
+            secret: "command_token",
+            env: "COMMAND_TOKEN",
+            required: true
+          }
+        ],
+        environment: {
+          API_TOKEN: {
+            secret: "local_api_token",
+            env: "LOCAL_API_TOKEN",
+            required: true
+          }
+        },
+        target_overrides: {
+          codex: {
+            headers: {
+              Authorization: {
+                secret: "codex_header_token",
+                env: "CODEX_HEADER_TOKEN",
+                prefix: "Bearer ",
+                required: true
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+  assert.deepEqual(references, [
+    { secret: "command_token", env: "COMMAND_TOKEN" },
+    { secret: "local_api_token", env: "LOCAL_API_TOKEN" },
+    { secret: "codex_header_token", env: "CODEX_HEADER_TOKEN" }
+  ]);
+});
+
+test("snapshot collection captures environment values for imported references", async () => {
+  const testRoot = await mkdtemp(join(tmpdir(), "mcpctl-import-snapshot-"));
+  const profiles = join(testRoot, "profiles");
+  const environmentName = "MCPCTL_TEST_IMPORTED_TOKEN";
+  const previous = process.env[environmentName];
+  try {
+    await mkdir(profiles, { recursive: true });
+    await writeFile(join(testRoot, "catalog.json"), JSON.stringify({
+      schema: 1,
+      servers: {
+        imported: {
+          transport: "stdio",
+          command: ["node", "server.mjs"],
+          environment: {
+            API_TOKEN: {
+              secret: "imported_api_token",
+              env: environmentName,
+              required: true
+            }
+          }
+        }
+      }
+    }));
+    await writeFile(join(profiles, "off.json"), JSON.stringify({
+      schema: 1,
+      name: "off",
+      extends: [],
+      enable: [],
+      disable: [],
+      target_overrides: {}
+    }));
+    process.env[environmentName] = "captured-imported-token";
+    const snapshot = await collectSnapshot(
+      testRoot,
+      {
+        schema: 1,
+        endpoint: "https://backup.example",
+        store_id: "0123456789abcdef0123456789abcdef",
+        root_key: Buffer.alloc(32, 8).toString("base64url")
+      },
+      join(testRoot, "missing-sops.json")
+    );
+    assert.equal(
+      snapshot.secrets.imported_api_token,
+      "captured-imported-token"
+    );
+  } finally {
+    if (previous === undefined) delete process.env[environmentName];
+    else process.env[environmentName] = previous;
+    await rm(testRoot, { recursive: true, force: true });
+  }
 });
 
 test("backs up ciphertext, restores on a fresh machine, and applies cached secrets", async () => {

@@ -80,6 +80,37 @@ missing instruction file. A template is never copied over an existing file.
 The Shell entrypoint delegates explicit commands to `promptctl.py`, which is
 an internal, non-interactive engine rather than the user-facing guide.
 
+## Encrypted backup and recovery
+
+Promptctl can collect every regular `*.md` document under the Claude and Codex
+instruction directories into a client-side encrypted Prompt Store. It never
+backs up `CLAUDE.md`, `config.toml`, provider credentials, or unrelated files.
+
+```bash
+promptctl remote init \
+  --endpoint https://mcp-store.example.workers.dev \
+  --create-token-file /secure/toolbox-create-token
+promptctl backup
+promptctl versions
+promptctl remote ui enable
+```
+
+The isolated `promptstore1_…` recovery code remains usable directly. For the
+normal one-login Web UI, attach it to the master Workspace:
+
+```bash
+agentctl workspace attach prompts
+```
+
+Web UI edits create a new encrypted remote version. Pull them back to local
+editable files explicitly; conflicts fail closed unless `--force` is supplied:
+
+```bash
+promptctl restore --yes
+promptctl restore --yes --version <version-id> --force
+promptctl restore --yes --recovery-file /secure/prompt-recovery-code
+```
+
 ## Advanced deployers
 
 Use the imported advanced tools when an existing or complex environment needs

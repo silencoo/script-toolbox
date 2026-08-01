@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Host adapters for MCP servers that need a local GUI, CDP service, or
+# user-installed bridge. Human-readable diagnostics go to stderr so stdout
+# remains reserved for MCP JSON-RPC.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_RUNNER="${SCRIPT_DIR}/mcp-package"
+
+die() {
+  printf 'mcpctl adapter: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "required command '$1' was not found on PATH"
+}
+
+[ $# -gt 0 ] || die "missing adapter name"
+adapter="$1"
+shift
+
+case "$adapter" in
+  cloak-devtools)
+    package="${1:-chrome-devtools-mcp@1.6.0}"
+    endpoint="${CLOAKBROWSER_CDP_ENDPOINT:-http://127.0.0.1:9222}"
+    exec "$PACKAGE_RUNNER" npm chrome-devtools-cloak \
+      "$package" chrome-devtools-mcp -- \
+      "--browser-url=${endpoint}" \
+      --no-usage-statistics \
+      --no-performance-crux
+    ;;
+
+  cloak-playwright)
+    package="${1:-@playwright/mcp@0.0.78}"
+    endpoint="${CLOAKBROWSER_CDP_ENDPOINT:-http://127.0.0.1:9222}"
+    exec "$PACKAGE_RUNNER" npm playwright-cloak \
+      "$package" playwright-mcp -- --cdp-endpoint "$endpoint"
+    ;;
+
+  js-reverse)
+    first_arg="${1:-js-reverse-mcp@4.0.1}"
+    case "$first_arg" in
+      js-reverse|js-reverse-isolated|js-reverse-cloak)
+        server_name="$first_arg"
+        [ $# -eq 0 ] || shift
+        ;;
+      *)
+        # Compatibility with catalogs created before the server name became
+        # an explicit adapter argument.
+        server_name="js-reverse"
+        ;;
+    esac
+    package="${1:-js-reverse-mcp@4.0.1}"
+    [ $# -eq 0 ] || shift
+    allowed_root="${JS_REVERSE_ALLOWED_ROOT:-}"
+    if [ -n "$allowed_root" ]; then
+      case "$allowed_root" in
+        /*) ;;
+        *) die "JS_REVERSE_ALLOWED_ROOT must be absolute: $allowed_root" ;;
+      esac
+      [ -d "$allowed_root" ] ||
+        die "JS_REVERSE_ALLOWED_ROOT is not a directory: $allowed_root"
+      exec "$PACKAGE_RUNNER" npm "$server_name" \
+        "$package" js-reverse-mcp -- \
+        --allowedRoots "$allowed_root" "$@"
+    fi
+    exec "$PACKAGE_RUNNER" npm "$server_name" \
+      "$package" js-reverse-mcp -- "$@"
+    ;;
+
+  ghidra)
+    if command -v bridge-mcp-ghidra >/dev/null 2>&1; then
+      exec bridge-mcp-ghidra "$@"
+    fi
+
+    ghidra_mcp_dir="${GHIDRA_MCP_DIR:-}"
+    if [ -n "$ghidra_mcp_dir" ]; then
+      [ -f "$ghidra_mcp_dir/pyproject.toml" ] ||
+        die "GHIDRA_MCP_DIR does not contain pyproject.toml: $ghidra_mcp_dir"
+      require_command uv
+      exec uv --directory "$ghidra_mcp_dir" run bridge-mcp-ghidra "$@"
+    fi
+
+    # Compatibility with pre-6.0 GhidraMCP releases that shipped a single
+    # bridge_mcp_ghidra.py file instead of the bridge-mcp-ghidra command.
+    bridge="${GHIDRA_MCP_BRIDGE:-}"
+    if [ -n "$bridge" ]; then
+      ghidra_url="${GHIDRA_MCP_URL:-http://127.0.0.1:8089/}"
+      python_bin="${GHIDRA_MCP_PYTHON:-python3}"
+      [ -f "$bridge" ] ||
+        die "GHIDRA_MCP_BRIDGE is not a regular file: $bridge"
+      require_command "$python_bin"
+      exec "$python_bin" "$bridge" --ghidra-server "$ghidra_url"
+    fi
+
+    die "install bridge-mcp-ghidra, set GHIDRA_MCP_DIR to its checkout, or set GHIDRA_MCP_BRIDGE for a legacy release"
+    ;;
+
+  ghidra-headless)
+    ghidra_install_dir="${GHIDRA_INSTALL_DIR:-}"
+    project_path="${GHIDRA_MCP_PROJECT_PATH:-}"
+    [ -n "$ghidra_install_dir" ] ||
+      die "set GHIDRA_INSTALL_DIR to the Ghidra installation directory"
+    [ -d "$ghidra_install_dir" ] ||
+      die "GHIDRA_INSTALL_DIR is not a directory: $ghidra_install_dir"
+    [ -n "$project_path" ] ||
+      die "set GHIDRA_MCP_PROJECT_PATH to an absolute writable project path"
+    case "$project_path" in
+      /*) ;;
+      *) die "GHIDRA_MCP_PROJECT_PATH must be absolute: $project_path" ;;
+    esac
+    exec "$PACKAGE_RUNNER" uv ghidra-headless \
+      pyghidra-mcp==0.2.3 pyghidra-mcp -- \
+      --transport stdio \
+      --project-path "$project_path" \
+      "$@"
+    ;;
+
+  jadx)
+    require_command jadx_mcp_server
+    exec jadx_mcp_server "$@"
+    ;;
+
+  apktool)
+    require_command apktool
+    if command -v apktool_mcp_server >/dev/null 2>&1; then
+      exec apktool_mcp_server "$@"
+    fi
+    apktool_mcp_dir="${APKTOOL_MCP_DIR:-}"
+    [ -n "$apktool_mcp_dir" ] ||
+      die "install apktool_mcp_server or set APKTOOL_MCP_DIR to its checkout"
+    [ -f "$apktool_mcp_dir/apktool_mcp_server.py" ] ||
+      die "APKTOOL_MCP_DIR does not contain apktool_mcp_server.py: $apktool_mcp_dir"
+    require_command uv
+    exec uv --directory "$apktool_mcp_dir" run apktool_mcp_server.py "$@"
+    ;;
+
+  burp)
+    proxy_jar="${BURP_MCP_PROXY_JAR:-}"
+    java_bin="${BURP_MCP_JAVA:-java}"
+    burp_url="${BURP_MCP_URL:-http://127.0.0.1:9876}"
+    [ -n "$proxy_jar" ] ||
+      die "set BURP_MCP_PROXY_JAR to the proxy JAR extracted by the Burp MCP extension"
+    [ -f "$proxy_jar" ] ||
+      die "BURP_MCP_PROXY_JAR is not a regular file: $proxy_jar"
+    require_command "$java_bin"
+    exec "$java_bin" -jar "$proxy_jar" --sse-url "$burp_url"
+    ;;
+
+  cutter)
+    cutter_mcp_dir="${CUTTER_MCP_DIR:-}"
+    python_bin="${CUTTER_MCP_PYTHON:-python3}"
+    [ -n "$cutter_mcp_dir" ] ||
+      die "set CUTTER_MCP_DIR to a CutterMCP-plus checkout"
+    [ -f "$cutter_mcp_dir/mcp_server.py" ] ||
+      die "CUTTER_MCP_DIR does not contain mcp_server.py: $cutter_mcp_dir"
+    require_command "$python_bin"
+    exec "$python_bin" "$cutter_mcp_dir/mcp_server.py" "$@"
+    ;;
+
+  x64dbg)
+    x64dbg_script="${X64DBG_MCP_SCRIPT:-}"
+    python_bin="${X64DBG_MCP_PYTHON:-python}"
+    x64dbg_url="${X64DBG_MCP_URL:-http://127.0.0.1:8888}"
+    [ -n "$x64dbg_script" ] ||
+      die "set X64DBG_MCP_SCRIPT to the absolute x64dbg.py bridge path"
+    [ -f "$x64dbg_script" ] ||
+      die "X64DBG_MCP_SCRIPT is not a regular file: $x64dbg_script"
+    require_command "$python_bin"
+    exec "$python_bin" "$x64dbg_script" "$x64dbg_url" "$@"
+    ;;
+
+  *)
+    die "unknown adapter '$adapter'"
+    ;;
+esac

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "web-reverse",
+  "description": "Burp traffic analysis with a CloakBrowser DevTools session",
+  "extends": [],
+  "enable": [
+    "burp",
+    "chrome-devtools-cloak"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

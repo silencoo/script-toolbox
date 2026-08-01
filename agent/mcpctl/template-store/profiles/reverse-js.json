@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "reverse-js",
+  "description": "JavaScript reverse engineering in persistent headed Chrome",
+  "extends": [],
+  "enable": [
+    "js-reverse"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

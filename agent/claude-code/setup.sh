@@ -27,6 +27,7 @@ trap 'on_error $LINENO' ERR
 PROVIDER=""
 MODEL=""
 KEY=""
+KEY_INPUT_FILE=""
 KEY_ENV_OVERRIDE=""
 BASE_URL_OVERRIDE=""
 MODELS_URL_OVERRIDE=""
@@ -38,6 +39,7 @@ UNINSTALL=0
 LIST_PROVIDERS=0
 INTERACTIVE=0
 CLEAN_SHELL_ENV=0
+DRY_RUN=0
 
 SETTINGS_DIR="${HOME}/.claude"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
@@ -58,6 +60,7 @@ ${C_BOLD}Options:${C_RESET}
                              minimax-global, or custom. Omit for a menu.
   --model <model-id>         Omit for an interactive model menu.
   --key <api-key>            Falls back to the provider's standard env var.
+  --key-file <path>          Read the key from one owner-only file (recommended).
   --base-url <url>           Override the preset URL; required for custom.
   --models-url <url>         Override the key/model validation endpoint.
   --key-env <name>           Custom provider environment variable.
@@ -65,6 +68,7 @@ ${C_BOLD}Options:${C_RESET}
   --region <china|global>    Backward-compatible alias for MiniMax selection.
   --list-providers           Print presets and current model IDs.
   --skip-validate            Skip the models endpoint probe.
+  --dry-run                  Preview resolution without network/install/writes.
   --clean-shell-env          Back up shell rc files and remove ANTHROPIC auth
                              exports that would override settings.json.
   --force                    Replace a provider config not created by this script.
@@ -96,6 +100,7 @@ while [ $# -gt 0 ]; do
     --provider)       PROVIDER="${2:?}"; shift 2 ;;
     --model)          MODEL="${2:?}"; shift 2 ;;
     --key)            KEY="${2:?}"; shift 2 ;;
+    --key-file)       KEY_INPUT_FILE="${2:?}"; shift 2 ;;
     --base-url)       BASE_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --models-url)     MODELS_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
@@ -103,6 +108,7 @@ while [ $# -gt 0 ]; do
     --region)         REGION="${2:?}"; shift 2 ;;
     --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
     --clean-shell-env) CLEAN_SHELL_ENV=1; shift ;;
     --force)          FORCE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
@@ -115,6 +121,9 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   list_providers
   exit 0
 fi
+
+[ "$UNINSTALL" != 1 ] || [ "$DRY_RUN" != 1 ] ||
+  die "--dry-run previews setup only and cannot be combined with --uninstall"
 
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
@@ -154,8 +163,6 @@ if [ "$UNINSTALL" = 1 ]; then
   ok "removed $MANAGED_BY settings"
   exit 0
 fi
-
-ensure_jq
 
 if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
   case "$REGION" in
@@ -304,14 +311,30 @@ if [ -z "$MODEL" ]; then
 fi
 [ -n "$MODEL" ] || die "model ID is required (use --model)"
 
-if [ -z "$KEY" ]; then
-  KEY="$(read_env "$KEY_ENV")"
+resolve_api_key \
+  "$KEY" "$KEY_INPUT_FILE" "$KEY_ENV" "$DRY_RUN" \
+  "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
+KEY="$RESOLVED_API_KEY"
+
+if [ "$SKIP_VALIDATE" = 1 ]; then
+  VALIDATION_PLAN="skip (--skip-validate)"
+else
+  VALIDATION_PLAN="would probe $MODELS_URL"
 fi
-if [ -z "$KEY" ]; then
-  prompt_secret "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
-  KEY="$PROMPT_REPLY"
+if [ "$DRY_RUN" = 1 ]; then
+  CONFIG_PLAN="$SETTINGS_FILE"
+  if [ "$CLEAN_SHELL_ENV" = 1 ]; then
+    CONFIG_PLAN="${CONFIG_PLAN}; matching shell startup exports (with backups)"
+  fi
+  print_provider_plan \
+    "Claude Code" "$DISPLAY_NAME ($PROVIDER)" "$BASE_URL" "$MODEL" \
+    "claude" "Claude Code (native installer, npm fallback)" \
+    "$CONFIG_PLAN" "$STATE_FILE" \
+    "$SETTINGS_FILE (embedded, mode 600)" "$API_KEY_SOURCE" "$VALIDATION_PLAN"
+  exit 0
 fi
-[ -n "$KEY" ] || die "no API key supplied"
+
+ensure_jq
 
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  Claude Code provider setup                                   |" "${C_RESET}"
@@ -319,6 +342,7 @@ printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+---------------------------------------
 info "Provider : $DISPLAY_NAME ($PROVIDER)"
 info "Base URL : $BASE_URL"
 info "Model    : $MODEL"
+info "Key      : $API_KEY_SOURCE"
 echo
 
 command -v curl >/dev/null 2>&1 || die "curl is required"

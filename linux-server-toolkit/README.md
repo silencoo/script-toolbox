@@ -27,9 +27,11 @@ sudo ./server-toolkit.sh
 | --- | --- | --- |
 | 第一次初始化普通 VPS | `minimal` | 基础工具、SSH、UFW、Fail2ban 和自动安全更新 |
 | 部署 Docker 应用 | `docker-host` | 在服务器基线上增加 Docker、反向代理、备份、监控和容器安全 |
-| 把 VPS 当远程开发机 | `dev-box` | 安装语言运行时、终端和网络工具 |
+| 把 VPS 当远程开发机 | `dev-box` | 在服务器安全基线上增加语言运行时、终端和网络工具 |
 | 强化公网服务器 | `secure-server` | 增加安全审计、SSH 审计、端口检查和维护窗口 |
 | 还不确定需要什么 | 直接运行脚本 | 从“快速开始”查看计划，再按用途选择 |
+
+四个内置 Profile 共用基础安全模块：基础工具、SSH、UFW、Fail2ban 和自动安全更新；各 Profile 只在这套基线上增加用途相关模块。
 
 例如，先查看计划，再执行相同 Profile：
 

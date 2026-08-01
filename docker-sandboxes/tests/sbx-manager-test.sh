@@ -71,6 +71,18 @@ grep -Fq 'toolbox_store="$HOME/.local/share/sbx-manager/script-toolbox"' \
 grep -Fq 'git -C "$toolbox_store" sparse-checkout set agent' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not limit the toolbox checkout to agent/"
+grep -Fq 'toolbox_agent=/home/agent/.local/share/sbx-manager/script-toolbox/agent' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not locate the sparse agent helpers"
+grep -Fq 'for command_name in agentctl mcpctl promptctl skillsctl; do' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not install all agent controller links"
+grep -Fq 'command_link="/usr/local/bin/$command_name"' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not expose agent commands globally"
+grep -Fq 'Refusing to replace existing command: $command_link' \
+  "$SHELL_KIT/spec.yaml" \
+  || fail "default shell kit does not preserve global command conflicts"
 grep -Fq 'path: /home/agent/.config/sbx-manager/workspace' \
   "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not record the primary workspace"
@@ -148,17 +160,41 @@ HOME="$empty_workspace_home" zsh -f -c '
   "$SHELL_KIT/files/home/.config/sbx-manager/enter-workspace.zsh" \
   || fail "workspace entry helper did not replace an empty ~/workspace directory"
 
-# Bash 3.2 with nounset treats an empty array expansion as unbound. Invoking
-# the manager without a command, including after consuming global options,
-# must fall back to help without using an empty remaining-arguments array.
-NO_COLOR=1 "$ROOT_DIR/sbx-manager.sh" \
+# Bash 3.2 with nounset treats an empty array expansion as unbound. A manager
+# with no command must remain read-only, guide a new user to setup when sbx is
+# missing, and then show the normal help. Use a minimal PATH so the host's sbx
+# installation cannot hide the first-run behavior.
+first_run_bin="$TEST_TMP_DIR/first-run-bin"
+mkdir -p "$first_run_bin"
+ln -s "$(command -v cat)" "$first_run_bin/cat"
+ln -s "$(command -v dirname)" "$first_run_bin/dirname"
+
+PATH="$first_run_bin" NO_COLOR=1 /bin/bash "$ROOT_DIR/sbx-manager.sh" \
   > "$TEST_TMP_DIR/no-arguments-output" 2>&1
+grep -Fq 'First-time setup' "$TEST_TMP_DIR/no-arguments-output" \
+  || fail "no-argument invocation did not show first-run guidance"
+grep -Fq './sbx-manager.sh setup balanced' \
+  "$TEST_TMP_DIR/no-arguments-output" \
+  || fail "no-argument invocation did not recommend setup"
 grep -Fq 'Usage' "$TEST_TMP_DIR/no-arguments-output" \
   || fail "no-argument invocation did not show help"
-NO_COLOR=1 "$ROOT_DIR/sbx-manager.sh" --yes \
+
+PATH="$first_run_bin" NO_COLOR=1 /bin/bash "$ROOT_DIR/sbx-manager.sh" --yes \
   > "$TEST_TMP_DIR/global-options-only-output" 2>&1
+grep -Fq './sbx-manager.sh setup balanced' \
+  "$TEST_TMP_DIR/global-options-only-output" \
+  || fail "global-options-only invocation did not recommend setup"
 grep -Fq 'Usage' "$TEST_TMP_DIR/global-options-only-output" \
   || fail "global-options-only invocation did not show help"
+
+if PATH="$first_run_bin" NO_COLOR=1 \
+  /bin/bash "$ROOT_DIR/sbx-manager.sh" run shell . \
+  > "$TEST_TMP_DIR/missing-sbx-output" 2>&1; then
+  fail "sbx-dependent command succeeded without sbx"
+fi
+grep -Fq './sbx-manager.sh setup balanced' \
+  "$TEST_TMP_DIR/missing-sbx-output" \
+  || fail "missing-sbx error did not recommend setup"
 
 # A fresh setup must initialize the requested preset before diagnose/login.
 # Otherwise the daemon opens its interactive first-use policy picker.
@@ -265,13 +301,15 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   "$ROOT_DIR/sbx-manager.sh" run claude \
     "$TEST_TMP_DIR/block-driver/workspace" --name test-claude \
   > "$TEST_TMP_DIR/block-driver/output" 2>&1
-assert_contains "$TEST_TMP_DIR/block-driver/log" 'daemon stop'
-assert_contains "$TEST_TMP_DIR/block-driver/log" 'daemon start --detach'
 assert_contains "$TEST_TMP_DIR/block-driver/log" \
   "run --name test-claude --kit $SHELL_KIT claude $TEST_TMP_DIR/block-driver/workspace"
-if tail -n 1 "$TEST_TMP_DIR/block-driver/daemon.log" \
-  | grep -Fq 'mkfs.ext4 not available'; then
-  fail "block-volume repair did not replace the disabled daemon session"
+if [ "$(uname -s)" = Linux ]; then
+  assert_contains "$TEST_TMP_DIR/block-driver/log" 'daemon stop'
+  assert_contains "$TEST_TMP_DIR/block-driver/log" 'daemon start --detach'
+  if tail -n 1 "$TEST_TMP_DIR/block-driver/daemon.log" \
+    | grep -Fq 'mkfs.ext4 not available'; then
+    fail "block-volume repair did not replace the disabled daemon session"
+  fi
 fi
 
 # New sandboxes receive the productive zsh kit by default, but custom images

@@ -45,6 +45,7 @@ run_dependency_tests() {
 
 run_config_tests() {
   local test_root fake_bin test_home bad_home minimax_home system_path
+  local dry_home key_input insecure_key multiline_key
   command -v jq >/dev/null 2>&1 || {
     echo "skip: isolated provider config tests require jq" >&2
     return 2
@@ -68,6 +69,114 @@ run_config_tests() {
     } > "${fake_bin}/${cmd}"
     chmod +x "${fake_bin}/${cmd}"
   done
+
+  # Dry-run resolves every backend without requiring a credential and exits
+  # before API probes, dependency installation, or HOME mutations.
+  dry_home="${test_root}/dry-claude"
+  HOME="$dry_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 --dry-run \
+      >"$test_root/dry-claude.out" || { rm -rf "$test_root"; return 1; }
+  [ ! -e "$dry_home" ] || { rm -rf "$test_root"; return 1; }
+
+  dry_home="${test_root}/dry-codex"
+  HOME="$dry_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider openai --model gpt-5.6 --dry-run \
+      >"$test_root/dry-codex.out" || { rm -rf "$test_root"; return 1; }
+  [ ! -e "$dry_home" ] || { rm -rf "$test_root"; return 1; }
+
+  dry_home="${test_root}/dry-opencode"
+  HOME="$dry_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/opencode/setup.sh" \
+      --provider openai --model gpt-5.6 --dry-run \
+      >"$test_root/dry-opencode.out" || { rm -rf "$test_root"; return 1; }
+  [ ! -e "$dry_home" ] || { rm -rf "$test_root"; return 1; }
+
+  dry_home="${test_root}/dry-pi"
+  HOME="$dry_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/pi/setup.sh" \
+      --provider openai --model gpt-5.6 --dry-run \
+      >"$test_root/dry-pi.out" || { rm -rf "$test_root"; return 1; }
+  [ ! -e "$dry_home" ] || { rm -rf "$test_root"; return 1; }
+  for dry_output in "$test_root"/dry-*.out; do
+    grep -q 'not supplied (apply mode will prompt)' "$dry_output" ||
+      { rm -rf "$test_root"; return 1; }
+    grep -q 'no validation request, package installation, or file change' \
+      "$dry_output" || { rm -rf "$test_root"; return 1; }
+  done
+
+  # Every provider backend accepts one private, single-line key file and never
+  # echoes its contents. The source file remains user-owned and unchanged.
+  key_input="${test_root}/provider-api-key"
+  printf '%s\n' 'KEY-FILE-SECRET' > "$key_input"
+  chmod 600 "$key_input"
+
+  HOME="$test_root/key-claude-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 \
+      --key-file "$key_input" --skip-validate \
+      >"$test_root/key-claude.out" || { rm -rf "$test_root"; return 1; }
+  jq -e '.env.ANTHROPIC_API_KEY == "KEY-FILE-SECRET"' \
+    "$test_root/key-claude-home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+
+  HOME="$test_root/key-codex-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider openai --model gpt-5.6 \
+      --key-file "$key_input" --skip-validate \
+      >"$test_root/key-codex.out" || { rm -rf "$test_root"; return 1; }
+  [ "$(sed -n '1p' "$test_root/key-codex-home/.codex/provider-keys/script_toolbox_openai.key")" = \
+    "KEY-FILE-SECRET" ] || { rm -rf "$test_root"; return 1; }
+
+  HOME="$test_root/key-opencode-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/opencode/setup.sh" \
+      --provider openai --model gpt-5.6 \
+      --key-file "$key_input" --skip-validate \
+      >"$test_root/key-opencode.out" || { rm -rf "$test_root"; return 1; }
+  [ "$(sed -n '1p' "$test_root/key-opencode-home/.config/opencode/provider-keys/script-toolbox-openai.key")" = \
+    "KEY-FILE-SECRET" ] || { rm -rf "$test_root"; return 1; }
+
+  HOME="$test_root/key-pi-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/pi/setup.sh" \
+      --provider openai --model gpt-5.6 \
+      --key-file "$key_input" --skip-validate \
+      >"$test_root/key-pi.out" || { rm -rf "$test_root"; return 1; }
+  [ "$(sed -n '1p' "$test_root/key-pi-home/.pi/agent/provider-keys/script-toolbox-openai.key")" = \
+    "KEY-FILE-SECRET" ] || { rm -rf "$test_root"; return 1; }
+
+  for key_output in "$test_root"/key-*.out; do
+    ! grep -q 'KEY-FILE-SECRET' "$key_output" ||
+      { rm -rf "$test_root"; return 1; }
+  done
+  [ "$(sed -n '1p' "$key_input")" = "KEY-FILE-SECRET" ] ||
+    { rm -rf "$test_root"; return 1; }
+
+  insecure_key="${test_root}/insecure-api-key"
+  printf '%s\n' 'insecure-secret' > "$insecure_key"
+  chmod 644 "$insecure_key"
+  if HOME="$test_root/insecure-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider openai --model gpt-5.6 \
+      --key-file "$insecure_key" --dry-run >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
+
+  multiline_key="${test_root}/multiline-api-key"
+  printf '%s\n%s\n' 'first-line' 'second-line' > "$multiline_key"
+  chmod 600 "$multiline_key"
+  if HOME="$test_root/multiline-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider openai --model gpt-5.6 \
+      --key-file "$multiline_key" --dry-run >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
+  if HOME="$test_root/conflicting-key-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider openai --model gpt-5.6 --key direct-secret \
+      --key-file "$key_input" --dry-run >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
 
   # MiniMax presets must follow the current official model ID when --model is
   # omitted. Exercise each client that exposes a MiniMax provider.
@@ -480,9 +589,44 @@ else
   fail=1
 fi
 
+if node --test "$SCRIPT_DIR/promptctl/prompt-remote.test.mjs"; then
+  :
+else
+  echo "FAIL: promptctl remote snapshot tests" >&2
+  fail=1
+fi
+
+if node "$SCRIPT_DIR/skillsctl/test.mjs"; then
+  :
+else
+  echo "FAIL: skillsctl pack manager tests" >&2
+  fail=1
+fi
+
+if node "$SCRIPT_DIR/remote-store.test.mjs"; then
+  :
+else
+  echo "FAIL: shared remote-store compatibility tests" >&2
+  fail=1
+fi
+
+if node --test "$SCRIPT_DIR/agentctl/workspace-client.test.mjs"; then
+  :
+else
+  echo "FAIL: unified Workspace integration tests" >&2
+  fail=1
+fi
+
+if "$SCRIPT_DIR/tests/install-commands-test.sh"; then
+  :
+else
+  echo "FAIL: reversible command installer tests" >&2
+  fail=1
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "all ${checked} backend scripts parse cleanly; agentctl, mcpctl, promptctl, and provider tests passed."
+  echo "all ${checked} backend scripts parse cleanly; controllers, command installer, and provider tests passed."
 else
   echo "one or more scripts failed to parse." >&2
 fi

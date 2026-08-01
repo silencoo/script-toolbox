@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Run a package-backed MCP from mcpctl's isolated install when present, with
+# the catalog's lazy package-manager command as a portable fallback.
+
+set -euo pipefail
+
+die() {
+  printf 'mcpctl package adapter: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "required command '$1' was not found on PATH"
+}
+
+[ $# -ge 5 ] ||
+  die "usage: mcp-package <npm|uv> <server> <package> <bin> -- [arguments...]"
+
+manager="$1"
+server="$2"
+package="$3"
+binary="$4"
+separator="$5"
+shift 5
+
+case "$server" in
+  ""|*[!A-Za-z0-9_-]*) die "invalid server name '$server'" ;;
+esac
+case "$binary" in
+  ""|*/*|*\\*) die "invalid package executable '$binary'" ;;
+esac
+case "$package" in
+  ""|-*) die "invalid package reference '$package'" ;;
+esac
+[ "$separator" = "--" ] || die "expected -- before package arguments"
+
+data_home="${XDG_DATA_HOME:-${HOME}/.local/share}"
+servers_root="${MCPCTL_HOST_ROOT:-${data_home}/mcpctl/servers}"
+case "$servers_root" in
+  /*) ;;
+  *) die "MCPCTL_HOST_ROOT must be an absolute path" ;;
+esac
+
+case "$manager" in
+  npm)
+    owned_entry="${servers_root}/${server}/node_modules/.bin/${binary}"
+    if [ -x "$owned_entry" ]; then
+      exec "$owned_entry" "$@"
+    fi
+    require_command npx
+    exec npx -y "$package" "$@"
+    ;;
+  uv)
+    owned_entry="${servers_root}/${server}/bin/${binary}"
+    if [ -x "$owned_entry" ]; then
+      exec "$owned_entry" "$@"
+    fi
+    require_command uvx
+    exec uvx "$package" "$@"
+    ;;
+  *)
+    die "unsupported package manager '$manager'"
+    ;;
+esac

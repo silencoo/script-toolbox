@@ -8,13 +8,22 @@
 set -euo pipefail
 umask 077
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE_PATH" ]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
+  SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+  case "$SOURCE_PATH" in
+    /*) ;;
+    *) SOURCE_PATH="${SOURCE_DIR}/${SOURCE_PATH}" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.1.0"
+VERSION="0.3.0"
+WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 
-log()  { printf '%s\n' "$*"; }
-warn() { printf '! %s\n' "$*" >&2; }
-die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../ctl-lib.sh
+. "${SCRIPT_DIR}/../ctl-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -24,22 +33,38 @@ Usage:
   agentctl
   agentctl interactive
   agentctl setup <claude|codex|opencode|pi> [setup options]
+  agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl providers <claude|codex|opencode|pi>
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl help <claude|codex|opencode|pi>
+  agentctl workspace <command> [options]
 
 Commands:
   setup       Install the selected CLI when missing, then configure its
               provider, model, and credential. "init" and "configure" are
               accepted aliases.
+  status      Read CLI/provider ownership and credential-file metadata.
+              Secret values are never read into the output.
   providers   Show the selected client's provider/model presets.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   help        Show the selected client's setup options.
+  workspace   Manage one encrypted recovery key that opens attached MCP,
+              Skills, and Prompts stores. Existing isolated stores remain
+              independently usable.
 
 Run without arguments for the guided Shell menu. Setup options after the
 client name are passed unchanged to that client's existing setup.sh backend.
+Run "agentctl workspace --help" for Workspace commands.
 EOF
+}
+
+run_workspace() {
+  command -v node >/dev/null 2>&1 ||
+    die "agentctl workspace requires Node.js 20 or newer"
+  [ -r "$WORKSPACE_CLIENT" ] ||
+    die "Workspace client not found: $WORKSPACE_CLIENT"
+  exec node "$WORKSPACE_CLIENT" "$@"
 }
 
 resolve_agent_root() {
@@ -85,76 +110,6 @@ resolve_client() {
     die "setup backend is not executable: $SETUP_SCRIPT"
 }
 
-prompt_value() {
-  local label="$1" default_value="${2:-}" input
-  if [ -n "$default_value" ]; then
-    printf '%s [%s]: ' "$label" "$default_value" >&2
-  else
-    printf '%s: ' "$label" >&2
-  fi
-  if ! IFS= read -r input; then
-    die "interactive input ended; use --help for explicit commands"
-  fi
-  PROMPT_REPLY="${input:-$default_value}"
-}
-
-choose_menu() {
-  local title="$1" default_index="$2" entry index selected
-  shift 2
-  printf '\n%s\n' "$title" >&2
-  index=1
-  for entry in "$@"; do
-    printf '  %d) %s\n' "$index" "${entry#*|}" >&2
-    index=$((index + 1))
-  done
-
-  while true; do
-    prompt_value "Choose" "$default_index"
-    selected="$PROMPT_REPLY"
-    case "$selected" in
-      ""|*[!0-9]*)
-        warn "enter a number from 1 to $#"
-        continue
-        ;;
-    esac
-    if [ "$selected" -lt 1 ] 2>/dev/null ||
-       [ "$selected" -gt "$#" ] 2>/dev/null; then
-      warn "enter a number from 1 to $#"
-      continue
-    fi
-
-    index=1
-    for entry in "$@"; do
-      if [ "$index" -eq "$selected" ]; then
-        MENU_VALUE="${entry%%|*}"
-        return 0
-      fi
-      index=$((index + 1))
-    done
-  done
-}
-
-ask_yes_no() {
-  local label="$1" default_answer="${2:-no}" answer
-  while true; do
-    if [ "$default_answer" = "yes" ]; then
-      prompt_value "$label [Y/n]" ""
-    else
-      prompt_value "$label [y/N]" ""
-    fi
-    answer="$(printf '%s' "$PROMPT_REPLY" | tr '[:upper:]' '[:lower:]')"
-    case "$answer" in
-      y|yes) return 0 ;;
-      n|no) return 1 ;;
-      "")
-        [ "$default_answer" = "yes" ] && return 0
-        return 1
-        ;;
-      *) warn "please answer y or n" ;;
-    esac
-  done
-}
-
 select_client() {
   choose_menu \
     "Which coding agent?" 1 \
@@ -194,6 +149,407 @@ run_client_help() {
   AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
     AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
     exec "$SETUP_SCRIPT" --help
+}
+
+status_file_mode() {
+  local path="$1" mode=""
+  mode="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path" 2>/dev/null || true)"
+  printf '%s' "$mode"
+}
+
+status_json_value() {
+  local path="$1" filter="$2"
+  [ -f "$path" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r "$filter" "$path" 2>/dev/null || true
+}
+
+status_toml_profile_value() {
+  local path="$1" wanted="$2"
+  [ -f "$path" ] || return 0
+  awk -v wanted="$wanted" '
+    $0 == "[profiles.script_toolbox]" { inside = 1; next }
+    inside && /^\[/ { exit }
+    inside {
+      line = $0
+      if (line ~ "^[[:space:]]*" wanted "[[:space:]]*=") {
+        sub(/^[^=]*=[[:space:]]*/, "", line)
+        sub(/[[:space:]]*#.*$/, "", line)
+        sub(/[[:space:]]*$/, "", line)
+        if (line ~ /^".*"$/) {
+          sub(/^"/, "", line)
+          sub(/"$/, "", line)
+        }
+        print line
+        exit
+      }
+    }
+  ' "$path"
+}
+
+status_safe_provider() {
+  local value="$1"
+  STATUS_SAFE_VALUE=""
+  case "$CLIENT_ID" in
+    claude)
+      case "$value" in
+        anthropic|deepseek|openrouter|minimax-cn|minimax-global|custom)
+          STATUS_SAFE_VALUE="$value"
+          ;;
+      esac
+      ;;
+    codex)
+      case "$value" in
+        ""|*[!A-Za-z0-9._-]*) ;;
+        script_toolbox_*) STATUS_SAFE_VALUE="$value" ;;
+      esac
+      ;;
+    opencode|pi)
+      case "$value" in
+        ""|*[!A-Za-z0-9._-]*) ;;
+        script-toolbox-*) STATUS_SAFE_VALUE="$value" ;;
+      esac
+      ;;
+  esac
+}
+
+status_set_metadata() {
+  CONFIG_FILE_1=""
+  CONFIG_FILE_2=""
+  STATE_FILE=""
+  CLI_COMMAND=""
+  CREDENTIAL_KIND="file"
+  CREDENTIAL_EXPECTED_PREFIX=""
+
+  case "$CLIENT_ID" in
+    claude)
+      CLI_COMMAND="claude"
+      CONFIG_FILE_1="${HOME}/.claude/settings.json"
+      STATE_FILE="${HOME}/.claude/.script-toolbox-provider"
+      CREDENTIAL_KIND="embedded"
+      ;;
+    codex)
+      CLI_COMMAND="codex"
+      CONFIG_FILE_1="${HOME}/.codex/config.toml"
+      STATE_FILE="${HOME}/.codex/.script-toolbox-provider-key"
+      CREDENTIAL_EXPECTED_PREFIX="${HOME}/.codex/provider-keys/"
+      ;;
+    opencode)
+      CLI_COMMAND="opencode"
+      CONFIG_FILE_1="${HOME}/.config/opencode/opencode.json"
+      STATE_FILE="${HOME}/.config/opencode/.script-toolbox-provider"
+      CREDENTIAL_EXPECTED_PREFIX="${HOME}/.config/opencode/provider-keys/"
+      ;;
+    pi)
+      CLI_COMMAND="pi"
+      CONFIG_FILE_1="${HOME}/.pi/agent/settings.json"
+      CONFIG_FILE_2="${HOME}/.pi/agent/models.json"
+      STATE_FILE="${HOME}/.pi/agent/.script-toolbox-provider"
+      CREDENTIAL_EXPECTED_PREFIX="${HOME}/.pi/agent/provider-keys/"
+      ;;
+  esac
+}
+
+status_prepare() {
+  local raw_value="" candidate="" raw_version=""
+
+  status_set_metadata
+  CLI_INSTALLED=false
+  CLI_PATH=""
+  CLI_VERSION=""
+  CONFIG_EXISTS=false
+  CONFIG_VALID=false
+  STATE_EXISTS=false
+  OWNERSHIP_MARKER=false
+  PROVIDER_STATUS="not-configured"
+  STATUS_PROVIDER=""
+  STATUS_MODEL=""
+  CREDENTIAL_FILE=""
+  CREDENTIAL_EXISTS=false
+  CREDENTIAL_MODE=""
+  CREDENTIAL_PRIVATE=false
+  CREDENTIAL_PATH_VALID=true
+
+  if command -v "$CLI_COMMAND" >/dev/null 2>&1; then
+    CLI_INSTALLED=true
+    CLI_PATH="$(command -v "$CLI_COMMAND" 2>/dev/null | sed -n '1p')"
+    raw_version="$("$CLI_COMMAND" --version 2>/dev/null || true)"
+    CLI_VERSION="$(printf '%s\n' "$raw_version" |
+      LC_ALL=C tr -cd '\11\12\15\40-\176' |
+      sed -n '1p' |
+      cut -c1-160)"
+  fi
+
+  if [ -f "$CONFIG_FILE_1" ] &&
+     { [ -z "$CONFIG_FILE_2" ] || [ -f "$CONFIG_FILE_2" ]; }; then
+    CONFIG_EXISTS=true
+    CONFIG_VALID=true
+    if command -v jq >/dev/null 2>&1; then
+      case "$CLIENT_ID" in
+        claude|opencode)
+          jq -e 'type == "object"' "$CONFIG_FILE_1" >/dev/null 2>&1 ||
+            CONFIG_VALID=false
+          ;;
+        pi)
+          jq -e 'type == "object"' "$CONFIG_FILE_1" >/dev/null 2>&1 &&
+            jq -e 'type == "object"' "$CONFIG_FILE_2" >/dev/null 2>&1 ||
+            CONFIG_VALID=false
+          ;;
+      esac
+    fi
+  fi
+  [ ! -f "$STATE_FILE" ] || STATE_EXISTS=true
+
+  case "$CLIENT_ID" in
+    claude)
+      if [ "$STATE_EXISTS" = true ]; then
+        OWNERSHIP_MARKER=true
+        raw_value="$(sed -n '1p' "$STATE_FILE")"
+        status_safe_provider "$raw_value"
+        STATUS_PROVIDER="$STATUS_SAFE_VALUE"
+      fi
+      STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '.model // .env.ANTHROPIC_MODEL // empty')"
+      CREDENTIAL_FILE="$CONFIG_FILE_1"
+      if [ -f "$CONFIG_FILE_1" ]; then
+        if command -v jq >/dev/null 2>&1; then
+          if jq -e '
+            ((.env.ANTHROPIC_API_KEY // "") | length > 0)
+            or ((.env.ANTHROPIC_AUTH_TOKEN // "") | length > 0)
+          ' "$CONFIG_FILE_1" >/dev/null 2>&1; then
+            CREDENTIAL_EXISTS=true
+          fi
+        elif [ "$STATE_EXISTS" = true ]; then
+          CREDENTIAL_EXISTS=true
+        fi
+      fi
+      ;;
+    codex)
+      if grep -qF '# >>> agent/codex/setup.sh >>>' "$CONFIG_FILE_1" 2>/dev/null ||
+         [ "$STATE_EXISTS" = true ]; then
+        OWNERSHIP_MARKER=true
+      fi
+      raw_value="$(status_toml_profile_value "$CONFIG_FILE_1" model_provider)"
+      status_safe_provider "$raw_value"
+      STATUS_PROVIDER="$STATUS_SAFE_VALUE"
+      STATUS_MODEL="$(status_toml_profile_value "$CONFIG_FILE_1" model)"
+      if [ "$OWNERSHIP_MARKER" = true ] &&
+         { [ -z "$STATUS_PROVIDER" ] || [ -z "$STATUS_MODEL" ]; }; then
+        CONFIG_VALID=false
+      fi
+      if [ "$STATE_EXISTS" = true ]; then
+        candidate="$(sed -n '1p' "$STATE_FILE")"
+      fi
+      ;;
+    opencode)
+      if grep -q '"script-toolbox-' "$CONFIG_FILE_1" 2>/dev/null ||
+         [ "$STATE_EXISTS" = true ]; then
+        OWNERSHIP_MARKER=true
+      fi
+      if [ "$STATE_EXISTS" = true ]; then
+        raw_value="$(sed -n '1p' "$STATE_FILE")"
+        status_safe_provider "$raw_value"
+        STATUS_PROVIDER="$STATUS_SAFE_VALUE"
+        candidate="$(sed -n '2p' "$STATE_FILE")"
+      fi
+      STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '.model // empty')"
+      case "$STATUS_MODEL" in
+        "${STATUS_PROVIDER}/"*) STATUS_MODEL="${STATUS_MODEL#"${STATUS_PROVIDER}/"}" ;;
+      esac
+      ;;
+    pi)
+      if grep -q '"script-toolbox-' "$CONFIG_FILE_2" 2>/dev/null ||
+         [ "$STATE_EXISTS" = true ]; then
+        OWNERSHIP_MARKER=true
+      fi
+      if [ "$STATE_EXISTS" = true ]; then
+        raw_value="$(sed -n '1p' "$STATE_FILE")"
+        status_safe_provider "$raw_value"
+        STATUS_PROVIDER="$STATUS_SAFE_VALUE"
+        candidate="$(sed -n '2p' "$STATE_FILE")"
+      fi
+      STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '.defaultModel // empty')"
+      ;;
+  esac
+  STATUS_MODEL="$(printf '%s' "$STATUS_MODEL" |
+    tr '\r\n' '  ' |
+    cut -c1-240)"
+
+  if [ "$CREDENTIAL_KIND" = "file" ] && [ -n "$candidate" ]; then
+    case "$candidate" in
+      "$CREDENTIAL_EXPECTED_PREFIX"*.key)
+        CREDENTIAL_FILE="$candidate"
+        ;;
+      *)
+        CREDENTIAL_PATH_VALID=false
+        ;;
+    esac
+  fi
+  if [ "$CREDENTIAL_KIND" = "file" ] &&
+     [ "$CREDENTIAL_PATH_VALID" = true ] &&
+     [ -n "$CREDENTIAL_FILE" ] &&
+     [ -f "$CREDENTIAL_FILE" ]; then
+    CREDENTIAL_EXISTS=true
+  fi
+  if [ "$CREDENTIAL_EXISTS" = true ]; then
+    CREDENTIAL_MODE="$(status_file_mode "$CREDENTIAL_FILE")"
+    case "$CREDENTIAL_MODE" in
+      ?00|??00) CREDENTIAL_PRIVATE=true ;;
+    esac
+  fi
+
+  if [ "$OWNERSHIP_MARKER" = true ]; then
+    if [ "$CONFIG_EXISTS" = true ] &&
+       [ "$CONFIG_VALID" = true ] &&
+       [ "$STATE_EXISTS" = true ] &&
+       [ -n "$STATUS_PROVIDER" ] &&
+       [ "$CREDENTIAL_EXISTS" = true ] &&
+       [ "$CREDENTIAL_PRIVATE" = true ] &&
+       [ "$CREDENTIAL_PATH_VALID" = true ]; then
+      PROVIDER_STATUS="configured"
+    else
+      PROVIDER_STATUS="incomplete"
+    fi
+  fi
+}
+
+status_emit_human() {
+  log "${CLIENT_LABEL}"
+  if [ "$CLI_INSTALLED" = true ]; then
+    log "  CLI         : installed${CLI_VERSION:+ ($CLI_VERSION)}"
+    log "  CLI path    : $CLI_PATH"
+  else
+    log "  CLI         : not installed"
+  fi
+  log "  Provider    : ${PROVIDER_STATUS}${STATUS_PROVIDER:+ ($STATUS_PROVIDER)}"
+  log "  Model       : ${STATUS_MODEL:-not resolved}"
+  log "  Config      : $CONFIG_FILE_1"
+  [ -z "$CONFIG_FILE_2" ] || log "                $CONFIG_FILE_2"
+  if [ "$CONFIG_EXISTS" = true ]; then
+    log "  Config state: $([ "$CONFIG_VALID" = true ] && printf valid || printf invalid)"
+  else
+    log "  Config state: missing"
+  fi
+  log "  Ownership   : $([ "$OWNERSHIP_MARKER" = true ] && printf present || printf missing)"
+  log "  State file  : $STATE_FILE ($([ "$STATE_EXISTS" = true ] && printf present || printf missing))"
+  if [ "$CREDENTIAL_PATH_VALID" != true ]; then
+    log "  Credential  : invalid path in ownership state (value hidden)"
+  elif [ "$CREDENTIAL_EXISTS" = true ]; then
+    log "  Credential  : $CREDENTIAL_KIND; $CREDENTIAL_FILE (mode ${CREDENTIAL_MODE:-unknown}, $([ "$CREDENTIAL_PRIVATE" = true ] && printf private || printf insecure))"
+  else
+    log "  Credential  : $CREDENTIAL_KIND; missing${CREDENTIAL_FILE:+ ($CREDENTIAL_FILE)}"
+  fi
+}
+
+status_emit_json() {
+  jq -n \
+    --arg client "$CLIENT_ID" \
+    --arg label "$CLIENT_LABEL" \
+    --arg cli_path "$CLI_PATH" \
+    --arg cli_version "$CLI_VERSION" \
+    --arg provider_status "$PROVIDER_STATUS" \
+    --arg provider "$STATUS_PROVIDER" \
+    --arg model "$STATUS_MODEL" \
+    --arg config_file_1 "$CONFIG_FILE_1" \
+    --arg config_file_2 "$CONFIG_FILE_2" \
+    --arg state_file "$STATE_FILE" \
+    --arg credential_kind "$CREDENTIAL_KIND" \
+    --arg credential_file "$CREDENTIAL_FILE" \
+    --arg credential_mode "$CREDENTIAL_MODE" \
+    --argjson cli_installed "$CLI_INSTALLED" \
+    --argjson config_exists "$CONFIG_EXISTS" \
+    --argjson config_valid "$CONFIG_VALID" \
+    --argjson state_exists "$STATE_EXISTS" \
+    --argjson ownership_marker "$OWNERSHIP_MARKER" \
+    --argjson credential_exists "$CREDENTIAL_EXISTS" \
+    --argjson credential_private "$CREDENTIAL_PRIVATE" \
+    --argjson credential_path_valid "$CREDENTIAL_PATH_VALID" '
+      {
+        client: $client,
+        label: $label,
+        cli_installed: $cli_installed,
+        cli_path: (if $cli_path == "" then null else $cli_path end),
+        cli_version: (if $cli_version == "" then null else $cli_version end),
+        provider_status: $provider_status,
+        provider: (if $provider == "" then null else $provider end),
+        model: (if $model == "" then null else $model end),
+        config_files: (
+          [$config_file_1, $config_file_2] | map(select(length > 0))
+        ),
+        config_exists: $config_exists,
+        config_valid: $config_valid,
+        state_file: $state_file,
+        state_exists: $state_exists,
+        ownership_marker: $ownership_marker,
+        credential_kind: $credential_kind,
+        credential_file: (
+          if $credential_file == "" then null else $credential_file end
+        ),
+        credential_exists: $credential_exists,
+        credential_private: $credential_private,
+        credential_mode: (
+          if $credential_mode == "" then null else $credential_mode end
+        ),
+        credential_path_valid: $credential_path_valid
+      }
+    '
+}
+
+run_status() {
+  local requested="" json_output=0 client first=1
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json)
+        json_output=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        [ -z "$requested" ] || die "status accepts one client name and optional --json"
+        requested="$1"
+        shift
+        ;;
+    esac
+  done
+  [ -n "$requested" ] || die "status requires a client name or all"
+  if [ "$json_output" = 1 ]; then
+    command -v jq >/dev/null 2>&1 ||
+      die "jq is required for status --json; install jq and re-run"
+  fi
+
+  if [ "$requested" = "all" ]; then
+    if [ "$json_output" = 1 ]; then
+      {
+        for client in claude codex opencode pi; do
+          resolve_client "$client"
+          status_prepare
+          status_emit_json
+        done
+      } | jq -s '.'
+    else
+      for client in claude codex opencode pi; do
+        resolve_client "$client"
+        status_prepare
+        if [ "$first" -ne 1 ]; then
+          log ""
+        fi
+        status_emit_human
+        first=0
+      done
+    fi
+    return 0
+  fi
+
+  resolve_client "$requested"
+  status_prepare
+  if [ "$json_output" = 1 ]; then
+    status_emit_json
+  else
+    status_emit_human
+  fi
 }
 
 run_uninstall() {
@@ -238,18 +594,24 @@ run_interactive() {
   fi
 
   log "Agentctl guided Shell setup"
-  log "This controls client/provider setup only; MCP and prompts stay independent."
+  log "Agent providers and the encrypted Toolbox Workspace are managed here."
 
   choose_menu \
     "What would you like to do?" 1 \
     "setup|Install or configure a coding agent" \
+    "status|Inspect client and provider status" \
     "providers|List provider and model presets" \
+    "workspace|Inspect the unified MCP / Skills / Prompts Workspace" \
     "uninstall|Remove managed provider configuration" \
     "exit|Exit without changes"
   action="$MENU_VALUE"
   if [ "$action" = "exit" ]; then
     log "No changes were made."
     return 0
+  fi
+
+  if [ "$action" = "workspace" ]; then
+    run_workspace status
   fi
 
   select_client
@@ -259,6 +621,9 @@ run_interactive() {
       AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
         AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
         exec "$SETUP_SCRIPT"
+      ;;
+    status)
+      run_status "$CLIENT_ID"
       ;;
     providers)
       exec "$SETUP_SCRIPT" --list-providers
@@ -282,6 +647,10 @@ case "${1:-}" in
     shift
     run_setup "$@"
     ;;
+  status)
+    shift
+    run_status "$@"
+    ;;
   providers|list-providers)
     [ $# -eq 2 ] || die "$1 requires exactly one client name"
     shift
@@ -296,6 +665,10 @@ case "${1:-}" in
     [ $# -eq 2 ] || die "help requires exactly one client name"
     shift
     run_client_help "$@"
+    ;;
+  workspace)
+    shift
+    run_workspace "$@"
     ;;
   -h|--help)
     usage

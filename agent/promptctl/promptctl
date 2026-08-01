@@ -8,14 +8,23 @@
 set -euo pipefail
 umask 077
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE_PATH" ]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
+  SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+  case "$SOURCE_PATH" in
+    /*) ;;
+    *) SOURCE_PATH="${SOURCE_DIR}/${SOURCE_PATH}" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 ENGINE="${SCRIPT_DIR}/promptctl.py"
+REMOTE_CLIENT="${SCRIPT_DIR}/prompt-remote.mjs"
 PYTHON_BIN=""
 export PROMPTCTL_PROG="promptctl"
 
-log()  { printf '%s\n' "$*"; }
-warn() { printf '! %s\n' "$*" >&2; }
-die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../ctl-lib.sh
+. "${SCRIPT_DIR}/../ctl-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -28,6 +37,11 @@ Usage:
   promptctl status <claude|codex|all> [options]
   promptctl path <claude|codex|all> [options]
   promptctl uninstall <claude|codex|all> [options]
+  promptctl backup [--home <directory>]
+  promptctl restore --yes [--version <id>] [--force]
+  promptctl recovery
+  promptctl versions
+  promptctl remote init|ui ...
 
 Run without arguments for the guided Shell setup. Every write is previewed and
 requires confirmation. Explicit subcommands are passed to the deterministic
@@ -35,7 +49,15 @@ Python engine; use "promptctl <command> --help" for their options.
 
 Environment:
   PROMPTCTL_PYTHON   Python 3.9+ executable used by the internal engine.
+  PROMPTCTL_REMOTE_CONFIG  Remote capability file.
 EOF
+}
+
+run_remote_client() {
+  command -v node >/dev/null 2>&1 ||
+    die "Prompt Store commands require Node.js 20 or newer"
+  [ -r "$REMOTE_CLIENT" ] || die "Prompt Store client not found: $REMOTE_CLIENT"
+  exec node "$REMOTE_CLIENT" "$@"
 }
 
 find_python() {
@@ -68,76 +90,6 @@ find_python() {
 
 run_engine() {
   "$PYTHON_BIN" "$ENGINE" "$@"
-}
-
-prompt_value() {
-  local label="$1" default_value="${2:-}" input
-  if [ -n "$default_value" ]; then
-    printf '%s [%s]: ' "$label" "$default_value" >&2
-  else
-    printf '%s: ' "$label" >&2
-  fi
-  if ! IFS= read -r input; then
-    die "interactive input ended; use --help for non-interactive commands"
-  fi
-  PROMPT_REPLY="${input:-$default_value}"
-}
-
-choose_menu() {
-  local title="$1" default_index="$2" entry index selected
-  shift 2
-  printf '\n%s\n' "$title" >&2
-  index=1
-  for entry in "$@"; do
-    printf '  %d) %s\n' "$index" "${entry#*|}" >&2
-    index=$((index + 1))
-  done
-
-  while true; do
-    prompt_value "Choose" "$default_index"
-    selected="$PROMPT_REPLY"
-    case "$selected" in
-      ""|*[!0-9]*)
-        warn "enter a number from 1 to $#"
-        continue
-        ;;
-    esac
-    if [ "$selected" -lt 1 ] 2>/dev/null ||
-       [ "$selected" -gt "$#" ] 2>/dev/null; then
-      warn "enter a number from 1 to $#"
-      continue
-    fi
-
-    index=1
-    for entry in "$@"; do
-      if [ "$index" -eq "$selected" ]; then
-        MENU_VALUE="${entry%%|*}"
-        return 0
-      fi
-      index=$((index + 1))
-    done
-  done
-}
-
-ask_yes_no() {
-  local label="$1" default_answer="${2:-no}" answer
-  while true; do
-    if [ "$default_answer" = "yes" ]; then
-      prompt_value "$label [Y/n]" ""
-    else
-      prompt_value "$label [y/N]" ""
-    fi
-    answer="$(printf '%s' "$PROMPT_REPLY" | tr '[:upper:]' '[:lower:]')"
-    case "$answer" in
-      y|yes) return 0 ;;
-      n|no) return 1 ;;
-      "")
-        [ "$default_answer" = "yes" ] && return 0
-        return 1
-        ;;
-      *) warn "please answer y or n" ;;
-    esac
-  done
 }
 
 normalize_profile() {
@@ -259,6 +211,12 @@ case "${1:-}" in
   -h|--help)
     usage
     exit 0
+    ;;
+esac
+
+case "${1:-}" in
+  backup|restore|recovery|versions|remote)
+    run_remote_client "$@"
     ;;
 esac
 

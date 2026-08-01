@@ -9,6 +9,9 @@ const STORE_ID = "0123456789abcdef0123456789abcdef";
 const TOKEN = "A".repeat(43);
 const CREATE_TOKEN = "create-token-".padEnd(48, "C");
 const SNAPSHOT_TYPE = "application/vnd.mcpctl.snapshot+json";
+const SKILLS_SNAPSHOT_TYPE = "application/vnd.skillsctl.snapshot+json";
+const PROMPT_SNAPSHOT_TYPE = "application/vnd.promptctl.snapshot+json";
+const WORKSPACE_SNAPSHOT_TYPE = "application/vnd.agentctl.workspace+json";
 
 function environment(overrides = {}) {
   return {
@@ -58,9 +61,152 @@ test("health check is public and security headers are attached", async () => {
   assert.ok(response.headers.get("x-request-id"));
   assert.deepEqual(await response.json(), {
     schema: 1,
-    service: "mcp-store",
+    service: "toolbox-store",
+    compatibility: [
+      "mcp-store-v1",
+      "skills-store-v1",
+      "prompt-store-v1",
+      "toolbox-workspace-v1"
+    ],
     status: "ok"
   });
+});
+
+test("non-API routes are delegated to the same-origin asset binding", async () => {
+  const env = environment({
+    ASSETS: {
+      async fetch(request) {
+        return new Response(`asset:${new URL(request.url).pathname}`, {
+          headers: { "Content-Type": "text/plain" }
+        });
+      }
+    }
+  });
+  const response = await worker.fetch(request("/"), env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "asset:/index.html");
+  const csp = response.headers.get("content-security-policy");
+  assert.match(csp, /style-src 'self'/);
+  assert.match(csp, /style-src-elem 'self' 'unsafe-inline'/);
+  assert.match(csp, /style-src-attr 'unsafe-inline'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+});
+
+test("accepts every Toolbox snapshot type with product-neutral headers", async () => {
+  for (const [contentType, kind] of [
+    [SKILLS_SNAPSHOT_TYPE, "skillsctl-snapshot"],
+    [PROMPT_SNAPSHOT_TYPE, "promptctl-snapshot"],
+    [WORKSPACE_SNAPSHOT_TYPE, "agentctl-workspace-snapshot"]
+  ]) {
+    const env = environment();
+    const created = await worker.fetch(request(`/v1/stores/${STORE_ID}`, {
+      method: "PUT",
+      headers: authenticatedHeaders({
+        "X-Toolbox-Store-Create-Token": CREATE_TOKEN
+      })
+    }), env);
+    assert.equal(created.status, 201);
+
+    const body = JSON.stringify({ schema: 1, kind, ciphertext: `opaque-${kind}` });
+    const uploaded = await worker.fetch(request(`/v1/stores/${STORE_ID}/versions`, {
+      method: "PUT",
+      headers: authenticatedHeaders({
+        "Content-Type": contentType,
+        "X-Toolbox-Base-Version": "none"
+      }),
+      body
+    }), env);
+    assert.equal(uploaded.status, 201);
+    const metadata = await uploaded.json();
+
+    const latest = await worker.fetch(
+      request(`/v1/stores/${STORE_ID}/latest`, {
+        headers: authenticatedHeaders()
+      }),
+      env
+    );
+    assert.equal(latest.status, 200);
+    assert.equal(latest.headers.get("content-type"), contentType);
+    assert.equal(latest.headers.get("x-toolbox-store-version"), metadata.version);
+    assert.equal(await latest.text(), body);
+  }
+});
+
+test("Web UI access is disabled by default and controlled per authenticated store", async () => {
+  const env = environment();
+  await createStore(env);
+
+  const cliStatus = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}`, { headers: authenticatedHeaders() }),
+    env
+  );
+  assert.equal(cliStatus.status, 200);
+  assert.equal((await cliStatus.json()).web_ui_enabled, false);
+
+  const blocked = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}`, {
+      headers: authenticatedHeaders({ "X-Toolbox-Client": "web" })
+    }),
+    env
+  );
+  assert.equal(blocked.status, 403);
+  assert.equal((await blocked.json()).error.code, "web_ui_disabled");
+
+  const enabled = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}/settings/web-ui`, {
+      method: "PUT",
+      headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ enabled: true })
+    }),
+    env
+  );
+  assert.equal(enabled.status, 200);
+  assert.equal((await enabled.json()).web_ui_enabled, true);
+
+  const allowed = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}`, {
+      headers: authenticatedHeaders({ "X-Toolbox-Client": "web" })
+    }),
+    env
+  );
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json()).web_ui_enabled, true);
+
+  const disabled = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}/settings/web-ui`, {
+      method: "PUT",
+      headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ enabled: false })
+    }),
+    env
+  );
+  assert.equal(disabled.status, 200);
+
+  const setting = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}/settings/web-ui`, {
+      headers: authenticatedHeaders()
+    }),
+    env
+  );
+  assert.equal(setting.status, 200);
+  assert.equal((await setting.json()).web_ui_enabled, false);
+});
+
+test("Web UI setting rejects malformed updates", async () => {
+  const env = environment();
+  await createStore(env);
+  const invalid = await worker.fetch(
+    request(`/v1/stores/${STORE_ID}/settings/web-ui`, {
+      method: "PUT",
+      headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ enabled: "yes" })
+    }),
+    env
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, "invalid_setting");
 });
 
 test("creates a store once and persists only the token digest", async () => {

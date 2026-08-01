@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "reverse-windows",
+  "description": "Windows VM dynamic analysis with x64dbg and Frida",
+  "extends": [
+    "reverse-frida"
+  ],
+  "enable": [
+    "x64dbg"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

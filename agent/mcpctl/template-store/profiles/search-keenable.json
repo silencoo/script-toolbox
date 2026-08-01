@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "search-keenable",
+  "description": "Documentation plus Keenable anonymous or API-key search",
+  "extends": [
+    "base"
+  ],
+  "enable": [
+    "keenable"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

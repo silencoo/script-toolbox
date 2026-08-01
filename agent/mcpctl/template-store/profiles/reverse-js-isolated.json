@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "reverse-js-isolated",
+  "description": "JavaScript reverse engineering with disposable browser state",
+  "extends": [],
+  "enable": [
+    "js-reverse-isolated"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

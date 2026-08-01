@@ -1,8 +1,50 @@
 {
   "schema": 1,
   "servers": {
+    "context7": {
+      "category": "core",
+      "description": "Library and framework documentation",
+      "homepage": "https://github.com/upstash/context7",
+      "transport": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "secret": "context7_api_key",
+        "env": "CONTEXT7_API_KEY",
+        "required": false
+      },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "github": {
+      "category": "core",
+      "description": "GitHub repositories, issues, and pull requests",
+      "homepage": "https://github.com/github/github-mcp-server",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "secret": "github_mcp_pat",
+        "env": "GITHUB_MCP_PAT",
+        "required": true
+      },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
     "brave": {
+      "category": "search",
       "description": "Brave Search remote MCP",
+      "homepage": "https://api-dashboard.search.brave.com/",
       "transport": "http",
       "url": "https://api.search.brave.com/mcp",
       "auth": {
@@ -20,7 +62,9 @@
       ]
     },
     "exa": {
-      "description": "Exa remote MCP",
+      "category": "search",
+      "description": "Exa search and research",
+      "homepage": "https://github.com/exa-labs/exa-mcp-server",
       "transport": "http",
       "url": "https://mcp.exa.ai/mcp",
       "auth": {
@@ -37,18 +81,85 @@
         "opencode"
       ]
     },
-    "context7": {
-      "description": "Context7 documentation MCP with optional higher-limit key",
+    "keenable": {
+      "category": "search",
+      "description": "Keenable search and page fetch; anonymous by default with an optional API key",
+      "homepage": "https://docs.keenable.ai/mcp-server",
+      "provider": "keenable",
+      "auth_mode": "optional-api-key",
       "transport": "http",
-      "url": "https://mcp.context7.com/mcp",
+      "url": "https://api.keenable.ai/mcp",
+      "auth": {
+        "type": "header",
+        "header": "X-API-Key",
+        "prefix": "",
+        "secret": "keenable_api_key",
+        "env": "KEENABLE_API_KEY",
+        "required": false
+      },
+      "setup": "Works anonymously when no key is configured. Add a Keenable API key to remove the anonymous hourly limit.",
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "tavily-keyless": {
+      "category": "search",
+      "description": "Tavily Search and Extract without an account or API key",
+      "homepage": "https://docs.tavily.com/documentation/keyless",
+      "provider": "tavily",
+      "auth_mode": "keyless",
+      "variant_group": "tavily-auth",
+      "variant_label": "Keyless",
+      "transport": "http",
+      "url": "https://mcp.tavily.com/mcp/",
+      "headers": {
+        "X-Tavily-Access-Mode": "keyless"
+      },
+      "setup": "Free rate-limited access to Tavily Search and Extract. Choose tavily-api for account credits and the complete tool set.",
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "tavily-api": {
+      "category": "search",
+      "description": "Tavily Search, Extract, Crawl, Map, and Research with an API key",
+      "homepage": "https://docs.tavily.com/documentation/mcp",
+      "provider": "tavily",
+      "auth_mode": "api-key",
+      "variant_group": "tavily-auth",
+      "variant_label": "API key",
+      "transport": "http",
+      "url": "https://mcp.tavily.com/mcp/",
       "auth": {
         "type": "header",
         "header": "Authorization",
         "prefix": "Bearer ",
-        "secret": "context7_api_key",
-        "env": "CONTEXT7_API_KEY",
-        "required": false
+        "secret": "tavily_api_key",
+        "env": "TAVILY_API_KEY",
+        "required": true
       },
+      "setup": "Create a Tavily key in the dashboard. mcpctl sends it in an Authorization header and never places it in the URL.",
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "tavily-oauth": {
+      "category": "search",
+      "description": "Tavily account access through each MCP client's OAuth login",
+      "homepage": "https://docs.tavily.com/documentation/mcp",
+      "provider": "tavily",
+      "auth_mode": "oauth",
+      "variant_group": "tavily-auth",
+      "variant_label": "OAuth",
+      "transport": "http",
+      "url": "https://mcp.tavily.com/mcp/",
+      "setup": "OAuth credentials stay in each client and are not backed up. After restore, authenticate with the client's MCP login command.",
       "supported_targets": [
         "claude",
         "codex",
@@ -56,13 +167,843 @@
       ]
     },
     "chrome-devtools": {
-      "description": "Local Chrome DevTools MCP",
+      "category": "browser",
+      "description": "Chrome DevTools debugging and performance analysis",
+      "homepage": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+    "transport": "stdio",
+    "command": [
+      "@mcpctl/adapters/mcp-package",
+      "npm",
+      "chrome-devtools",
+      "chrome-devtools-mcp@1.6.0",
+      "chrome-devtools-mcp",
+      "--"
+    ],
+    "setup": "Requires Node.js LTS and a supported local Chrome installation.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "chrome-devtools-mcp@1.6.0",
+        "bin": "chrome-devtools-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js LTS"
+        }
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "playwright": {
+      "category": "browser",
+      "description": "Playwright accessibility-driven browser automation",
+      "homepage": "https://github.com/microsoft/playwright-mcp",
+      "provider": "playwright",
+      "variant_group": "playwright-runtime",
+      "variant_label": "Persistent headed browser",
+    "transport": "stdio",
+    "command": [
+      "@mcpctl/adapters/mcp-package",
+      "npm",
+      "playwright",
+      "@playwright/mcp@0.0.78",
+      "playwright-mcp",
+      "--"
+    ],
+    "setup": "Requires Node.js 18 or newer; the MCP maintains its own browser profile.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "@playwright/mcp@0.0.78",
+        "bin": "playwright-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 18+"
+        }
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "playwright-headless": {
+      "category": "browser",
+      "description": "Playwright browser automation for display-free servers",
+      "homepage": "https://github.com/microsoft/playwright-mcp",
+      "provider": "playwright",
+      "variant_group": "playwright-runtime",
+      "variant_label": "Headless isolated browser",
+    "transport": "stdio",
+    "command": [
+      "@mcpctl/adapters/mcp-package",
+      "npm",
+      "playwright-headless",
+      "@playwright/mcp@0.0.78",
+      "playwright-mcp",
+      "--",
+      "--headless",
+      "--isolated"
+    ],
+    "setup": "Requires Node.js 18 or newer and Playwright browser dependencies. Runs without DISPLAY and keeps each MCP session isolated.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "@playwright/mcp@0.0.78",
+        "bin": "playwright-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 18+"
+        }
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "js-reverse": {
+      "category": "web-reverse",
+      "description": "JavaScript debugging, breakpoints, network, and WebSocket analysis in persistent headed Chrome",
+      "homepage": "https://github.com/zhizhuodemao/js-reverse-mcp",
+      "provider": "js-reverse",
+      "variant_group": "js-reverse-runtime",
+      "variant_label": "Persistent system Chrome",
       "transport": "stdio",
       "command": [
-        "npx",
-        "-y",
+      "@mcpctl/adapters/mcp-host",
+      "js-reverse",
+      "js-reverse",
+      "js-reverse-mcp@4.0.1"
+    ],
+    "setup": "Requires Node.js 20.19 or newer, Chrome, and a graphical session. Set JS_REVERSE_ALLOWED_ROOT to an absolute analysis directory to restrict MCP file reads and writes.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "js-reverse-mcp@4.0.1",
+        "bin": "js-reverse-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 20.19+"
+        }
+      ]
+    },
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "js-reverse-isolated": {
+      "category": "web-reverse",
+      "description": "JavaScript reverse engineering in a temporary headed Chrome profile",
+      "homepage": "https://github.com/zhizhuodemao/js-reverse-mcp",
+      "provider": "js-reverse",
+      "variant_group": "js-reverse-runtime",
+      "variant_label": "Isolated system Chrome",
+      "transport": "stdio",
+      "command": [
+      "@mcpctl/adapters/mcp-host",
+      "js-reverse",
+      "js-reverse-isolated",
+      "js-reverse-mcp@4.0.1",
+      "--isolated"
+    ],
+    "setup": "Requires Node.js 20.19 or newer, Chrome, and a graphical session. Browser state is removed at exit. Set JS_REVERSE_ALLOWED_ROOT to restrict local file access.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "js-reverse-mcp@4.0.1",
+        "bin": "js-reverse-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 20.19+"
+        }
+      ]
+    },
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "js-reverse-cloak": {
+      "category": "web-reverse",
+      "description": "JavaScript reverse engineering with the optional CloakBrowser binary",
+      "homepage": "https://github.com/zhizhuodemao/js-reverse-mcp",
+      "provider": "js-reverse",
+      "variant_group": "js-reverse-runtime",
+      "variant_label": "Persistent CloakBrowser",
+      "transport": "stdio",
+      "command": [
+      "@mcpctl/adapters/mcp-host",
+      "js-reverse",
+      "js-reverse-cloak",
+      "js-reverse-mcp@4.0.1",
+      "--cloak"
+    ],
+    "setup": "Requires Node.js 20.19 or newer and a graphical session. Preinstall the optional browser with npx cloakbrowser install; set JS_REVERSE_ALLOWED_ROOT to restrict local file access.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "js-reverse-mcp@4.0.1",
+        "bin": "js-reverse-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 20.19+"
+        }
+      ]
+    },
+      "startup_timeout_sec": 180,
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "chrome-devtools-cloak": {
+      "category": "browser",
+      "description": "Chrome DevTools connected to a CloakBrowser CDP service",
+      "homepage": "https://github.com/CloakHQ/CloakBrowser",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "cloak-devtools",
         "chrome-devtools-mcp@1.6.0"
+    ],
+    "setup": "Start cloakserve on 127.0.0.1:9222, or set CLOAKBROWSER_CDP_ENDPOINT. Keep the CDP endpoint local.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "chrome-devtools-mcp@1.6.0",
+        "bin": "chrome-devtools-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js LTS"
+        }
       ],
+      "service": {
+        "ownership": "external",
+        "url_env": "CLOAKBROWSER_CDP_ENDPOINT",
+        "url": "http://127.0.0.1:9222"
+      }
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "playwright-cloak": {
+      "category": "browser",
+      "description": "Playwright MCP connected to a CloakBrowser CDP service",
+      "homepage": "https://github.com/CloakHQ/CloakBrowser",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "cloak-playwright",
+        "@playwright/mcp@0.0.78"
+    ],
+    "setup": "Start cloakserve on 127.0.0.1:9222, or set CLOAKBROWSER_CDP_ENDPOINT. Wrapper-level humanize is not applied over a plain CDP connection.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "@playwright/mcp@0.0.78",
+        "bin": "playwright-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 18+"
+        }
+      ],
+      "service": {
+        "ownership": "external",
+        "url_env": "CLOAKBROWSER_CDP_ENDPOINT",
+        "url": "http://127.0.0.1:9222"
+      }
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "radare2": {
+      "category": "reverse",
+      "description": "Radare2 static binary analysis",
+      "homepage": "https://github.com/radareorg/radare2-mcp",
+      "transport": "stdio",
+      "command": [
+        "r2pm",
+        "-r",
+        "r2mcp"
+    ],
+    "setup": "Install radare2, then run r2pm -Uci r2mcp. Keep raw run tools restricted unless explicitly needed.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "r2",
+          "label": "radare2"
+        },
+        {
+          "type": "command",
+          "name": "r2pm",
+          "label": "r2pm with r2mcp installed"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "lldb": {
+      "category": "reverse",
+      "description": "Native LLDB dynamic debugging",
+      "homepage": "https://lldb.llvm.org/use/mcp.html",
+      "transport": "stdio",
+      "command": [
+        "lldb-mcp"
+    ],
+    "setup": "Requires an LLVM installation that includes lldb-mcp; this grants debugger command execution.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "lldb-mcp",
+          "label": "LLVM lldb-mcp"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux"
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "gdb": {
+      "category": "reverse",
+      "description": "Native GDB debugging over a local stdio MCP server",
+      "homepage": "https://github.com/datobena/gdb-mcp",
+    "transport": "stdio",
+    "command": [
+      "@mcpctl/adapters/mcp-package",
+      "uv",
+      "gdb",
+      "gdb-mcp==1.0.1",
+      "gdb-mcp",
+      "--"
+    ],
+    "setup": "Requires uv and GDB on PATH. This server can start or attach debugger sessions and execute arbitrary GDB commands; use it only for trusted analysis targets.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "uv",
+        "package": "gdb-mcp==1.0.1",
+        "bin": "gdb-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "gdb",
+          "label": "GDB"
+        }
+      ],
+      "platforms": [
+        "linux"
+      ]
+    },
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "ghidra": {
+      "category": "reverse",
+      "description": "Ghidra GUI decompilation and live program analysis",
+      "homepage": "https://github.com/bethington/ghidra-mcp",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "ghidra"
+    ],
+    "setup": "Install GhidraMCP 6.x and its bridge-mcp-ghidra wheel, enable the plugin, and keep GHIDRA_MCP_URL on http://127.0.0.1:8089/. A checkout can be selected with GHIDRA_MCP_DIR.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "any",
+          "commands": [
+            "bridge-mcp-ghidra"
+          ],
+          "envs": [
+            "GHIDRA_MCP_DIR",
+            "GHIDRA_MCP_BRIDGE"
+          ],
+          "label": "bridge-mcp-ghidra or a configured Ghidra bridge"
+        }
+      ],
+      "service": {
+        "ownership": "external",
+        "url_env": "GHIDRA_MCP_URL",
+        "url": "http://127.0.0.1:8089/"
+      },
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "ghidra-headless": {
+      "category": "reverse",
+      "description": "Headless Ghidra analysis through PyGhidra",
+      "homepage": "https://github.com/clearbluejar/pyghidra-mcp",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "ghidra-headless"
+    ],
+    "setup": "Install Ghidra and uv, then set GHIDRA_INSTALL_DIR and an absolute writable GHIDRA_MCP_PROJECT_PATH. No DISPLAY, X11, or desktop session is required.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "uv",
+        "package": "pyghidra-mcp==0.2.3",
+        "bin": "pyghidra-mcp"
+      },
+      "requirements": [
+        {
+          "type": "env",
+          "name": "GHIDRA_INSTALL_DIR",
+          "path_kind": "directory",
+          "label": "GHIDRA_INSTALL_DIR directory"
+        },
+        {
+          "type": "env",
+          "name": "GHIDRA_MCP_PROJECT_PATH",
+          "path_kind": "writable-directory",
+          "label": "writable GHIDRA_MCP_PROJECT_PATH directory"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "startup_timeout_sec": 180,
+      "tool_timeout_sec": 600,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "idalib": {
+      "category": "reverse",
+      "description": "Headless IDA Pro analysis through idalib",
+      "homepage": "https://github.com/mrexodia/ida-pro-mcp",
+      "transport": "stdio",
+      "command": [
+        "idalib-mcp",
+        "--stdio"
+    ],
+    "setup": "Requires IDA Pro with idalib activated and ida-pro-mcp installed; run the current headless supervisor over stdio. IDA Free is not supported.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "idalib-mcp",
+          "label": "licensed IDA Pro IDALib and idalib-mcp"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "startup_timeout_sec": 180,
+      "tool_timeout_sec": 600,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "frida": {
+      "category": "reverse",
+      "description": "Frida 17 dynamic instrumentation for local and mobile targets",
+      "homepage": "https://github.com/yfe404/frida-mcp",
+    "transport": "stdio",
+    "command": [
+      "@mcpctl/adapters/mcp-package",
+      "npm",
+      "frida",
+      "frida-mcp@1.1.0",
+      "frida-mcp",
+      "--"
+    ],
+    "setup": "Requires Node.js 20 or newer and Frida 17. Android operations also require adb plus a compatible frida-server on the device. Tools can execute scripts and modify process memory.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "npm",
+        "package": "frida-mcp@1.1.0",
+        "bin": "frida-mcp"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "node",
+          "label": "Node.js 20+"
+        },
+        {
+          "type": "command",
+          "name": "adb",
+          "label": "ADB for Android targets",
+          "optional": true
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "jadx": {
+      "category": "mobile",
+      "description": "Live Android APK analysis through JADX GUI",
+      "homepage": "https://github.com/zinja-coder/jadx-ai-mcp",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "jadx"
+    ],
+    "setup": "Install the jadx-ai-mcp plugin, install jadx_mcp_server on PATH, then open the APK in jadx-gui.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "jadx_mcp_server",
+          "label": "jadx_mcp_server and the JADX GUI plugin"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "apktool": {
+      "category": "mobile",
+      "description": "APK resources, manifests, decode, and rebuild operations",
+      "homepage": "https://github.com/zinja-coder/apktool-mcp-server",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "apktool"
+    ],
+    "setup": "Install apktool and either install apktool_mcp_server on PATH or set APKTOOL_MCP_DIR to its checkout.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "command",
+          "name": "apktool",
+          "label": "Apktool"
+        },
+        {
+          "type": "any",
+          "commands": [
+            "apktool_mcp_server"
+          ],
+          "envs": [
+            "APKTOOL_MCP_DIR"
+          ],
+          "label": "apktool_mcp_server or APKTOOL_MCP_DIR"
+        }
+      ],
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "cutter": {
+      "category": "reverse",
+      "description": "Cutter GUI analysis backed by Rizin",
+      "homepage": "https://github.com/restkhz/CutterMCP-plus",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "cutter"
+    ],
+    "setup": "Install CutterMCP-plus, copy mcp_plugin.py into Cutter's Python plugin directory, install the wrapper requirements, and set CUTTER_MCP_DIR. The plugin endpoint must remain on 127.0.0.1:8000.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "env",
+          "name": "CUTTER_MCP_DIR",
+          "path_kind": "directory",
+          "label": "CUTTER_MCP_DIR checkout"
+        },
+        {
+          "type": "command",
+          "name": "python3",
+          "alternatives": [
+            "python"
+          ],
+          "label": "Python runtime"
+        }
+      ],
+      "service": {
+        "ownership": "external",
+        "url": "http://127.0.0.1:8000"
+      },
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "x64dbg": {
+      "category": "reverse-windows",
+      "description": "Windows x64dbg dynamic debugging through a local plugin bridge",
+      "homepage": "https://github.com/shadowbrok3r/x64dbgMCP",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "x64dbg"
+    ],
+    "setup": "Windows only. Install the x64dbgMCP plugin, install the Python MCP dependencies, set X64DBG_MCP_SCRIPT to src/x64dbg.py, and keep X64DBG_MCP_URL on http://127.0.0.1:8888.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "env",
+          "name": "X64DBG_MCP_SCRIPT",
+          "path_kind": "file",
+          "label": "X64DBG_MCP_SCRIPT bridge file"
+        },
+        {
+          "type": "command",
+          "name": "python",
+          "label": "Python runtime"
+        }
+      ],
+      "service": {
+        "ownership": "external",
+        "url_env": "X64DBG_MCP_URL",
+        "url": "http://127.0.0.1:8888"
+      },
+      "platforms": [
+        "windows"
+      ]
+    },
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "burp": {
+      "category": "web-reverse",
+      "description": "Burp Suite proxy history and testing workflows",
+      "homepage": "https://github.com/PortSwigger/mcp-server",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-host",
+        "burp"
+    ],
+    "setup": "Load and enable the official Burp MCP extension, then set BURP_MCP_PROXY_JAR. BURP_MCP_URL defaults to http://127.0.0.1:9876.",
+    "host": {
+      "lifecycle": "client",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [
+        {
+          "type": "env",
+          "name": "BURP_MCP_PROXY_JAR",
+          "path_kind": "file",
+          "label": "BURP_MCP_PROXY_JAR from the Burp extension"
+        },
+        {
+          "type": "command",
+          "name": "java",
+          "label": "Java runtime"
+        }
+      ],
+      "service": {
+        "ownership": "external",
+        "url_env": "BURP_MCP_URL",
+        "url": "http://127.0.0.1:9876"
+      },
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    "anything-analyzer": {
+      "category": "web-reverse",
+      "description": "Anything Analyzer GUI traffic capture, browser control, JS hooks, and protocol analysis",
+      "homepage": "https://github.com/Mouseww/anything-analyzer",
+      "provider": "anything-analyzer",
+      "auth_mode": "local-bearer-token",
+      "transport": "http",
+      "url": "http://127.0.0.1:23816/mcp",
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "secret": "anything_analyzer_mcp_token",
+        "env": "ANYTHING_ANALYZER_MCP_TOKEN",
+        "required": true
+    },
+    "setup": "Install Anything Analyzer 3.6.52 or newer, enable its MCP Server on port 23816 with authentication, and copy the generated token to ANYTHING_ANALYZER_MCP_TOKEN or the encrypted Secret. The upstream server currently listens without an explicit host; block port 23816 at the host firewall and never publish it.",
+    "host": {
+      "lifecycle": "external",
+      "install": {
+        "type": "manual"
+      },
+      "requirements": [],
+      "service": {
+        "ownership": "external",
+        "url": "http://127.0.0.1:23816/mcp"
+      },
+      "platforms": [
+        "darwin",
+        "linux",
+        "windows"
+      ]
+    },
+      "tool_timeout_sec": 600,
       "supported_targets": [
         "claude",
         "codex",

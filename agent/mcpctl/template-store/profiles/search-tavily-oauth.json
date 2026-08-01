@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "search-tavily-oauth",
+  "description": "Documentation plus Tavily authenticated by each client's OAuth flow",
+  "extends": [
+    "base"
+  ],
+  "enable": [
+    "tavily-oauth"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

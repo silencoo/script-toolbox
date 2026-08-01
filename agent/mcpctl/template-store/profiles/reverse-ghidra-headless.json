@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "reverse-ghidra-headless",
+  "description": "Display-free Ghidra analysis through PyGhidra",
+  "extends": [],
+  "enable": [
+    "ghidra-headless"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

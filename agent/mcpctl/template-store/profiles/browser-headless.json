@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "browser-headless",
+  "description": "Display-free isolated Playwright browser automation",
+  "extends": [],
+  "enable": [
+    "playwright-headless"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

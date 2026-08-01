@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "reverse-gui",
+  "description": "GUI-backed reverse and web analysis for Xvfb plus xpra or VNC",
+  "extends": [
+    "reverse-ghidra",
+    "reverse-cutter"
+  ],
+  "enable": [
+    "jadx",
+    "burp"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

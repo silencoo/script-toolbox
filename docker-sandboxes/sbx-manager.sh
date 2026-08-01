@@ -90,7 +90,8 @@ as_root() {
 }
 
 require_sbx() {
-  has sbx || die "sbx is not installed. Run: $SCRIPT_NAME install"
+  has sbx \
+    || die "sbx is not installed. Run the first-time setup: ./$SCRIPT_NAME setup balanced"
 }
 
 shell_quote_command() {
@@ -117,9 +118,10 @@ ${C_BOLD}Global options${C_RESET}
   -h, --help                 Show this help.
 
 ${C_BOLD}Main commands${C_RESET}
-  install                    Install sbx for the detected host.
+  install                    Install sbx; skip network policy and login setup.
   setup [open|balanced|locked]
-                             Install if needed, sign in, set policy, show info.
+                             Recommended first command: install if needed,
+                             sign in, set policy, and show info.
   login                      Sign in to Docker using sbx OAuth.
   info                       Show host, daemon, policy, sandbox, and cache info.
   doctor                     Run host checks plus 'sbx diagnose'.
@@ -167,6 +169,16 @@ ${C_BOLD}Examples${C_RESET}
 
 Official documentation: ${DOCS_ROOT}
 EOF_USAGE
+}
+
+first_run_hint() {
+  section "First-time setup"
+  say "Docker sbx is not installed yet."
+  say "Start with the recommended setup command:"
+  say "  ./$SCRIPT_NAME setup balanced"
+  say
+  say "This installs sbx, configures a balanced network policy, and signs in to Docker."
+  say "Use './$SCRIPT_NAME install' only to install sbx without completing setup."
 }
 
 host_os() {
@@ -1374,8 +1386,16 @@ main() {
   # Shift the parsed global options instead of copying the remainder.
   shift "$PARSED_GLOBAL_OPTION_COUNT"
 
-  local command="${1:-help}"
-  if [ "$#" -gt 0 ]; then shift; fi
+  if [ "$#" -eq 0 ]; then
+    if ! has sbx; then
+      first_run_hint
+    fi
+    usage
+    return 0
+  fi
+
+  local command="$1"
+  shift
 
   case "$command" in
     help|-h|--help) usage ;;

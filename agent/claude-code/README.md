@@ -90,11 +90,21 @@ OPENROUTER_API_KEY=sk-or-... \
   --base-url https://gateway.example.com/anthropic \
   --models-url https://gateway.example.com/v1/models \
   --model my-model --key-env MY_API_KEY --auth-mode auth-token
+
+# Preview without a key, validation request, install, or file change.
+./agent/agentctl/agentctl setup claude \
+  --provider anthropic --model claude-sonnet-4-6 --dry-run
+
+# For automation, prefer a mode-0600 single-line file over --key.
+./agent/agentctl/agentctl setup claude \
+  --provider anthropic --model claude-sonnet-4-6 \
+  --key-file /secure/anthropic-api-key
 ```
 
 `--region china|global` is retained as a MiniMax compatibility shortcut.
 Use `--skip-validate` when a custom gateway does not implement a models
-endpoint.
+endpoint. `--key-file` refuses symlinks, group/other-readable files, empty
+files, and multi-line values.
 
 Shell-level `ANTHROPIC_*` exports take precedence over `settings.json`. During
 interactive setup the script offers to back up each affected shell startup file

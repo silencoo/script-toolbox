@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "reverse-debian-headless",
+  "description": "Full Debian headless lab, including licensed IDALib and APK resource tooling",
+  "extends": [
+    "reverse-headless",
+    "reverse-ida"
+  ],
+  "enable": [
+    "apktool"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

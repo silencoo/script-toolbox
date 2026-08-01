@@ -6923,6 +6923,7 @@ run_script_static_self_check() {
         action_module_status_overview
         action_script_quality
         action_profile_plan_apply
+        profile_baseline_modules
         profile_module_catalog
         profile_module_impact
         validate_profile_modules
@@ -7047,20 +7048,25 @@ profile_presets() {
     printf '%s\n' "minimal" "docker-host" "dev-box" "secure-server"
 }
 
+profile_baseline_modules() {
+    printf '%s\n' "essentials ssh firewall fail2ban auto_updates"
+}
+
 profile_modules_for_preset() {
-    local profile="$1"
+    local profile="$1" baseline_modules
+    baseline_modules="$(profile_baseline_modules)"
     case "$profile" in
         minimal)
-            printf '%s\n' "essentials ssh firewall fail2ban auto_updates module_status report"
+            printf '%s\n' "$baseline_modules module_status report"
             ;;
         docker-host)
-            printf '%s\n' "essentials ssh firewall fail2ban auto_updates docker reverse_proxy compose_backup monitoring backup_restore docker_security docker_image_check port_exposure report"
+            printf '%s\n' "$baseline_modules docker reverse_proxy compose_backup monitoring backup_restore docker_security docker_image_check port_exposure report"
             ;;
         dev-box)
-            printf '%s\n' "essentials runtime terminal network_tools rclone croc module_status report"
+            printf '%s\n' "$baseline_modules runtime terminal network_tools rclone croc module_status report"
             ;;
         secure-server)
-            printf '%s\n' "essentials ssh firewall fail2ban auto_updates security_audit ssh_audit port_exposure external_trust maintenance_window report"
+            printf '%s\n' "$baseline_modules security_audit ssh_audit port_exposure external_trust maintenance_window report"
             ;;
         *)
             return 1
@@ -7073,7 +7079,7 @@ profile_description() {
     case "$profile" in
         minimal) printf '最小服务器基线：基础工具、SSH、防火墙、Fail2ban 和自动安全更新。' ;;
         docker-host) printf 'Docker 应用主机：Docker、反代、Compose 备份、监控、备份与安全基线。' ;;
-        dev-box) printf '开发机：语言运行时、终端环境、网络工具、rclone、croc。' ;;
+        dev-box) printf '远程开发机：服务器安全基线、语言运行时、终端环境、网络工具、rclone 和 croc。' ;;
         secure-server) printf '安全服务器基线：主动配置 SSH/UFW/Fail2ban/自动更新与维护窗口，并附带只读审计报告。' ;;
         *) printf '自定义 Profile。' ;;
     esac
@@ -8724,7 +8730,7 @@ show_recommended_modules() {
     printf '%b\n' "  Docker 官方 apt 安装、Docker 管理器、应用市场、证书/反代、Compose 项目备份、Docker 安全基线、镜像更新检查、服务健康检查"
     printf '%b\n' ""
     printf '%b\n' "${GREEN}开发机:${PLAIN}"
-    printf '%b\n' "  Runtime 管理器、终端环境、网络/HTTP 工具集"
+    printf '%b\n' "  dev-box 在新 VPS 安全基线上增加 Runtime 管理器、终端环境、网络/HTTP 工具集"
     printf '%b\n' ""
     printf '%b\n' "${GREEN}存储 / 媒体机:${PLAIN}"
     printf '%b\n' "  备份/恢复、rclone、CloudDrive2、磁盘工具、共享挂载辅助"

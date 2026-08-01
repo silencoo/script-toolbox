@@ -13,13 +13,16 @@ documentation so scripts can evolve without crowding the repository root.
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
+| [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Visual Codex quota, credit, value, turn, and daily usage dashboard |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
+| [`userscripts/gemini-session-batch-delete/`](./userscripts/gemini-session-batch-delete/) | Review, filter, and permanently delete multiple Gemini conversations |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
-| [`agent/`](./agent/) | Provider setup, MCP profiles, and Promptctl persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
+| [`agent/`](./agent/) | Provider setup, MCP profiles, portable skill packs, and persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
+| [`workers/mcp-store/`](./workers/mcp-store/) | End-to-end encrypted Toolbox Workspace/Web UI for MCP profiles, skill packs, and persistent prompts |
 | [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
@@ -56,12 +59,23 @@ provider URL/key/model flow, and non-interactive flags. The same folders also
 ship optional Brave Search, Exa, Context7, GitHub, and CloakBrowser-backed
 Chrome DevTools MCP configuration.
 
-From a clone, the three independent Shell controllers are:
+From a clone, the four independent controllers are:
 
 ```bash
 ./agent/agentctl/agentctl
 ./agent/mcpctl/mcpctl
 ./agent/promptctl/promptctl
+./agent/skillsctl/skillsctl
+```
+
+Optionally expose those names on `PATH` with reversible repository-backed
+symlinks:
+
+```bash
+./agent/install-commands.sh --prefix "$HOME/.local/bin"
+./agent/install-commands.sh --prefix "$HOME/.local/bin" --yes
+agentctl status all
+agentctl workspace status
 ```
 
 See [`agent/`](./agent/) for the per-agent convention and the full list of
@@ -73,16 +87,22 @@ agents. Today:
 - [`agent/opencode/`](./agent/opencode/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider.
 - [`agent/pi/`](./agent/pi/) — Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, MiniMax, or a custom provider through Pi's native API adapters.
 - [`agent/promptctl/`](./agent/promptctl/) — persistent-instruction setup for Claude Code and Codex with direct and Agent-guided entrypoints.
+- [`agent/skillsctl/`](./agent/skillsctl/) — portable skills, inherited
+  frontend/backend/fullstack packs, safe target links, and encrypted recovery.
 
 ## Agent controllers
 
-The three controller entrypoints open a guided menu without arguments:
+The controller entrypoints share a reversible PATH installer:
 
 - [`agentctl`](./agent/agentctl/) installs supported clients and configures
-  providers, models, and owned credentials.
+  providers, models, and owned credentials. It also provides redacted
+  human/JSON status, mutation-free provider previews, and an optional master
+  Workspace recovery layer for the three encrypted content Stores.
 - [`mcpctl`](./agent/mcpctl/) manages task-oriented MCP profiles.
 - [`promptctl`](./agent/promptctl/) manages persistent instructions and their
   user-editable Markdown files.
+- [`skillsctl`](./agent/skillsctl/) manages portable skills and focused packs
+  across supported agent skill directories.
 
 An agent can perform the Promptctl workflow by following
 [`AGENT_SETUP.md`](./agent/promptctl/AGENT_SETUP.md); direct and Agent-guided

@@ -18,6 +18,12 @@ manager checks the Windows version, CPU architecture, and Hypervisor Platform
 feature; when run as Administrator, `install` can enable the feature after
 confirmation. A reboot may be required. Docker Desktop is not required.
 
+On a new host, start with `setup balanced`. This is the recommended first
+command: it installs `sbx` when needed, configures the initial network policy,
+and signs in to Docker. Running either manager without a command remains
+read-only; when `sbx` is missing, it displays the recommended setup command
+before the general help.
+
 On a Linux VPS, confirm that the provider exposes nested virtualization and that
 `/dev/kvm` is available.
 
@@ -150,6 +156,9 @@ The same kit also installs:
 - a sparse checkout containing only
   [`script-toolbox/agent`](https://github.com/silencoo/script-toolbox/tree/main/agent)
   under `~/.local/share/sbx-manager`, exposed through the short `~/agent` link
+- global `agentctl`, `mcpctl`, `promptctl`, and `skillsctl` commands in
+  `/usr/local/bin`,
+  linked to that sparse checkout so they can be run from any directory
 
 `fzf` uses `fd` for traversal and `bat`/`eza` for previews. The kit normalizes
 Debian and Ubuntu's `batcat` and `fdfind` binary names to `bat` and `fd`.

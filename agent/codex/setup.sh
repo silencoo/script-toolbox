@@ -27,6 +27,7 @@ trap 'on_error $LINENO' ERR
 PROVIDER=""
 MODEL=""
 KEY=""
+KEY_INPUT_FILE=""
 KEY_ENV_OVERRIDE=""
 BASE_URL_OVERRIDE=""
 MODELS_URL_OVERRIDE=""
@@ -36,6 +37,7 @@ SKIP_VALIDATE=0
 UNINSTALL=0
 LIST_PROVIDERS=0
 INTERACTIVE=0
+DRY_RUN=0
 
 SETTINGS_DIR="${HOME}/.codex"
 SETTINGS_FILE="${SETTINGS_DIR}/config.toml"
@@ -59,12 +61,14 @@ ${C_BOLD}Options:${C_RESET}
   --provider <id>            openai, openrouter, or custom. Omit for a menu.
   --model <model-id>         Omit for an interactive model menu.
   --key <api-key>            Falls back to the provider's standard env var.
+  --key-file <path>          Read the key from one owner-only file (recommended).
   --base-url <url>           Override the preset URL; required for custom.
   --models-url <url>         Override the key/model validation endpoint.
   --key-env <name>           Custom provider environment variable.
   --provider-name <name>     Display name for a custom provider.
   --list-providers           Print presets and current model IDs.
   --skip-validate            Skip the models endpoint probe.
+  --dry-run                  Preview resolution without network/install/writes.
   --force                    Replace this script's previous/legacy block.
   --uninstall                Remove this script's provider/profile and key file.
   -h | --help                Show this help.
@@ -137,6 +141,7 @@ while [ $# -gt 0 ]; do
     --provider)       PROVIDER="${2:?}"; shift 2 ;;
     --model)          MODEL="${2:?}"; shift 2 ;;
     --key)            KEY="${2:?}"; shift 2 ;;
+    --key-file)       KEY_INPUT_FILE="${2:?}"; shift 2 ;;
     --base-url)       BASE_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --models-url)     MODELS_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
@@ -144,6 +149,7 @@ while [ $# -gt 0 ]; do
     --region)         die "--region was a MiniMax-only option; current Codex requires a Responses-compatible provider" ;;
     --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
     --force)          FORCE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -155,6 +161,9 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   list_providers
   exit 0
 fi
+
+[ "$UNINSTALL" != 1 ] || [ "$DRY_RUN" != 1 ] ||
+  die "--dry-run previews setup only and cannot be combined with --uninstall"
 
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no config.toml at $SETTINGS_FILE"
@@ -259,14 +268,28 @@ if [ -z "$MODEL" ]; then
 fi
 [ -n "$MODEL" ] || die "model ID is required (use --model)"
 
-if [ -z "$KEY" ]; then
-  KEY="$(read_env "$KEY_ENV")"
+PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
+[ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
+PROVIDER_ID="script_toolbox_${PROVIDER_SUFFIX}"
+KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
+
+resolve_api_key \
+  "$KEY" "$KEY_INPUT_FILE" "$KEY_ENV" "$DRY_RUN" \
+  "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
+KEY="$RESOLVED_API_KEY"
+
+if [ "$SKIP_VALIDATE" = 1 ]; then
+  VALIDATION_PLAN="skip (--skip-validate)"
+else
+  VALIDATION_PLAN="would probe $MODELS_URL"
 fi
-if [ -z "$KEY" ]; then
-  prompt_secret "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
-  KEY="$PROMPT_REPLY"
+if [ "$DRY_RUN" = 1 ]; then
+  print_provider_plan \
+    "Codex" "$DISPLAY_NAME ($PROVIDER)" "$BASE_URL" "$MODEL" \
+    "codex" "@openai/codex via npm" "$SETTINGS_FILE" "$STATE_FILE" \
+    "$KEY_FILE (mode 600)" "$API_KEY_SOURCE" "$VALIDATION_PLAN"
+  exit 0
 fi
-[ -n "$KEY" ] || die "no API key supplied"
 
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  Codex provider setup                                         |" "${C_RESET}"
@@ -274,6 +297,7 @@ printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+---------------------------------------
 info "Provider : $DISPLAY_NAME ($PROVIDER)"
 info "Base URL : $BASE_URL"
 info "Model    : $MODEL"
+info "Key      : $API_KEY_SOURCE"
 echo
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
@@ -290,11 +314,6 @@ mkdir -p "$SETTINGS_DIR" "$KEY_DIR"
 if [ ! -f "$SETTINGS_FILE" ]; then
   printf '# Codex CLI configuration.\n' > "$SETTINGS_FILE"
 fi
-
-PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
-[ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
-PROVIDER_ID="script_toolbox_${PROVIDER_SUFFIX}"
-KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
 
 if grep -qF "$BEGIN_MARKER" "$SETTINGS_FILE"; then
   info "refreshing the existing $MANAGED_BY block"

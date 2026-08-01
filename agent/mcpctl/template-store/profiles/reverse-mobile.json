@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "reverse-mobile",
+  "description": "Android static analysis and Frida dynamic instrumentation",
+  "extends": [
+    "reverse-android",
+    "reverse-frida"
+  ],
+  "enable": [],
+  "disable": [],
+  "target_overrides": {}
+}

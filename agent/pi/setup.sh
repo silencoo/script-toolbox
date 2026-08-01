@@ -27,6 +27,7 @@ trap 'on_error $LINENO' ERR
 PROVIDER=""
 MODEL=""
 KEY=""
+KEY_INPUT_FILE=""
 KEY_ENV_OVERRIDE=""
 BASE_URL_OVERRIDE=""
 MODELS_URL_OVERRIDE=""
@@ -39,6 +40,7 @@ SKIP_VALIDATE=0
 UNINSTALL=0
 LIST_PROVIDERS=0
 INTERACTIVE=0
+DRY_RUN=0
 
 SETTINGS_DIR="${HOME}/.pi/agent"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
@@ -62,6 +64,7 @@ ${C_BOLD}Options:${C_RESET}
                              minimax-cn, minimax-global, or custom.
   --model <model-id>         Omit for an interactive model menu.
   --key <api-key>            Falls back to the provider's standard env var.
+  --key-file <path>          Read the key from one owner-only file (recommended).
   --base-url <url>           Override the preset URL; required for custom.
   --models-url <url>         Override the key/model validation endpoint.
   --key-env <name>           Custom provider environment variable.
@@ -71,6 +74,7 @@ ${C_BOLD}Options:${C_RESET}
   --region <china|global>    Backward-compatible alias for MiniMax selection.
   --list-providers           Print presets and current model IDs.
   --skip-validate            Skip the models endpoint probe.
+  --dry-run                  Preview resolution without network/install/writes.
   --force                    Replace a previous script-toolbox provider entry.
   --uninstall                Remove this script's provider and credential only.
   -h | --help                Show this help.
@@ -158,6 +162,7 @@ while [ $# -gt 0 ]; do
     --provider)       PROVIDER="${2:?}"; shift 2 ;;
     --model)          MODEL="${2:?}"; shift 2 ;;
     --key)            KEY="${2:?}"; shift 2 ;;
+    --key-file)       KEY_INPUT_FILE="${2:?}"; shift 2 ;;
     --base-url)       BASE_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --models-url)     MODELS_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
@@ -167,6 +172,7 @@ while [ $# -gt 0 ]; do
     --region)         REGION="${2:?}"; shift 2 ;;
     --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
     --force)          FORCE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -178,6 +184,9 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   list_providers
   exit 0
 fi
+
+[ "$UNINSTALL" != 1 ] || [ "$DRY_RUN" != 1 ] ||
+  die "--dry-run previews setup only and cannot be combined with --uninstall"
 
 if [ "$UNINSTALL" = 1 ]; then
   [ -f "$SETTINGS_FILE" ] || die "no settings.json at $SETTINGS_FILE"
@@ -201,13 +210,6 @@ if [ "$UNINSTALL" = 1 ]; then
   ok "removed $MANAGED_BY provider and credential"
   exit 0
 fi
-
-ensure_jq
-mkdir -p "$SETTINGS_DIR"
-[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
-[ -f "$MODELS_FILE" ] || printf '{}\n' > "$MODELS_FILE"
-require_json_object "$SETTINGS_FILE"
-require_json_object "$MODELS_FILE"
 
 if [ -n "$REGION" ] && [ -z "$PROVIDER" ]; then
   case "$REGION" in
@@ -419,14 +421,32 @@ if [ -z "$MODEL" ]; then
 fi
 [ -n "$MODEL" ] || die "model ID is required (use --model)"
 
-if [ -z "$KEY" ]; then
-  KEY="$(read_env "$KEY_ENV")"
+PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
+[ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
+PROVIDER_ID="script-toolbox-${PROVIDER_SUFFIX}"
+KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
+KEY_COMMAND='!cat "$HOME/.pi/agent/provider-keys/'"${PROVIDER_ID}"'.key"'
+
+resolve_api_key \
+  "$KEY" "$KEY_INPUT_FILE" "$KEY_ENV" "$DRY_RUN" \
+  "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
+KEY="$RESOLVED_API_KEY"
+
+if [ "$SKIP_VALIDATE" = 1 ]; then
+  VALIDATION_PLAN="skip (--skip-validate)"
+else
+  VALIDATION_PLAN="would probe $MODELS_URL"
 fi
-if [ -z "$KEY" ]; then
-  prompt_secret "${DISPLAY_NAME} API key (see ${KEY_DOC_URL})"
-  KEY="$PROMPT_REPLY"
+if [ "$DRY_RUN" = 1 ]; then
+  print_provider_plan \
+    "Pi" "$DISPLAY_NAME ($PROVIDER; $API_TYPE)" "$BASE_URL" "$MODEL" \
+    "pi" "@earendil-works/pi-coding-agent via npm (Node.js 22.19+)" \
+    "$MODELS_FILE; $SETTINGS_FILE" "$STATE_FILE" \
+    "$KEY_FILE (mode 600)" "$API_KEY_SOURCE" "$VALIDATION_PLAN"
+  exit 0
 fi
-[ -n "$KEY" ] || die "no API key supplied"
+
+ensure_jq
 
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "+--------------------------------------------------------------+" "${C_RESET}"
 printf '%s%s%s\n' "${C_BOLD}${C_BLUE}" "|  Pi provider setup                                            |" "${C_RESET}"
@@ -435,6 +455,7 @@ info "Provider : $DISPLAY_NAME ($PROVIDER)"
 info "Protocol : $API_TYPE"
 info "Base URL : $BASE_URL"
 info "Model    : $MODEL"
+info "Key      : $API_KEY_SOURCE"
 echo
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
@@ -455,11 +476,11 @@ else
   ok "Pi installed"
 fi
 
-PROVIDER_SUFFIX="$(safe_id "$PROVIDER")"
-[ -n "$PROVIDER_SUFFIX" ] || die "provider ID did not contain usable characters"
-PROVIDER_ID="script-toolbox-${PROVIDER_SUFFIX}"
-KEY_FILE="${KEY_DIR}/${PROVIDER_ID}.key"
-KEY_COMMAND='!cat "$HOME/.pi/agent/provider-keys/'"${PROVIDER_ID}"'.key"'
+mkdir -p "$SETTINGS_DIR"
+[ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"
+[ -f "$MODELS_FILE" ] || printf '{}\n' > "$MODELS_FILE"
+require_json_object "$SETTINGS_FILE"
+require_json_object "$MODELS_FILE"
 
 if [ -f "$STATE_FILE" ]; then
   old_id="$(sed -n '1p' "$STATE_FILE")"

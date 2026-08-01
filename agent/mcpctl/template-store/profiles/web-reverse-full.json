@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "web-reverse-full",
+  "description": "Explicit full web lab with Burp, Anything Analyzer, Cloak DevTools, and JS reverse debugging",
+  "extends": [
+    "web-reverse",
+    "web-capture",
+    "reverse-js"
+  ],
+  "enable": [],
+  "disable": [],
+  "target_overrides": {}
+}

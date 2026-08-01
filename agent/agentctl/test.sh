@@ -9,6 +9,8 @@ TEST_ROOT="$(mktemp -d)"
 TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 BACKEND_ROOT="${TEST_ROOT}/backends"
 LOG_FILE="${TEST_ROOT}/backend.log"
+TEST_HOME="${TEST_ROOT}/home"
+FAKE_BIN="${TEST_ROOT}/bin"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -45,7 +47,18 @@ for client in claude-code codex opencode pi; do
   make_backend "$client"
 done
 
+mkdir -p "$TEST_HOME" "$FAKE_BIN"
+for command_name in claude codex opencode pi; do
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'printf "%s test-version\n" "$(basename "$0")"'
+  } > "${FAKE_BIN}/${command_name}"
+  chmod +x "${FAKE_BIN}/${command_name}"
+done
+
 run_agentctl() {
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" "$@"
@@ -57,9 +70,9 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.1.0" ] ||
+  "agentctl 0.3.0" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.1.0" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.3.0" ] ||
   fail "version output is incorrect"
 
 [ "$(run_agentctl providers claude)" = "claude-code-provider" ] ||
@@ -82,9 +95,92 @@ run_agentctl init pi --provider anthropic >/dev/null
 grep -qF 'setup pi <--provider> <anthropic>' "$LOG_FILE" ||
   fail "init alias did not route to setup"
 
+mkdir -p "$TEST_HOME/.codex/provider-keys"
+cat > "$TEST_HOME/.codex/config.toml" <<'EOF'
+# >>> agent/codex/setup.sh >>>
+[model_providers.script_toolbox_openai]
+name = "OpenAI"
+
+[profiles.script_toolbox]
+model = "gpt-test"
+model_provider = "script_toolbox_openai"
+# <<< agent/codex/setup.sh <<<
+EOF
+printf '%s\n' 'STATUS-SECRET-MUST-NOT-APPEAR' \
+  > "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key"
+chmod 600 "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key"
+printf '%s\n' "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key" \
+  > "$TEST_HOME/.codex/.script-toolbox-provider-key"
+chmod 600 "$TEST_HOME/.codex/.script-toolbox-provider-key"
+
+status_json="$(run_agentctl status codex --json)"
+printf '%s' "$status_json" | jq -e '
+  .client == "codex"
+  and .cli_installed == true
+  and .provider_status == "configured"
+  and .provider == "script_toolbox_openai"
+  and .model == "gpt-test"
+  and .config_valid == true
+  and .credential_exists == true
+  and .credential_mode == "600"
+  and .credential_private == true
+' >/dev/null || fail "Codex JSON status omitted provider or credential metadata"
+case "$status_json" in
+  *STATUS-SECRET-MUST-NOT-APPEAR*)
+    fail "status JSON exposed a credential value"
+    ;;
+esac
+
+mkdir -p "$TEST_HOME/.claude"
+printf '%s\n' \
+  '{"model":"claude-test","env":{"ANTHROPIC_API_KEY":"CLAUDE-EMBEDDED-SECRET"}}' \
+  > "$TEST_HOME/.claude/settings.json"
+chmod 600 "$TEST_HOME/.claude/settings.json"
+printf '%s\n' 'sk-state-value-that-is-not-a-provider' \
+  > "$TEST_HOME/.claude/.script-toolbox-provider"
+chmod 600 "$TEST_HOME/.claude/.script-toolbox-provider"
+claude_status="$(run_agentctl status claude --json)"
+printf '%s' "$claude_status" | jq -e '
+  .provider_status == "incomplete"
+  and .provider == null
+  and .credential_exists == true
+  and .credential_private == true
+' >/dev/null || fail "Claude status trusted a malformed provider marker"
+case "$claude_status" in
+  *CLAUDE-EMBEDDED-SECRET*|*sk-state-value-that-is-not-a-provider*)
+    fail "Claude status exposed a credential or malformed state value"
+    ;;
+esac
+
+all_status="$(run_agentctl status all --json)"
+[ "$(printf '%s' "$all_status" | jq 'length')" = 4 ] ||
+  fail "status all did not return all four clients"
+case "$all_status" in
+  *STATUS-SECRET-MUST-NOT-APPEAR*|*CLAUDE-EMBEDDED-SECRET*|*sk-state-value-that-is-not-a-provider*)
+    fail "status all exposed a credential value"
+    ;;
+esac
+
+# A corrupted ownership marker is not trusted as a path or echoed back.
+printf '%s\n' 'CORRUPTED-STATE-SECRET-MUST-STAY-HIDDEN' \
+  > "$TEST_HOME/.codex/.script-toolbox-provider-key"
+invalid_status="$(run_agentctl status codex --json)"
+printf '%s' "$invalid_status" |
+  jq -e '.credential_path_valid == false and .provider_status == "incomplete"' \
+  >/dev/null || fail "status trusted an invalid credential path"
+case "$invalid_status" in
+  *CORRUPTED-STATE-SECRET-MUST-STAY-HIDDEN*)
+    fail "status echoed an invalid ownership-state value"
+    ;;
+esac
+printf '%s\n' "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key" \
+  > "$TEST_HOME/.codex/.script-toolbox-provider-key"
+
 # No arguments enter the Shell guide. Read-only provider listing is delegated
 # after the action and client selections.
-printf '2\n4\n' |
+printf '3\n4\n' |
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" >"$TEST_ROOT/interactive-providers.out" 2>&1 ||
@@ -94,8 +190,22 @@ grep -q 'Agentctl guided Shell setup' "$TEST_ROOT/interactive-providers.out" ||
 grep -q 'pi-provider' "$TEST_ROOT/interactive-providers.out" ||
   fail "guided provider action selected the wrong backend"
 
+# Guided status is read-only and uses the same status implementation.
+printf '2\n2\n' |
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
+  AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
+    AGENTCTL_TEST_LOG="$LOG_FILE" \
+    "$AGENTCTL" >"$TEST_ROOT/interactive-status.out" 2>&1 ||
+  fail "guided status failed"
+grep -q 'Provider    : configured (script_toolbox_openai)' \
+  "$TEST_ROOT/interactive-status.out" ||
+  fail "guided status omitted the configured Codex provider"
+
 # Guided setup delegates to the selected setup backend.
 printf '1\n1\n' |
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" >"$TEST_ROOT/interactive-setup.out" 2>&1 ||
@@ -105,7 +215,9 @@ grep -q '^setup claude-code$' "$LOG_FILE" ||
 
 # Provider uninstall always asks separately and defaults to cancellation.
 line_count_before="$(wc -l < "$LOG_FILE" | tr -d ' ')"
-printf '3\n2\n\n' |
+printf '5\n2\n\n' |
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" >"$TEST_ROOT/interactive-cancel.out" 2>&1 ||
@@ -117,7 +229,9 @@ grep -qF '[cancelled] no provider configuration was changed' \
   "$TEST_ROOT/interactive-cancel.out" ||
   fail "guided uninstall cancellation was not reported"
 
-printf '3\n2\ny\n' |
+printf '5\n2\ny\n' |
+  HOME="$TEST_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" >"$TEST_ROOT/interactive-uninstall.out" 2>&1 ||
@@ -130,6 +244,8 @@ grep -q '^uninstall opencode$' "$LOG_FILE" ||
   fail "explicit confirmed uninstall did not reach its backend"
 
 if AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
+  HOME="$TEST_HOME" \
+  PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_TEST_LOG="$LOG_FILE" \
   "$AGENTCTL" </dev/null >"$TEST_ROOT/eof.out" 2>&1; then
   fail "guided mode accepted missing input"
@@ -143,4 +259,4 @@ fi
 grep -q "unsupported client 'unknown'" "$TEST_ROOT/unknown.out" ||
   fail "unknown client error was not actionable"
 
-printf '%s\n' "ok  : agentctl guide, aliases, routing, and ownership boundary"
+printf '%s\n' "ok  : agentctl guide, status, routing, and ownership boundary"

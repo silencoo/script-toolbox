@@ -20,6 +20,13 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  MCP_REMOTE_PROTOCOL,
+  RemoteStoreError,
+  getRemoteWebUiSetting,
+  setRemoteWebUiEnabled
+} from "../remote-store.mjs";
+
 const SCHEMA = 1;
 const RECOVERY_PREFIX = "mcpstore1_";
 const STORE_ID_PATTERN = /^[a-f0-9]{32}$/;
@@ -53,6 +60,9 @@ Usage:
   remote-client.mjs backup --store <dir> --remote-config <file> [--sops-file <file>]
   remote-client.mjs restore --store <dir> --remote-config <file> [options]
   remote-client.mjs status --remote-config <file>
+  remote-client.mjs ui-status --remote-config <file>
+  remote-client.mjs ui-enable --remote-config <file>
+  remote-client.mjs ui-disable --remote-config <file>
   remote-client.mjs versions --remote-config <file>
   remote-client.mjs recovery --remote-config <file>
   remote-client.mjs secrets --store <dir> --remote-config <file>
@@ -146,6 +156,11 @@ async function main(argv) {
       return;
     case "status":
       await printStatus(options);
+      return;
+    case "ui-status":
+    case "ui-enable":
+    case "ui-disable":
+      await printOrUpdateWebUi(options);
       return;
     case "versions":
       await printVersions(options);
@@ -320,16 +335,11 @@ async function collectSnapshot(storePath, config, sopsFile) {
     Object.assign(secrets, await decryptSopsSecrets(sopsFile));
   }
 
-  for (const definition of Object.values(catalog.servers)) {
-    const auth = definition && typeof definition === "object"
-      ? definition.auth
-      : null;
-    if (!auth || typeof auth !== "object") continue;
-    if (typeof auth.secret !== "string" || auth.secret.length === 0) continue;
-    if (typeof auth.env !== "string" || auth.env.length === 0) continue;
-    const value = process.env[auth.env];
+  for (const reference of collectCatalogSecretReferences(catalog)) {
+    if (!reference.env) continue;
+    const value = process.env[reference.env];
     if (typeof value === "string" && value.length > 0) {
-      secrets[auth.secret] = value;
+      secrets[reference.secret] = value;
     }
   }
   validateSecrets(secrets);
@@ -341,6 +351,78 @@ async function collectSnapshot(storePath, config, sopsFile) {
     profiles,
     secrets
   };
+}
+
+function collectCatalogSecretReferences(catalog) {
+  const references = new Map();
+  for (const definition of Object.values(catalog.servers)) {
+    if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
+      continue;
+    }
+    const candidates = [definition];
+    if (definition.target_overrides &&
+        typeof definition.target_overrides === "object" &&
+        !Array.isArray(definition.target_overrides)) {
+      candidates.push(...Object.values(definition.target_overrides));
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        continue;
+      }
+      const descriptors = [];
+      if (candidate.auth &&
+          typeof candidate.auth === "object" &&
+          !Array.isArray(candidate.auth)) {
+        descriptors.push(candidate.auth);
+      }
+      if (Array.isArray(candidate.command)) {
+        for (const descriptor of candidate.command) {
+          if (descriptor &&
+              typeof descriptor === "object" &&
+              !Array.isArray(descriptor)) {
+            descriptors.push(descriptor);
+          }
+        }
+      }
+      for (const field of ["environment", "headers"]) {
+        const values = candidate[field];
+        if (!values || typeof values !== "object" || Array.isArray(values)) continue;
+        for (const descriptor of Object.values(values)) {
+          if (descriptor &&
+              typeof descriptor === "object" &&
+              !Array.isArray(descriptor)) {
+            descriptors.push(descriptor);
+          }
+        }
+      }
+
+      for (const descriptor of descriptors) {
+        if (typeof descriptor.secret !== "string" ||
+            descriptor.secret.length === 0) {
+          throw new RemoteError("catalog contains an invalid Secret reference");
+        }
+        if (descriptor.env !== undefined &&
+            (typeof descriptor.env !== "string" ||
+             (descriptor.env.length > 0 &&
+              !/^[A-Za-z_][A-Za-z0-9_]*$/.test(descriptor.env)))) {
+          throw new RemoteError("catalog contains an invalid Secret environment reference");
+        }
+        const previous = references.get(descriptor.secret);
+        if (previous && previous.env && descriptor.env &&
+            previous.env !== descriptor.env) {
+          throw new RemoteError(
+            `catalog Secret '${descriptor.secret}' has conflicting environment references`
+          );
+        }
+        references.set(descriptor.secret, {
+          secret: descriptor.secret,
+          env: descriptor.env || previous?.env || ""
+        });
+      }
+    }
+  }
+  return [...references.values()];
 }
 
 async function decryptSopsSecrets(sopsFile) {
@@ -527,6 +609,21 @@ async function printStatus(options) {
     process.stdout.write(`Created:  ${status.latest.created_at}\n`);
     process.stdout.write(`Size:     ${status.latest.size} bytes\n`);
   }
+}
+
+async function printOrUpdateWebUi(options) {
+  const config = await readRemoteConfig(options.remoteConfig);
+  const setting = options.command === "ui-status"
+    ? await getRemoteWebUiSetting(config, MCP_REMOTE_PROTOCOL)
+    : await setRemoteWebUiEnabled(
+      config,
+      MCP_REMOTE_PROTOCOL,
+      options.command === "ui-enable"
+    );
+  process.stdout.write(
+    `Web UI: ${setting.web_ui_enabled ? "enabled" : "disabled"}\n` +
+    `URL:    ${config.endpoint}/\n`
+  );
 }
 
 async function printVersions(options) {
@@ -1100,6 +1197,7 @@ export {
   LOCAL_SECRETS_INFO,
   RECOVERY_PREFIX,
   SNAPSHOT_INFO,
+  collectCatalogSecretReferences,
   collectSnapshot,
   decryptValue,
   deriveAuthenticationToken,
@@ -1116,7 +1214,7 @@ export {
 if (process.argv[1] &&
     import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main(process.argv.slice(2)).catch((error) => {
-    const message = error instanceof RemoteError
+    const message = error instanceof RemoteError || error instanceof RemoteStoreError
       ? error.message
       : "unexpected remote-client failure";
     process.stderr.write(`✗ ${message}\n`);

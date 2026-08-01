@@ -1,17 +1,42 @@
 {
-  "name": "mcp-store-worker",
+  "name": "toolbox-store-worker",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "wrangler dev",
-    "test": "node --test worker.test.mjs worker.runtime.test.mjs",
+    "build": "vite build",
+    "dev": "npm run build && wrangler dev",
+    "dev:ui": "vite",
+    "deploy": "npm run build && wrangler deploy",
+    "test": "node --test worker.test.mjs worker.runtime.test.mjs store-crypto.test.mjs mcp-model.test.mjs ui-contract.test.mjs",
+    "typecheck": "tsc --noEmit",
     "types": "wrangler types --include-runtime false",
-    "validate": "npm run test && npm run types && wrangler deploy --dry-run --outdir .wrangler/dry-run"
+    "validate": "npm run typecheck && npm run build && npm run test && npm run types && wrangler deploy --dry-run --outdir .wrangler/dry-run"
   },
   "devDependencies": {
-    "wrangler": "^4.114.0"
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "shadcn": "^4.16.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0",
+    "wrangler": "^4.118.0"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.28.0",
+    "radix-ui": "^1.6.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0"
   }
 }

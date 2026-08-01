@@ -1,0 +1,644 @@
+#!/usr/bin/env bash
+# Local lifecycle manager for catalogued MCP servers. Package installs are
+# isolated below MCPCTL_HOST_ROOT and are the only files this script uninstalls.
+
+set -euo pipefail
+umask 077
+
+die() {
+  printf 'mcpctl: %s\n' "$*" >&2
+  exit 1
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "required command '$1' was not found on PATH"
+}
+
+validate_name() {
+  case "$1" in
+    ""|*[!A-Za-z0-9_-]*)
+      die "invalid server name '$1'"
+      ;;
+  esac
+}
+
+[ $# -ge 1 ] || die "missing lifecycle action"
+ACTION="$1"
+shift
+NAME=""
+CATALOG=""
+STATE_FILE=""
+ALL=0
+DRY_RUN=0
+
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  NAME="$1"
+  shift
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --catalog)
+      [ $# -ge 2 ] || die "--catalog requires a file"
+      CATALOG="$2"
+      shift 2
+      ;;
+    --state)
+      [ $# -ge 2 ] || die "--state requires a file"
+      STATE_FILE="$2"
+      shift 2
+      ;;
+    --all)
+      ALL=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    *)
+      die "unknown host-manager argument '$1'"
+      ;;
+  esac
+done
+
+require_command jq
+[ -f "$CATALOG" ] || die "catalog not found: $CATALOG"
+
+case "$ACTION" in
+  doctor|status)
+    if [ -z "$NAME" ]; then ALL=1; fi
+    ;;
+  install|uninstall|start|stop|restart)
+    [ -n "$NAME" ] || die "server $ACTION requires a server name"
+    ;;
+  *)
+    die "unknown lifecycle action '$ACTION'"
+    ;;
+esac
+
+if [ -n "$NAME" ]; then
+  validate_name "$NAME"
+  jq -e --arg name "$NAME" '.servers[$name] != null' "$CATALOG" \
+    >/dev/null 2>&1 || die "unknown server '$NAME'"
+fi
+
+data_home="${XDG_DATA_HOME:-${HOME}/.local/share}"
+SERVERS_ROOT="${MCPCTL_HOST_ROOT:-${data_home}/mcpctl/servers}"
+if [ -n "${MCPCTL_HOST_TRASH:-}" ]; then
+  TRASH_ROOT="$MCPCTL_HOST_TRASH"
+elif [ -n "${MCPCTL_HOST_ROOT:-}" ]; then
+  TRASH_ROOT="$(dirname "$SERVERS_ROOT")/trash"
+else
+  TRASH_ROOT="${data_home}/mcpctl/trash"
+fi
+case "$SERVERS_ROOT" in
+  /*) ;;
+  *) die "MCPCTL_HOST_ROOT must be an absolute path" ;;
+esac
+case "$TRASH_ROOT" in
+  /*) ;;
+  *) die "MCPCTL_HOST_TRASH must be an absolute path" ;;
+esac
+
+platform_name() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Darwin)  printf 'darwin' ;;
+    Linux)   printf 'linux' ;;
+    MINGW*|MSYS*|CYGWIN*) printf 'windows' ;;
+    *)       printf 'unknown' ;;
+  esac
+}
+
+PLATFORM="$(platform_name)"
+
+definition_for() {
+  jq -c --arg name "$1" '.servers[$name]' "$CATALOG"
+}
+
+host_for() {
+  definition_for "$1" | jq -c '
+    . as $definition
+    | (.host // {
+        lifecycle: (if .transport == "http" then "remote" else "client" end),
+        install: {type: (if .transport == "http" then "none" else "manual" end)},
+        requirements: []
+      })
+    | .lifecycle = (.lifecycle //
+        (if $definition.transport == "http" then "remote" else "client" end))
+    | .install = (.install // {type: "manual"})
+    | .requirements = (.requirements // [])
+  '
+}
+
+setup_for() {
+  definition_for "$1" | jq -r '.setup // empty'
+}
+
+homepage_for() {
+  definition_for "$1" | jq -r '.homepage // empty'
+}
+
+platform_supported() {
+  local host="$1"
+  printf '%s' "$host" | jq -e --arg platform "$PLATFORM" '
+    ((.platforms // []) | length) == 0
+    or ((.platforms // []) | index($platform)) != null
+  ' >/dev/null 2>&1
+}
+
+requirement_label() {
+  printf '%s' "$1" | jq -r '
+    .label //
+    (if .type == "command" then
+       "command " + ([.name] + (.alternatives // []) | join(" or "))
+     elif .type == "env" then
+       "environment " + .name
+     elif .type == "any" then
+       "one of " + ((.commands // []) + (.envs // []) | join(", "))
+     elif .type == "endpoint" then
+       "local endpoint"
+     else .type end)
+  '
+}
+
+env_path_is_valid() {
+  local value="$1" path_kind="$2"
+  case "$path_kind" in
+    "")        [ -n "$value" ] ;;
+    file)      [ -f "$value" ] ;;
+    directory) [ -d "$value" ] ;;
+    writable-directory) [ -d "$value" ] && [ -w "$value" ] ;;
+    *)         return 1 ;;
+  esac
+}
+
+requirement_satisfied() {
+  local requirement="$1" type command_name env_name env_value path_kind
+  type="$(printf '%s' "$requirement" | jq -r '.type')"
+  case "$type" in
+    command)
+      while IFS= read -r command_name; do
+        [ -n "$command_name" ] || continue
+        command -v "$command_name" >/dev/null 2>&1 && return 0
+      done < <(printf '%s' "$requirement" | jq -r '.name, (.alternatives // [])[]')
+      return 1
+      ;;
+    env)
+      env_name="$(printf '%s' "$requirement" | jq -r '.name')"
+      env_value="$(printenv "$env_name" 2>/dev/null || true)"
+      path_kind="$(printf '%s' "$requirement" | jq -r '.path_kind // empty')"
+      env_path_is_valid "$env_value" "$path_kind"
+      ;;
+    any)
+      while IFS= read -r command_name; do
+        [ -n "$command_name" ] || continue
+        command -v "$command_name" >/dev/null 2>&1 && return 0
+      done < <(printf '%s' "$requirement" | jq -r '(.commands // [])[]')
+      path_kind="$(printf '%s' "$requirement" | jq -r '.path_kind // empty')"
+      while IFS= read -r env_name; do
+        [ -n "$env_name" ] || continue
+        env_value="$(printenv "$env_name" 2>/dev/null || true)"
+        env_path_is_valid "$env_value" "$path_kind" && return 0
+      done < <(printf '%s' "$requirement" | jq -r '(.envs // [])[]')
+      return 1
+      ;;
+    endpoint)
+      endpoint_for_requirement "$requirement" >/dev/null
+      ;;
+    note)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+endpoint_for_requirement() {
+  local requirement="$1" env_name endpoint
+  env_name="$(printf '%s' "$requirement" | jq -r '.env // empty')"
+  endpoint=""
+  if [ -n "$env_name" ]; then
+    endpoint="$(printenv "$env_name" 2>/dev/null || true)"
+  fi
+  if [ -z "$endpoint" ]; then
+    endpoint="$(printf '%s' "$requirement" | jq -r '.default // empty')"
+  fi
+  [ -n "$endpoint" ] || return 1
+  printf '%s' "$endpoint"
+}
+
+owned_manifest_valid() {
+  local name="$1" server_dir manifest
+  server_dir="${SERVERS_ROOT}/${name}"
+  manifest="${server_dir}/manifest.json"
+  [ -d "$server_dir" ] && [ ! -L "$server_dir" ] && [ -f "$manifest" ] ||
+    return 1
+  jq -e --arg name "$name" '
+    .schema == 1
+    and .managed_by == "agent/mcpctl"
+    and .server == $name
+    and (.manager == "npm" or .manager == "uv")
+    and (.package | type == "string" and length > 0)
+    and (.binary | type == "string" and length > 0)
+  ' "$manifest" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+owned_entrypoint() {
+  local name="$1" manager binary server_dir
+  owned_manifest_valid "$name" || return 1
+  server_dir="${SERVERS_ROOT}/${name}"
+  manager="$(jq -r '.manager' "${server_dir}/manifest.json")"
+  binary="$(jq -r '.binary' "${server_dir}/manifest.json")"
+  case "$binary" in
+    ""|*/*|*\\*) return 1 ;;
+  esac
+  case "$manager" in
+    npm) printf '%s/node_modules/.bin/%s' "$server_dir" "$binary" ;;
+    uv)  printf '%s/bin/%s' "$server_dir" "$binary" ;;
+    *) return 1 ;;
+  esac
+}
+
+install_state() {
+  local name="$1" host="$2" install_type runner entrypoint
+  install_type="$(printf '%s' "$host" | jq -r '.install.type // "manual"')"
+  if entrypoint="$(owned_entrypoint "$name" 2>/dev/null)" && [ -x "$entrypoint" ]; then
+    printf 'owned'
+    return 0
+  fi
+  case "$install_type" in
+    npm)
+      runner="npx"
+      command -v "$runner" >/dev/null 2>&1 && printf 'lazy' || printf 'missing'
+      ;;
+    uv)
+      runner="uvx"
+      command -v "$runner" >/dev/null 2>&1 && printf 'lazy' || printf 'missing'
+      ;;
+    none) printf 'not-needed' ;;
+    manual) printf 'external' ;;
+    *) printf 'unsupported' ;;
+  esac
+}
+
+enabled_targets() {
+  local name="$1"
+  if [ -z "$STATE_FILE" ] || [ ! -f "$STATE_FILE" ]; then
+    printf '-'
+    return 0
+  fi
+  jq -r --arg name "$name" '
+    [
+      (.targets // {})
+      | to_entries[]
+      | select((.value.servers // []) | index($name))
+      | .key
+    ]
+    | if length == 0 then "-" else join(",") end
+  ' "$STATE_FILE" 2>/dev/null || printf '-'
+}
+
+probe_loopback_endpoint() {
+  local endpoint="$1" code remainder authority port
+  case "$endpoint" in
+    http://*) remainder="${endpoint#http://}" ;;
+    https://*) remainder="${endpoint#https://}" ;;
+    *) return 2 ;;
+  esac
+  authority="${remainder%%/*}"
+  case "$authority" in
+    127.0.0.1:*) port="${authority#127.0.0.1:}" ;;
+    localhost:*) port="${authority#localhost:}" ;;
+    \[::1\]:*) port="${authority#\[::1\]:}" ;;
+    *) return 2 ;;
+  esac
+  case "$port" in
+    ""|*[!0-9]*) return 2 ;;
+  esac
+  command -v curl >/dev/null 2>&1 || return 3
+  code="$(curl -k -sS -o /dev/null --max-time 2 -w '%{http_code}' -- "$endpoint" 2>/dev/null || true)"
+  [ -n "$code" ] && [ "$code" != "000" ]
+}
+
+service_state() {
+  local name="$1" host="$2" lifecycle service endpoint env_name
+  lifecycle="$(printf '%s' "$host" | jq -r '.lifecycle')"
+  service="$(printf '%s' "$host" | jq -c '.service // null')"
+  if [ "$service" != "null" ]; then
+    if [ "$ALL" -eq 1 ]; then
+      printf 'external-unprobed'
+      return 0
+    fi
+    env_name="$(printf '%s' "$service" | jq -r '.url_env // empty')"
+    endpoint=""
+    if [ -n "$env_name" ]; then
+      endpoint="$(printenv "$env_name" 2>/dev/null || true)"
+    fi
+    [ -n "$endpoint" ] || endpoint="$(printf '%s' "$service" | jq -r '.url // empty')"
+    if [ -z "$endpoint" ]; then
+      printf 'not-configured'
+    elif probe_loopback_endpoint "$endpoint"; then
+      printf 'reachable'
+    else
+      case "$?" in
+        2) printf 'unsafe-endpoint' ;;
+        3) printf 'unknown-no-curl' ;;
+        *) printf 'unreachable' ;;
+      esac
+    fi
+    return 0
+  fi
+  case "$lifecycle" in
+    remote) printf 'remote' ;;
+    client) printf 'client-managed' ;;
+    external) printf 'external' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+doctor_one() {
+  local name="$1" host requirement label optional setup install_status
+  local service service_status
+  local failed=0
+  host="$(host_for "$name")"
+  log "$name"
+  if platform_supported "$host"; then
+    printf '  [ok] platform %s\n' "$PLATFORM"
+  else
+    printf '  [missing] unsupported platform %s\n' "$PLATFORM"
+    failed=1
+  fi
+
+  while IFS= read -r requirement; do
+    [ -n "$requirement" ] || continue
+    label="$(requirement_label "$requirement")"
+    optional="$(printf '%s' "$requirement" | jq -r '.optional // false')"
+    if requirement_satisfied "$requirement"; then
+      printf '  [ok] %s\n' "$label"
+    elif [ "$optional" = "true" ]; then
+      printf '  [warn] %s\n' "$label"
+    else
+      printf '  [missing] %s\n' "$label"
+      failed=1
+    fi
+  done < <(printf '%s' "$host" | jq -c '.requirements[]?')
+
+  install_status="$(install_state "$name" "$host")"
+  case "$install_status" in
+    owned) printf '  [ok] isolated package installed by mcpctl\n' ;;
+    lazy) printf '  [ok] lazy package runner available (not isolated yet)\n' ;;
+    not-needed) printf '  [ok] no local package installation required\n' ;;
+    external) printf '  [info] installation is managed outside mcpctl\n' ;;
+    *)
+      printf '  [missing] package runtime is not available\n'
+      failed=1
+      ;;
+  esac
+
+  service="$(printf '%s' "$host" | jq -c '.service // null')"
+  if [ "$service" != "null" ]; then
+    if [ "$ALL" -eq 1 ]; then
+      printf '  [info] external service endpoint not probed in --all mode\n'
+    else
+      service_status="$(service_state "$name" "$host")"
+      case "$service_status" in
+        reachable)
+          printf '  [ok] external service endpoint is reachable\n'
+          ;;
+        unknown-no-curl)
+          printf '  [warn] external endpoint was not probed because curl is missing\n'
+          ;;
+        *)
+          printf '  [missing] external service endpoint (%s)\n' "$service_status"
+          failed=1
+          ;;
+      esac
+    fi
+  fi
+
+  setup="$(setup_for "$name")"
+  [ -z "$setup" ] || printf '  Setup: %s\n' "$setup"
+  return "$failed"
+}
+
+status_one() {
+  local name="$1" host lifecycle installed service enabled
+  host="$(host_for "$name")"
+  lifecycle="$(printf '%s' "$host" | jq -r '.lifecycle')"
+  if platform_supported "$host"; then
+    installed="$(install_state "$name" "$host")"
+    service="$(service_state "$name" "$host")"
+  else
+    installed="unsupported-platform"
+    service="unsupported-platform"
+  fi
+  enabled="$(enabled_targets "$name")"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$name" "$lifecycle" "$installed" "$service" "$enabled"
+}
+
+for_each_selected() {
+  local callback="$1" current result=0
+  if [ "$ALL" -eq 1 ]; then
+    while IFS= read -r current; do
+      [ -n "$current" ] || continue
+      "$callback" "$current" || result=1
+    done < <(jq -r '.servers | keys[]' "$CATALOG")
+  else
+    "$callback" "$NAME" || result=1
+  fi
+  return "$result"
+}
+
+install_one() {
+  local name="$1" host manager package binary server_dir temp_dir entrypoint
+  local created_at
+  host="$(host_for "$name")"
+  manager="$(printf '%s' "$host" | jq -r '.install.type // "manual"')"
+  package="$(printf '%s' "$host" | jq -r '.install.package // empty')"
+  binary="$(printf '%s' "$host" | jq -r '.install.bin // empty')"
+
+  platform_supported "$host" ||
+    die "server '$name' does not support the current $PLATFORM platform"
+
+  case "$manager" in
+    none)
+      log "$name is remote; no local installation is required."
+      return 0
+      ;;
+    manual)
+      printf 'mcpctl cannot install the host application for %s.\n' "$name" >&2
+      setup_for "$name" | sed 's/^/Setup: /' >&2
+      homepage_for "$name" | sed 's/^/Upstream: /' >&2
+      return 2
+      ;;
+    npm|uv) ;;
+    *) die "server '$name' has unsupported installer '$manager'" ;;
+  esac
+
+  [ -n "$package" ] && [ -n "$binary" ] ||
+    die "server '$name' has incomplete package install metadata"
+  case "$package" in
+    -*) die "server '$name' has an invalid package reference" ;;
+  esac
+  case "$binary" in
+    *[!A-Za-z0-9._-]*|""|.|..)
+      die "server '$name' has an invalid package executable"
+      ;;
+  esac
+  server_dir="${SERVERS_ROOT}/${name}"
+  if owned_manifest_valid "$name"; then
+    entrypoint="$(owned_entrypoint "$name")"
+    if [ -x "$entrypoint" ] &&
+       [ "$(jq -r '.package' "${server_dir}/manifest.json")" = "$package" ] &&
+       [ "$(jq -r '.binary' "${server_dir}/manifest.json")" = "$binary" ]; then
+      log "$name is already installed by mcpctl at $server_dir"
+      return 0
+    fi
+    die "$name has a different mcpctl-owned installation; uninstall it before reinstalling"
+  fi
+  [ ! -e "$server_dir" ] && [ ! -L "$server_dir" ] ||
+    die "refusing to replace unowned path $server_dir"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Would install $package with $manager into $server_dir"
+    return 0
+  fi
+
+  mkdir -p "$SERVERS_ROOT"
+  chmod 700 "$SERVERS_ROOT"
+  [ ! -L "$SERVERS_ROOT" ] || die "refusing to use symlinked host root $SERVERS_ROOT"
+  temp_dir="$(mktemp -d "${SERVERS_ROOT}/.install-${name}.XXXXXX")"
+  cleanup_temp() {
+    case "$temp_dir" in
+      "${SERVERS_ROOT}"/.install-*) rm -rf "$temp_dir" ;;
+    esac
+  }
+  trap cleanup_temp EXIT HUP INT TERM
+
+  case "$manager" in
+    npm)
+      require_command npm
+      npm install --prefix "$temp_dir" --no-save --no-package-lock -- "$package"
+      entrypoint="${temp_dir}/node_modules/.bin/${binary}"
+      ;;
+    uv)
+      require_command uv
+      UV_TOOL_DIR="${temp_dir}/tools" \
+        UV_TOOL_BIN_DIR="${temp_dir}/bin" \
+        uv tool install -- "$package"
+      entrypoint="${temp_dir}/bin/${binary}"
+      ;;
+  esac
+  [ -x "$entrypoint" ] ||
+    die "package '$package' did not install expected executable '$binary'"
+
+  created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  jq -n \
+    --arg server "$name" \
+    --arg manager "$manager" \
+    --arg package "$package" \
+    --arg binary "$binary" \
+    --arg installed_at "$created_at" '
+      {
+        schema: 1,
+        managed_by: "agent/mcpctl",
+        server: $server,
+        manager: $manager,
+        package: $package,
+        binary: $binary,
+        installed_at: $installed_at
+      }
+    ' > "${temp_dir}/manifest.json"
+  chmod 600 "${temp_dir}/manifest.json"
+  mv "$temp_dir" "$server_dir"
+  trap - EXIT HUP INT TERM
+  log "Installed $name into $server_dir"
+}
+
+uninstall_one() {
+  local name="$1" server_dir trash_target timestamp
+  server_dir="${SERVERS_ROOT}/${name}"
+  if [ ! -e "$server_dir" ] && [ ! -L "$server_dir" ]; then
+    log "$name has no mcpctl-owned installation."
+    return 0
+  fi
+  owned_manifest_valid "$name" ||
+    die "refusing to remove unowned or invalid path $server_dir"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Would move $server_dir to mcpctl's recoverable trash."
+    return 0
+  fi
+  mkdir -p "$TRASH_ROOT"
+  chmod 700 "$TRASH_ROOT"
+  [ ! -L "$TRASH_ROOT" ] || die "refusing to use symlinked trash root $TRASH_ROOT"
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  trash_target="${TRASH_ROOT}/${name}-${timestamp}-$$"
+  [ ! -e "$trash_target" ] && [ ! -L "$trash_target" ] ||
+    die "trash destination already exists: $trash_target"
+  mv "$server_dir" "$trash_target"
+  log "Uninstalled $name. Recoverable copy: $trash_target"
+}
+
+lifecycle_action() {
+  local action="$1" name="$2" host lifecycle service setup result
+  host="$(host_for "$name")"
+  lifecycle="$(printf '%s' "$host" | jq -r '.lifecycle')"
+  service="$(printf '%s' "$host" | jq -c '.service // null')"
+  case "$action:$lifecycle" in
+    start:remote|stop:remote|restart:remote)
+      log "$name is remote; there is no local process for mcpctl to $action."
+      return 0
+      ;;
+    start:client)
+      if doctor_one "$name"; then
+        log "$name is ready. Its MCP client starts the stdio process on demand."
+        return 0
+      fi
+      return 1
+      ;;
+    stop:client)
+      log "$name has no mcpctl-owned daemon. Disable it or close/reload the MCP client to stop its stdio process."
+      return 0
+      ;;
+    restart:client)
+      log "$name has no standalone daemon. Reload the MCP client after configuration changes."
+      return 0
+      ;;
+    *)
+      result="$(service_state "$name" "$host")"
+      printf 'mcpctl does not own the external process for %s (status: %s).\n' \
+        "$name" "$result" >&2
+      setup="$(setup_for "$name")"
+      [ -z "$setup" ] || printf 'Setup: %s\n' "$setup" >&2
+      return 2
+      ;;
+  esac
+}
+
+case "$ACTION" in
+  doctor)
+    for_each_selected doctor_one
+    ;;
+  status)
+    printf 'SERVER\tLIFECYCLE\tINSTALL\tSERVICE\tENABLED\n'
+    for_each_selected status_one
+    ;;
+  install)
+    install_one "$NAME"
+    ;;
+  uninstall)
+    uninstall_one "$NAME"
+    ;;
+  start|stop|restart)
+    lifecycle_action "$ACTION" "$NAME"
+    ;;
+esac

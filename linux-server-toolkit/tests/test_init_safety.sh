@@ -84,8 +84,13 @@ fi
 pass "invalid SWAP_SIZE_MB fails before execution"
 SWAP_SIZE_MB=""
 
+baseline_modules="$(profile_baseline_modules)"
 for preset in $(profile_presets); do
     preset_modules="$(profile_modules_for_preset "$preset")"
+    for baseline_module in $baseline_modules; do
+        assert_contains " $preset_modules " " $baseline_module " \
+            "$preset includes baseline module $baseline_module"
+    done
     assert_not_contains " $preset_modules " " swap " \
         "$preset keeps Swap opt-in"
     assert_not_contains "$preset_modules" "dd_reinstall" \

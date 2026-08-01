@@ -1,4 +1,4 @@
-// mcp-store — opaque, versioned storage for encrypted mcpctl snapshots.
+// toolbox-store — opaque, versioned storage for encrypted controller snapshots.
 //
 // The client creates every store identifier, authentication capability, and
 // encryption key. This Worker receives an authentication capability over TLS,
@@ -10,7 +10,18 @@ const MAX_CONFIGURED_BLOB_BYTES = 25 * 1024 * 1024;
 const STORE_ID_PATTERN = /^[a-f0-9]{32}$/;
 const VERSION_ID_PATTERN = /^[0-9]{13}-[a-f0-9-]{36}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const SNAPSHOT_CONTENT_TYPE = "application/vnd.mcpctl.snapshot+json";
+const LEGACY_MCP_SNAPSHOT_CONTENT_TYPE = "application/vnd.mcpctl.snapshot+json";
+const TOOLBOX_SNAPSHOT_CONTENT_TYPE = "application/vnd.script-toolbox.snapshot+json";
+const SKILLS_SNAPSHOT_CONTENT_TYPE = "application/vnd.skillsctl.snapshot+json";
+const PROMPT_SNAPSHOT_CONTENT_TYPE = "application/vnd.promptctl.snapshot+json";
+const WORKSPACE_SNAPSHOT_CONTENT_TYPE = "application/vnd.agentctl.workspace+json";
+const SNAPSHOT_CONTENT_TYPES = new Set([
+  LEGACY_MCP_SNAPSHOT_CONTENT_TYPE,
+  TOOLBOX_SNAPSHOT_CONTENT_TYPE,
+  SKILLS_SNAPSHOT_CONTENT_TYPE,
+  PROMPT_SNAPSHOT_CONTENT_TYPE,
+  WORKSPACE_SNAPSHOT_CONTENT_TYPE
+]);
 const MAX_VERSION_TIME = 9_999_999_999_999;
 const MIN_CREATE_TOKEN_LENGTH = 32;
 const MAX_CREATE_TOKEN_LENGTH = 512;
@@ -37,7 +48,7 @@ export default {
         response = errorResponse(error.status, error.code, error.message, error.headers);
       } else {
         console.error(JSON.stringify({
-          event: "mcp_store_request_failed",
+          event: "toolbox_store_request_failed",
           request_id: requestId,
           method: request.method,
           path_class: classifyPath(new URL(request.url).pathname),
@@ -52,6 +63,15 @@ export default {
     headers.set("X-Content-Type-Options", "nosniff");
     headers.set("X-Request-Id", requestId);
     headers.set("Referrer-Policy", "no-referrer");
+    headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    headers.set(
+      "Content-Security-Policy",
+      "default-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; " +
+      "img-src 'self' data:; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; " +
+      "style-src-attr 'unsafe-inline'; " +
+      "script-src 'self'; base-uri 'none'; " +
+      "form-action 'none'; frame-ancestors 'none'"
+    );
 
     return new Response(response.body, {
       status: response.status,
@@ -62,24 +82,40 @@ export default {
 };
 
 async function route(request, env) {
-  assertEnvironment(env);
-
   const url = new URL(request.url);
   const parts = parsePath(url.pathname);
 
   if (parts.length === 1 && parts[0] === "health") {
+    assertEnvironment(env);
     requireMethod(request, ["GET"]);
     return jsonResponse({
       schema: API_SCHEMA,
-      service: "mcp-store",
+      service: "toolbox-store",
+      compatibility: [
+        "mcp-store-v1",
+        "skills-store-v1",
+        "prompt-store-v1",
+        "toolbox-workspace-v1"
+      ],
       status: "ok"
     });
   }
 
+  if (parts.length === 0 && env?.ASSETS &&
+      typeof env.ASSETS.fetch === "function") {
+    const assetUrl = new URL(request.url);
+    assetUrl.pathname = "/index.html";
+    return env.ASSETS.fetch(new Request(assetUrl, request));
+  }
+
   if (parts.length < 3 || parts[0] !== "v1" || parts[1] !== "stores") {
+    if (env?.ASSETS && typeof env.ASSETS.fetch === "function") {
+      return env.ASSETS.fetch(request);
+    }
     throw new ApiError(404, "not_found", "Route not found.");
   }
 
+  assertEnvironment(env);
   const storeId = parts[2];
   validateStoreId(storeId);
 
@@ -88,7 +124,7 @@ async function route(request, env) {
       return createStore(request, env, storeId);
     }
     if (request.method === "GET") {
-      await authenticate(request, env, storeId);
+      await authenticateForAccess(request, env, storeId);
       return getStoreStatus(env, storeId);
     }
     throw methodNotAllowed(["GET", "PUT"]);
@@ -96,12 +132,12 @@ async function route(request, env) {
 
   if (parts.length === 4 && parts[3] === "latest") {
     requireMethod(request, ["GET"]);
-    await authenticate(request, env, storeId);
+    await authenticateForAccess(request, env, storeId);
     return downloadLatest(env, storeId);
   }
 
   if (parts.length === 4 && parts[3] === "versions") {
-    await authenticate(request, env, storeId);
+    await authenticateForAccess(request, env, storeId);
     if (request.method === "PUT") {
       return uploadVersion(request, env, storeId);
     }
@@ -113,21 +149,33 @@ async function route(request, env) {
 
   if (parts.length === 5 && parts[3] === "versions") {
     requireMethod(request, ["GET"]);
-    await authenticate(request, env, storeId);
+    await authenticateForAccess(request, env, storeId);
     const versionId = parts[4];
     validateVersionId(versionId);
     return downloadVersion(env, storeId, versionId);
+  }
+
+  if (parts.length === 5 && parts[3] === "settings" && parts[4] === "web-ui") {
+    await authenticate(request, env, storeId);
+    if (request.method === "GET") return getWebUiSetting(env, storeId);
+    if (request.method === "PUT") return updateWebUiSetting(request, env, storeId);
+    throw methodNotAllowed(["GET", "PUT"]);
   }
 
   throw new ApiError(404, "not_found", "Route not found.");
 }
 
 function assertEnvironment(env) {
-  if (!env || !env.MCP_STORE ||
-      typeof env.MCP_STORE.get !== "function" ||
-      typeof env.MCP_STORE.put !== "function") {
-    throw new Error("MCP_STORE R2 binding is missing");
+  const bucket = storeBucket(env);
+  if (!bucket ||
+      typeof bucket.get !== "function" ||
+      typeof bucket.put !== "function") {
+    throw new Error("TOOLBOX_STORE/MCP_STORE R2 binding is missing");
   }
+}
+
+function storeBucket(env) {
+  return env?.TOOLBOX_STORE || env?.MCP_STORE;
 }
 
 function parsePath(pathname) {
@@ -148,6 +196,7 @@ function classifyPath(pathname) {
     if (parts[3] === "versions" && parts.length === 5) return "version";
     if (parts[3] === "versions") return "versions";
     if (parts[3] === "latest") return "latest";
+    if (parts[3] === "settings") return "settings";
     return "store";
   }
   return "unknown";
@@ -211,6 +260,10 @@ function versionKey(storeId, versionId) {
   return `${versionPrefix(storeId)}${versionId}.blob`;
 }
 
+function settingsKey(storeId) {
+  return `v1/stores/${storeId}/settings.json`;
+}
+
 async function createStore(request, env, storeId) {
   await authorizeStoreCreation(request, env);
   const token = readBearerToken(request);
@@ -233,7 +286,7 @@ async function createStore(request, env, storeId) {
     created_at: createdAt
   };
 
-  const result = await env.MCP_STORE.put(
+  const result = await storeBucket(env).put(
     metaKey(storeId),
     JSON.stringify(metadata),
     {
@@ -265,7 +318,10 @@ async function authorizeStoreCreation(request, env) {
     );
   }
 
-  const supplied = request.headers.get("X-MCP-Store-Create-Token") || "";
+  const supplied =
+    request.headers.get("X-Toolbox-Store-Create-Token") ||
+    request.headers.get("X-MCP-Store-Create-Token") ||
+    "";
   if (supplied.length < MIN_CREATE_TOKEN_LENGTH ||
       supplied.length > MAX_CREATE_TOKEN_LENGTH ||
       /[\u0000-\u001f\u007f]/.test(supplied)) {
@@ -283,7 +339,7 @@ async function authorizeStoreCreation(request, env) {
 
 async function authenticate(request, env, storeId) {
   const token = readBearerToken(request);
-  const object = await env.MCP_STORE.get(metaKey(storeId));
+  const object = await storeBucket(env).get(metaKey(storeId));
 
   if (object === null) {
     throw new ApiError(404, "store_not_found", "Store not found.");
@@ -304,7 +360,22 @@ async function authenticate(request, env, storeId) {
       401,
       "unauthorized",
       "Authentication failed.",
-      { "WWW-Authenticate": 'Bearer realm="mcp-store"' }
+      { "WWW-Authenticate": 'Bearer realm="toolbox-store"' }
+    );
+  }
+}
+
+async function authenticateForAccess(request, env, storeId) {
+  await authenticate(request, env, storeId);
+  if ((request.headers.get("X-Toolbox-Client") || "").toLowerCase() !== "web") {
+    return;
+  }
+  const setting = await readWebUiSetting(env, storeId);
+  if (!setting.web_ui_enabled) {
+    throw new ApiError(
+      403,
+      "web_ui_disabled",
+      "Web UI access is disabled for this store. Enable it with the matching ctl."
     );
   }
 }
@@ -317,23 +388,96 @@ function readBearerToken(request) {
       401,
       "unauthorized",
       "A valid bearer capability is required.",
-      { "WWW-Authenticate": 'Bearer realm="mcp-store"' }
+      { "WWW-Authenticate": 'Bearer realm="toolbox-store"' }
     );
   }
   return match[1];
 }
 
 async function getStoreStatus(env, storeId) {
-  const head = await readHead(env, storeId);
+  const [head, setting] = await Promise.all([
+    readHead(env, storeId),
+    readWebUiSetting(env, storeId)
+  ]);
   return jsonResponse({
     schema: API_SCHEMA,
     store_id: storeId,
-    latest: head
+    latest: head,
+    web_ui_enabled: setting.web_ui_enabled
   });
 }
 
+async function getWebUiSetting(env, storeId) {
+  const setting = await readWebUiSetting(env, storeId);
+  return jsonResponse({
+    schema: API_SCHEMA,
+    store_id: storeId,
+    web_ui_enabled: setting.web_ui_enabled,
+    updated_at: setting.updated_at
+  });
+}
+
+async function updateWebUiSetting(request, env, storeId) {
+  const contentType = (request.headers.get("Content-Type") || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/json") {
+    throw new ApiError(415, "unsupported_media_type", "Content-Type must be application/json.");
+  }
+  const bytes = await readBodyLimited(request, 1024);
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new ApiError(400, "invalid_json", "Web UI setting must be valid JSON.");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body) ||
+      typeof body.enabled !== "boolean" ||
+      Object.keys(body).some((key) => key !== "enabled")) {
+    throw new ApiError(
+      400,
+      "invalid_setting",
+      "Web UI setting must contain only a boolean enabled field."
+    );
+  }
+  const setting = {
+    schema: API_SCHEMA,
+    web_ui_enabled: body.enabled,
+    updated_at: new Date().toISOString()
+  };
+  await storeBucket(env).put(settingsKey(storeId), JSON.stringify(setting), {
+    httpMetadata: { contentType: "application/json" }
+  });
+  return jsonResponse({
+    schema: API_SCHEMA,
+    store_id: storeId,
+    web_ui_enabled: setting.web_ui_enabled,
+    updated_at: setting.updated_at
+  });
+}
+
+async function readWebUiSetting(env, storeId) {
+  const object = await storeBucket(env).get(settingsKey(storeId));
+  if (object === null) {
+    return {
+      schema: API_SCHEMA,
+      web_ui_enabled: false,
+      updated_at: null
+    };
+  }
+  const setting = await readTrustedJson(object, "store settings");
+  if (!setting || setting.schema !== API_SCHEMA ||
+      typeof setting.web_ui_enabled !== "boolean" ||
+      typeof setting.updated_at !== "string" ||
+      Number.isNaN(Date.parse(setting.updated_at))) {
+    throw new Error("invalid store settings");
+  }
+  return setting;
+}
+
 async function readHead(env, storeId) {
-  const object = await env.MCP_STORE.get(headKey(storeId));
+  const object = await storeBucket(env).get(headKey(storeId));
   if (object === null) return null;
 
   const head = await readTrustedJson(object, "store head");
@@ -342,7 +486,8 @@ async function readHead(env, storeId) {
     version: head.version,
     created_at: head.created_at,
     size: head.size,
-    sha256: head.sha256
+    sha256: head.sha256,
+    content_type: head.content_type || LEGACY_MCP_SNAPSHOT_CONTENT_TYPE
   };
 }
 
@@ -356,7 +501,9 @@ function validateHead(head) {
       !Number.isSafeInteger(head.size) ||
       head.size < 1 ||
       typeof head.sha256 !== "string" ||
-      !/^[a-f0-9]{64}$/.test(head.sha256)) {
+      !/^[a-f0-9]{64}$/.test(head.sha256) ||
+      (head.content_type !== undefined &&
+       !SNAPSHOT_CONTENT_TYPES.has(head.content_type))) {
     throw new Error("invalid store head");
   }
 }
@@ -366,22 +513,25 @@ async function uploadVersion(request, env, storeId) {
     .split(";", 1)[0]
     .trim()
     .toLowerCase();
-  if (contentType !== SNAPSHOT_CONTENT_TYPE) {
+  if (!SNAPSHOT_CONTENT_TYPES.has(contentType)) {
     throw new ApiError(
       415,
       "unsupported_media_type",
-      `Content-Type must be ${SNAPSHOT_CONTENT_TYPE}.`
+      "Content-Type must be a supported encrypted toolbox snapshot type."
     );
   }
 
-  const oldHeadObject = await env.MCP_STORE.get(headKey(storeId));
+  const bucket = storeBucket(env);
+  const oldHeadObject = await bucket.get(headKey(storeId));
   let oldHead = null;
   if (oldHeadObject !== null) {
     oldHead = await readTrustedJson(oldHeadObject, "store head");
     validateHead(oldHead);
   }
 
-  const baseVersion = request.headers.get("X-MCPCTL-Base-Version");
+  const baseVersion =
+    request.headers.get("X-Toolbox-Base-Version") ||
+    request.headers.get("X-MCPCTL-Base-Version");
   const expectedBase = oldHead === null ? "none" : oldHead.version;
   if (baseVersion !== expectedBase) {
     throw new ApiError(
@@ -397,20 +547,27 @@ async function uploadVersion(request, env, storeId) {
     throw new ApiError(400, "empty_snapshot", "Snapshot body must not be empty.");
   }
 
-  const now = Date.now();
+  // R2 lists keys lexicographically. Advance the logical millisecond when two
+  // writes land in the same clock tick so inverted timestamps remain a strict
+  // newest-first ordering and pagination is deterministic.
+  const previousTime = oldHead === null
+    ? 0
+    : MAX_VERSION_TIME - Number(oldHead.version.slice(0, 13));
+  const now = Math.max(Date.now(), previousTime + 1);
   const versionId =
     `${String(MAX_VERSION_TIME - now).padStart(13, "0")}-${crypto.randomUUID()}`;
   const createdAt = new Date(now).toISOString();
   const digest = await sha256Hex(bytes);
   const objectKey = versionKey(storeId, versionId);
 
-  const versionObject = await env.MCP_STORE.put(objectKey, bytes, {
+  const versionObject = await bucket.put(objectKey, bytes, {
     onlyIf: { etagDoesNotMatch: "*" },
-    httpMetadata: { contentType: SNAPSHOT_CONTENT_TYPE },
+    httpMetadata: { contentType },
     customMetadata: {
       version: versionId,
       createdAt,
-      sha256: digest
+      sha256: digest,
+      contentType
     }
   });
   if (versionObject === null) {
@@ -422,7 +579,8 @@ async function uploadVersion(request, env, storeId) {
     version: versionId,
     created_at: createdAt,
     size: bytes.byteLength,
-    sha256: digest
+    sha256: digest,
+    content_type: contentType
   };
   const headCondition = oldHeadObject === null
     ? { etagDoesNotMatch: "*" }
@@ -430,7 +588,7 @@ async function uploadVersion(request, env, storeId) {
 
   let headObject;
   try {
-    headObject = await env.MCP_STORE.put(
+    headObject = await bucket.put(
       headKey(storeId),
       JSON.stringify(newHead),
       {
@@ -459,10 +617,10 @@ async function uploadVersion(request, env, storeId) {
 
 async function cleanupUnreferencedVersion(env, objectKey) {
   try {
-    await env.MCP_STORE.delete(objectKey);
+    await storeBucket(env).delete(objectKey);
   } catch (error) {
     console.error(JSON.stringify({
-      event: "mcp_store_orphan_cleanup_failed",
+      event: "toolbox_store_orphan_cleanup_failed",
       error_name: error instanceof Error ? error.name : "UnknownError"
     }));
   }
@@ -478,7 +636,7 @@ async function listVersions(url, env, storeId) {
   };
   if (cursor !== null) options.cursor = cursor;
 
-  const listed = await env.MCP_STORE.list(options);
+  const listed = await storeBucket(env).list(options);
   const versions = listed.objects.map((object) => {
     const metadata = object.customMetadata || {};
     const version = typeof metadata.version === "string"
@@ -491,7 +649,10 @@ async function listVersions(url, env, storeId) {
         ? metadata.createdAt
         : object.uploaded.toISOString(),
       size: object.size,
-      sha256: typeof metadata.sha256 === "string" ? metadata.sha256 : null
+      sha256: typeof metadata.sha256 === "string" ? metadata.sha256 : null,
+      content_type: SNAPSHOT_CONTENT_TYPES.has(metadata.contentType)
+        ? metadata.contentType
+        : LEGACY_MCP_SNAPSHOT_CONTENT_TYPE
     };
   });
 
@@ -531,17 +692,21 @@ async function downloadLatest(env, storeId) {
 }
 
 async function downloadVersion(env, storeId, versionId) {
-  const object = await env.MCP_STORE.get(versionKey(storeId, versionId));
+  const object = await storeBucket(env).get(versionKey(storeId, versionId));
   if (object === null) {
     throw new ApiError(404, "version_not_found", "Backup version not found.");
   }
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set("Content-Type", SNAPSHOT_CONTENT_TYPE);
+  const contentType = SNAPSHOT_CONTENT_TYPES.has(object.customMetadata?.contentType)
+    ? object.customMetadata.contentType
+    : LEGACY_MCP_SNAPSHOT_CONTENT_TYPE;
+  headers.set("Content-Type", contentType);
   headers.set("Content-Length", String(object.size));
   headers.set("ETag", object.httpEtag);
   headers.set("X-MCPCTL-Version", versionId);
+  headers.set("X-Toolbox-Store-Version", versionId);
   if (object.customMetadata?.sha256) {
     headers.set("X-Content-SHA256", object.customMetadata.sha256);
   }

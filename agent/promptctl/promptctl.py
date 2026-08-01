@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 CLIENTS = ("claude", "codex")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MODEL_KEY_RE = re.compile(

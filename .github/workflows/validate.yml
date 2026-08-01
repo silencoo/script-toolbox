@@ -59,6 +59,12 @@ jobs:
       - name: Validate Worker bundle
         run: npm run validate
         working-directory: workers/cloudflare-vless
+      - name: Install Toolbox Store tooling
+        run: npm ci
+        working-directory: workers/mcp-store
+      - name: Validate Toolbox Store Worker and Web UI
+        run: npm run validate
+        working-directory: workers/mcp-store
 
   validate-windows:
     runs-on: windows-latest
@@ -85,3 +91,26 @@ jobs:
           ./workstation-utils/tests/windows-test.ps1
           ./windows-dev-setup/tests/windows-dev-setup-test.ps1
           ./windows-dev-setup/tests/wsl-test.ps1
+
+  validate-agent-bash-3:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Ensure agent test dependencies
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            brew install jq
+          fi
+      - name: Test agent controllers with macOS system Bash 3.2
+        run: |
+          bash_major="$(/bin/bash -c 'printf "%s" "${BASH_VERSINFO[0]}"')"
+          test "$bash_major" = "3"
+          compat_bin="$(mktemp -d "${RUNNER_TEMP}/script-toolbox-bash3.XXXXXX")"
+          ln -s /bin/bash "$compat_bin/bash"
+          PATH="$compat_bin:$PATH" /bin/bash ./agent/test.sh

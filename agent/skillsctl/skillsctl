@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# skillsctl — guided frontend for portable skill packs and recovery.
+
+set -euo pipefail
+umask 077
+
+SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE_PATH" ]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
+  SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+  case "$SOURCE_PATH" in
+    /*) ;;
+    *) SOURCE_PATH="${SOURCE_DIR}/${SOURCE_PATH}" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
+ENGINE="${SCRIPT_DIR}/skillsctl.mjs"
+
+if ! command -v node >/dev/null 2>&1; then
+  printf '✗ skillsctl requires Node.js 20 or newer\n' >&2
+  exit 1
+fi
+
+node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf '0')"
+if [ "$node_major" -lt 20 ]; then
+  printf '✗ skillsctl requires Node.js 20 or newer (found %s)\n' "$node_major" >&2
+  exit 1
+fi
+
+exec node "$ENGINE" "$@"

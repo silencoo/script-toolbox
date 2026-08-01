@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "search-tavily-api",
+  "description": "Documentation plus Tavily's API-key search and research tools",
+  "extends": [
+    "base"
+  ],
+  "enable": [
+    "tavily-api"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

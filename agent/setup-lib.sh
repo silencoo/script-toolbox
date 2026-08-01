@@ -41,7 +41,7 @@ prompt_value() {
 
 prompt_secret() {
   local label="$1" input
-  have_tty || die "no API key supplied and no TTY is available; use --key or the provider environment variable"
+  have_tty || die "no API key supplied and no TTY is available; use --key-file, --key, or the provider environment variable"
   printf '%s: ' "$label" > /dev/tty
   stty -echo < /dev/tty 2>/dev/null || true
   IFS= read -r input < /dev/tty
@@ -100,6 +100,101 @@ choose_menu() {
 read_env() {
   # Avoid eval/indirect expansion for user-supplied custom env names.
   printenv "$1" 2>/dev/null || true
+}
+
+file_mode() {
+  local path="$1" mode=""
+  mode="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path" 2>/dev/null || true)"
+  printf '%s' "$mode"
+}
+
+require_private_secret_file() {
+  local path="$1" mode
+  [ -n "$path" ] || die "--key-file requires a path"
+  [ -f "$path" ] || die "API key file does not exist or is not a regular file: $path"
+  [ ! -L "$path" ] || die "refusing symlinked API key file: $path"
+  [ -r "$path" ] || die "API key file is not readable: $path"
+  mode="$(file_mode "$path")"
+  case "$mode" in
+    ?00|??00) ;;
+    "")
+      die "could not inspect API key file permissions: $path"
+      ;;
+    *)
+      die "API key file must be owner-only (for example chmod 600 '$path'); found mode $mode"
+      ;;
+  esac
+}
+
+resolve_api_key() {
+  # Args: direct-key key-file env-name allow-missing-for-dry-run prompt-label
+  # Results: RESOLVED_API_KEY and API_KEY_SOURCE. Secret values are never
+  # included in API_KEY_SOURCE.
+  local direct_key="$1" input_file="$2" env_name="$3"
+  local allow_missing="${4:-0}" prompt_label="${5:-API key}"
+  local line_count value=""
+
+  [ -z "$direct_key" ] || [ -z "$input_file" ] ||
+    die "--key and --key-file are mutually exclusive"
+
+  if [ -n "$direct_key" ]; then
+    value="$direct_key"
+    API_KEY_SOURCE="--key (redacted)"
+  elif [ -n "$input_file" ]; then
+    require_private_secret_file "$input_file"
+    line_count="$(awk 'END { print NR + 0 }' "$input_file")"
+    [ "$line_count" -eq 1 ] ||
+      die "API key file must contain exactly one non-empty line: $input_file"
+    value="$(sed -n '1p' "$input_file")"
+    API_KEY_SOURCE="file: $input_file"
+  else
+    value="$(read_env "$env_name")"
+    if [ -n "$value" ]; then
+      API_KEY_SOURCE="environment: $env_name"
+    elif [ "$allow_missing" = 1 ]; then
+      API_KEY_SOURCE="not supplied (apply mode will prompt)"
+    else
+      prompt_secret "$prompt_label"
+      value="$PROMPT_REPLY"
+      API_KEY_SOURCE="interactive prompt"
+    fi
+  fi
+
+  case "$value" in
+    *"
+"*) die "API keys must contain exactly one line" ;;
+    *$'\r'*) die "API keys must not contain carriage returns" ;;
+  esac
+  if [ "$allow_missing" != 1 ] || [ -n "$value" ]; then
+    [ -n "$value" ] || die "no API key supplied"
+  fi
+  RESOLVED_API_KEY="$value"
+}
+
+print_provider_plan() {
+  # Args: client provider base-url model cli install-hint config-paths
+  #       state-path credential-target credential-source validation
+  local client="$1" provider="$2" base_url="$3" model="$4"
+  local cli="$5" install_hint="$6" config_paths="$7" state_path="$8"
+  local credential_target="$9"
+  shift 9
+  local credential_source="$1" validation="$2"
+
+  log "[dry-run] ${client} provider setup"
+  info "Provider          : $provider"
+  info "Base URL          : $base_url"
+  info "Model             : $model"
+  if command -v "$cli" >/dev/null 2>&1; then
+    info "CLI action        : keep installed $cli"
+  else
+    info "CLI action        : install $install_hint"
+  fi
+  info "Configuration     : $config_paths"
+  info "Ownership state   : $state_path"
+  info "Credential target : $credential_target"
+  info "Credential source : $credential_source"
+  info "Validation        : $validation"
+  log "[dry-run] no validation request, package installation, or file change was performed"
 }
 
 detect_pm() {

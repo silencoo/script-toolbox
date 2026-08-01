@@ -1,7 +1,8 @@
 # agentctl
 
 `agentctl` is the public Shell entrypoint for installing a supported coding
-agent and configuring its provider, model, and credential.
+agent, configuring its provider/model/credential, and managing the optional
+unified encrypted Toolbox Workspace.
 
 Run it without arguments from the repository root:
 
@@ -22,8 +23,20 @@ that client's existing interactive setup implementation.
 ./agent/agentctl/agentctl setup codex \
   --provider openai --model gpt-5.6
 
+# Resolve the provider/model and affected paths without a key or any changes.
+./agent/agentctl/agentctl setup codex \
+  --provider openai --model gpt-5.6 --dry-run
+
+# Prefer a private file to putting a key in shell history.
+./agent/agentctl/agentctl setup codex \
+  --provider openai --model gpt-5.6 --key-file /secure/openai-api-key
+
 # "init" and "configure" are setup aliases.
 ./agent/agentctl/agentctl init opencode
+
+# Inspect installed CLIs and agentctl-owned provider state without secrets.
+./agent/agentctl/agentctl status all
+./agent/agentctl/agentctl status codex --json
 
 # Inspect client-specific presets and options.
 ./agent/agentctl/agentctl providers pi
@@ -37,13 +50,97 @@ that client's existing interactive setup implementation.
 Client aliases include `claude`/`claude-code` and
 `opencode`/`open-code`.
 
+`status` reports the CLI path/version, resolved provider/model, ownership
+marker, config/state paths, and credential-file existence/mode. It never emits
+a credential value. JSON status requires `jq`.
+
+All four setup backends accept `--dry-run` and `--key-file PATH`. Dry-run exits
+before validation requests, package installation, or filesystem changes, and
+does not require a key. Key files must be regular, non-symlinked, owner-only
+files containing exactly one non-empty line (normally mode `0600`).
+
+## Unified Workspace and isolated Stores
+
+The default recovery experience uses one `toolbox1_…` Workspace code. Its
+encrypted manifest contains the capabilities for attached MCP, Skills, and
+Prompts Stores. Unlocking the Worker UI once then opens three tabs. Child
+capabilities are never sent to the Worker in plaintext.
+
+Existing isolated modes remain available for compartmentalization and
+break-glass recovery:
+
+- `mcpstore1_…` opens only an MCP Store;
+- `skillstore1_…` opens only a Skills Store; and
+- `promptstore1_…` opens only a Prompt Store.
+
+Create a Workspace, then attach existing isolated Stores without copying or
+deleting their data:
+
+```bash
+agentctl workspace init \
+  --endpoint https://mcp-store.example.workers.dev \
+  --create-token-file /secure/toolbox-create-token
+
+agentctl workspace attach mcp
+agentctl workspace attach skills
+agentctl workspace attach prompts
+agentctl workspace status
+agentctl workspace ui enable
+```
+
+`attach` enables browser access for that child Store and records its private
+capability only in a new encrypted Workspace version. `detach` removes only
+the reference; the child Store, versions, local config, and isolated recovery
+code stay intact.
+
+```bash
+agentctl workspace recovery
+agentctl workspace versions
+agentctl workspace ui status
+agentctl workspace ui disable
+```
+
+The master capability is stored locally at
+`~/.config/agentctl/workspace-remote.json` with owner-only permissions. A
+fresh machine can recover it from a private one-line file:
+
+```bash
+agentctl workspace restore --recovery-file /secure/toolbox-recovery-code
+```
+
+## Optional PATH commands
+
+Preview and then install repository-backed command symlinks:
+
+```bash
+./agent/install-commands.sh --prefix "$HOME/.local/bin"
+./agent/install-commands.sh --prefix "$HOME/.local/bin" --yes
+
+agentctl status all
+agentctl workspace status
+mcpctl current --target codex
+promptctl status all
+```
+
+The installer refuses existing commands by default. `--force` first moves a
+conflict to a tracked backup. Uninstall removes only matching managed links and
+restores those backups:
+
+```bash
+./agent/install-commands.sh --prefix "$HOME/.local/bin" --uninstall
+./agent/install-commands.sh --prefix "$HOME/.local/bin" --uninstall --yes
+```
+
 ## Ownership boundary
 
-`agentctl` controls only the client/provider layer:
+`agentctl` controls the client/provider layer and the optional master Workspace
+manifest:
 
 - It can install a missing CLI through the selected setup backend.
 - It configures provider, model, and owned credential state.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.
+- Its `workspace` commands attach or detach encrypted child Store capabilities;
+  they do not rewrite the child snapshots.
 
 It does not invoke `mcpctl`, Promptctl, a per-client `mcp.sh`, or a full
 `uninstall.sh`. It also does not remove an installed CLI binary. Use these
@@ -52,6 +149,7 @@ independent entrypoints when needed:
 ```bash
 ./agent/mcpctl/mcpctl
 ./agent/promptctl/promptctl
+./agent/skillsctl/skillsctl
 ```
 
 ## Compatibility entrypoints

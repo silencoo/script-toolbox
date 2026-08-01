@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "browser-debug",
+  "description": "Standard Chrome DevTools debugging with documentation",
+  "extends": [
+    "base"
+  ],
+  "enable": [
+    "chrome-devtools"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}
