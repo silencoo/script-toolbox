@@ -49,7 +49,7 @@ Usage:
   mcpctl --target <claude|codex|opencode> --profile <name> [options]
   mcpctl apply   --target <target> --profile <name> [options]
   mcpctl plan    --target <target> --profile <name> [options]
-  mcpctl current --target <target> [options]
+  mcpctl current --target <target> [--json] [options]
   mcpctl init [--store <directory>]
   mcpctl sync [--store <directory>]
   mcpctl import --target <claude|codex> [--profile <name>] [options]
@@ -103,6 +103,7 @@ Options:
                         For import, adopt differing target definitions and
                         replace changed encrypted Secret values.
   --dry-run             Alias for plan.
+  --json                Emit machine-readable output where supported.
   -h, --help            Show this help.
 
 Environment:
@@ -968,6 +969,7 @@ CLI_ENABLE=()
 CLI_DISABLE=()
 ALL_SERVERS=0
 DRY_RUN=0
+JSON_OUTPUT=0
 
 if [ $# -gt 0 ]; then
   case "$1" in
@@ -1235,6 +1237,10 @@ while [ $# -gt 0 ]; do
           ;;
         *) COMMAND="plan" ;;
       esac
+      shift
+      ;;
+    --json)
+      JSON_OUTPUT=1
       shift
       ;;
     -h|--help)
@@ -3132,6 +3138,64 @@ fi
 
 if [ "$COMMAND" = "current" ]; then
   load_current_servers
+  if [ "$JSON_OUTPUT" -eq 1 ]; then
+    current_servers_json="$(
+      for server in ${CURRENT[@]+"${CURRENT[@]}"}; do printf '%s\n' "$server"; done |
+        jq -Rsc 'split("\n") | map(select(length > 0))'
+    )"
+    if [ -f "$STATE_FILE" ] &&
+       jq -e --arg target "$TARGET" '.targets[$target] != null' \
+         "$STATE_FILE" >/dev/null 2>&1; then
+      current_selection_mode="$(jq -r --arg target "$TARGET" \
+        '.targets[$target].selection_mode // "profile"' "$STATE_FILE")"
+      if [ "$current_selection_mode" = "manual" ]; then
+        expected_servers_json="$(jq -c --arg target "$TARGET" \
+          '.targets[$target].servers // []' "$STATE_FILE")"
+      else
+        PROFILE="$(jq -r --arg target "$TARGET" \
+          '.targets[$target].profile // empty' "$STATE_FILE")"
+        resolve_profile
+        expected_servers_json="$(
+          for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '%s\n' "$server"; done |
+            jq -Rsc 'split("\n") | map(select(length > 0))'
+        )"
+      fi
+      jq --arg target "$TARGET" \
+         --arg config "$CONFIG_FILE" \
+         --argjson servers "$current_servers_json" \
+         --argjson expected "$expected_servers_json" '
+        .targets[$target] as $state
+        | {
+            schema: 1,
+            target: $target,
+            config: $config,
+            selection_mode: ($state.selection_mode // "profile"),
+            profile: ($state.profile // null),
+            base_profile: ($state.base_profile // null),
+            servers: $servers,
+            expected_servers: $expected,
+            drift: (($expected | sort) != ($servers | sort)),
+            healthy: (($expected | sort) == ($servers | sort))
+          }
+      ' "$STATE_FILE"
+    else
+      jq -n --arg target "$TARGET" \
+        --arg config "$CONFIG_FILE" \
+        --argjson servers "$current_servers_json" '{
+          schema: 1,
+          target: $target,
+          config: $config,
+          selection_mode: "unknown",
+          profile: null,
+          base_profile: null,
+          servers: $servers,
+          expected_servers: [],
+          drift: (($servers | length) > 0),
+          healthy: (($servers | length) == 0)
+        }'
+    fi
+    exit 0
+  fi
   printf 'Target: %s\nConfig: %s\n' "$TARGET" "$CONFIG_FILE"
   if [ -f "$STATE_FILE" ] &&
      jq -e --arg target "$TARGET" '.targets[$target] != null' \

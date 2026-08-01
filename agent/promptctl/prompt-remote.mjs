@@ -49,6 +49,7 @@ function usage() {
 
 Usage:
   promptctl remote init --endpoint <url> [--create-token-file <file>] [--force]
+  promptctl remote status
   promptctl remote ui <status|enable|disable>
   promptctl backup [--home <directory>]
   promptctl restore --yes [--version <id>] [--force] [--home <directory>]

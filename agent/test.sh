@@ -655,6 +655,13 @@ else
   fail=1
 fi
 
+if node "$SCRIPT_DIR/agentctl/orchestrator-client.test.mjs"; then
+  :
+else
+  echo "FAIL: development preset and unified doctor tests" >&2
+  fail=1
+fi
+
 if "$SCRIPT_DIR/tests/install-commands-test.sh"; then
   :
 else

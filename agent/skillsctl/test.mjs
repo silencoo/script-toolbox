@@ -47,7 +47,7 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.2.0");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.3.0");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
@@ -73,6 +73,12 @@ run(["pack", "remove", "fullstack", "frontend-dev", "--store", store, "--yes"]);
 const preview = run(["plan", "--target", "codex", "--pack", "frontend", "--store", store]);
 assert.match(preview, /create\s+frontend-dev/);
 run(["apply", "--target", "codex", "--pack", "frontend", "--store", store, "--yes"]);
+const current = JSON.parse(run([
+  "current", "--target", "codex", "--store", store, "--json"
+]));
+assert.equal(current.pack, "frontend");
+assert.deepEqual(current.skills, ["frontend-dev"]);
+assert.equal(current.healthy, true);
 assert.equal((await lstat(join(target, "frontend-dev"))).isSymbolicLink(), true);
 assert.equal(
   resolve(dirname(join(target, "frontend-dev")), await readlink(join(target, "frontend-dev"))),

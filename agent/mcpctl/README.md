@@ -119,7 +119,13 @@ Supplying `--target` and `--profile` without a subcommand remains shorthand for
 
 ```bash
 mcpctl apply --target claude --profile frontend
+mcpctl current --target claude --json
 ```
+
+`current --json` returns the named or custom selection, base profile, exact
+managed server set, config path, and drift health without resolving or printing
+Secret values. This is the stable orchestration interface used by
+`agentctl preset` and `agentctl doctor`.
 
 ### Keenable and Tavily search
 

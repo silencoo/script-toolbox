@@ -37,11 +37,15 @@ Usage:
   promptctl status <claude|codex|all> [options]
   promptctl path <claude|codex|all> [options]
   promptctl uninstall <claude|codex|all> [options]
+  promptctl profile list|create|delete ...
+  promptctl plan --target <claude|codex|all> --profile <name>
+  promptctl apply --target <claude|codex|all> --profile <name> --yes
+  promptctl current --target <claude|codex|all> [--json]
   promptctl backup [--home <directory>]
   promptctl restore --yes [--version <id>] [--force]
   promptctl recovery
   promptctl versions
-  promptctl remote init|ui ...
+  promptctl remote init|status|ui ...
 
 Run without arguments for the guided Shell setup. Every write is previewed and
 requires confirmation. Explicit subcommands are passed to the deterministic
@@ -215,7 +219,14 @@ case "${1:-}" in
 esac
 
 case "${1:-}" in
-  backup|restore|recovery|versions|remote)
+  remote)
+    if [ "${2:-}" = "status" ]; then
+      shift 2
+      run_remote_client status "$@"
+    fi
+    run_remote_client "$@"
+    ;;
+  backup|restore|recovery|versions)
     run_remote_client "$@"
     ;;
 esac

@@ -253,6 +253,79 @@ def test_existing_profile_must_be_uninstalled_before_switching(tmp_path, capsys)
     assert not (tmp_path / ".codex" / "instructions" / "second.md").exists()
 
 
+def test_profile_clone_switch_current_and_delete_lifecycle(tmp_path, capsys):
+    assert run_cli(tmp_path, "install", "all", "--yes") == 0
+    claude_personal = tmp_path / ".claude" / "instructions" / "personal.md"
+    codex_personal = tmp_path / ".codex" / "instructions" / "personal.md"
+    claude_personal.write_text("# Claude personal\n", encoding="utf-8")
+    codex_personal.write_text("# Codex personal\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert run_cli(tmp_path, "profile", "create", "work", "--from", "personal") == 0
+    assert not (tmp_path / ".claude" / "instructions" / "work.md").exists()
+    assert run_cli(
+        tmp_path, "profile", "create", "work", "--from", "personal", "--yes"
+    ) == 0
+    assert (tmp_path / ".claude" / "instructions" / "work.md").read_text(
+        encoding="utf-8"
+    ) == "# Claude personal\n"
+    assert (tmp_path / ".codex" / "instructions" / "work.md").read_text(
+        encoding="utf-8"
+    ) == "# Codex personal\n"
+    capsys.readouterr()
+
+    assert run_cli(tmp_path, "plan", "--target", "all", "--profile", "work") == 0
+    assert "profile=personal" in (tmp_path / ".codex" / "config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert run_cli(
+        tmp_path, "apply", "--target", "all", "--profile", "work", "--yes"
+    ) == 0
+    capsys.readouterr()
+
+    assert run_cli(tmp_path, "current", "--target", "all", "--json") == 0
+    current = json.loads(capsys.readouterr().out)
+    assert [item["profile"] for item in current] == ["work", "work"]
+    assert all(item["healthy"] is True for item in current)
+
+    assert run_cli(tmp_path, "profile", "delete", "work", "--yes") == 1
+    assert "is active" in capsys.readouterr().err
+    assert run_cli(
+        tmp_path, "apply", "--target", "all", "--profile", "personal", "--yes"
+    ) == 0
+    assert run_cli(tmp_path, "profile", "delete", "work", "--yes") == 0
+    assert not (tmp_path / ".claude" / "instructions" / "work.md").exists()
+    assert list((tmp_path / ".claude" / "instructions").glob("work.md.bak_*"))
+
+
+def test_all_client_switch_restores_first_client_when_second_write_fails(
+    tmp_path, capsys, monkeypatch
+):
+    assert run_cli(tmp_path, "install", "all", "--yes") == 0
+    assert run_cli(
+        tmp_path, "profile", "create", "work", "--from", "personal", "--yes"
+    ) == 0
+    claude_link = tmp_path / ".claude" / "CLAUDE.md"
+    codex_link = tmp_path / ".codex" / "config.toml"
+    claude_before = claude_link.read_text(encoding="utf-8")
+    codex_before = codex_link.read_text(encoding="utf-8")
+    original_apply = promptctl._apply_plan
+
+    def fail_codex(plan, timestamp):
+        if plan.layout.client == "codex":
+            raise OSError("simulated second-client failure")
+        return original_apply(plan, timestamp)
+
+    monkeypatch.setattr(promptctl, "_apply_plan", fail_codex)
+    capsys.readouterr()
+    assert run_cli(
+        tmp_path, "apply", "--target", "all", "--profile", "work", "--yes"
+    ) == 1
+    assert "simulated second-client failure" in capsys.readouterr().err
+    assert claude_link.read_text(encoding="utf-8") == claude_before
+    assert codex_link.read_text(encoding="utf-8") == codex_before
+
+
 def test_explicit_dry_run_wins_over_yes(tmp_path):
     assert run_cli(tmp_path, "install", "claude", "--dry-run", "--yes") == 0
     assert not (tmp_path / ".claude").exists()

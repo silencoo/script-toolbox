@@ -16,6 +16,7 @@ skillsctl skill add /path/to/frontend-dev --yes
 skillsctl pack add frontend frontend-dev --yes
 skillsctl plan --target codex --pack frontend
 skillsctl apply --target codex --pack frontend --yes
+skillsctl current --target codex --json
 ```
 
 The starter packs are:
@@ -52,6 +53,8 @@ skillsctl skill enable frontend-dev --target codex --yes
 This records a target-local custom selection based on the last applied pack.
 The canonical Skill remains installed in the Store; disabling only removes the
 managed target link. Applying a named pack later replaces the custom selection.
+`current` reports the named or custom selection, exact managed Skill names,
+and link drift in a stable human or JSON form for orchestration.
 
 ## Store and targets
 
@@ -114,6 +117,7 @@ skillsctl remote init --endpoint https://mcp-store.example.workers.dev
 skillsctl backup
 skillsctl versions
 skillsctl recovery
+skillsctl remote status
 skillsctl remote ui enable
 ```
 

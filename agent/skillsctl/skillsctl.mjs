@@ -36,7 +36,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -68,6 +68,7 @@ Usage:
   skillsctl init [--store <dir>] [--yes]
   skillsctl list [--store <dir>]
   skillsctl status [--store <dir>]
+  skillsctl current --target <target> [--store <dir>] [--json]
   skillsctl doctor [--store <dir>]
 
   skillsctl skill add <directory> [--name <name>] [--store <dir>] --yes
@@ -91,6 +92,7 @@ Usage:
 
   skillsctl remote init --endpoint <url> [--create-token-file <file>]
                          [--remote-config <file>] [--force]
+  skillsctl remote status [--remote-config <file>]
   skillsctl remote ui <status|enable|disable> [--remote-config <file>]
   skillsctl backup [--store <dir>] [--remote-config <file>]
   skillsctl restore [--store <dir>] [--remote-config <file>]
@@ -122,6 +124,7 @@ function parseArguments(argv) {
     yes: false,
     write: false,
     force: false,
+    json: false,
     extends: []
   };
 
@@ -177,6 +180,9 @@ function parseArguments(argv) {
       case "--force":
         options.force = true;
         break;
+      case "--json":
+        options.json = true;
+        break;
       case "--help":
       case "-h":
         options.help = true;
@@ -222,6 +228,9 @@ async function main(argv) {
       return;
     case "status":
       await showStatus(options);
+      return;
+    case "current":
+      await showCurrent(options);
       return;
     case "doctor":
       await doctor(options);
@@ -443,6 +452,44 @@ async function showStatus(options) {
       `${target}: ${Object.keys(state.links).length} managed links (${selection})\n`
     );
   }
+}
+
+async function showCurrent(options) {
+  validateTarget(options.target, false);
+  const store = await loadStore(options.store);
+  const state = await readTargetState(options.store, options.target);
+  const drift = new Set();
+  for (const [name, record] of Object.entries(state.links)) {
+    if (!await managedLinkMatches(record.link, record.target)) drift.add(name);
+  }
+  if (state.selection_mode === "pack" && state.pack) {
+    const expected = resolvePack(store, state.pack, options.target);
+    const actual = new Set(Object.keys(state.links));
+    for (const name of new Set([...expected, ...actual])) {
+      if (expected.has(name) !== actual.has(name)) drift.add(name);
+    }
+  }
+  const payload = {
+    schema: SCHEMA,
+    target: options.target,
+    selection_mode: state.selection_mode || "unknown",
+    pack: state.pack || null,
+    base_pack: state.base_pack || null,
+    skills: Object.keys(state.links).sort(),
+    drift: [...drift].sort(),
+    healthy: drift.size === 0
+  };
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  const selection = payload.selection_mode === "manual"
+    ? `custom${payload.base_pack ? ` (based on ${payload.base_pack})` : ""}`
+    : payload.pack || "unknown";
+  process.stdout.write(`Target: ${payload.target}\n`);
+  process.stdout.write(`Pack: ${selection}\n`);
+  process.stdout.write(`Managed skills: ${payload.skills.length}\n`);
+  process.stdout.write(`Drift: ${payload.drift.length === 0 ? "none" : payload.drift.join(", ")}\n`);
 }
 
 async function doctor(options) {
@@ -1129,6 +1176,17 @@ async function restoreFile(options) {
 
 async function runRemoteCommand(positional, options) {
   const action = positional.shift();
+  if (action === "status") {
+    if (positional.length > 0) throw new SkillsError("usage: skillsctl remote status");
+    const [config, status] = await Promise.all([
+      readRemoteConfig(options.remoteConfig),
+      getRemoteStatus(options.remoteConfig, SKILLS_REMOTE_PROTOCOL)
+    ]);
+    process.stdout.write(`Remote:  ${config.endpoint}/\n`);
+    process.stdout.write(`Version: ${status.latest?.version || "none"}\n`);
+    process.stdout.write(`Web UI:  ${status.web_ui_enabled ? "enabled" : "disabled"}\n`);
+    return;
+  }
   if (action === "ui") {
     const mode = positional.shift();
     if (!["status", "enable", "disable"].includes(mode) || positional.length > 0) {
@@ -1150,7 +1208,7 @@ async function runRemoteCommand(positional, options) {
   }
   if (action !== "init" || positional.length > 0) {
     throw new SkillsError(
-      "usage: skillsctl remote init --endpoint <url> | remote ui <status|enable|disable>"
+      "usage: skillsctl remote init --endpoint <url> | remote status | remote ui <status|enable|disable>"
     );
   }
   if (!options.endpoint) throw new SkillsError("--endpoint is required");

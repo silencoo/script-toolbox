@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 CLIENTS = ("claude", "codex")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MODEL_KEY_RE = re.compile(
@@ -302,6 +302,41 @@ def _render_uninstall(content: str, layout: Layout, name: str) -> tuple[str, boo
     return before + after, True
 
 
+def _active_block(content: str, layout: Layout) -> Optional[ManagedBlock]:
+    """Return the single valid Promptctl block, regardless of profile name."""
+    blocks = _managed_blocks(content, layout.client)
+    if len(blocks) > 1:
+        raise PromptctlError(
+            f"{layout.link_file} contains multiple script-toolbox-promptctl blocks"
+        )
+    if not blocks:
+        return None
+    block = blocks[0]
+    active_layout = resolve_layout(layout.client, layout.home, block.profile)
+    if block.body != _expected_body(active_layout):
+        raise PromptctlError(
+            f"{layout.link_file} managed block was edited; refusing to guess ownership"
+        )
+    if layout.client == "codex":
+        outside = content[: block.start] + content[block.end :]
+        if MODEL_KEY_RE.search(outside):
+            raise PromptctlError(
+                f"{layout.link_file} contains another model_instructions_file key"
+            )
+    return block
+
+
+def _render_switch(content: str, layout: Layout, name: str) -> tuple[str, bool]:
+    block = _active_block(content, layout)
+    if block is None:
+        return _render_install(content, layout, name)
+    if block.profile == name:
+        return content, False
+    newline = _newline(content)
+    rendered = newline.join(_block_lines(layout, name)) + newline
+    return content[: block.start] + rendered + content[block.end :], True
+
+
 def _default_template_path(client: str) -> Path:
     return Path(__file__).resolve().parent / "templates" / f"{client}-personal.md"
 
@@ -377,6 +412,25 @@ def plan_uninstall(
     )
 
 
+def plan_switch(layout: Layout, name: str) -> ClientPlan:
+    _validate_parent(layout.link_file)
+    _validate_parent(layout.instruction_file)
+    if _node_kind(layout.instruction_file) != "regular":
+        raise PromptctlError(
+            f"prompt profile {name!r} does not exist for {layout.client}: "
+            f"{layout.instruction_file}"
+        )
+    link_before = _read_optional_regular(layout.link_file, f"{layout.client} link file")
+    link_after, _changed = _render_switch(link_before or "", layout, name)
+    return ClientPlan(
+        operation="switch",
+        layout=layout,
+        link_before=link_before,
+        link_after=link_after,
+        instruction_action="preserve",
+    )
+
+
 def _mkdir_private(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
@@ -448,6 +502,42 @@ def _apply_plan(plan: ClientPlan, timestamp: str) -> list[tuple[str, Path]]:
         events.append(("backed up instructions", backup))
         events.append(("removed instructions", layout.instruction_file))
     return events
+
+
+def _apply_plans_transactionally(
+    plans: Sequence[ClientPlan], timestamp: str
+) -> list[tuple[str, str, Path]]:
+    """Apply a multi-client plan and restore pre-apply bytes after any failure."""
+    snapshots: dict[Path, tuple[str, Optional[str], Optional[int]]] = {}
+    for plan in plans:
+        for path in (plan.layout.link_file, plan.layout.instruction_file):
+            if path in snapshots:
+                continue
+            kind = _node_kind(path)
+            content = (
+                _read_optional_regular(path, "transaction input")
+                if kind == "regular"
+                else None
+            )
+            mode = stat.S_IMODE(path.stat().st_mode) if kind == "regular" else None
+            snapshots[path] = (kind, content, mode)
+    events: list[tuple[str, str, Path]] = []
+    try:
+        for plan in plans:
+            for event, path in _apply_plan(plan, timestamp):
+                events.append((plan.layout.client, event, path))
+        return events
+    except (PromptctlError, OSError):
+        for path, (kind, content, mode) in reversed(list(snapshots.items())):
+            current = _node_kind(path)
+            if kind == "regular":
+                assert content is not None
+                _atomic_write(path, content)
+                if mode is not None:
+                    path.chmod(mode)
+            elif kind == "missing" and current == "regular":
+                path.unlink()
+        raise
 
 
 def _action_summary(plan: ClientPlan) -> dict[str, str]:
@@ -540,9 +630,8 @@ def command_install(args: argparse.Namespace) -> int:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        for plan in plans:
-            for event, path in _apply_plan(plan, timestamp):
-                print(f"[{plan.layout.client}] {event}: {path}")
+        for client, event, path in _apply_plans_transactionally(plans, timestamp):
+            print(f"[{client}] {event}: {path}")
     except (PromptctlError, OSError) as exc:
         print(f"[error] apply failed: {exc}", file=sys.stderr)
         return 1
@@ -579,9 +668,8 @@ def command_uninstall(args: argparse.Namespace) -> int:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        for plan in plans:
-            for event, path in _apply_plan(plan, timestamp):
-                print(f"[{plan.layout.client}] {event}: {path}")
+        for client, event, path in _apply_plans_transactionally(plans, timestamp):
+            print(f"[{client}] {event}: {path}")
     except (PromptctlError, OSError) as exc:
         print(f"[error] apply failed: {exc}", file=sys.stderr)
         return 1
@@ -642,6 +730,214 @@ def command_path(args: argparse.Namespace) -> int:
     return 0
 
 
+def _current_for_client(client: str, home: Path) -> dict[str, object]:
+    layout = resolve_layout(client, home, "personal")
+    result: dict[str, object] = {
+        "client": client,
+        "profile": None,
+        "link_file": str(layout.link_file),
+        "managed": False,
+    }
+    content = _read_optional_regular(layout.link_file, f"{client} link file")
+    if content is None:
+        return result
+    block = _active_block(content, layout)
+    if block is None:
+        return result
+    profile_layout = resolve_layout(client, home, block.profile)
+    result.update(
+        profile=block.profile,
+        managed=True,
+        instruction_file=str(profile_layout.instruction_file),
+        instructions=_node_kind(profile_layout.instruction_file),
+    )
+    result["healthy"] = result["instructions"] == "regular"
+    return result
+
+
+def command_current(args: argparse.Namespace) -> int:
+    try:
+        home = _home_from_args(args.home)
+        values = [
+            _current_for_client(client, home)
+            for client in selected_clients(args.target)
+        ]
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    payload: object = values[0] if len(values) == 1 else values
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        for value in values:
+            print(f"[{value['client']}]")
+            print(f"Profile: {value['profile'] or 'none'}")
+            print(f"Managed: {'yes' if value['managed'] else 'no'}")
+    return 0
+
+
+def command_switch(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.profile)
+        home = _home_from_args(args.home)
+        plans = [
+            plan_switch(resolve_layout(client, home, name), name)
+            for client in selected_clients(args.target)
+        ]
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    preview = args.command == "plan" or not args.yes
+    _print_plans(plans, preview)
+    if preview:
+        print("\n[preview] re-run with apply --yes to switch the active profile")
+        return 0
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        for client, event, path in _apply_plans_transactionally(plans, timestamp):
+            print(f"[{client}] {event}: {path}")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] apply failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"\n[done] active prompt profile: {name}")
+    print("Start a new agent session to load the selected instructions.")
+    return 0
+
+
+def _profile_names(home: Path) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for client in CLIENTS:
+        directory = resolve_layout(client, home, "personal").instruction_file.parent
+        names: set[str] = set()
+        if _node_kind(directory) == "directory":
+            for path in directory.iterdir():
+                if path.is_file() and not path.is_symlink() and path.suffix == ".md":
+                    try:
+                        names.add(normalize_name(path.name))
+                    except PromptctlError:
+                        continue
+        elif _node_kind(directory) not in {"missing", "directory"}:
+            raise PromptctlError(f"instructions path is not a directory: {directory}")
+        result[client] = names
+    return result
+
+
+def command_profile_list(args: argparse.Namespace) -> int:
+    try:
+        home = _home_from_args(args.home)
+        names_by_client = _profile_names(home)
+        active = {
+            client: _current_for_client(client, home)["profile"] for client in CLIENTS
+        }
+        names = sorted(set().union(*names_by_client.values()))
+        profiles = [
+            {
+                "name": name,
+                "clients": [client for client in CLIENTS if name in names_by_client[client]],
+                "active_for": [client for client in CLIENTS if active[client] == name],
+            }
+            for name in names
+        ]
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(profiles, ensure_ascii=False, indent=2, sort_keys=True))
+    elif not profiles:
+        print("(no prompt profiles)")
+    else:
+        for profile in profiles:
+            clients = ",".join(profile["clients"])
+            active_for = ",".join(profile["active_for"])
+            suffix = f"\tactive: {active_for}" if active_for else ""
+            print(f"{profile['name']}\t{clients}{suffix}")
+    return 0
+
+
+def command_profile_create(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.name)
+        source_name = normalize_name(args.source) if args.source else None
+        home = _home_from_args(args.home)
+        clients = selected_clients(args.target)
+        writes: list[tuple[Path, str]] = []
+        for client in clients:
+            destination = resolve_layout(client, home, name).instruction_file
+            _validate_parent(destination)
+            if _node_kind(destination) != "missing":
+                raise PromptctlError(f"profile already exists for {client}: {destination}")
+            if source_name:
+                source = resolve_layout(client, home, source_name).instruction_file
+                content = _read_optional_regular(source, f"source profile for {client}")
+                if content is None:
+                    raise PromptctlError(f"source profile does not exist for {client}: {source}")
+            else:
+                content = _load_template(client, None)
+            writes.append((destination, content))
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    for path, _content in writes:
+        print(f"create {path}")
+    if not args.yes:
+        print("\n[preview] re-run with --yes to create the profile")
+        return 0
+    created: list[Path] = []
+    try:
+        for path, content in writes:
+            _atomic_write(path, content)
+            created.append(path)
+    except (PromptctlError, OSError) as exc:
+        for path in reversed(created):
+            if _node_kind(path) == "regular":
+                path.unlink()
+        print(f"[error] create failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"[done] created prompt profile '{name}'")
+    return 0
+
+
+def command_profile_delete(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.name)
+        home = _home_from_args(args.home)
+        clients = selected_clients(args.target)
+        active = [_current_for_client(client, home) for client in clients]
+        if any(value["profile"] == name for value in active):
+            used = ", ".join(value["client"] for value in active if value["profile"] == name)
+            raise PromptctlError(f"profile {name!r} is active for {used}; switch it first")
+        paths = []
+        for client in clients:
+            path = resolve_layout(client, home, name).instruction_file
+            kind = _node_kind(path)
+            if kind == "regular":
+                paths.append(path)
+            elif kind != "missing":
+                raise PromptctlError(f"profile path is {kind}, not a regular file: {path}")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    if not paths:
+        print(f"[done] prompt profile '{name}' is already absent")
+        return 0
+    for path in paths:
+        print(f"back up and remove {path}")
+    if not args.yes:
+        print("\n[preview] re-run with --yes to delete the profile")
+        return 0
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        for path in paths:
+            backup = _backup(path, timestamp)
+            path.unlink()
+            print(f"backed up {path}: {backup}")
+    except OSError as exc:
+        print(f"[error] delete failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"[done] deleted prompt profile '{name}'")
+    return 0
+
+
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("client", choices=(*CLIENTS, "all"))
     parser.add_argument(
@@ -665,6 +961,10 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   %(prog)s install codex
+  %(prog)s profile create work --from personal --yes
+  %(prog)s plan --target codex --profile work
+  %(prog)s apply --target codex --profile work --yes
+  %(prog)s current --target codex
   %(prog)s install all --yes
   %(prog)s status all
   %(prog)s path claude
@@ -708,6 +1008,46 @@ Examples:
     uninstall.add_argument("--dry-run", action="store_true", help="force preview")
     uninstall.add_argument("--yes", action="store_true", help="apply the previewed changes")
     uninstall.set_defaults(func=command_uninstall)
+
+    for command in ("plan", "apply"):
+        switch = subparsers.add_parser(
+            command,
+            help=("preview" if command == "plan" else "apply") + " a prompt profile switch",
+        )
+        switch.add_argument("--target", required=True, choices=(*CLIENTS, "all"))
+        switch.add_argument("--profile", required=True)
+        switch.add_argument("--home")
+        switch.add_argument("--yes", action="store_true")
+        switch.set_defaults(func=command_switch)
+
+    current = subparsers.add_parser("current", help="show the active prompt profile")
+    current.add_argument("--target", required=True, choices=(*CLIENTS, "all"))
+    current.add_argument("--home")
+    current.add_argument("--json", action="store_true")
+    current.set_defaults(func=command_current)
+
+    profile = subparsers.add_parser("profile", help="manage editable prompt profiles")
+    profile_subparsers = profile.add_subparsers(dest="profile_command", required=True)
+
+    profile_list = profile_subparsers.add_parser("list", help="list prompt profiles")
+    profile_list.add_argument("--home")
+    profile_list.add_argument("--json", action="store_true")
+    profile_list.set_defaults(func=command_profile_list)
+
+    profile_create = profile_subparsers.add_parser("create", help="create or clone a profile")
+    profile_create.add_argument("name")
+    profile_create.add_argument("--from", dest="source")
+    profile_create.add_argument("--target", default="all", choices=(*CLIENTS, "all"))
+    profile_create.add_argument("--home")
+    profile_create.add_argument("--yes", action="store_true")
+    profile_create.set_defaults(func=command_profile_create)
+
+    profile_delete = profile_subparsers.add_parser("delete", help="back up and delete a profile")
+    profile_delete.add_argument("name")
+    profile_delete.add_argument("--target", default="all", choices=(*CLIENTS, "all"))
+    profile_delete.add_argument("--home")
+    profile_delete.add_argument("--yes", action="store_true")
+    profile_delete.set_defaults(func=command_profile_delete)
     return parser
 
 

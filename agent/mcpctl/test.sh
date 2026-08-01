@@ -961,6 +961,16 @@ current_output="$(
 )"
 printf '%s' "$current_output" | grep -q '^Profile: frontend$' ||
   fail "current did not report the applied profile"
+current_json="$(
+  HOME="$TEST_HOME" "$MCPCTL" current --target claude --store "$STORE" --json
+)"
+printf '%s' "$current_json" | jq -e '
+  .target == "claude"
+  and .selection_mode == "profile"
+  and .profile == "frontend"
+  and .healthy == true
+  and (.servers | length > 0)
+' >/dev/null || fail "current --json omitted the active MCP selection"
 
 github_plan="$(
   HOME="$TEST_HOME" GITHUB_MCP_PAT='never-print-github-secret' \

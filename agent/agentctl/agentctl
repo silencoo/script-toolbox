@@ -19,8 +19,9 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.3.1"
+VERSION="0.4.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
+ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 
 # shellcheck source=../ctl-lib.sh
 . "${SCRIPT_DIR}/../ctl-lib.sh"
@@ -38,6 +39,8 @@ Usage:
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl help <claude|codex|opencode|pi>
   agentctl workspace <command> [options]
+  agentctl preset <list|show|create|delete|plan|apply|current|rollback> ...
+  agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Commands:
   setup       Install the selected CLI when missing, then configure its
@@ -52,10 +55,15 @@ Commands:
   workspace   Manage one encrypted recovery key that opens attached MCP,
               Skills, and Prompts stores. Existing isolated stores remain
               independently usable.
+  preset      Bind one MCP profile, Skills pack, and Prompt profile into a
+              transactional development preset with plan/apply/rollback.
+  doctor      Inspect providers, local selections, preset drift, secrets,
+              remote stores, and session-restart guidance.
 
 Run without arguments for the guided Shell menu. Setup options after the
 client name are passed unchanged to that client's existing setup.sh backend.
 Run "agentctl workspace --help" for Workspace commands.
+Run "agentctl preset --help" for development-preset commands.
 EOF
 }
 
@@ -65,6 +73,14 @@ run_workspace() {
   [ -r "$WORKSPACE_CLIENT" ] ||
     die "Workspace client not found: $WORKSPACE_CLIENT"
   exec node "$WORKSPACE_CLIENT" "$@"
+}
+
+run_orchestrator() {
+  command -v node >/dev/null 2>&1 ||
+    die "agentctl presets and doctor require Node.js 20 or newer"
+  [ -r "$ORCHESTRATOR_CLIENT" ] ||
+    die "Orchestration client not found: $ORCHESTRATOR_CLIENT"
+  AGENTCTL_SELF="${SCRIPT_DIR}/agentctl" exec node "$ORCHESTRATOR_CLIENT" "$@"
 }
 
 resolve_agent_root() {
@@ -668,6 +684,12 @@ case "${1:-}" in
   workspace)
     shift
     run_workspace "$@"
+    ;;
+  preset)
+    run_orchestrator "$@"
+    ;;
+  doctor)
+    run_orchestrator "$@"
     ;;
   -h|--help)
     usage

@@ -65,6 +65,17 @@ run independently:
 ./agent/promptctl/promptctl status all --json
 ./agent/promptctl/promptctl path all
 
+# Create a complete clone, then preview and atomically switch both clients.
+./agent/promptctl/promptctl profile create work --from personal --yes
+./agent/promptctl/promptctl profile list
+./agent/promptctl/promptctl plan --target all --profile work
+./agent/promptctl/promptctl apply --target all --profile work --yes
+./agent/promptctl/promptctl current --target all --json
+
+# Active profiles cannot be deleted; switch first. Deletion creates backups.
+./agent/promptctl/promptctl apply --target all --profile personal --yes
+./agent/promptctl/promptctl profile delete work --yes
+
 # Preview, then remove only Promptctl-owned links.
 ./agent/promptctl/promptctl uninstall all
 ./agent/promptctl/promptctl uninstall all --yes
@@ -74,9 +85,17 @@ run independently:
 ./agent/promptctl/promptctl uninstall all --remove-instructions --yes
 ```
 
-The default profile name is `personal`. Use `--name NAME` for another safe
-filename and `--template /path/to/file.md` to choose initial content for a
-missing instruction file. A template is never copied over an existing file.
+The default profile name is `personal`. Profiles are independent Markdown
+documents rather than inherited fragments: `profile create --from` makes a
+complete clone that can be edited without hidden parent behavior. `plan` and
+`apply` are the intentional switching interface and replace only a valid
+Promptctl-owned block. Multi-client writes restore their pre-apply bytes if a
+later write fails.
+
+Use `--name NAME` with the legacy-compatible `install` commands or
+`--template /path/to/file.md` to choose initial content for a missing
+instruction file. A template is never copied over an existing file, and
+`install --name` still refuses to replace a different active profile.
 The Shell entrypoint delegates explicit commands to `promptctl.py`, which is
 an internal, non-interactive engine rather than the user-facing guide.
 
@@ -91,6 +110,7 @@ promptctl remote init \
   --endpoint https://mcp-store.example.workers.dev \
   --create-token-file /secure/toolbox-create-token
 promptctl backup
+promptctl remote status
 promptctl versions
 promptctl remote ui enable
 ```

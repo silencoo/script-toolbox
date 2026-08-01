@@ -59,6 +59,55 @@ before validation requests, package installation, or filesystem changes, and
 does not require a key. Key files must be regular, non-symlinked, owner-only
 files containing exactly one non-empty line (normally mode `0600`).
 
+## Development presets
+
+A development preset binds one named MCP profile, Skills pack, and Prompt
+profile. The catalog is local and contains names only; credentials remain in
+their existing ctl-specific stores.
+
+```bash
+agentctl preset create web-research \
+  --mcp browser-research \
+  --skills frontend \
+  --prompt research \
+  --description "Browser-assisted frontend research" \
+  --yes
+
+agentctl preset plan web-research --target codex
+agentctl preset apply web-research --target codex --yes
+agentctl preset current --target codex
+```
+
+`plan` runs all three component plans without writing anything. `apply`
+starts only after every plan succeeds. If a later component fails, agentctl
+reconstructs the previous MCP and Skills selections—including target-local
+custom enable/disable sets—and restores the previous Prompt profile. A
+successful transaction can also be reverted explicitly:
+
+```bash
+agentctl preset rollback --target codex --yes
+```
+
+The default catalog is `~/.config/agentctl/presets.json`; the last 20 applied
+transactions are kept in `~/.local/state/agentctl/presets.json`. Both formats
+are schema-versioned JSON and contain no secret values. Presets currently
+target Claude Code and Codex because those are the clients shared by all
+three component controllers.
+
+## Unified doctor
+
+```bash
+agentctl doctor codex
+agentctl doctor all --json
+```
+
+Doctor combines redacted provider status with machine-readable MCP, Skills,
+and Prompt selections. It reports preset drift, managed-link health, MCP
+Secrets availability, remote-store reachability, and whether a new agent
+session is recommended. An unreachable or unconfigured optional remote Store
+is reported separately and does not make an otherwise healthy local setup
+fail.
+
 ## Unified Workspace and isolated Stores
 
 The default recovery experience uses one `toolbox1_…` Workspace code. Its
@@ -133,18 +182,21 @@ restores those backups:
 
 ## Ownership boundary
 
-`agentctl` controls the client/provider layer and the optional master Workspace
-manifest:
+`agentctl` controls the client/provider layer, local development-preset
+transactions, and the optional master Workspace manifest:
 
 - It can install a missing CLI through the selected setup backend.
 - It configures provider, model, and owned credential state.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.
 - Its `workspace` commands attach or detach encrypted child Store capabilities;
   they do not rewrite the child snapshots.
+- Its `preset` command deliberately invokes the three child controllers only
+  for plan/apply/status/rollback; each controller retains ownership of its
+  files and validation rules.
 
-It does not invoke `mcpctl`, Promptctl, a per-client `mcp.sh`, or a full
-`uninstall.sh`. It also does not remove an installed CLI binary. Use these
-independent entrypoints when needed:
+Outside an explicit preset or doctor command, it does not invoke `mcpctl`,
+Promptctl, a per-client `mcp.sh`, or a full `uninstall.sh`. It also does not
+remove an installed CLI binary. Use these independent entrypoints when needed:
 
 ```bash
 ./agent/mcpctl/mcpctl

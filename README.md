@@ -96,7 +96,8 @@ The controller entrypoints share a reversible PATH installer:
 
 - [`agentctl`](./agent/agentctl/) installs supported clients and configures
   providers, models, and owned credentials. It also provides redacted
-  human/JSON status, mutation-free provider previews, and an optional master
+  human/JSON status, transactional MCP/Skills/Prompt development presets, a
+  unified doctor, mutation-free provider previews, and an optional master
   Workspace recovery layer for the three encrypted content Stores.
 - [`mcpctl`](./agent/mcpctl/) manages task-oriented MCP profiles.
 - [`promptctl`](./agent/promptctl/) manages persistent instructions and their
@@ -141,6 +142,7 @@ python3 mihomo-subscription-manager/test_manager.py
 python3 sing-box/generate-client-config.py --help
 node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
 python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests
+node agent/agentctl/orchestrator-client.test.mjs
 python3 -m pytest agent/promptctl/advanced/claude/tests
 python3 -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
 ```
