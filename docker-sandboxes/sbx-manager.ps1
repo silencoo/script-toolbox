@@ -606,6 +606,7 @@ function Restart-Daemon {
 function Invoke-DaemonCommand {
   param([string[]] $CommandArguments)
 
+  $CommandArguments = @($CommandArguments)
   $action = if ($CommandArguments.Count -gt 0) {
     $CommandArguments[0]
   } else {
@@ -818,6 +819,7 @@ function Show-NetworkStatus {
 function Invoke-NetworkCommand {
   param([string[]] $CommandArguments)
 
+  $CommandArguments = @($CommandArguments)
   $subcommand = if ($CommandArguments.Count -gt 0) {
     $CommandArguments[0]
   } else {
@@ -1213,6 +1215,7 @@ function Format-CommandArgument {
 function Invoke-RunCommand {
   param([string[]] $CommandArguments)
 
+  $CommandArguments = @($CommandArguments)
   if ($CommandArguments.Count -lt 1) {
     Stop-Manager (
       "Usage: .\$($script:ScriptName) run <agent> [workspace] " +
@@ -1415,6 +1418,7 @@ function Invoke-RunCommand {
 function Invoke-Setup {
   param([string[]] $CommandArguments)
 
+  $CommandArguments = @($CommandArguments)
   $mode = if ($CommandArguments.Count -gt 0) {
     $CommandArguments[0]
   } else {
@@ -1445,6 +1449,7 @@ function Invoke-Setup {
 function Split-GlobalOptions {
   param([string[]] $RawArguments)
 
+  $RawArguments = @($RawArguments)
   $remaining = [Collections.Generic.List[string]]::new()
   $action = 'Continue'
   $index = 0

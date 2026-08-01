@@ -127,6 +127,41 @@ try {
   )
   Assert-TextContains $firstRunOutput 'Usage'
 
+  # PowerShell binds an empty positional array as null at function boundaries.
+  # Strict mode must not turn supported no-argument defaults into .Count errors.
+  $defaultDaemon = Initialize-Case 'default-daemon'
+  Set-CaseEnvironment $defaultDaemon
+  $env:Path = "$fixtureDir;$originalPath"
+  if ((Invoke-ManagerCase $defaultDaemon @('daemon')) -ne 0) {
+    Stop-Test 'daemon default action failed'
+  }
+  Assert-LogContains (Join-Path $defaultDaemon 'log') 'daemon status'
+
+  $defaultNetwork = Initialize-Case 'default-network'
+  Set-CaseEnvironment $defaultNetwork
+  if ((Invoke-ManagerCase $defaultNetwork @('network')) -ne 0) {
+    Stop-Test 'network default action failed'
+  }
+  Assert-LogContains (Join-Path $defaultNetwork 'log') (
+    'policy ls --include-inactive --wide'
+  )
+
+  $missingRunArgument = Initialize-Case 'missing-run-argument'
+  Set-CaseEnvironment $missingRunArgument
+  if ((Invoke-ManagerCase $missingRunArgument @('run')) -eq 0) {
+    Stop-Test 'run without an agent unexpectedly succeeded'
+  }
+  Assert-TextContains (Join-Path $missingRunArgument 'output') (
+    'run <agent> [workspace]'
+  )
+
+  $defaultSetup = Initialize-Case 'default-setup'
+  Set-CaseEnvironment $defaultSetup
+  if ((Invoke-ManagerCase $defaultSetup @('--skip-login', 'setup')) -ne 0) {
+    Stop-Test 'setup default mode failed'
+  }
+  Assert-LogContains (Join-Path $defaultSetup 'log') 'policy init balanced'
+
   $missingSbx = Initialize-Case 'missing-sbx'
   Set-CaseEnvironment $missingSbx
   $env:Path = $missingSbx
