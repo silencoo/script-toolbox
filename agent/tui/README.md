@@ -39,10 +39,18 @@ editable local source. The TUI deliberately has no whole-Workspace pull
 action; the explicit bulk preset push/pull commands remain available for
 automation and migration.
 
+The Agents view is actionable as well as diagnostic. Select Claude Code,
+Codex, OpenCode, or Pi with `j`/`k`; `p` shows its provider catalog, `c` or
+Enter temporarily suspends Ink and opens the existing interactive setup/install
+flow, and `x` removes only agentctl-owned provider configuration after
+confirmation. When setup exits, the dashboard reopens on Agents with refreshed
+status.
+
 Cloud empty states distinguish local-only setup, incompatible Workspace data,
 temporary connectivity failures, rejected capabilities, and invalid local
 configuration. Recognized failures use short recovery guidance instead of raw
-backend errors.
+backend errors. The configured endpoint and Store ID remain visible even when
+the remote snapshot itself cannot be opened.
 
 ## Keys
 
@@ -54,6 +62,9 @@ backend errors.
 | `j` / `k`, Up / Down | Select a cloud Profile, Pack, Prompt, or Preset |
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | `u` | Roll back a preset transaction |
+| Agents: `c` / Enter | Configure the selected agent, installing its CLI if needed |
+| Agents: `p` | Show provider/model choices |
+| Agents: `x` | Confirm removal of agentctl-owned provider configuration |
 | `?` | Toggle keyboard help |
 | `q` | Quit |
 

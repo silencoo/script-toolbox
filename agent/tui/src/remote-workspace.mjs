@@ -23,6 +23,7 @@ import {
   validateRemoteConfig,
   writeJsonAtomic
 } from "../../remote-store.mjs";
+import { normalizeWorkspaceSchema } from "../../agentctl/workspace-schema.mjs";
 
 const MCP_NAME = /^[A-Za-z0-9._-]+$/;
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -34,6 +35,7 @@ const PROTOCOLS = Object.freeze({
 });
 
 function validateWorkspaceSnapshot(snapshot) {
+  snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
   if (snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" ||
       typeof snapshot.name !== "string" || !snapshot.name ||
@@ -70,9 +72,14 @@ function validateWorkspaceSnapshot(snapshot) {
 }
 
 async function loadRemoteWorkspace(_path, config) {
-  return validateWorkspaceSnapshot(
-    await downloadRemoteSnapshot(config, WORKSPACE_REMOTE_PROTOCOL)
-  );
+  const snapshot = await downloadRemoteSnapshot(config, WORKSPACE_REMOTE_PROTOCOL);
+  const sourceSchema = snapshot?.schema;
+  const workspace = validateWorkspaceSnapshot(snapshot);
+  Object.defineProperty(workspace, "source_schema", {
+    value: sourceSchema,
+    enumerable: false
+  });
+  return workspace;
 }
 
 async function loadRemoteStatus(config) {
@@ -194,7 +201,7 @@ function validateSkillsSnapshot(snapshot) {
     const files = assertObject(skill.files, `Skill '${name}' files`);
     if (!files["SKILL.md"]) throw new RemoteWorkspaceError(`Skill '${name}' has no SKILL.md`);
     const hash = createHash("sha256");
-    for (const [path, file] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [path, file] of Object.entries(files)) {
       validateRelativePath(path);
       if (![0o600, 0o700].includes(file?.mode)) {
         throw new RemoteWorkspaceError(`remote Skill file '${name}/${path}' has an unsafe mode`);
@@ -445,6 +452,16 @@ export function createRemoteWorkspace({
   const childCache = new Map();
   const childStoreIds = new Map();
 
+  async function connection() {
+    const config = await readConfigFn(workspaceConfig);
+    return {
+      schema: 1,
+      endpoint: config.endpoint,
+      store_id: config.store_id,
+      configured: true
+    };
+  }
+
   async function index({ refresh = false } = {}) {
     if (publicIndex && !refresh) return structuredClone(publicIndex);
     const config = await readConfigFn(workspaceConfig);
@@ -468,6 +485,8 @@ export function createRemoteWorkspace({
       schema: 2,
       mode: "workspace",
       source: "cloud",
+      remote_schema: workspace.source_schema || 2,
+      migration_pending: workspace.source_schema === 1,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -771,6 +790,7 @@ export function createRemoteWorkspace({
     catalog,
     child,
     componentPlan,
+    connection,
     index,
     materializeComponent,
     materializePreset,

@@ -48,8 +48,9 @@ Commands:
   setup       Install the selected CLI when missing, then configure its
               provider, model, and credential. "init" and "configure" are
               accepted aliases.
-  status      Read CLI/provider ownership and credential-file metadata.
-              Secret values are never read into the output.
+  status      Read CLI/provider configuration source and credential metadata,
+              including external Claude config and official Codex login.
+              Secret values are never emitted.
   providers   Show the selected client's provider/model presets.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
@@ -233,6 +234,7 @@ status_set_metadata() {
   CONFIG_FILE_1=""
   CONFIG_FILE_2=""
   STATE_FILE=""
+  AUTH_FILE=""
   CLI_COMMAND=""
   CREDENTIAL_KIND="file"
   CREDENTIAL_EXPECTED_PREFIX=""
@@ -248,6 +250,7 @@ status_set_metadata() {
       CLI_COMMAND="codex"
       CONFIG_FILE_1="${HOME}/.codex/config.toml"
       STATE_FILE="${HOME}/.codex/.script-toolbox-provider-key"
+      AUTH_FILE="${HOME}/.codex/auth.json"
       CREDENTIAL_EXPECTED_PREFIX="${HOME}/.codex/provider-keys/"
       ;;
     opencode)
@@ -278,6 +281,7 @@ status_prepare() {
   STATE_EXISTS=false
   OWNERSHIP_MARKER=false
   PROVIDER_STATUS="not-configured"
+  PROVIDER_SOURCE="none"
   STATUS_PROVIDER=""
   STATUS_MODEL=""
   CREDENTIAL_FILE=""
@@ -320,11 +324,17 @@ status_prepare() {
     claude)
       if [ "$STATE_EXISTS" = true ]; then
         OWNERSHIP_MARKER=true
+        PROVIDER_SOURCE="agentctl"
         raw_value="$(sed -n '1p' "$STATE_FILE")"
         status_safe_provider "$raw_value"
         STATUS_PROVIDER="$STATUS_SAFE_VALUE"
       fi
-      STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '.model // .env.ANTHROPIC_MODEL // empty')"
+      STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '
+        .model
+        // .env.ANTHROPIC_MODEL
+        // .env.ANTHROPIC_DEFAULT_SONNET_MODEL
+        // empty
+      ')"
       CREDENTIAL_FILE="$CONFIG_FILE_1"
       if [ -f "$CONFIG_FILE_1" ]; then
         if command -v jq >/dev/null 2>&1; then
@@ -338,11 +348,24 @@ status_prepare() {
           CREDENTIAL_EXISTS=true
         fi
       fi
+      if [ "$OWNERSHIP_MARKER" != true ] &&
+         [ "$CONFIG_VALID" = true ] &&
+         [ "$CREDENTIAL_EXISTS" = true ]; then
+        PROVIDER_SOURCE="external"
+        if command -v jq >/dev/null 2>&1 &&
+           jq -e '((.env.ANTHROPIC_BASE_URL // "") | length > 0)' \
+             "$CONFIG_FILE_1" >/dev/null 2>&1; then
+          STATUS_PROVIDER="external-endpoint"
+        else
+          STATUS_PROVIDER="anthropic"
+        fi
+      fi
       ;;
     codex)
       if grep -qF '# >>> agent/codex/setup.sh >>>' "$CONFIG_FILE_1" 2>/dev/null ||
          [ "$STATE_EXISTS" = true ]; then
         OWNERSHIP_MARKER=true
+        PROVIDER_SOURCE="agentctl"
       fi
       raw_value="$(status_toml_top_level_value "$CONFIG_FILE_1" model_provider)"
       status_safe_provider "$raw_value"
@@ -354,6 +377,27 @@ status_prepare() {
       fi
       if [ "$STATE_EXISTS" = true ]; then
         candidate="$(sed -n '1p' "$STATE_FILE")"
+      fi
+      if [ "$OWNERSHIP_MARKER" != true ] &&
+         [ -f "$AUTH_FILE" ] &&
+         command -v jq >/dev/null 2>&1; then
+        if jq -e '
+          .auth_mode == "chatgpt"
+          and ((.tokens // {}) | [.. | strings | select(length > 0)] | length > 0)
+        ' "$AUTH_FILE" >/dev/null 2>&1; then
+          PROVIDER_SOURCE="official-login"
+          STATUS_PROVIDER="openai-chatgpt"
+          CREDENTIAL_KIND="official-auth"
+          CREDENTIAL_FILE="$AUTH_FILE"
+          CREDENTIAL_EXISTS=true
+        elif jq -e '((.OPENAI_API_KEY // "") | length > 0)' \
+          "$AUTH_FILE" >/dev/null 2>&1; then
+          PROVIDER_SOURCE="official-login"
+          STATUS_PROVIDER="openai"
+          CREDENTIAL_KIND="official-auth"
+          CREDENTIAL_FILE="$AUTH_FILE"
+          CREDENTIAL_EXISTS=true
+        fi
       fi
       ;;
     opencode)
@@ -425,6 +469,20 @@ status_prepare() {
     else
       PROVIDER_STATUS="incomplete"
     fi
+  elif [ "$PROVIDER_SOURCE" = "external" ]; then
+    if [ "$CONFIG_VALID" = true ] &&
+       [ -n "$STATUS_PROVIDER" ] &&
+       [ "$CREDENTIAL_EXISTS" = true ]; then
+      PROVIDER_STATUS="configured"
+    else
+      PROVIDER_STATUS="incomplete"
+    fi
+  elif [ "$PROVIDER_SOURCE" = "official-login" ]; then
+    if [ -n "$STATUS_PROVIDER" ] && [ "$CREDENTIAL_EXISTS" = true ]; then
+      PROVIDER_STATUS="configured"
+    else
+      PROVIDER_STATUS="incomplete"
+    fi
   fi
 }
 
@@ -437,6 +495,7 @@ status_emit_human() {
     log "  CLI         : not installed"
   fi
   log "  Provider    : ${PROVIDER_STATUS}${STATUS_PROVIDER:+ ($STATUS_PROVIDER)}"
+  log "  Source      : $PROVIDER_SOURCE"
   log "  Model       : ${STATUS_MODEL:-not resolved}"
   log "  Config      : $CONFIG_FILE_1"
   [ -z "$CONFIG_FILE_2" ] || log "                $CONFIG_FILE_2"
@@ -463,6 +522,7 @@ status_emit_json() {
     --arg cli_path "$CLI_PATH" \
     --arg cli_version "$CLI_VERSION" \
     --arg provider_status "$PROVIDER_STATUS" \
+    --arg provider_source "$PROVIDER_SOURCE" \
     --arg provider "$STATUS_PROVIDER" \
     --arg model "$STATUS_MODEL" \
     --arg config_file_1 "$CONFIG_FILE_1" \
@@ -486,6 +546,7 @@ status_emit_json() {
         cli_path: (if $cli_path == "" then null else $cli_path end),
         cli_version: (if $cli_version == "" then null else $cli_version end),
         provider_status: $provider_status,
+        provider_source: $provider_source,
         provider: (if $provider == "" then null else $provider end),
         model: (if $model == "" then null else $model end),
         config_files: (

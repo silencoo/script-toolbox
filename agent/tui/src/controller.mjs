@@ -8,6 +8,7 @@ export const defaultAgentRoot = resolve(
   process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join(moduleDirectory, "..", "..")
 );
 const MAX_OUTPUT = 512 * 1024;
+const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
 
 export function sanitizeOutput(value) {
   return String(value || "")
@@ -78,6 +79,12 @@ export function createController({
     prompts: join(agentRoot, "promptctl", "promptctl")
   };
 
+  function agentctlCommand(args) {
+    return process.platform === "win32"
+      ? { executable: "bash", args: [agentctl, ...args] }
+      : { executable: agentctl, args };
+  }
+
   async function runJson(script, args, label, env = {}) {
     return parseJsonOutput(await run(process.execPath, [script, ...args], { env }), label);
   }
@@ -86,13 +93,24 @@ export function createController({
     return parseJsonOutput(await run(executable, args, { env }), label);
   }
 
+  async function runAgentctlJson(args, label) {
+    const command = agentctlCommand(args);
+    return runExecutableJson(command.executable, command.args, label);
+  }
+
   async function snapshot() {
     const remoteResult = remoteWorkspace.index({ refresh: true })
-      .then((data) => ({ data, error: "" }))
-      .catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) }));
+      .then((data) => ({ data, connection: data, error: "" }))
+      .catch(async (error) => {
+        let connection = null;
+        if (typeof remoteWorkspace.connection === "function") {
+          connection = await remoteWorkspace.connection().catch(() => null);
+        }
+        return { data: null, connection, error: sanitizeOutput(error?.message || error) };
+      });
     let [doctorResult, agentsResult, presetsResult, remote] = await Promise.all([
       runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
-      runExecutableJson(agentctl, ["status", "all", "--json"], "agentctl status"),
+      runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
       remoteResult
     ]);
@@ -133,6 +151,7 @@ export function createController({
       presetsError: cloudPresets ? "" : presetsResult.error,
       presetSource: cloudPresets ? "cloud" : "local",
       workspace: remote.data,
+      workspaceConnection: remote.connection,
       workspaceError: remote.error
     };
   }
@@ -223,11 +242,26 @@ export function createController({
   }
 
   async function action(actionName, {
+    agent = "",
     preset = "",
     selection = "",
     source = "local",
     target = "codex"
   } = {}) {
+    if (actionName === "agent-providers" || actionName === "agent-uninstall") {
+      if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
+      const args = actionName === "agent-providers"
+        ? ["providers", agent]
+        : ["uninstall", agent, "--yes"];
+      const command = agentctlCommand(args);
+      const result = await run(command.executable, command.args);
+      return {
+        ok: result.code === 0,
+        data: { agent },
+        detail: sanitizeOutput(result.stdout || result.stderr) ||
+          (result.code === 0 ? "Done" : `Action failed with code ${result.code}`)
+      };
+    }
     const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(actionName);
     if (component) return remoteComponentAction(actionName, component[1], selection, target);
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
@@ -264,5 +298,10 @@ export function createController({
     };
   }
 
-  return { snapshot, action, remoteCatalog };
+  function interactiveCommand(agent) {
+    if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
+    return agentctlCommand(["setup", agent]);
+  }
+
+  return { snapshot, action, interactiveCommand, remoteCatalog };
 }

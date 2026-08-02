@@ -12,6 +12,25 @@
   chosen selection and inherited dependencies enter a per-Workspace runtime;
   MCP Secret values remain encrypted outside the private controller adapter.
   The TUI no longer exposes a whole-catalog pull action.
+- Added hidden interactive `toolbox1_` entry to `agentctl workspace restore`.
+  `--recovery-file` remains available for non-interactive automation, while a
+  non-TTY invocation without it fails without reading or exposing the code.
+- Restored legacy schema 1 Workspace access through a non-mutating in-memory
+  schema 2 conversion. Read-only restore/status/TUI access does not create a
+  remote version. Added previewable `agentctl workspace migrate [--yes]` for an
+  explicit immutable schema 2 version; Cloud error views retain the configured
+  endpoint and Store ID.
+- Made the Agents TUI view operational: select a client, inspect providers,
+  enter the existing interactive setup/install flow with inherited terminal
+  I/O, return automatically to the dashboard, or confirm an owned-config-only
+  uninstall.
+- Separated provider readiness from agentctl ownership in Agent status. Claude
+  settings managed by tools such as CC Switch and Codex official ChatGPT/API-key
+  authentication now appear as configured with an explicit source instead of
+  being misreported as not configured.
+- Corrected remote Skill digest verification to preserve the canonical
+  depth-first snapshot order produced by `skillsctl`; large nested Skills such
+  as `cloudflare` no longer fail after an incorrect global path re-sort.
 - Made no-argument TTY launches open the dashboard while preserving legacy
   non-TTY behavior and the explicit `interactive` Shell guides.
 - Standardized the repository-backed controller runtime on Node.js 22 and

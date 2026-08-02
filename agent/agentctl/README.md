@@ -15,6 +15,8 @@ The dashboard starts on Overview and combines providers, MCP, Skills, Prompts,
 development presets, and encrypted Workspace state. It refreshes automatically,
 browses cloud catalogs on demand, and can plan/apply one selected remote
 Profile, Pack, Prompt, or Preset without first restoring the whole Store.
+The Agents section also selects a client for provider discovery, interactive
+setup/install, or confirmed removal of agentctl-owned provider configuration.
 Node.js 22 or newer is required. Use `agentctl interactive` for the older
 line-oriented guide that selects Claude Code, Codex, OpenCode, or Pi and then
 delegates to that client's setup implementation. Non-TTY no-argument callers
@@ -47,7 +49,7 @@ The same dashboard can be selected explicitly:
 # "init" and "configure" are setup aliases.
 ./agent/agentctl/agentctl init opencode
 
-# Inspect installed CLIs and agentctl-owned provider state without secrets.
+# Inspect installed CLIs and provider state without secrets.
 ./agent/agentctl/agentctl status all
 ./agent/agentctl/agentctl status codex --json
 
@@ -63,9 +65,11 @@ The same dashboard can be selected explicitly:
 Client aliases include `claude`/`claude-code` and
 `opencode`/`open-code`.
 
-`status` reports the CLI path/version, resolved provider/model, ownership
-marker, config/state paths, and credential-file existence/mode. It never emits
-a credential value. JSON status requires `jq`.
+`status` reports the CLI path/version, resolved provider/model, configuration
+source, ownership marker, config/state paths, and credential-file
+existence/mode. The source distinguishes agentctl-owned settings, externally
+managed Claude settings such as CC Switch, and Codex's official ChatGPT/API-key
+login. It never emits a credential value. JSON status requires `jq`.
 
 All four setup backends accept `--dry-run` and `--key-file PATH`. Dry-run exits
 before validation requests, package installation, or filesystem changes, and
@@ -146,8 +150,22 @@ Prompts Stores plus the shared development-preset catalog. Unlocking the
 Worker UI once opens MCP, Skills, Prompts, and Presets tabs. Child
 capabilities are never sent to the Worker in plaintext.
 
-Workspace manifests and development-preset catalogs use strict schema 2.
-Schema 1 manifests are rejected rather than migrated implicitly.
+Workspace manifests and development-preset catalogs are written as strict
+schema 2. Legacy schema 1 Workspace manifests are normalized to schema 2 in
+memory so recovery and read-only browsing continue to work; the encrypted
+remote version remains untouched until an explicit attach, detach, or preset
+write creates a new schema 2 version.
+
+Preview or explicitly persist that compatibility conversion as a new immutable
+remote version:
+
+```bash
+agentctl workspace migrate
+agentctl workspace migrate --yes
+```
+
+The preview is read-only. `--yes` uploads schema 2 while retaining the previous
+schema 1 version in Workspace history.
 
 Existing isolated modes remain available for compartmentalization and
 break-glass recovery:
@@ -185,7 +203,14 @@ agentctl workspace ui disable
 
 The master capability is stored locally at
 `~/.config/agentctl/workspace-remote.json` with owner-only permissions. A
-fresh machine can recover it from a private one-line file:
+fresh machine can paste its recovery code into a hidden terminal prompt:
+
+```bash
+agentctl workspace restore
+```
+
+The code is not echoed and does not enter shell history. For automation, read
+the same one-line code from a private file instead:
 
 ```bash
 agentctl workspace restore --recovery-file /secure/toolbox-recovery-code

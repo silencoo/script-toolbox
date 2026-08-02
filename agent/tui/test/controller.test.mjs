@@ -102,3 +102,45 @@ test("remote actions plan without writes and apply through the selected runtime"
   assert.deepEqual(writes.slice(-2), ["preset:web", "prompt"]);
   assert.deepEqual(calls.at(-1).args.slice(1), ["preset", "apply", "web", "--target", "codex", "--yes", "--json"]);
 });
+
+test("snapshot preserves public Workspace connection metadata when remote data is incompatible", async () => {
+  const runner = async (_executable, args) => {
+    if (args.includes("doctor")) return { code: 0, stdout: '{"targets":[]}', stderr: "" };
+    if (args.includes("list")) return { code: 0, stdout: '{}', stderr: "" };
+    return { code: 0, stdout: '[]', stderr: "" };
+  };
+  const remoteWorkspace = {
+    index: async () => { throw new Error("remote snapshot is not a valid agentctl Workspace"); },
+    connection: async () => ({
+      endpoint: "https://workspace.example.test",
+      store_id: "a".repeat(32),
+      configured: true
+    })
+  };
+  const snapshot = await createController({ agentRoot: "/agent", runner, remoteWorkspace }).snapshot();
+  assert.equal(snapshot.workspace, null);
+  assert.equal(snapshot.workspaceConnection.endpoint, "https://workspace.example.test");
+  assert.match(snapshot.workspaceError, /not a valid agentctl Workspace/);
+});
+
+test("Agents actions expose providers, owned uninstall, and interactive setup", async () => {
+  const calls = [];
+  const runner = async (executable, args) => {
+    calls.push({ executable, args });
+    return { code: 0, stdout: "provider-a\nprovider-b\n", stderr: "" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  const providers = await controller.action("agent-providers", { agent: "codex" });
+  assert.equal(providers.ok, true);
+  assert.match(providers.detail, /provider-a/);
+  assert.deepEqual(calls.at(-1).args, ["providers", "codex"]);
+
+  const removed = await controller.action("agent-uninstall", { agent: "claude" });
+  assert.equal(removed.ok, true);
+  assert.deepEqual(calls.at(-1).args, ["uninstall", "claude", "--yes"]);
+  assert.deepEqual(controller.interactiveCommand("pi"), {
+    executable: "/agent/agentctl/agentctl",
+    args: ["setup", "pi"]
+  });
+  assert.throws(() => controller.interactiveCommand("unknown"), /unsupported agent/);
+});

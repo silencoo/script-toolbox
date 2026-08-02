@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
+import { spawnSync } from "node:child_process";
 import { createController } from "./controller.mjs";
 import {
   SECTIONS,
@@ -29,9 +30,10 @@ Keys:
   Tab / Shift+Tab / Left / Right  Switch section
   t                                 Switch Codex / Claude target
   r                                 Refresh live status
-  j / k / Up / Down                 Select a cloud profile, pack, or preset
+  j / k / Up / Down                 Select the current list item
   p / a                             Plan / apply selected cloud configuration
   u                                 Roll back a preset
+  Agents: c configure · p providers · x uninstall owned config
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -92,9 +94,18 @@ function ErrorText({ value }) {
 
 function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
-  if (!report) return <ErrorText value={snapshot?.doctorError || "Diagnostics unavailable"} />;
   const workspace = snapshot.workspace;
+  const connection = workspace || snapshot.workspaceConnection;
   const cloud = workspacePresentation(workspace, snapshot.workspaceError);
+  if (!report) {
+    return (
+      <Box flexDirection="column">
+        <ErrorText value={snapshot?.doctorError || "Diagnostics unavailable"} />
+        <Row label="Workspace" value={workspace ? "connected" : cloud.status} kind={cloud.kind} />
+        {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="column">
       <SummaryRow name="Provider" summary={componentSummary("provider", report.provider)} />
@@ -105,27 +116,35 @@ function Overview({ snapshot, target }) {
       <Row label="Secrets" value={snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete"} kind={snapshot.doctor?.secrets?.ok ? "good" : "bad"} />
       <Row label="Remotes" value={`${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available`} />
       <Row label="Workspace" value={workspace ? `${workspace.latest?.version || "empty"} · ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status} kind={cloud.kind} />
+      {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
     </Box>
   );
 }
 
-function Agents({ snapshot }) {
+function Agents({ snapshot, selected }) {
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
   if (agents.length === 0) return <ErrorText value={snapshot.agentsError || snapshot.doctorError || "No agent status"} />;
+  const safeIndex = clampSelection(selected, agents.length);
+  const current = agents[safeIndex];
   return (
-    <Box flexDirection="column">
-      {agents.map((agent) => {
-        const report = targetReport(snapshot, agent.client);
-        const provider = componentSummary("provider", { ok: true, data: agent });
-        return (
-          <Box key={agent.client} flexDirection="column">
-            <Text bold color="cyan">{agent.label || agent.client}</Text>
-            <SummaryRow name="Provider" summary={provider} />
-            <Row label="CLI" value={agent.cli_installed ? agent.cli_version || "installed" : "not installed"} kind={agent.cli_installed ? "good" : "bad"} />
-            {report && <Row label="Preset" value={report.preset?.name || "none"} kind={report.preset?.drift ? "bad" : "muted"} />}
-          </Box>
-        );
-      })}
+    <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 88 ? "column" : "row"}>
+      <Box flexDirection="column" minWidth={24}>
+        {agents.map((agent, index) => (
+          <Text key={agent.client} color={index === safeIndex ? "cyan" : undefined} bold={index === safeIndex}>
+            {index === safeIndex ? "> " : "  "}{agent.label || agent.client}
+            {agent.cli_installed ? "" : " (not installed)"}
+          </Text>
+        ))}
+      </Box>
+      <Box flexDirection="column">
+        <Text bold>{current.label || current.client}</Text>
+        <SummaryRow name="Provider" summary={componentSummary("provider", { ok: true, data: current })} />
+        <Row label="CLI" value={current.cli_installed ? current.cli_version || "installed" : "not installed"} kind={current.cli_installed ? "good" : "bad"} />
+        {targetReport(snapshot, current.client) && <Row label="Preset" value={targetReport(snapshot, current.client)?.preset?.name || "none"} kind={targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted"} />}
+        <Text color="gray">
+          <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall owned config
+        </Text>
+      </Box>
     </Box>
   );
 }
@@ -225,12 +244,15 @@ function Cloud({ snapshot }) {
     );
   }
   const workspace = snapshot.workspace;
+  const connection = snapshot.workspaceConnection;
   const presentation = workspacePresentation(workspace, snapshot.workspaceError);
   if (!workspace) {
     return (
       <Box flexDirection="column">
         <Text bold color={COLORS[presentation.kind]}>{presentation.heading}</Text>
         <Row label="Status" value={presentation.status} kind={presentation.kind} />
+        {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
+        {connection?.store_id && <Row label="Store ID" value={connection.store_id} />}
         <Text>{presentation.description}</Text>
         <Text color="green">{presentation.safety}</Text>
         <Box flexDirection="column" marginTop={1}>
@@ -249,6 +271,10 @@ function Cloud({ snapshot }) {
       <Row label="Status" value={presentation.status} kind="good" />
       <Row label="Endpoint" value={workspace.endpoint} />
       <Row label="Version" value={workspace.latest?.version || "none"} />
+      <Row label="Format" value={workspace.migration_pending
+        ? `schema ${workspace.remote_schema} · compatible in memory`
+        : `schema ${workspace.remote_schema || 2}`} kind={workspace.migration_pending ? "warn" : "good"} />
+      {workspace.migration_pending && <Text color="yellow">Upgrade preview: agentctl workspace migrate</Text>}
       <Row label="Web UI" value={workspace.web_ui_enabled ? "enabled" : "disabled"} kind={workspace.web_ui_enabled ? "good" : "muted"} />
       {Object.entries(workspace.stores || {}).map(([name, store]) => (
         <Row key={name} label={name} value={store.attached
@@ -267,7 +293,10 @@ function Help() {
     <Panel title="Keyboard help">
       <Text>Tab / Shift+Tab or arrows  switch section</Text>
       <Text>t  switch target     r  refresh     q  quit</Text>
-      <Text>j/k or Up/Down  select cloud profile, pack, or preset</Text>
+      <Text>j/k or Up/Down  select the current list item</Text>
+      <Text>
+        Agents: <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall
+      </Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
       <Text>Presets: p inspect plan · a apply · u rollback</Text>
       <Text>Destructive actions require y confirmation.</Text>
@@ -275,7 +304,7 @@ function Help() {
   );
 }
 
-function App({ initialSection, controller }) {
+function App({ initialSection, controller, onLaunch }) {
   const { exit } = useApp();
   const [section, setSection] = useState(initialSection);
   const [target, setTarget] = useState("codex");
@@ -283,6 +312,7 @@ function App({ initialSection, controller }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(0);
+  const [selectedAgent, setSelectedAgent] = useState(0);
   const [componentSelected, setComponentSelected] = useState({ mcp: 0, skills: 0, prompts: 0 });
   const [catalogs, setCatalogs] = useState({
     mcp: { items: [], loading: false, error: "", key: "" },
@@ -301,6 +331,7 @@ function App({ initialSection, controller }) {
       const next = await controller.snapshot();
       setSnapshot(next);
       setSelected((value) => clampSelection(value, presetEntries(next).length));
+      setSelectedAgent((value) => clampSelection(value, Array.isArray(next.agents) ? next.agents.length : 0));
       setMessage(`Updated ${new Date(next.updatedAt).toLocaleTimeString()}`);
     } catch (error) {
       setMessage(`Refresh failed: ${error.message}`);
@@ -343,18 +374,33 @@ function App({ initialSection, controller }) {
   }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
 
   const selectedPreset = useMemo(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
+  const selectedAgentId = Array.isArray(snapshot?.agents)
+    ? snapshot.agents[selectedAgent]?.client || ""
+    : "";
   const selectedRemote = ["mcp", "skills", "prompts"].includes(section)
     ? catalogs[section].items[componentSelected[section]]?.name || ""
     : "";
 
   const executeAction = useCallback(async (action) => {
     setConfirm(null);
+    if (action === "agent-configure") {
+      try {
+        onLaunch(controller.interactiveCommand(selectedAgentId));
+        exit();
+      } catch (error) {
+        setMessage(`Failed: ${error.message}`);
+      }
+      return;
+    }
     setBusy(true);
-    const selection = action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = action.startsWith("agent-")
+      ? selectedAgentId
+      : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, target)}…`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
+        agent: selectedAgentId,
         preset: selectedPreset,
         selection: selectedRemote,
         source: snapshot?.presetSource || "local",
@@ -368,7 +414,7 @@ function App({ initialSection, controller }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, refresh, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
+  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
 
   useInput((input, key) => {
     if (busy) return;
@@ -387,6 +433,16 @@ function App({ initialSection, controller }) {
     if (key.leftArrow) return setSection((value) => moveSection(value, -1));
     if (input === "t") return setTarget((value) => otherTarget(value));
     if (input === "r") return void refresh();
+    if (section === "agents" && (input === "j" || key.downArrow)) {
+      return setSelectedAgent((value) => clampSelection(
+        value + 1, Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
+      ));
+    }
+    if (section === "agents" && (input === "k" || key.upArrow)) {
+      return setSelectedAgent((value) => clampSelection(
+        value - 1, Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
+      ));
+    }
     if (section === "presets" && (input === "j" || key.downArrow)) {
       return setSelected((value) => clampSelection(value + 1, presetEntries(snapshot).length));
     }
@@ -405,8 +461,12 @@ function App({ initialSection, controller }) {
         [section]: clampSelection(value[section] - 1, catalogs[section].items.length)
       }));
     }
-    const action = actionForKey(section, input);
+    const action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action.startsWith("agent-") && !selectedAgentId) {
+      setMessage("No agent is selected.");
+      return;
+    }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
       setMessage("No preset is selected.");
       return;
@@ -416,14 +476,17 @@ function App({ initialSection, controller }) {
       return;
     }
     if (actionNeedsConfirmation(action)) {
-      setConfirm({ action, label: actionLabel(action, action.includes("-") ? selectedRemote : selectedPreset, target) });
+      const selection = action.startsWith("agent-")
+        ? selectedAgentId
+        : action.includes("-") ? selectedRemote : selectedPreset;
+      setConfirm({ action, label: actionLabel(action, selection, target) });
     } else {
       void executeAction(action);
     }
   });
 
   let content = <Overview snapshot={snapshot || {}} target={target} />;
-  if (section === "agents") content = <Agents snapshot={snapshot || {}} />;
+  if (section === "agents") content = <Agents snapshot={snapshot || {}} selected={selectedAgent} />;
   if (section === "mcp") content = <ComponentView snapshot={snapshot || {}} target={target} component="mcp" catalog={catalogs.mcp} selected={componentSelected.mcp} />;
   if (section === "skills") content = <ComponentView snapshot={snapshot || {}} target={target} component="skills" catalog={catalogs.skills} selected={componentSelected.skills} />;
   if (section === "prompts") content = <ComponentView snapshot={snapshot || {}} target={target} component="prompts" catalog={catalogs.prompts} selected={componentSelected.prompts} />;
@@ -478,6 +541,30 @@ if (options?.help) {
     process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
     process.exitCode = 1;
   } else {
-    render(<App initialSection={options.section} controller={createController()} />);
+    const controller = createController();
+    let section = options.section;
+    let keepRunning = true;
+    while (keepRunning) {
+      let launch = null;
+      const instance = render(
+        <App
+          initialSection={section}
+          controller={controller}
+          onLaunch={(command) => { launch = command; }}
+        />
+      );
+      await instance.waitUntilExit();
+      if (!launch) {
+        keepRunning = false;
+        continue;
+      }
+      const result = spawnSync(launch.executable, launch.args, {
+        stdio: "inherit",
+        env: process.env,
+        windowsHide: false
+      });
+      if (result.error) process.stderr.write(`ERROR ${result.error.message}\n`);
+      section = "agents";
+    }
   }
 }

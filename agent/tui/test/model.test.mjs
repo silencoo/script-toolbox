@@ -31,10 +31,14 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("presets", "P"), null);
   assert.equal(actionForKey("mcp", "p"), "mcp-plan");
   assert.equal(actionForKey("skills", "a"), "skills-apply");
+  assert.equal(actionForKey("agents", "c"), "agent-configure");
+  assert.equal(actionForKey("agents", "p"), "agent-providers");
+  assert.equal(actionForKey("agents", "x"), "agent-uninstall");
   assert.equal(actionForKey("cloud", "P"), null);
   assert.equal(actionNeedsConfirmation("plan"), false);
   assert.equal(actionNeedsConfirmation("apply"), true);
   assert.equal(actionNeedsConfirmation("prompts-apply"), true);
+  assert.equal(actionNeedsConfirmation("agent-uninstall"), true);
 });
 
 test("component summaries preserve useful state without raw secrets", () => {
@@ -44,8 +48,25 @@ test("component summaries preserve useful state without raw secrets", () => {
   }), { label: "Healthy", kind: "good", detail: "work · 1 server(s)" });
   assert.equal(componentSummary("provider", {
     ok: true,
-    data: { provider_status: "configured", provider: "openai", model: "gpt" }
-  }).detail, "openai / gpt");
+    data: {
+      provider_status: "configured",
+      provider_source: "official-login",
+      provider: "openai",
+      model: "gpt",
+      credential_exists: true,
+      credential_private: true
+    }
+  }).detail, "openai / gpt · official login");
+  assert.equal(componentSummary("provider", {
+    ok: true,
+    data: {
+      provider_status: "configured",
+      provider_source: "external",
+      provider: "external-endpoint",
+      credential_exists: true,
+      credential_private: false
+    }
+  }).kind, "warn");
 });
 
 test("Workspace empty states distinguish setup, connectivity, and incompatible data", () => {

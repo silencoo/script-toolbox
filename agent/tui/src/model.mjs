@@ -48,10 +48,18 @@ export function componentSummary(component, check) {
   const data = check.data || {};
   if (component === "provider") {
     const label = data.provider_status === "configured" ? "Configured" : data.provider_status || "Unknown";
+    const source = {
+      agentctl: "agentctl",
+      external: "external config",
+      "official-login": "official login"
+    }[data.provider_source] || "";
+    const configured = data.provider_status === "configured";
+    const insecureCredential = configured && data.credential_exists === true && data.credential_private === false;
+    const selection = [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected";
     return {
       label,
-      kind: data.provider_status === "configured" ? "good" : "bad",
-      detail: [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected"
+      kind: configured ? insecureCredential ? "warn" : "good" : "bad",
+      detail: source ? `${selection} · ${source}` : selection
     };
   }
   if (component === "mcp") {
@@ -79,6 +87,11 @@ export function componentSummary(component, check) {
 }
 
 export function actionForKey(section, input) {
+  if (section === "agents") {
+    if (input === "p") return "agent-providers";
+    if (input === "c" || input === "\r") return "agent-configure";
+    if (input === "x") return "agent-uninstall";
+  }
   if (["mcp", "skills", "prompts"].includes(section)) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
@@ -92,10 +105,14 @@ export function actionForKey(section, input) {
 }
 
 export function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
+    action.endsWith("-apply");
 }
 
 export function actionLabel(action, selection, target) {
+  if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
+  if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
+  if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
   const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(action);
   if (component) {
     const label = component[1] === "prompts" ? "Prompt" :
@@ -135,7 +152,7 @@ export function workspacePresentation(workspace, error = "") {
       safety: "No cloud data exists until you initialize or restore a Workspace.",
       commands: [
         "agentctl workspace init --endpoint <url>",
-        "agentctl workspace restore --recovery-file <file>"
+        "agentctl workspace restore"
       ],
       diagnostic: ""
     };
@@ -145,12 +162,12 @@ export function workspacePresentation(workspace, error = "") {
       state: "incompatible",
       kind: "warn",
       heading: "Remote Workspace data is incompatible",
-      status: "Connected · needs attention",
+      status: "Endpoint reachable · incompatible data",
       description: "The encrypted store opened, but its latest snapshot is not in the current unified Workspace format.",
       safety: "Nothing was changed locally or remotely.",
       commands: [
         "Restore the correct toolbox1 recovery code:",
-        "agentctl workspace restore --recovery-file <file>"
+        "agentctl workspace restore"
       ],
       diagnostic: ""
     };
@@ -175,7 +192,7 @@ export function workspacePresentation(workspace, error = "") {
       status: "Recovery needed",
       description: "The local capability does not authorize this remote Workspace.",
       safety: "Restore a known-good toolbox1 recovery code; no remote data was changed.",
-      commands: ["agentctl workspace restore --recovery-file <file>"],
+      commands: ["agentctl workspace restore"],
       diagnostic: ""
     };
   }
@@ -188,7 +205,7 @@ export function workspacePresentation(workspace, error = "") {
       status: "Invalid local configuration",
       description: "The saved capability cannot be used safely in its current form.",
       safety: "Restore a known-good recovery code instead of editing key material by hand.",
-      commands: ["agentctl workspace restore --recovery-file <file>"],
+      commands: ["agentctl workspace restore"],
       diagnostic: ""
     };
   }

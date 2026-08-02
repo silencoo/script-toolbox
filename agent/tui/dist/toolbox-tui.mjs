@@ -22483,6 +22483,9 @@ var import_react32 = __toESM(require_react(), 1);
 // node_modules/ink/build/hooks/use-box-metrics.js
 var import_react33 = __toESM(require_react(), 1);
 
+// src/toolbox-tui.jsx
+import { spawnSync } from "node:child_process";
+
 // src/controller.mjs
 import { spawn } from "node:child_process";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
@@ -22936,6 +22939,22 @@ async function writeJsonAtomic(filePath, value) {
   }
 }
 
+// ../agentctl/workspace-schema.mjs
+var CURRENT_WORKSPACE_SCHEMA = 2;
+var WORKSPACE_KIND = "agentctl-workspace";
+function normalizeWorkspaceSchema(snapshot) {
+  if (!snapshot || snapshot.schema !== 1 || snapshot.kind !== WORKSPACE_KIND || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || snapshot.presets !== void 0 && (!snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets))) {
+    return snapshot;
+  }
+  const upgraded = structuredClone(snapshot);
+  upgraded.schema = CURRENT_WORKSPACE_SCHEMA;
+  upgraded.presets ||= {};
+  for (const attachment of Object.values(upgraded.stores)) {
+    if (attachment?.schema === 1) attachment.schema = CURRENT_WORKSPACE_SCHEMA;
+  }
+  return upgraded;
+}
+
 // src/remote-workspace.mjs
 var MCP_NAME = /^[A-Za-z0-9._-]+$/;
 var SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -22946,6 +22965,7 @@ var PROTOCOLS = Object.freeze({
   prompts: PROMPT_REMOTE_PROTOCOL
 });
 function validateWorkspaceSnapshot(snapshot) {
+  snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
   if (snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" || typeof snapshot.name !== "string" || !snapshot.name || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || !snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets)) {
     throw new RemoteWorkspaceError("remote snapshot is not a valid agentctl Workspace");
@@ -22970,9 +22990,14 @@ function validateWorkspaceSnapshot(snapshot) {
   return snapshot;
 }
 async function loadRemoteWorkspace(_path, config) {
-  return validateWorkspaceSnapshot(
-    await downloadRemoteSnapshot(config, WORKSPACE_REMOTE_PROTOCOL)
-  );
+  const snapshot = await downloadRemoteSnapshot(config, WORKSPACE_REMOTE_PROTOCOL);
+  const sourceSchema = snapshot?.schema;
+  const workspace = validateWorkspaceSnapshot(snapshot);
+  Object.defineProperty(workspace, "source_schema", {
+    value: sourceSchema,
+    enumerable: false
+  });
+  return workspace;
 }
 async function loadRemoteStatus(config) {
   const [status, setting] = await Promise.all([
@@ -23085,7 +23110,7 @@ function validateSkillsSnapshot(snapshot) {
     const files = assertObject(skill.files, `Skill '${name}' files`);
     if (!files["SKILL.md"]) throw new RemoteWorkspaceError(`Skill '${name}' has no SKILL.md`);
     const hash = createHash("sha256");
-    for (const [path, file] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [path, file] of Object.entries(files)) {
       validateRelativePath(path);
       if (![384, 448].includes(file?.mode)) {
         throw new RemoteWorkspaceError(`remote Skill file '${name}/${path}' has an unsafe mode`);
@@ -23317,6 +23342,15 @@ function createRemoteWorkspace({
   let publicIndex = null;
   const childCache = /* @__PURE__ */ new Map();
   const childStoreIds = /* @__PURE__ */ new Map();
+  async function connection() {
+    const config = await readConfigFn(workspaceConfig);
+    return {
+      schema: 1,
+      endpoint: config.endpoint,
+      store_id: config.store_id,
+      configured: true
+    };
+  }
   async function index({ refresh = false } = {}) {
     if (publicIndex && !refresh) return structuredClone(publicIndex);
     const config = await readConfigFn(workspaceConfig);
@@ -23340,6 +23374,8 @@ function createRemoteWorkspace({
       schema: 2,
       mode: "workspace",
       source: "cloud",
+      remote_schema: workspace.source_schema || 2,
+      migration_pending: workspace.source_schema === 1,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -23623,6 +23659,7 @@ function createRemoteWorkspace({
     catalog,
     child,
     componentPlan,
+    connection,
     index,
     materializeComponent,
     materializePreset,
@@ -23642,6 +23679,7 @@ var defaultAgentRoot = resolve3(
   process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join3(moduleDirectory, "..", "..")
 );
 var MAX_OUTPUT = 512 * 1024;
+var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
 function sanitizeOutput(value) {
   return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
 }
@@ -23706,17 +23744,30 @@ function createController({
     skills: join3(agentRoot, "skillsctl", "skillsctl"),
     prompts: join3(agentRoot, "promptctl", "promptctl")
   };
+  function agentctlCommand(args) {
+    return process.platform === "win32" ? { executable: "bash", args: [agentctl, ...args] } : { executable: agentctl, args };
+  }
   async function runJson(script, args, label, env3 = {}) {
     return parseJsonOutput(await run(process.execPath, [script, ...args], { env: env3 }), label);
   }
   async function runExecutableJson(executable, args, label, env3 = {}) {
     return parseJsonOutput(await run(executable, args, { env: env3 }), label);
   }
+  async function runAgentctlJson(args, label) {
+    const command = agentctlCommand(args);
+    return runExecutableJson(command.executable, command.args, label);
+  }
   async function snapshot() {
-    const remoteResult = remoteWorkspace.index({ refresh: true }).then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) }));
+    const remoteResult = remoteWorkspace.index({ refresh: true }).then((data) => ({ data, connection: data, error: "" })).catch(async (error) => {
+      let connection = null;
+      if (typeof remoteWorkspace.connection === "function") {
+        connection = await remoteWorkspace.connection().catch(() => null);
+      }
+      return { data: null, connection, error: sanitizeOutput(error?.message || error) };
+    });
     let [doctorResult, agentsResult, presetsResult, remote] = await Promise.all([
       runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
-      runExecutableJson(agentctl, ["status", "all", "--json"], "agentctl status"),
+      runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
       remoteResult
     ]);
@@ -23768,6 +23819,7 @@ function createController({
       presetsError: cloudPresets ? "" : presetsResult.error,
       presetSource: cloudPresets ? "cloud" : "local",
       workspace: remote.data,
+      workspaceConnection: remote.connection,
       workspaceError: remote.error
     };
   }
@@ -23858,11 +23910,23 @@ No remote catalog was written locally.`;
     }
   }
   async function action(actionName, {
+    agent = "",
     preset = "",
     selection = "",
     source = "local",
     target = "codex"
   } = {}) {
+    if (actionName === "agent-providers" || actionName === "agent-uninstall") {
+      if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
+      const args2 = actionName === "agent-providers" ? ["providers", agent] : ["uninstall", agent, "--yes"];
+      const command = agentctlCommand(args2);
+      const result2 = await run(command.executable, command.args);
+      return {
+        ok: result2.code === 0,
+        data: { agent },
+        detail: sanitizeOutput(result2.stdout || result2.stderr) || (result2.code === 0 ? "Done" : `Action failed with code ${result2.code}`)
+      };
+    }
     const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(actionName);
     if (component) return remoteComponentAction(actionName, component[1], selection, target);
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
@@ -23897,7 +23961,11 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? successDetail : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
   }
-  return { snapshot, action, remoteCatalog };
+  function interactiveCommand(agent) {
+    if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
+    return agentctlCommand(["setup", agent]);
+  }
+  return { snapshot, action, interactiveCommand, remoteCatalog };
 }
 
 // src/model.mjs
@@ -23936,10 +24004,18 @@ function componentSummary(component, check2) {
   const data = check2.data || {};
   if (component === "provider") {
     const label = data.provider_status === "configured" ? "Configured" : data.provider_status || "Unknown";
+    const source = {
+      agentctl: "agentctl",
+      external: "external config",
+      "official-login": "official login"
+    }[data.provider_source] || "";
+    const configured = data.provider_status === "configured";
+    const insecureCredential = configured && data.credential_exists === true && data.credential_private === false;
+    const selection = [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected";
     return {
       label,
-      kind: data.provider_status === "configured" ? "good" : "bad",
-      detail: [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected"
+      kind: configured ? insecureCredential ? "warn" : "good" : "bad",
+      detail: source ? `${selection} \xB7 ${source}` : selection
     };
   }
   if (component === "mcp") {
@@ -23966,6 +24042,11 @@ function componentSummary(component, check2) {
   };
 }
 function actionForKey(section, input) {
+  if (section === "agents") {
+    if (input === "p") return "agent-providers";
+    if (input === "c" || input === "\r") return "agent-configure";
+    if (input === "x") return "agent-uninstall";
+  }
   if (["mcp", "skills", "prompts"].includes(section)) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
@@ -23978,9 +24059,12 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
+  if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
+  if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
+  if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
   const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(action);
   if (component) {
     const label = component[1] === "prompts" ? "Prompt" : component[1][0].toUpperCase() + component[1].slice(1);
@@ -24015,7 +24099,7 @@ function workspacePresentation(workspace, error = "") {
       safety: "No cloud data exists until you initialize or restore a Workspace.",
       commands: [
         "agentctl workspace init --endpoint <url>",
-        "agentctl workspace restore --recovery-file <file>"
+        "agentctl workspace restore"
       ],
       diagnostic: ""
     };
@@ -24025,12 +24109,12 @@ function workspacePresentation(workspace, error = "") {
       state: "incompatible",
       kind: "warn",
       heading: "Remote Workspace data is incompatible",
-      status: "Connected \xB7 needs attention",
+      status: "Endpoint reachable \xB7 incompatible data",
       description: "The encrypted store opened, but its latest snapshot is not in the current unified Workspace format.",
       safety: "Nothing was changed locally or remotely.",
       commands: [
         "Restore the correct toolbox1 recovery code:",
-        "agentctl workspace restore --recovery-file <file>"
+        "agentctl workspace restore"
       ],
       diagnostic: ""
     };
@@ -24055,7 +24139,7 @@ function workspacePresentation(workspace, error = "") {
       status: "Recovery needed",
       description: "The local capability does not authorize this remote Workspace.",
       safety: "Restore a known-good toolbox1 recovery code; no remote data was changed.",
-      commands: ["agentctl workspace restore --recovery-file <file>"],
+      commands: ["agentctl workspace restore"],
       diagnostic: ""
     };
   }
@@ -24067,7 +24151,7 @@ function workspacePresentation(workspace, error = "") {
       status: "Invalid local configuration",
       description: "The saved capability cannot be used safely in its current form.",
       safety: "Restore a known-good recovery code instead of editing key material by hand.",
-      commands: ["agentctl workspace restore --recovery-file <file>"],
+      commands: ["agentctl workspace restore"],
       diagnostic: ""
     };
   }
@@ -24096,9 +24180,10 @@ Keys:
   Tab / Shift+Tab / Left / Right  Switch section
   t                                 Switch Codex / Claude target
   r                                 Refresh live status
-  j / k / Up / Down                 Select a cloud profile, pack, or preset
+  j / k / Up / Down                 Select the current list item
   p / a                             Plan / apply selected cloud configuration
   u                                 Roll back a preset
+  Agents: c configure \xB7 p providers \xB7 x uninstall owned config
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -24136,19 +24221,20 @@ function ErrorText({ value }) {
 }
 function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
-  if (!report) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" });
   const workspace = snapshot.workspace;
+  const connection = workspace || snapshot.workspaceConnection;
   const cloud = workspacePresentation(workspace, snapshot.workspaceError);
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }));
+  if (!report) {
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? "connected" : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
+  }
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
 }
-function Agents({ snapshot }) {
+function Agents({ snapshot, selected }) {
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
   if (agents.length === 0) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.agentsError || snapshot.doctorError || "No agent status" });
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, agents.map((agent) => {
-    const report = targetReport(snapshot, agent.client);
-    const provider = componentSummary("provider", { ok: true, data: agent });
-    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: agent.client, flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, agent.label || agent.client), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: provider }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: agent.cli_installed ? agent.cli_version || "installed" : "not installed", kind: agent.cli_installed ? "good" : "bad" }), report && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: report.preset?.name || "none", kind: report.preset?.drift ? "bad" : "muted" }));
-  }));
+  const safeIndex = clampSelection(selected, agents.length);
+  const current = agents[safeIndex];
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
 }
 function CloudCatalog({ catalog, selected }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
@@ -24182,16 +24268,17 @@ function Cloud({ snapshot }) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Loading Workspace status\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local configuration remains untouched."));
   }
   const workspace = snapshot.workspace;
+  const connection = snapshot.workspaceConnection;
   const presentation = workspacePresentation(workspace, snapshot.workspaceError);
   if (!workspace) {
-    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), /* @__PURE__ */ import_react34.default.createElement(Text, null, presentation.description), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, presentation.safety), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "Next step"), presentation.commands.map((command, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${command}-${index}`, color: command.startsWith("agentctl ") ? "cyan" : "gray" }, command))), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "bad" }));
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }), connection?.store_id && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store ID", value: connection.store_id }), /* @__PURE__ */ import_react34.default.createElement(Text, null, presentation.description), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, presentation.safety), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "Next step"), presentation.commands.map((command, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${command}-${index}`, color: command.startsWith("agentctl ") ? "cyan" : "gray" }, command))), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "bad" }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Profile, Pack, Prompt, or Preset is materialized locally."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 2}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Profile, Pack, Prompt, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  switch target     r  refresh     q  quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "j/k or Up/Down  select cloud profile, pack, or preset"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  switch target     r  refresh     q  quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "j/k or Up/Down  select the current list item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
-function App2({ initialSection, controller }) {
+function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
   const [section, setSection] = (0, import_react34.useState)(initialSection);
   const [target, setTarget] = (0, import_react34.useState)("codex");
@@ -24199,6 +24286,7 @@ function App2({ initialSection, controller }) {
   const [loading, setLoading] = (0, import_react34.useState)(true);
   const [busy, setBusy] = (0, import_react34.useState)(false);
   const [selected, setSelected] = (0, import_react34.useState)(0);
+  const [selectedAgent, setSelectedAgent] = (0, import_react34.useState)(0);
   const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ mcp: 0, skills: 0, prompts: 0 });
   const [catalogs, setCatalogs] = (0, import_react34.useState)({
     mcp: { items: [], loading: false, error: "", key: "" },
@@ -24216,6 +24304,7 @@ function App2({ initialSection, controller }) {
       const next = await controller.snapshot();
       setSnapshot(next);
       setSelected((value) => clampSelection(value, presetEntries(next).length));
+      setSelectedAgent((value) => clampSelection(value, Array.isArray(next.agents) ? next.agents.length : 0));
       setMessage(`Updated ${new Date(next.updatedAt).toLocaleTimeString()}`);
     } catch (error) {
       setMessage(`Refresh failed: ${error.message}`);
@@ -24256,15 +24345,26 @@ function App2({ initialSection, controller }) {
     };
   }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
   const selectedPreset = (0, import_react34.useMemo)(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
+  const selectedAgentId = Array.isArray(snapshot?.agents) ? snapshot.agents[selectedAgent]?.client || "" : "";
   const selectedRemote = ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
   const executeAction = (0, import_react34.useCallback)(async (action) => {
     setConfirm(null);
+    if (action === "agent-configure") {
+      try {
+        onLaunch(controller.interactiveCommand(selectedAgentId));
+        exit();
+      } catch (error) {
+        setMessage(`Failed: ${error.message}`);
+      }
+      return;
+    }
     setBusy(true);
-    const selection = action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = action.startsWith("agent-") ? selectedAgentId : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, target)}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
+        agent: selectedAgentId,
         preset: selectedPreset,
         selection: selectedRemote,
         source: snapshot?.presetSource || "local",
@@ -24278,7 +24378,7 @@ function App2({ initialSection, controller }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, refresh, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
+  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
   use_input_default((input, key) => {
     if (busy) return;
     if (confirm) {
@@ -24296,6 +24396,18 @@ function App2({ initialSection, controller }) {
     if (key.leftArrow) return setSection((value) => moveSection(value, -1));
     if (input === "t") return setTarget((value) => otherTarget(value));
     if (input === "r") return void refresh();
+    if (section === "agents" && (input === "j" || key.downArrow)) {
+      return setSelectedAgent((value) => clampSelection(
+        value + 1,
+        Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
+      ));
+    }
+    if (section === "agents" && (input === "k" || key.upArrow)) {
+      return setSelectedAgent((value) => clampSelection(
+        value - 1,
+        Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
+      ));
+    }
     if (section === "presets" && (input === "j" || key.downArrow)) {
       return setSelected((value) => clampSelection(value + 1, presetEntries(snapshot).length));
     }
@@ -24314,8 +24426,12 @@ function App2({ initialSection, controller }) {
         [section]: clampSelection(value[section] - 1, catalogs[section].items.length)
       }));
     }
-    const action = actionForKey(section, input);
+    const action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action.startsWith("agent-") && !selectedAgentId) {
+      setMessage("No agent is selected.");
+      return;
+    }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
       setMessage("No preset is selected.");
       return;
@@ -24325,13 +24441,14 @@ function App2({ initialSection, controller }) {
       return;
     }
     if (actionNeedsConfirmation(action)) {
-      setConfirm({ action, label: actionLabel(action, action.includes("-") ? selectedRemote : selectedPreset, target) });
+      const selection = action.startsWith("agent-") ? selectedAgentId : action.includes("-") ? selectedRemote : selectedPreset;
+      setConfirm({ action, label: actionLabel(action, selection, target) });
     } else {
       void executeAction(action);
     }
   });
   let content = /* @__PURE__ */ import_react34.default.createElement(Overview, { snapshot: snapshot || {}, target });
-  if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot: snapshot || {} });
+  if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot: snapshot || {}, selected: selectedAgent });
   if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "mcp", catalog: catalogs.mcp, selected: componentSelected.mcp });
   if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "skills", catalog: catalogs.skills, selected: componentSelected.skills });
   if (section === "prompts") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "prompts", catalog: catalogs.prompts, selected: componentSelected.prompts });
@@ -24354,6 +24471,36 @@ if (options?.help) {
     process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
     process.exitCode = 1;
   } else {
-    render_default(/* @__PURE__ */ import_react34.default.createElement(App2, { initialSection: options.section, controller: createController() }));
+    const controller = createController();
+    let section = options.section;
+    let keepRunning = true;
+    while (keepRunning) {
+      let launch = null;
+      const instance = render_default(
+        /* @__PURE__ */ import_react34.default.createElement(
+          App2,
+          {
+            initialSection: section,
+            controller,
+            onLaunch: (command) => {
+              launch = command;
+            }
+          }
+        )
+      );
+      await instance.waitUntilExit();
+      if (!launch) {
+        keepRunning = false;
+        continue;
+      }
+      const result = spawnSync(launch.executable, launch.args, {
+        stdio: "inherit",
+        env: process.env,
+        windowsHide: false
+      });
+      if (result.error) process.stderr.write(`ERROR ${result.error.message}
+`);
+      section = "agents";
+    }
   }
 }

@@ -119,6 +119,7 @@ printf '%s' "$status_json" | jq -e '
   .client == "codex"
   and .cli_installed == true
   and .provider_status == "configured"
+  and .provider_source == "agentctl"
   and .provider == "script_toolbox_openai"
   and .model == "gpt-test"
   and .config_valid == true
@@ -132,17 +133,62 @@ case "$status_json" in
     ;;
 esac
 
+OFFICIAL_HOME="${TEST_ROOT}/official-home"
+mkdir -p "$OFFICIAL_HOME/.codex"
+printf '%s\n' 'model = "gpt-official"' > "$OFFICIAL_HOME/.codex/config.toml"
+printf '%s\n' \
+  '{"auth_mode":"chatgpt","tokens":{"access_token":"OFFICIAL-LOGIN-SECRET-MUST-NOT-APPEAR"}}' \
+  > "$OFFICIAL_HOME/.codex/auth.json"
+chmod 600 "$OFFICIAL_HOME/.codex/auth.json"
+official_status="$(
+  HOME="$OFFICIAL_HOME" \
+    PATH="${FAKE_BIN}:${PATH}" \
+    AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
+    AGENTCTL_TEST_LOG="$LOG_FILE" \
+    "$AGENTCTL" status codex --json
+)"
+printf '%s' "$official_status" | jq -e '
+  .provider_status == "configured"
+  and .provider_source == "official-login"
+  and .provider == "openai-chatgpt"
+  and .model == "gpt-official"
+  and .ownership_marker == false
+  and .credential_kind == "official-auth"
+  and .credential_exists == true
+  and .credential_private == true
+' >/dev/null || fail "Codex status did not recognize an official ChatGPT login"
+case "$official_status" in
+  *OFFICIAL-LOGIN-SECRET-MUST-NOT-APPEAR*)
+    fail "Codex official-login status exposed a token"
+    ;;
+esac
+
 mkdir -p "$TEST_HOME/.claude"
 printf '%s\n' \
   '{"model":"claude-test","env":{"ANTHROPIC_API_KEY":"CLAUDE-EMBEDDED-SECRET"}}' \
   > "$TEST_HOME/.claude/settings.json"
 chmod 600 "$TEST_HOME/.claude/settings.json"
+external_claude_status="$(run_agentctl status claude --json)"
+printf '%s' "$external_claude_status" | jq -e '
+  .provider_status == "configured"
+  and .provider_source == "external"
+  and .provider == "anthropic"
+  and .model == "claude-test"
+  and .ownership_marker == false
+  and .credential_exists == true
+' >/dev/null || fail "Claude status did not recognize externally managed settings"
+case "$external_claude_status" in
+  *CLAUDE-EMBEDDED-SECRET*)
+    fail "externally managed Claude status exposed a credential"
+    ;;
+esac
 printf '%s\n' 'sk-state-value-that-is-not-a-provider' \
   > "$TEST_HOME/.claude/.script-toolbox-provider"
 chmod 600 "$TEST_HOME/.claude/.script-toolbox-provider"
 claude_status="$(run_agentctl status claude --json)"
 printf '%s' "$claude_status" | jq -e '
   .provider_status == "incomplete"
+  and .provider_source == "agentctl"
   and .provider == null
   and .credential_exists == true
   and .credential_private == true

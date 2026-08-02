@@ -31,13 +31,21 @@ const masterConfig = {
 };
 
 const skillContent = "---\nname: cloud-skill\ndescription: Cloud skill\n---\n# Cloud Skill\n";
-const skillHash = createHash("sha256")
-  .update("SKILL.md\0")
-  .update(String(0o600))
-  .update("\0")
-  .update(skillContent)
-  .update("\0")
-  .digest("hex");
+const skillFiles = {
+  "references/api/api.md": { encoding: "base64", content: Buffer.from("API\n").toString("base64"), mode: 0o600 },
+  "references/api-shield/api.md": { encoding: "base64", content: Buffer.from("Shield\n").toString("base64"), mode: 0o600 },
+  "SKILL.md": { encoding: "base64", content: Buffer.from(skillContent).toString("base64"), mode: 0o600 }
+};
+const skillHasher = createHash("sha256");
+for (const [path, file] of Object.entries(skillFiles)) {
+  skillHasher.update(path);
+  skillHasher.update("\0");
+  skillHasher.update(String(file.mode));
+  skillHasher.update("\0");
+  skillHasher.update(Buffer.from(file.content, "base64"));
+  skillHasher.update("\0");
+}
+const skillHash = skillHasher.digest("hex");
 const snapshots = {
   mcp: {
     schema: 1,
@@ -68,7 +76,7 @@ const snapshots = {
     skills: {
       "cloud-skill": {
         metadata: { description: "Cloud skill", sha256: skillHash },
-        files: { "SKILL.md": { encoding: "base64", content: Buffer.from(skillContent).toString("base64"), mode: 0o600 } }
+        files: skillFiles
       }
     },
     packs: {
@@ -141,7 +149,16 @@ async function fixture() {
 
 test("remote Workspace index and catalogs never expose capabilities or Secret values", async () => {
   assert.equal(validateWorkspaceSnapshot(workspaceSnapshot()).schema, 2);
+  const legacy = workspaceSnapshot();
+  legacy.schema = 1;
+  delete legacy.presets;
+  for (const attachment of Object.values(legacy.stores)) attachment.schema = 1;
+  assert.equal(validateWorkspaceSnapshot(legacy).schema, 2);
+  assert.equal(legacy.schema, 1);
   const { remote, downloads } = await fixture();
+  const connection = await remote.connection();
+  assert.equal(connection.endpoint, masterConfig.endpoint);
+  assert.equal(JSON.stringify(connection).includes(masterConfig.root_key), false);
   const index = await remote.index();
   const serialized = JSON.stringify(index);
   assert.equal(serialized.includes(masterConfig.root_key), false);
