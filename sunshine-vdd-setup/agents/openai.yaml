@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sunshine VDD Setup"
+  short_description: "Plan and configure Sunshine with a safe Windows VDD workflow"
+  default_prompt: "Use $sunshine-vdd-setup. Start with the Plan-mode interview, then safely configure and verify Sunshine and Windows VDD."
