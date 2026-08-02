@@ -23,6 +23,9 @@ third-party-derived files.
   `v0.1.2` (`c3f229c`), then adapted for this repository's multi-client
   Promptctl layout and explicit-`--file` prompt model. They retain their bundled
   MIT license and attribution.
+- `agent/tui/dist/toolbox-tui.mjs` bundles Ink, React, Yoga, and their runtime
+  dependencies. Their package names, versions, copyright notices, and license
+  texts are retained in `agent/tui/dist/THIRD_PARTY_LICENSES.txt`.
 
 External services queried by `workers/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those

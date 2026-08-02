@@ -68,6 +68,11 @@ From a clone, the four independent controllers are:
 ./agent/skillsctl/skillsctl
 ```
 
+With Node.js 22+, each no-argument command opens one shared Ink 7 / React 19
+dashboard on its relevant section. It shows redacted live status across the
+four controller domains and provides remote-first, selective Workspace actions;
+the explicit subcommands remain available for scripts and automation.
+
 Optionally expose those names on `PATH` with reversible repository-backed
 symlinks:
 

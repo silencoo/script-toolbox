@@ -7,13 +7,17 @@ side effect of changing providers or MCP servers.
 
 ## Choose an entrypoint
 
-For an interactive setup, run Promptctl without arguments:
+Run Promptctl without arguments in a terminal to open the shared dashboard on
+Prompts:
 
 ```bash
 ./agent/promptctl/promptctl
 ```
 
-The Shell menu lets you configure, inspect, locate, or uninstall instructions.
+Node.js 22 or newer is required for the dashboard and encrypted Prompt Store
+operations. Use `promptctl tui` for the explicit dashboard entrypoint or
+`promptctl interactive` for the older Shell menu. The Shell menu lets you
+configure, inspect, locate, or uninstall instructions.
 Every write is previewed and requires a separate `y` confirmation.
 
 For automation or an Agent-guided workflow, use explicit commands:

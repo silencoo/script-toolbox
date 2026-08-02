@@ -24,6 +24,8 @@ cask "rectangle" if false
 
 # workstation-package|media|brew|yt-dlp|yt-dlp|required
 brew "yt-dlp" if false
+# workstation-package|media|brew|gallery-dl|gallery-dl|required
+brew "gallery-dl" if false
 # workstation-package|media|brew|ffmpeg|FFmpeg|required
 brew "ffmpeg" if false
 # workstation-package|media|cask|handbrake-app|HandBrake|required

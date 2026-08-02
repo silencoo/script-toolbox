@@ -13,6 +13,18 @@ ok()   { printf '✓ %s\n' "$*"; }
 warn() { printf '! %s\n' "$*" >&2; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 
+require_node22() {
+  local purpose="$1" node_major
+  command -v node >/dev/null 2>&1 ||
+    die "Node.js 22 or newer is required for $purpose"
+  node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf '0')"
+  case "$node_major" in
+    ""|*[!0-9]*) node_major=0 ;;
+  esac
+  [ "$node_major" -ge 22 ] ||
+    die "Node.js 22 or newer is required for $purpose (found ${node_major})"
+}
+
 prompt_value() {
   local label="$1" default_value="${2:-}" input
   if [ -n "$default_value" ]; then
@@ -100,4 +112,14 @@ ask_yes_no() {
       *) warn "please answer y or n" ;;
     esac
   done
+}
+
+run_agent_tui() {
+  # Usage: run_agent_tui <bundle> <initial-section> [TUI options]
+  local bundle="$1" section="$2"
+  shift 2
+  require_node22 "the agent TUI"
+  [ -r "$bundle" ] ||
+    die "agent TUI bundle not found: $bundle (run npm run build in agent/tui)"
+  exec node "$bundle" --section "$section" "$@"
 }

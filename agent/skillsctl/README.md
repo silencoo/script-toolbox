@@ -8,6 +8,10 @@ It is deliberately separate from `mcpctl`: MCP profiles select running tools;
 skill packs select instruction and asset directories. Both can use the same
 Toolbox Store Worker for independent end-to-end encrypted backups.
 
+Node.js 22 or newer is required. Run `skillsctl` in a terminal or use
+`skillsctl tui` to open the shared dashboard directly on Skills. Explicit
+commands remain the stable automation interface.
+
 ## Quick start
 
 ```bash

@@ -39,6 +39,13 @@ The public controllers can be called directly:
 ./skillsctl/skillsctl --help
 ```
 
+Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and
+the controllers' structured orchestration clients. Run any controller without
+arguments in a terminal, or use its explicit `tui` command, to open the same
+dashboard on the relevant section. Use `interactive` when you want the older
+line-oriented guided flow. See [`tui/`](./tui/) for the views, keys, safety
+confirmations, and build contract.
+
 To make those names available from any directory, preview and apply the
 reversible symlink installer:
 
@@ -137,9 +144,11 @@ same repository; prompts read from `/dev/tty`, so one-shot interactive use
 still works. Scripts that update JSON install `jq` automatically through
 apt, dnf/yum, Homebrew, or apk when it is missing.
 
-The repository-backed `agentctl`, `mcpctl`, `promptctl`, and `skillsctl` frontends share
-[`ctl-lib.sh`](./ctl-lib.sh) for consistent menus, confirmations, and terminal
-messages. This does not add a repository dependency to Raw URL setup scripts.
+The repository-backed `agentctl`, `mcpctl`, `promptctl`, and `skillsctl`
+frontends share [`ctl-lib.sh`](./ctl-lib.sh) for consistent launch checks,
+menus, confirmations, and terminal messages, plus the committed
+[`tui/dist/toolbox-tui.mjs`](./tui/dist/toolbox-tui.mjs) dashboard. This does
+not add a repository dependency to Raw URL setup scripts.
 
 ## Credentials
 

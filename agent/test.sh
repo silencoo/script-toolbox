@@ -662,6 +662,14 @@ else
   fail=1
 fi
 
+if node --test "$SCRIPT_DIR"/tui/test/*.test.mjs &&
+   node "$SCRIPT_DIR/tui/dist/toolbox-tui.mjs" --help >/dev/null; then
+  echo "ok  : shared Ink TUI model and committed bundle"
+else
+  echo "FAIL: shared Ink TUI model or committed bundle" >&2
+  fail=1
+fi
+
 if "$SCRIPT_DIR/tests/install-commands-test.sh"; then
   :
 else

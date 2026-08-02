@@ -21,6 +21,7 @@ MANAGED_BY="agent/mcpctl"
 CODEX_BEGIN="# >>> ${MANAGED_BY} >>>"
 CODEX_END="# <<< ${MANAGED_BY} <<<"
 TEMPLATE_STORE="${SCRIPT_DIR}/template-store"
+TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 
 # shellcheck source=../ctl-lib.sh
 . "${SCRIPT_DIR}/../ctl-lib.sh"
@@ -44,6 +45,7 @@ mcpctl — apply task-oriented MCP profiles to coding agents
 
 Usage:
   mcpctl
+  mcpctl tui
   mcpctl interactive [--store <directory>] [--secrets <file>]
                      [--remote-config <file>]
   mcpctl --target <claude|codex|opencode> --profile <name> [options]
@@ -923,8 +925,15 @@ run_interactive() {
 }
 
 if [ $# -eq 0 ]; then
+  if [ -t 0 ] && [ -t 1 ]; then
+    run_agent_tui "$TUI_CLIENT" mcp
+  fi
   run_interactive
   exit $?
+fi
+if [ "${1:-}" = "tui" ]; then
+  shift
+  run_agent_tui "$TUI_CLIENT" mcp "$@"
 fi
 if [ "${1:-}" = "interactive" ]; then
   shift
@@ -1270,19 +1279,8 @@ IMPORT_CLIENT="${SCRIPT_DIR}/import-client.mjs"
 REMOTE_SECRETS_FILE="${STORE_DIR}/secrets.remote.enc"
 HOST_MANAGER="${SCRIPT_DIR}/host-manager"
 
-require_node20() {
-  local purpose="$1"
-  command -v node >/dev/null 2>&1 ||
-    die "Node.js 20 or newer is required for $purpose"
-  node -e '
-    const major = Number(process.versions.node.split(".")[0]);
-    process.exit(Number.isInteger(major) && major >= 20 ? 0 : 1);
-  ' >/dev/null 2>&1 ||
-    die "Node.js 20 or newer is required for $purpose"
-}
-
 require_remote_node() {
-  require_node20 "encrypted remote backup"
+  require_node22 "encrypted remote backup"
 }
 
 require_private_input_file() {
@@ -1444,7 +1442,7 @@ if [ "$COMMAND" = "import" ]; then
     *) die "import currently supports claude and codex" ;;
   esac
   [ -n "$PROFILE" ] || PROFILE="imported"
-  require_node20 "MCP configuration import"
+  require_node22 "MCP configuration import"
   import_action="plan"
   [ "$IMPORT_WRITE" -eq 0 ] || import_action="apply"
   import_args=(

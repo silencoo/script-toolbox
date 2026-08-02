@@ -2,7 +2,7 @@
 
 This catalog records the choices made by the platform installers. Package
 identifiers were checked against the WinGet community manifests and the
-Homebrew Formulae API on 2026-07-28.
+Homebrew Formulae API on 2026-08-03.
 
 Built-in operating-system tools are preferred when they already cover the
 need. An entry marked **optional** is installed only when the caller explicitly
@@ -32,6 +32,7 @@ integrations overlap.
 | Purpose | Windows WinGet ID | macOS Homebrew token |
 | --- | --- | --- |
 | Media download | `yt-dlp.yt-dlp` | `yt-dlp` |
+| Image gallery download | `mikf.gallery-dl` | `gallery-dl` |
 | Media conversion | `Gyan.FFmpeg` | `ffmpeg` |
 | Video conversion | `HandBrake.HandBrake` | `handbrake-app` |
 | Image conversion | `ImageMagick.ImageMagick` | `imagemagick` |
@@ -39,8 +40,8 @@ integrations overlap.
 | Transfer CLI | `aria2.aria2` | `aria2` |
 | Alternative player (**optional**) | `mpv.net` | `mpv` |
 
-Use yt-dlp only where downloading is permitted by the content owner,
-applicable law, and the service's terms.
+Use yt-dlp and gallery-dl only where downloading is permitted by the content
+owner, applicable law, and the service's terms.
 
 ## Maintenance
 

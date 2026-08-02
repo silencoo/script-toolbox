@@ -12,27 +12,30 @@ It never removes an MCP entry unless that entry is marked as owned by
 `agent/mcpctl`. A same-name entry created manually or by an existing `mcp.sh`
 is reported as a conflict. `--force` replaces only the conflicting names.
 
-Requirements are Bash 3.2+ and `jq`. Node.js 20+ is required for importing
-existing client configuration and for encrypted remote backup/restore. SOPS is
+Requirements are Bash 3.2+, `jq`, and Node.js 22+. Node powers the shared TUI,
+existing-client import, and encrypted remote backup/restore. SOPS is
 needed only when using a SOPS-encrypted secret file. Individual local MCP
 servers retain their own runtime requirements, such as Node.js for Chrome
 DevTools MCP.
 
 ## Quick start
 
-Run without arguments for the guided local workflow:
+Run without arguments in a terminal to open the shared dashboard directly on
+the MCP view:
 
 ```bash
 ./agent/mcpctl/mcpctl
 ```
 
-The menu can initialize or safely update the starter store, select Claude Code,
-Codex, or OpenCode, apply a complete profile, or toggle individual MCP
-servers. A custom selection can be applied once or saved as a target-specific
-child profile. Every client-config mutation first shows the resolved add/remove
-plan and requires a separate confirmation. When required Secrets are missing,
-the guide can accept them without echo for that process only, open the
-encrypted SOPS editor, or cancel without writing client configuration.
+Use `mcpctl tui` for the explicit form, or `mcpctl interactive` for the older
+guided local workflow. The guide can initialize or safely update the starter
+store, select Claude Code, Codex, or OpenCode, apply a complete profile, or
+toggle individual MCP servers. A custom selection can be applied once or saved
+as a target-specific child profile. Every client-config mutation first shows
+the resolved add/remove plan and requires a separate confirmation. When
+required Secrets are missing, the guide can accept them without echo for that
+process only, open the encrypted SOPS editor, or cancel without writing client
+configuration.
 
 For automation, initialize a personal store explicitly:
 

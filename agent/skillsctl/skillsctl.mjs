@@ -65,6 +65,7 @@ function usage() {
   process.stdout.write(`skillsctl — manage portable skills, packs, and recovery
 
 Usage:
+  skillsctl tui
   skillsctl init [--store <dir>] [--yes]
   skillsctl list [--store <dir>]
   skillsctl status [--store <dir>]

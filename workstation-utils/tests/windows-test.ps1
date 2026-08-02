@@ -88,6 +88,7 @@ foreach ($requiredId in @(
     'Meta.Zstandard',
     'LocalSend.LocalSend',
     'yt-dlp.yt-dlp',
+    'mikf.gallery-dl',
     'Klocman.BulkCrapUninstaller',
     'qarmin.krokiet',
     'REALiX.HWiNFO',
@@ -115,7 +116,8 @@ if ($coreMedia -notmatch 'Plan: core, media profile\(s\)') {
 }
 if ($coreMedia -notmatch 'M2Team\.NanaZip' -or
     $coreMedia -notmatch 'KeePassXCTeam\.KeePassXC' -or
-    $coreMedia -notmatch 'yt-dlp\.yt-dlp') {
+    $coreMedia -notmatch 'yt-dlp\.yt-dlp' -or
+    $coreMedia -notmatch 'mikf\.gallery-dl') {
   Stop-Test 'Combined core/media plan omitted a required package.'
 }
 

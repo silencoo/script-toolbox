@@ -72,6 +72,8 @@ assert_contains "$core_media_output" 'brew   sevenzip' \
   'Core plan did not include the 7-Zip CLI'
 assert_contains "$core_media_output" 'brew   yt-dlp' \
   'Media plan did not include yt-dlp'
+assert_contains "$core_media_output" 'brew   gallery-dl' \
+  'Media plan did not include gallery-dl'
 assert_contains "$core_media_output" 'cask   handbrake-app' \
   'Media plan did not include the current HandBrake cask'
 assert_not_contains "$core_media_output" 'brew   mpv' \

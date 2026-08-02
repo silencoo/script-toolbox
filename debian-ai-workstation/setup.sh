@@ -226,6 +226,9 @@ sudo -E curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
 # 2. 赋予它可执行权限
 sudo chmod a+rx /usr/local/bin/yt-dlp
 
+# install gallery-dl in an isolated uv tool environment
+$HOME/.local/bin/uv tool install gallery-dl
+
 
 
 

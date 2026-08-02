@@ -22,6 +22,7 @@
       Description = 'Media download, inspection, playback, and conversion'
       Packages = @(
         'yt-dlp.yt-dlp'
+        'mikf.gallery-dl'
         'Gyan.FFmpeg'
         'HandBrake.HandBrake'
         'ImageMagick.ImageMagick'
@@ -131,6 +132,10 @@
     'yt-dlp.yt-dlp' = @{
       Name = 'yt-dlp'
       Purpose = 'Permitted media downloads'
+    }
+    'mikf.gallery-dl' = @{
+      Name = 'gallery-dl'
+      Purpose = 'Permitted image gallery downloads'
     }
     'Gyan.FFmpeg' = @{
       Name = 'FFmpeg'

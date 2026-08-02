@@ -22,6 +22,7 @@ DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSION="0.5.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
+TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 
 # shellcheck source=../ctl-lib.sh
 . "${SCRIPT_DIR}/../ctl-lib.sh"
@@ -32,6 +33,7 @@ agentctl — install coding agents and configure providers/models
 
 Usage:
   agentctl
+  agentctl tui
   agentctl interactive
   agentctl setup <claude|codex|opencode|pi> [setup options]
   agentctl status <claude|codex|opencode|pi|all> [--json]
@@ -60,7 +62,8 @@ Commands:
   doctor      Inspect providers, local selections, preset drift, secrets,
               remote stores, and session-restart guidance.
 
-Run without arguments for the guided Shell menu. Setup options after the
+Run without arguments in a terminal for the unified TUI. Use "interactive"
+for the guided Shell menu. Setup options after the
 client name are passed unchanged to that client's existing setup.sh backend.
 Run "agentctl workspace --help" for Workspace commands.
 Run "agentctl preset --help" for development-preset commands.
@@ -68,16 +71,14 @@ EOF
 }
 
 run_workspace() {
-  command -v node >/dev/null 2>&1 ||
-    die "agentctl workspace requires Node.js 20 or newer"
+  require_node22 "agentctl workspace"
   [ -r "$WORKSPACE_CLIENT" ] ||
     die "Workspace client not found: $WORKSPACE_CLIENT"
   exec node "$WORKSPACE_CLIENT" "$@"
 }
 
 run_orchestrator() {
-  command -v node >/dev/null 2>&1 ||
-    die "agentctl presets and doctor require Node.js 20 or newer"
+  require_node22 "agentctl presets and doctor"
   [ -r "$ORCHESTRATOR_CLIENT" ] ||
     die "Orchestration client not found: $ORCHESTRATOR_CLIENT"
   AGENTCTL_SELF="${SCRIPT_DIR}/agentctl" exec node "$ORCHESTRATOR_CLIENT" "$@"
@@ -651,7 +652,15 @@ run_interactive() {
 
 case "${1:-}" in
   "")
-    run_interactive
+    if [ -t 0 ] && [ -t 1 ]; then
+      run_agent_tui "$TUI_CLIENT" overview
+    else
+      run_interactive
+    fi
+    ;;
+  tui)
+    shift
+    run_agent_tui "$TUI_CLIENT" overview "$@"
     ;;
   interactive)
     shift

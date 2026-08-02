@@ -19,7 +19,7 @@ identifier, built-in alternative, opt-in choice, and safety note.
 | Profile | Contents |
 | --- | --- |
 | `core` | KeePassXC, archives, local transfer, disk usage, search, media/PDF viewing, and window layout |
-| `media` | yt-dlp, FFmpeg, HandBrake, ImageMagick, ExifTool, aria2, and optional mpv |
+| `media` | yt-dlp, gallery-dl, FFmpeg, HandBrake, ImageMagick, ExifTool, aria2, and optional mpv |
 | `maintenance` | Manual uninstall/duplicate inspection, qpdf, drive health, hardware monitoring, restic, and rclone |
 | `desktop` | Screenshot or wake tools, LocalSend/layout tools, and opt-in launchers/clipboard history |
 | `admin` | Explicit system/network inspection, private networking, Moonlight/Sunshine streaming, recovery, and encryption tools |
@@ -189,8 +189,8 @@ winget upgrade
 brew outdated
 ```
 
-yt-dlp changes frequently as supported sites evolve, so review its updates
-regularly. Use it only for content you are allowed to download.
+yt-dlp and gallery-dl change frequently as supported sites evolve, so review
+their updates regularly. Use them only for content you are allowed to download.
 
 ## Validation
 

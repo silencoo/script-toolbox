@@ -1,5 +1,27 @@
 # Changelog — agent/
 
+## 2026-08-03 — unified Node 22 terminal dashboard
+
+- Added one Ink 7 / React 19 TUI shared by `agentctl`, `mcpctl`, `skillsctl`,
+  and `promptctl`, with Overview, Agents, MCP, Skills, Prompts, Presets, and
+  Cloud views plus target switching and 30-second live refresh.
+- Added remote-first Workspace catalogs for MCP Profiles, Skill Packs, Prompt
+  profiles, and development Presets. Child Stores are fetched lazily, decrypted
+  only in process memory, and projected into a secret-free UI model.
+- Added read-only selection plans and confirmed, selective apply. Only the
+  chosen selection and inherited dependencies enter a per-Workspace runtime;
+  MCP Secret values remain encrypted outside the private controller adapter.
+  The TUI no longer exposes a whole-catalog pull action.
+- Made no-argument TTY launches open the dashboard while preserving legacy
+  non-TTY behavior and the explicit `interactive` Shell guides.
+- Standardized the repository-backed controller runtime on Node.js 22 and
+  committed a self-contained production bundle so end users do not install npm
+  packages. Added Linux/macOS build validation and Windows bundle/model tests.
+- Reworked the Cloud empty state to distinguish local-only, incompatible,
+  offline, unauthorized, and invalid-capability conditions. Known backend
+  errors are translated into safe recovery guidance. Child Store version
+  metadata invalidates stale in-memory catalogs without restoring them locally.
+
 ## 2026-08-02 — denser Toolbox Workspace UI
 
 - Added a fourth Presets view that composes MCP profiles, Skills packs, and

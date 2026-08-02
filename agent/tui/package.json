@@ -1,0 +1,21 @@
+{
+  "name": "@script-toolbox/agent-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "test": "node --test ./test/*.test.mjs",
+    "validate": "npm run test && npm run build && node ./dist/toolbox-tui.mjs --help"
+  },
+  "dependencies": {
+    "ink": "^7.0.0",
+    "react": "^19.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

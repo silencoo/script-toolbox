@@ -4,14 +4,27 @@
 agent, configuring its provider/model/credential, and managing the optional
 unified encrypted Toolbox Workspace.
 
-Run it without arguments from the repository root:
+Run it without arguments from the repository root to open the unified terminal
+dashboard:
 
 ```bash
 ./agent/agentctl/agentctl
 ```
 
-The guide selects Claude Code, Codex, OpenCode, or Pi and then delegates to
-that client's existing interactive setup implementation.
+The dashboard starts on Overview and combines providers, MCP, Skills, Prompts,
+development presets, and encrypted Workspace state. It refreshes automatically,
+browses cloud catalogs on demand, and can plan/apply one selected remote
+Profile, Pack, Prompt, or Preset without first restoring the whole Store.
+Node.js 22 or newer is required. Use `agentctl interactive` for the older
+line-oriented guide that selects Claude Code, Codex, OpenCode, or Pi and then
+delegates to that client's setup implementation. Non-TTY no-argument callers
+retain the guide for compatibility.
+
+The same dashboard can be selected explicitly:
+
+```bash
+./agent/agentctl/agentctl tui
+```
 
 ## Explicit commands
 
@@ -177,6 +190,15 @@ fresh machine can recover it from a private one-line file:
 ```bash
 agentctl workspace restore --recovery-file /secure/toolbox-recovery-code
 ```
+
+`workspace restore` restores only the local `toolbox1_` capability. It does not
+copy MCP, Skills, Prompt, or Preset catalogs into their normal local Stores.
+After recovery, the TUI queries version metadata from the endpoint and lazily
+decrypts a child Store only when its section is opened. Plans remain in memory;
+an apply writes only the chosen selection and its dependencies to
+`~/.local/share/agentctl/workspaces/<workspace-store-id>/` (or the platform data
+directory on Windows), then invokes the existing controller transaction. Agent
+provider, model, and API-key configuration always remain local.
 
 ## Optional PATH commands
 

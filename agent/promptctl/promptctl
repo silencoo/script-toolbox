@@ -20,6 +20,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 ENGINE="${SCRIPT_DIR}/promptctl.py"
 REMOTE_CLIENT="${SCRIPT_DIR}/prompt-remote.mjs"
+TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 PYTHON_BIN=""
 export PROMPTCTL_PROG="promptctl"
 
@@ -32,6 +33,7 @@ promptctl — configure persistent, user-editable instructions
 
 Usage:
   promptctl
+  promptctl tui
   promptctl interactive [--home <directory>]
   promptctl install <claude|codex|all> [options]
   promptctl status <claude|codex|all> [options]
@@ -47,7 +49,8 @@ Usage:
   promptctl versions
   promptctl remote init|status|ui ...
 
-Run without arguments for the guided Shell setup. Every write is previewed and
+Run without arguments in a terminal for the unified TUI. Use "interactive"
+for the guided Shell setup. Every write is previewed and
 requires confirmation. Explicit subcommands are passed to the deterministic
 Python engine; use "promptctl <command> --help" for their options.
 
@@ -58,8 +61,7 @@ EOF
 }
 
 run_remote_client() {
-  command -v node >/dev/null 2>&1 ||
-    die "Prompt Store commands require Node.js 20 or newer"
+  require_node22 "Prompt Store commands"
   [ -r "$REMOTE_CLIENT" ] || die "Prompt Store client not found: $REMOTE_CLIENT"
   exec node "$REMOTE_CLIENT" "$@"
 }
@@ -217,6 +219,14 @@ case "${1:-}" in
     exit 0
     ;;
 esac
+
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+  run_agent_tui "$TUI_CLIENT" prompts
+fi
+if [ "${1:-}" = "tui" ]; then
+  shift
+  run_agent_tui "$TUI_CLIENT" prompts "$@"
+fi
 
 case "${1:-}" in
   remote)

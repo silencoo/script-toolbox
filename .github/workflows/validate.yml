@@ -34,6 +34,12 @@ jobs:
         run: ./linux-server-toolkit/tests/test_init_safety.sh
       - name: Test agent setup scripts
         run: ./agent/test.sh
+      - name: Validate shared agent TUI
+        run: |
+          npm ci
+          npm run validate
+          git diff --exit-code -- dist
+        working-directory: agent/tui
       - name: Test Promptctl
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
       - name: Test Promptctl advanced Claude deployer
@@ -72,6 +78,9 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -81,6 +90,10 @@ jobs:
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
       - name: Test Promptctl advanced Codex deployer on Windows
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
+      - name: Test portable agent TUI bundle on Windows
+        run: |
+          node --test agent/tui/test/model.test.mjs agent/tui/test/controller.test.mjs agent/tui/test/remote-workspace.test.mjs
+          node agent/tui/dist/toolbox-tui.mjs --help
       - name: Test workstation utilities with Windows PowerShell 5.1
         shell: powershell
         run: ./workstation-utils/tests/windows-test.ps1
@@ -107,6 +120,12 @@ jobs:
           if ! command -v jq >/dev/null 2>&1; then
             brew install jq
           fi
+      - name: Validate shared agent TUI
+        run: |
+          npm ci
+          npm run validate
+          git diff --exit-code -- dist
+        working-directory: agent/tui
       - name: Test agent controllers with macOS system Bash 3.2
         run: |
           bash_major="$(/bin/bash -c 'printf "%s" "${BASH_VERSINFO[0]}"')"
