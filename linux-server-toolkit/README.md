@@ -67,8 +67,49 @@ PHP 配置和新生成的 CloudDrive2 Compose 配置会使用同一个时区；�
 
 标准快速初始化和四个内置 Profile 都不会自动创建 Swap，也不会应用宽泛的
 sysctl 调优。需要时，在“系统与维护”或“自定义初始化”中明确选择相应模块。
+“系统与维护”中的保守、标准和激进三档 sysctl 性能预设都会配置 `fq + BBR`；
+实际应用前会检查当前内核是否提供 `tcp_bbr`，应用后会验证两项配置均已生效。
 非交互执行显式选择的 Swap 模块时，可用 `SWAP_SIZE_MB=2048` 指定大小；未指定
 则使用脚本根据内存计算的建议值。
+
+## 出口 IP 与双栈诊断
+
+“诊断与测试”中的“出口 IP / 双栈诊断”会分别显示 IPv4 和 IPv6 的本地全局地址、
+默认路由、实际选路、公网出口地址与状态，并检查 DNS A/AAAA 记录和当前解析器。
+当 DNS 返回 AAAA、但机器的 IPv6 默认路由或公网出口损坏时，诊断会给出明确警告。
+该功能只读，不会自动删除路由、禁用 IPv6 或修改 DNS。
+
+无需进入菜单，也不要求 root：
+
+```bash
+./server-toolkit.sh --network
+```
+
+默认使用 `www.cloudflare.com` 检查双栈 DNS；可以替换为实际出问题的域名：
+
+```bash
+NETWORK_DIAGNOSTIC_HOST=example.com ./server-toolkit.sh --network
+```
+
+## 一键完整机器概览
+
+“诊断与测试”中的“一键完整机器概览”把原本分散的信息集中到一次只读输出中：
+
+- 操作系统、Kernel、架构、虚拟化、运行时间、本地时间、UTC 和 NTP 状态；
+- CPU 型号/核心/负载、RAM、Swap、根文件系统和块设备；
+- SSH 有效端口、公钥/密码认证状态、root 登录策略和 UFW 状态；
+- IPv4/IPv6 本地地址、默认路由、公网出口、DNS A/AAAA；
+- 当前拥塞控制、可用算法、qdisc、TCP Fast Open、MTU probing 和脚本优化配置；
+- SSH、Fail2ban、Docker、自动更新、Nginx、Caddy 等服务状态；
+- Node.js、Python、PHP、Java、Go、.NET、Rust 和 Docker 等当前 PATH 中的版本。
+
+无需进入菜单，也不要求 root；部分 SSH 或服务详情在普通用户权限不足时显示 `N/A`：
+
+```bash
+./server-toolkit.sh --overview
+```
+
+概览不会显示 `authorized_keys` 内容、密码或其他凭据，也不会修改系统配置。
 
 ## 非交互执行
 

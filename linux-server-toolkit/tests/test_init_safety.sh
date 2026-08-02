@@ -118,6 +118,111 @@ assert_contains "$custom_init" "action_optimize_system" \
 assert_contains "$custom_init" "action_configure_swap" \
     "custom init still exposes Swap"
 
+for preset_choice in 1 2 3; do
+    preset_content="$(sysctl_preset_content "$preset_choice")"
+    assert_contains "$preset_content" "net.core.default_qdisc = fq" \
+        "sysctl preset $preset_choice enables fq"
+    assert_contains "$preset_content" "net.ipv4.tcp_congestion_control = bbr" \
+        "sysctl preset $preset_choice enables BBR"
+done
+if sysctl_preset_content 4 > /dev/null 2>&1; then
+    fail "unknown sysctl preset should be rejected"
+fi
+pass "unknown sysctl preset is rejected"
+
+assert_contains "$(network_family_status '192.0.2.10/24' 'default via 192.0.2.1' '1.1.1.1 via 192.0.2.1' '203.0.113.8')" \
+    "正常" "network status accepts a working public egress"
+assert_contains "$(network_family_status '' '' '' '')" \
+    "未配置" "network status distinguishes an unconfigured address family"
+assert_contains "$(network_family_status '2001:db8::10/64' '' '' '')" \
+    "缺少默认路由" "network status detects a missing default route"
+assert_contains "$(network_family_status '2001:db8::10/64' 'default via fe80::1' 'RTNETLINK answers: Network is unreachable' '')" \
+    "无法选路" "network status detects an unusable route"
+assert_contains "$(network_family_status '2001:db8::10/64' 'default via fe80::1' '2606:4700:4700::1111 via fe80::1' '')" \
+    "出口失败" "network status detects a broken routed egress"
+main_action="$(declare -f main)"
+assert_contains "$main_action" "NETWORK_DIAGNOSTIC_ONLY=1" \
+    "main exposes direct network diagnostic mode"
+assert_contains "$main_action" "check_network" \
+    "direct network diagnostic mode invokes the read-only helper"
+direct_network_output="$(
+    check_network() { printf '%s' 'direct-network-ok'; }
+    check_root() { printf '%s' 'unexpected-root-check'; return 1; }
+    main --network
+)"
+assert_contains "$direct_network_output" "direct-network-ok" \
+    "direct network diagnostic runs without the interactive menu"
+assert_not_contains "$direct_network_output" "unexpected-root-check" \
+    "direct network diagnostic does not require root"
+
+assert_contains "$(overview_ssh_auth_summary yes no no)" "仅公钥认证" \
+    "system overview identifies public-key-only SSH"
+assert_contains "$(overview_ssh_auth_summary yes yes no)" "均允许" \
+    "system overview identifies mixed SSH authentication"
+assert_contains "$(overview_ssh_auth_summary no yes no)" "仅密码" \
+    "system overview identifies password-only SSH"
+assert_contains "$(overview_ssh_auth_summary N/A N/A N/A)" "无法完整读取" \
+    "system overview does not misclassify unreadable SSH settings"
+
+overview_action="$(declare -f action_system_overview)"
+assert_contains "$overview_action" "UTC 时间" \
+    "system overview includes UTC time"
+assert_contains "$overview_action" "TCP 拥塞控制" \
+    "system overview includes network optimization state"
+assert_contains "$overview_action" "Runtime / 工具版本" \
+    "system overview includes runtime versions"
+assert_not_contains "$overview_action" "cat *authorized_keys" \
+    "system overview does not print authorized_keys"
+
+direct_overview_output="$(
+    action_system_overview() { printf '%s' 'direct-overview-ok'; }
+    check_root() { printf '%s' 'unexpected-root-check'; return 1; }
+    main --overview
+)"
+assert_contains "$direct_overview_output" "direct-overview-ok" \
+    "direct system overview runs without the interactive menu"
+assert_not_contains "$direct_overview_output" "unexpected-root-check" \
+    "direct system overview does not require root"
+
+native_aaaa_records="$(
+    dig() {
+        printf '%s\n' '::ffff:104.16.123.96' '2606:4700::6810:7b60'
+    }
+    network_dns_records 6 example.com
+)"
+assert_contains "$native_aaaa_records" "2606:4700::6810:7b60" \
+    "AAAA inspection retains native IPv6 records"
+assert_not_contains "$native_aaaa_records" "::ffff:" \
+    "AAAA inspection ignores synthesized IPv4-mapped addresses"
+
+broken_ipv6_diagnostic="$(
+    network_global_addresses() {
+        [ "$1" = "4" ] && printf '%s' '192.0.2.10/24 (eth0)' || printf '%s' '2001:db8::10/64 (eth0)'
+    }
+    network_default_route() {
+        [ "$1" = "4" ] && printf '%s' 'default via 192.0.2.1 dev eth0' || printf '%s' 'default via fe80::1 dev eth0'
+    }
+    network_route_probe() {
+        [ "$1" = "4" ] && printf '%s' '1.1.1.1 via 192.0.2.1 dev eth0' || printf '%s' '2606:4700:4700::1111 via fe80::1 dev eth0'
+    }
+    network_fetch_public_ip() {
+        [ "$1" = "4" ] && printf '%s' '203.0.113.8' || return 1
+    }
+    network_dns_records() {
+        [ "$1" = "4" ] && printf '%s' '104.16.123.96' || printf '%s' '2606:4700::6810:7b60'
+    }
+    network_resolvers() { printf '%s' '2001:4860:4860::8888'; }
+    curl() { printf '%s' '200 0.050 198.51.100.10'; }
+    log() { :; }
+    check_network 2>&1
+)"
+assert_contains "$broken_ipv6_diagnostic" "路由存在但出口失败" \
+    "dual-stack diagnostic identifies a broken IPv6 egress"
+assert_contains "$broken_ipv6_diagnostic" "DNS 返回 AAAA" \
+    "dual-stack diagnostic warns about AAAA with broken IPv6"
+assert_contains "$broken_ipv6_diagnostic" "IPv6 DNS 解析器" \
+    "dual-stack diagnostic warns about an IPv6 resolver on broken egress"
+
 if validate_profile_modules "essentials dd_reinstall" > /dev/null 2>&1; then
     fail "DD reinstall should be rejected from custom profiles"
 fi

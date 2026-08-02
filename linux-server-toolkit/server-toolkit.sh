@@ -27,6 +27,9 @@
 # - PLAN_ONLY=1        仅展示 Profile 执行计划
 # - SYSTEM_TIMEZONE=Etc/UTC  设置系统/PHP/Compose 时区；留空保留系统当前时区
 # - SWAP_SIZE_MB=2048  非交互执行显式选择的 Swap 模块时指定大小
+# - NETWORK_DIAGNOSTIC_ONLY=1  只运行出口 IP / 双栈诊断，不要求 root
+# - NETWORK_DIAGNOSTIC_HOST=www.cloudflare.com  双栈 DNS 检查域名
+# - SYSTEM_OVERVIEW_ONLY=1  只显示完整机器概览，不要求 root
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 #
 # 使用示例:
@@ -67,6 +70,9 @@ PROFILE_FILE="${PROFILE_FILE:-}"         # Profile 文件路径
 PLAN_ONLY="${PLAN_ONLY:-0}"              # 1=仅展示 Profile 计划
 SYSTEM_TIMEZONE="${SYSTEM_TIMEZONE:-}"   # IANA 时区；留空时不修改系统时区
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-}"         # 显式执行 Swap 模块时可指定大小
+NETWORK_DIAGNOSTIC_ONLY="${NETWORK_DIAGNOSTIC_ONLY:-0}"  # 1=只运行只读网络诊断
+NETWORK_DIAGNOSTIC_HOST="${NETWORK_DIAGNOSTIC_HOST:-www.cloudflare.com}"
+SYSTEM_OVERVIEW_ONLY="${SYSTEM_OVERVIEW_ONLY:-0}"  # 1=只运行只读机器概览
 EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permissive
 REMOTE_SCRIPT_SHA256="${REMOTE_SCRIPT_SHA256:-}"
 REMOTE_SCRIPT_CHECKSUM_FILE="${REMOTE_SCRIPT_CHECKSUM_FILE:-/root/init-remote-scripts.sha256}"
@@ -219,6 +225,28 @@ validate_runtime_modes() {
             return 1
             ;;
     esac
+    case "$NETWORK_DIAGNOSTIC_ONLY" in
+        0|1) ;;
+        *)
+            log_error "无效的 NETWORK_DIAGNOSTIC_ONLY: $NETWORK_DIAGNOSTIC_ONLY（应为 0/1）"
+            return 1
+            ;;
+    esac
+    case "$SYSTEM_OVERVIEW_ONLY" in
+        0|1) ;;
+        *)
+            log_error "无效的 SYSTEM_OVERVIEW_ONLY: $SYSTEM_OVERVIEW_ONLY（应为 0/1）"
+            return 1
+            ;;
+    esac
+    if [ "$NETWORK_DIAGNOSTIC_ONLY" = "1" ] && [ "$SYSTEM_OVERVIEW_ONLY" = "1" ]; then
+        log_error "NETWORK_DIAGNOSTIC_ONLY 与 SYSTEM_OVERVIEW_ONLY 不能同时启用"
+        return 1
+    fi
+    if [[ ! "$NETWORK_DIAGNOSTIC_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+        log_error "无效的 NETWORK_DIAGNOSTIC_HOST: $NETWORK_DIAGNOSTIC_HOST"
+        return 1
+    fi
     if [ -n "$SYSTEM_TIMEZONE" ] && ! timezone_name_is_valid "$SYSTEM_TIMEZONE"; then
         log_error "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
         return 1
@@ -1513,9 +1541,149 @@ rollback() {
     return 1
 }
 
-# --- 网络连接检查 ---
+# --- 出口 IP / 双栈网络诊断 ---
+network_join_lines() {
+    awk 'NF { if (joined != "") joined = joined ", "; joined = joined $0 } END { print joined }'
+}
+
+network_global_addresses() {
+    local family="$1"
+    command -v ip > /dev/null 2>&1 || return 0
+    ip "-$family" -o addr show scope global 2>/dev/null | awk '
+        NF >= 4 {
+            item = $4 " (" $2 ")"
+            if (joined != "") joined = joined ", "
+            joined = joined item
+        }
+        END { print joined }
+    '
+}
+
+network_default_route() {
+    local family="$1"
+    command -v ip > /dev/null 2>&1 || return 0
+    ip "-$family" route show default 2>/dev/null | awk 'NF { print; exit }'
+}
+
+network_route_probe() {
+    local family="$1" target="$2"
+    command -v ip > /dev/null 2>&1 || return 0
+    ip "-$family" route get "$target" 2>&1 | awk 'NF { print; exit }'
+}
+
+network_run_with_timeout() {
+    if command -v timeout > /dev/null 2>&1; then
+        timeout 5 "$@"
+    else
+        "$@"
+    fi
+}
+
+network_dns_records() {
+    local family="$1" host="$2" output="" records="" record_type="A"
+    [ "$family" = "6" ] && record_type="AAAA"
+
+    # dig reports the requested DNS record type exactly. getent is only a
+    # fallback because some NSS implementations synthesize IPv4-mapped IPv6.
+    if command -v dig > /dev/null 2>&1; then
+        output="$(dig +short +time=2 +tries=1 "$record_type" "$host" 2>/dev/null || true)"
+        if [ "$family" = "4" ]; then
+            records="$(printf '%s\n' "$output" | awk '/^([0-9]{1,3}[.]){3}[0-9]{1,3}$/ { print }' | sort -u | network_join_lines)"
+        else
+            records="$(printf '%s\n' "$output" | awk '/:/ && tolower($0) !~ /^::ffff:/ { print }' | sort -u | network_join_lines)"
+        fi
+    fi
+
+    if [ -z "$records" ] && command -v getent > /dev/null 2>&1; then
+        output="$(network_run_with_timeout getent "ahostsv${family}" "$host" 2>/dev/null || true)"
+        if [ "$family" = "4" ]; then
+            records="$(printf '%s\n' "$output" | awk '$1 ~ /^([0-9]{1,3}[.]){3}[0-9]{1,3}$/ { print $1 }' | sort -u | network_join_lines)"
+        else
+            records="$(printf '%s\n' "$output" | awk '$1 ~ /:/ && tolower($1) !~ /^::ffff:/ { print $1 }' | sort -u | network_join_lines)"
+        fi
+    fi
+
+    printf '%s' "$records"
+}
+
+network_resolvers() {
+    local resolvers=""
+    if command -v resolvectl > /dev/null 2>&1; then
+        resolvers="$(resolvectl dns 2>/dev/null | awk '
+            {
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ /^([0-9]{1,3}[.]){3}[0-9]{1,3}$/ ||
+                        ($i ~ /^[0-9A-Fa-f:%.]+$/ && $i ~ /:/)) print $i
+                }
+            }
+        ' | sort -u | network_join_lines)"
+    fi
+    if [ -z "$resolvers" ] && [ -r /etc/resolv.conf ]; then
+        resolvers="$(awk '$1 == "nameserver" && NF >= 2 { print $2 }' /etc/resolv.conf | sort -u | network_join_lines)"
+    fi
+    printf '%s' "$resolvers"
+}
+
+network_fetch_public_ip() {
+    local family="$1" endpoint candidate
+    local -a endpoints=(
+        'https://api.ip.sb/ip'
+        'https://ifconfig.me/ip'
+    )
+
+    command -v curl > /dev/null 2>&1 || return 1
+    for endpoint in "${endpoints[@]}"; do
+        candidate="$(curl -fsS "-$family" --noproxy '*' --connect-timeout 2 --max-time 5 \
+            --proto '=https' --tlsv1.2 "$endpoint" 2>/dev/null || true)"
+        candidate="$(printf '%s' "$candidate" | tr -d '[:space:]')"
+        if [ "$family" = "4" ]; then
+            if is_valid_ipv4 "$candidate"; then
+                printf '%s' "$candidate"
+                return 0
+            fi
+        elif [[ "$candidate" =~ ^[0-9A-Fa-f:.]+$ ]] && [[ "$candidate" == *:* ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+network_family_status() {
+    local addresses="$1" default_route="$2" route_probe="$3" public_ip="$4"
+    if [ -n "$public_ip" ]; then
+        printf '%s' '正常'
+    elif [ -z "$addresses" ] && [ -z "$default_route" ]; then
+        printf '%s' '未配置'
+    elif [ -z "$addresses" ]; then
+        printf '%s' '有默认路由但没有全局地址'
+    elif [ -z "$default_route" ]; then
+        printf '%s' '有全局地址但缺少默认路由'
+    elif [ -z "$route_probe" ] || [[ "$route_probe" =~ [Uu]nreachable|prohibit|blackhole ]]; then
+        printf '%s' '默认路由存在但无法选路'
+    else
+        printf '%s' '路由存在但出口失败'
+    fi
+}
+
+network_print_family() {
+    local label="$1" addresses="$2" default_route="$3" route_probe="$4" public_ip="$5" status="$6"
+    local status_color="$RED"
+    [ "$status" = "正常" ] && status_color="$GREEN"
+    [ "$status" = "未配置" ] && status_color="$YELLOW"
+
+    printf '%b\n' "${BOLD}${label}${PLAIN}"
+    printf '  %-12s %s\n' '本地全局地址:' "${addresses:-N/A}"
+    printf '  %-12s %s\n' '默认路由:' "${default_route:-N/A}"
+    printf '  %-12s %s\n' '实际选路:' "${route_probe:-N/A}"
+    printf '  %-12s %s\n' '公网出口:' "${public_ip:-N/A}"
+    printf '%b\n' "  状态:       ${status_color}${status}${PLAIN}"
+}
+
 check_network() {
-    local ipv4 ipv6 target url name result http_code time_total latency
+    local ipv4 ipv6 v4_addresses v6_addresses v4_default v6_default
+    local v4_probe v6_probe v4_status v6_status dns_a dns_aaaa resolvers
+    local target url name result http_code time_total latency remote_ip protocol
     local -a targets=(
         "www.google.com|Google"
         "github.com|GitHub"
@@ -1523,38 +1691,313 @@ check_network() {
         "1.1.1.1|Cloudflare DNS"
     )
 
-    log_info "=== 网络连接诊断 ==="
-    ipv4="$(curl -fsS4 --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
-        'https://api.ip.sb/ip' 2>/dev/null || printf 'N/A')"
-    ipv6="$(curl -fsS6 --connect-timeout 2 --max-time 5 --proto '=https' --tlsv1.2 \
-        'https://api.ip.sb/ip' 2>/dev/null || printf 'N/A')"
-    printf '%b\n' "IPv4: ${GREEN}${ipv4}${PLAIN}"
-    printf '%b\n' "IPv6: ${GREEN}${ipv6}${PLAIN}"
+    log_info "=== 出口 IP / 双栈网络诊断（只读） ==="
+    v4_addresses="$(network_global_addresses 4 || true)"
+    v6_addresses="$(network_global_addresses 6 || true)"
+    v4_default="$(network_default_route 4 || true)"
+    v6_default="$(network_default_route 6 || true)"
+    v4_probe="$(network_route_probe 4 '1.1.1.1' || true)"
+    v6_probe="$(network_route_probe 6 '2606:4700:4700::1111' || true)"
+    ipv4="$(network_fetch_public_ip 4 || true)"
+    ipv6="$(network_fetch_public_ip 6 || true)"
+    v4_status="$(network_family_status "$v4_addresses" "$v4_default" "$v4_probe" "$ipv4")"
+    v6_status="$(network_family_status "$v6_addresses" "$v6_default" "$v6_probe" "$ipv6")"
 
-    printf '\n%s\n' '连通性测试:'
-    printf '%-18s %-10s %-10s\n' '目标' '状态' '延迟'
+    network_print_family 'IPv4' "$v4_addresses" "$v4_default" "$v4_probe" "$ipv4" "$v4_status"
+    printf '\n'
+    network_print_family 'IPv6' "$v6_addresses" "$v6_default" "$v6_probe" "$ipv6" "$v6_status"
+
+    dns_a="$(network_dns_records 4 "$NETWORK_DIAGNOSTIC_HOST")"
+    dns_aaaa="$(network_dns_records 6 "$NETWORK_DIAGNOSTIC_HOST")"
+    resolvers="$(network_resolvers || true)"
+    printf '\n%s\n' "DNS 检查 (${NETWORK_DIAGNOSTIC_HOST}):"
+    printf '  %-12s %s\n' '解析器:' "${resolvers:-N/A}"
+    printf '  %-12s %s\n' 'A:' "${dns_a:-N/A}"
+    printf '  %-12s %s\n' 'AAAA:' "${dns_aaaa:-N/A}"
+
+    if [ -n "$dns_aaaa" ] && [ -z "$ipv6" ]; then
+        if [ -n "$v6_addresses" ] && [ -n "$v6_default" ]; then
+            log_warning "DNS 返回 AAAA，但 IPv6 看似已配置却无法访问公网；优先检查 IPv6 网关和上游路由"
+        else
+            log_warning "DNS 返回 AAAA，但本机没有完整可用的 IPv6；部分程序可能先尝试 IPv6 再回退"
+        fi
+    fi
+    if [ -z "$dns_a" ] && [ -n "$dns_aaaa" ] && [ -z "$ipv6" ]; then
+        log_error "测试域名仅解析到 AAAA，而 IPv6 出口不可用"
+    fi
+    if [ -z "$ipv6" ] && [[ "$resolvers" == *:* ]]; then
+        log_warning "检测到 IPv6 DNS 解析器，但 IPv6 公网出口不可用；请确认该解析器在当前链路上确实可达"
+    fi
+
+    printf '\n%s\n' '应用层自动选路测试:'
+    printf '%-18s %-10s %-8s %-10s\n' '目标' '状态' '出口' '延迟'
     for target in "${targets[@]}"; do
         IFS='|' read -r url name <<< "$target"
-        result="$(curl -o /dev/null -sS -w '%{http_code} %{time_total}' \
+        result="$(curl --noproxy '*' -o /dev/null -sS -w '%{http_code} %{time_total} %{remote_ip}' \
             --connect-timeout 2 --max-time 5 "https://${url}" 2>/dev/null)" || \
-        result="$(curl -o /dev/null -sS -w '%{http_code} %{time_total}' \
+        result="$(curl --noproxy '*' -o /dev/null -sS -w '%{http_code} %{time_total} %{remote_ip}' \
             --connect-timeout 2 --max-time 5 "http://${url}" 2>/dev/null)" || result=""
 
         http_code=""
         time_total=""
-        [ -n "$result" ] && read -r http_code time_total <<< "$result"
+        remote_ip=""
+        protocol="N/A"
+        [ -n "$result" ] && read -r http_code time_total remote_ip <<< "$result"
+        if [[ "$remote_ip" == *:* ]]; then
+            protocol="IPv6"
+        elif [[ "$remote_ip" == *.* ]]; then
+            protocol="IPv4"
+        fi
         if [[ "$http_code" =~ ^[0-9]{3}$ ]] && \
            [[ "$time_total" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
             latency="$(awk -v seconds="$time_total" 'BEGIN {printf "%.0f", seconds * 1000}')"
             if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 400 ]; then
-                printf "%-18s ${GREEN}%-10s${PLAIN} %-10s\n" "$name" 'OK' "${latency}ms"
+                printf "%-18s ${GREEN}%-10s${PLAIN} %-8s %-10s\n" "$name" 'OK' "$protocol" "${latency}ms"
             else
-                printf "%-18s ${RED}%-10s${PLAIN} %-10s\n" "$name" 'Fail' "HTTP $http_code"
+                printf "%-18s ${RED}%-10s${PLAIN} %-8s %-10s\n" "$name" 'Fail' "$protocol" "HTTP $http_code"
             fi
         else
-            printf "%-18s ${RED}%-10s${PLAIN} %-10s\n" "$name" 'Fail' 'Timeout'
+            printf "%-18s ${RED}%-10s${PLAIN} %-8s %-10s\n" "$name" 'Fail' "$protocol" 'Timeout'
         fi
     done
+}
+
+# --- 一键完整机器概览 ---
+overview_section() {
+    printf '\n%b\n' "${CYAN}── $1 ──${PLAIN}"
+}
+
+overview_field() {
+    local label="$1" value="${2:-N/A}"
+    printf '  %-24s %s\n' "$label" "$value"
+}
+
+overview_command_version() {
+    local label="$1" command_name="$2" output=""
+    shift 2
+    if command -v "$command_name" > /dev/null 2>&1; then
+        output="$("$command_name" "$@" 2>&1 | awk 'NF { print; exit }' || true)"
+        overview_field "$label" "${output:-installed (version unavailable)}"
+    else
+        overview_field "$label" 'not installed'
+    fi
+}
+
+overview_sysctl_value() {
+    local key="$1" value=""
+    if command -v sysctl > /dev/null 2>&1; then
+        value="$(sysctl -n "$key" 2>/dev/null || true)"
+    fi
+    printf '%s' "${value:-N/A}"
+}
+
+overview_service_status() {
+    local label="$1" unit="$2" active="N/A" enabled="N/A"
+    if command -v systemctl > /dev/null 2>&1; then
+        active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+        enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+        active="${active:-not-found}"
+        enabled="${enabled:-not-found}"
+    fi
+    overview_field "$label" "active=$active, enabled=$enabled"
+}
+
+overview_ssh_auth_summary() {
+    local pubkey="$1" password="$2" keyboard="$3"
+    if [[ ! "$pubkey" =~ ^(yes|no)$ ]] || [[ ! "$password" =~ ^(yes|no)$ ]] || [[ ! "$keyboard" =~ ^(yes|no)$ ]]; then
+        printf '%s' '无法完整读取 SSH 有效配置'
+        return 0
+    fi
+    if [ "$pubkey" = "yes" ] && { [ "$password" = "yes" ] || [ "$keyboard" = "yes" ]; }; then
+        printf '%s' '公钥和密码/交互式认证均允许'
+    elif [ "$pubkey" = "yes" ]; then
+        printf '%s' '仅公钥认证'
+    elif [ "$password" = "yes" ] || [ "$keyboard" = "yes" ]; then
+        printf '%s' '仅密码/交互式认证'
+    else
+        printf '%s' '未检测到可用的常规认证方式'
+    fi
+}
+
+overview_ssh_value() {
+    local effective="$1" key="$2"
+    printf '%s\n' "$effective" | awk -v wanted="$key" '
+        $1 == wanted {
+            if (joined != "") joined = joined ", "
+            joined = joined $2
+        }
+        END { print joined }
+    '
+}
+
+overview_optimization_files() {
+    local path joined=""
+    for path in \
+        /etc/sysctl.d/99-init-bbr.conf \
+        /etc/sysctl.d/99-init-optimization.conf \
+        /etc/sysctl.d/99-init-presets.conf; do
+        if [ -f "$path" ]; then
+            [ -n "$joined" ] && joined="$joined, "
+            joined="$joined$path"
+        fi
+    done
+    printf '%s' "${joined:-未检测到本脚本的优化配置}"
+}
+
+action_system_overview() {
+    local os_name="N/A" host_name="N/A" timezone="N/A" ntp_sync="N/A"
+    local cpu_model="N/A" cpu_cores="N/A" load_average="N/A"
+    local memory="N/A" swap="N/A" root_storage="N/A" virtualization="N/A"
+    local sshd_bin="" ssh_effective="" ssh_port="N/A" ssh_pubkey="N/A"
+    local ssh_password="N/A" ssh_keyboard="N/A" ssh_root="N/A" ssh_methods="N/A"
+    local v4_addresses="" v6_addresses="" v4_default="" v6_default=""
+    local v4_probe="" v6_probe="" ipv4="" ipv6="" v4_status="" v6_status=""
+    local dns_a="" dns_aaaa="" resolvers="" ufw_status="N/A" ssh_listeners=""
+    local network_warning="无"
+
+    log_info "=== 一键完整机器概览（只读） ==="
+    [ -r /etc/os-release ] && os_name="$(awk -F= '$1 == "PRETTY_NAME" { value=$2; gsub(/^\"|\"$/, "", value); print value; exit }' /etc/os-release)"
+    host_name="$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf 'N/A')"
+    timezone="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    [ -z "$timezone" ] && [ -r /etc/timezone ] && timezone="$(awk 'NF { print; exit }' /etc/timezone)"
+    ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+    if command -v systemd-detect-virt > /dev/null 2>&1; then
+        virtualization="$(systemd-detect-virt 2>/dev/null || printf 'none')"
+    fi
+
+    overview_section '系统与时间'
+    overview_field '主机名' "$host_name"
+    overview_field '操作系统' "$os_name"
+    overview_field 'Kernel / Architecture' "$(uname -r 2>/dev/null || printf 'N/A') / $(uname -m 2>/dev/null || printf 'N/A')"
+    overview_field '虚拟化' "$virtualization"
+    overview_field '运行时间' "$(uptime -p 2>/dev/null || uptime 2>/dev/null || printf 'N/A')"
+    overview_field '本地时间' "$(date '+%Y-%m-%d %H:%M:%S %Z (%z)' 2>/dev/null || printf 'N/A')"
+    overview_field 'UTC 时间' "$(date -u '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || printf 'N/A')"
+    overview_field '系统时区' "${timezone:-N/A}"
+    overview_field 'NTP 已同步' "${ntp_sync:-N/A}"
+
+    if command -v lscpu > /dev/null 2>&1; then
+        cpu_model="$(lscpu 2>/dev/null | awk -F: '/^Model name:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')"
+    elif [ -r /proc/cpuinfo ]; then
+        cpu_model="$(awk -F: '/model name/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }' /proc/cpuinfo)"
+    fi
+    cpu_cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 'N/A')"
+    [ -r /proc/loadavg ] && load_average="$(awk '{ print $1, $2, $3 }' /proc/loadavg)"
+    if command -v free > /dev/null 2>&1; then
+        memory="$(free -h 2>/dev/null | awk '/^Mem:/ { printf "%s total, %s used, %s available", $2, $3, $7 }')"
+        swap="$(free -h 2>/dev/null | awk '/^Swap:/ { printf "%s total, %s used, %s free", $2, $3, $4 }')"
+    fi
+    root_storage="$(df -hT / 2>/dev/null | awk 'NR == 2 { printf "%s total, %s used, %s available (%s), fs=%s", $3, $4, $5, $6, $2 }')"
+
+    overview_section 'CPU / 内存 / 存储'
+    overview_field 'CPU 型号' "${cpu_model:-N/A}"
+    overview_field 'CPU 逻辑核心' "$cpu_cores"
+    overview_field 'Load Average' "$load_average"
+    overview_field 'RAM' "$memory"
+    overview_field 'Swap' "$swap"
+    overview_field '根文件系统' "$root_storage"
+    if command -v lsblk > /dev/null 2>&1; then
+        printf '  块设备:\n'
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT 2>/dev/null | sed 's/^/    /' || true
+    fi
+
+    sshd_bin="$(command -v sshd 2>/dev/null || true)"
+    [ -z "$sshd_bin" ] && [ -x /usr/sbin/sshd ] && sshd_bin=/usr/sbin/sshd
+    if [ -n "$sshd_bin" ]; then
+        ssh_effective="$("$sshd_bin" -T 2>/dev/null || true)"
+    fi
+    if [ -n "$ssh_effective" ]; then
+        ssh_port="$(overview_ssh_value "$ssh_effective" port)"
+        ssh_pubkey="$(overview_ssh_value "$ssh_effective" pubkeyauthentication)"
+        ssh_password="$(overview_ssh_value "$ssh_effective" passwordauthentication)"
+        ssh_keyboard="$(overview_ssh_value "$ssh_effective" kbdinteractiveauthentication)"
+        ssh_root="$(overview_ssh_value "$ssh_effective" permitrootlogin)"
+        ssh_methods="$(overview_ssh_value "$ssh_effective" authenticationmethods)"
+    fi
+
+    overview_section 'SSH / 安全访问'
+    overview_field 'SSH 端口' "${ssh_port:-N/A}"
+    overview_field '认证概况' "$(overview_ssh_auth_summary "$ssh_pubkey" "$ssh_password" "$ssh_keyboard")"
+    overview_field 'PubkeyAuthentication' "${ssh_pubkey:-N/A}"
+    overview_field 'PasswordAuthentication' "${ssh_password:-N/A}"
+    overview_field 'KbdInteractiveAuthentication' "${ssh_keyboard:-N/A}"
+    overview_field 'PermitRootLogin' "${ssh_root:-N/A}"
+    overview_field 'AuthenticationMethods' "${ssh_methods:-N/A}"
+    if command -v ss > /dev/null 2>&1; then
+        ssh_listeners="$(ss -ltnp 2>/dev/null | awk '/sshd/ { print $4 }' | sort -u | network_join_lines)"
+    fi
+    overview_field 'SSH 实际监听' "${ssh_listeners:-N/A}"
+    if command -v ufw > /dev/null 2>&1; then
+        ufw_status="$(ufw status 2>/dev/null | awk 'NF { print; exit }' || true)"
+    fi
+    overview_field 'UFW' "$ufw_status"
+
+    v4_addresses="$(network_global_addresses 4 || true)"
+    v6_addresses="$(network_global_addresses 6 || true)"
+    v4_default="$(network_default_route 4 || true)"
+    v6_default="$(network_default_route 6 || true)"
+    v4_probe="$(network_route_probe 4 '1.1.1.1' || true)"
+    v6_probe="$(network_route_probe 6 '2606:4700:4700::1111' || true)"
+    ipv4="$(network_fetch_public_ip 4 || true)"
+    ipv6="$(network_fetch_public_ip 6 || true)"
+    v4_status="$(network_family_status "$v4_addresses" "$v4_default" "$v4_probe" "$ipv4")"
+    v6_status="$(network_family_status "$v6_addresses" "$v6_default" "$v6_probe" "$ipv6")"
+    dns_a="$(network_dns_records 4 "$NETWORK_DIAGNOSTIC_HOST")"
+    dns_aaaa="$(network_dns_records 6 "$NETWORK_DIAGNOSTIC_HOST")"
+    resolvers="$(network_resolvers || true)"
+
+    overview_section '网络 / DNS / 内核优化'
+    overview_field 'IPv4 状态 / 出口' "$v4_status / ${ipv4:-N/A}"
+    overview_field 'IPv4 本地地址' "${v4_addresses:-N/A}"
+    overview_field 'IPv4 默认路由' "${v4_default:-N/A}"
+    overview_field 'IPv6 状态 / 出口' "$v6_status / ${ipv6:-N/A}"
+    overview_field 'IPv6 本地地址' "${v6_addresses:-N/A}"
+    overview_field 'IPv6 默认路由' "${v6_default:-N/A}"
+    overview_field 'DNS 解析器' "${resolvers:-N/A}"
+    overview_field "${NETWORK_DIAGNOSTIC_HOST} A" "${dns_a:-N/A}"
+    overview_field "${NETWORK_DIAGNOSTIC_HOST} AAAA" "${dns_aaaa:-N/A}"
+    if [ -z "$ipv6" ] && [ -n "$v6_addresses" ] && [ -n "$v6_default" ]; then
+        network_warning="IPv6 有地址和默认路由，但公网出口失败"
+    elif [ -z "$ipv6" ] && [ -n "$dns_aaaa" ]; then
+        network_warning="DNS 返回 AAAA，但本机没有可用 IPv6 出口"
+    fi
+    overview_field '双栈告警' "$network_warning"
+    overview_field 'TCP 拥塞控制' "$(overview_sysctl_value net.ipv4.tcp_congestion_control)"
+    overview_field '可用拥塞控制' "$(overview_sysctl_value net.ipv4.tcp_available_congestion_control)"
+    overview_field '默认 qdisc' "$(overview_sysctl_value net.core.default_qdisc)"
+    overview_field 'TCP Fast Open' "$(overview_sysctl_value net.ipv4.tcp_fastopen)"
+    overview_field 'TCP MTU probing' "$(overview_sysctl_value net.ipv4.tcp_mtu_probing)"
+    overview_field 'somaxconn' "$(overview_sysctl_value net.core.somaxconn)"
+    overview_field 'IPv4 forwarding' "$(overview_sysctl_value net.ipv4.ip_forward)"
+    overview_field '脚本优化配置' "$(overview_optimization_files)"
+
+    overview_section '核心服务'
+    overview_service_status 'SSH' 'ssh.service'
+    overview_service_status 'Fail2ban' 'fail2ban.service'
+    overview_service_status 'Docker' 'docker.service'
+    overview_service_status '自动安全更新' 'unattended-upgrades.service'
+    overview_service_status 'Nginx' 'nginx.service'
+    overview_service_status 'Caddy' 'caddy.service'
+
+    overview_section 'Runtime / 工具版本（当前 PATH）'
+    overview_command_version 'Node.js' node --version
+    overview_command_version 'npm' npm --version
+    overview_command_version 'Python' python3 --version
+    overview_command_version 'pip' pip3 --version
+    overview_command_version 'PHP' php --version
+    overview_command_version 'Composer' composer --version
+    overview_command_version 'Java' java -version
+    overview_command_version 'Go' go version
+    overview_command_version '.NET' dotnet --version
+    overview_command_version 'Rust' rustc --version
+    overview_command_version 'Docker' docker --version
+    if command -v docker > /dev/null 2>&1; then
+        overview_field 'Docker Compose' "$(docker compose version 2>/dev/null | awk 'NF { print; exit }' || printf 'unavailable')"
+    else
+        overview_field 'Docker Compose' 'not installed'
+    fi
+
+    printf '\n%b\n' "${GREEN}概览完成。未显示 authorized_keys 内容、密码或其他凭据。${PLAIN}"
 }
 
 # --- 配置验证函数 ---
@@ -5627,54 +6070,86 @@ function action_service_health() {
 }
 
 # --- 模块: sysctl 性能预设 ---
-function action_sysctl_presets() {
-    log_info "sysctl 性能预设..."
-    printf '%b\n' "${GREEN}[1]${PLAIN} 保守 (conservative)"
-    printf '%b\n' "${GREEN}[2]${PLAIN} 标准 (standard)"
-    printf '%b\n' "${GREEN}[3]${PLAIN} 激进 (aggressive)"
-    read -r -p "请选择 [1-3]: " preset_choice
-    local preset_file="/etc/sysctl.d/99-init-presets.conf"
-    local content=""
-
+sysctl_preset_content() {
+    local preset_choice="$1"
     case "$preset_choice" in
         1)
-            content="net.core.somaxconn = 4096
+            cat <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.somaxconn = 4096
 net.ipv4.tcp_fin_timeout = 60
 net.ipv4.tcp_keepalive_time = 1200
-vm.swappiness = 10"
+vm.swappiness = 10
+EOF
             ;;
         2)
-            content="net.core.somaxconn = 65535
+            cat <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.somaxconn = 65535
 net.core.netdev_max_backlog = 262144
 net.ipv4.tcp_fin_timeout = 30
 net.ipv4.tcp_tw_reuse = 1
-vm.swappiness = 10"
+vm.swappiness = 10
+EOF
             ;;
         3)
-            content="net.core.somaxconn = 65535
+            cat <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.somaxconn = 65535
 net.core.netdev_max_backlog = 262144
 net.ipv4.tcp_max_syn_backlog = 262144
 net.ipv4.tcp_fin_timeout = 30
 net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_fastopen = 3
 net.ipv4.tcp_mtu_probing = 1
-vm.swappiness = 10"
+vm.swappiness = 10
+EOF
             ;;
         *)
-            log_warning "无效选择"
             return 1
             ;;
     esac
+}
+
+function action_sysctl_presets() {
+    log_info "sysctl 性能预设..."
+    printf '%b\n' "${GREEN}[1]${PLAIN} 保守 (conservative，含 BBR)"
+    printf '%b\n' "${GREEN}[2]${PLAIN} 标准 (standard，含 BBR)"
+    printf '%b\n' "${GREEN}[3]${PLAIN} 激进 (aggressive，含 BBR)"
+    read -r -p "请选择 [1-3]: " preset_choice
+    local preset_file="/etc/sysctl.d/99-init-presets.conf"
+    local content="" current_control="" current_qdisc=""
+
+    if ! content="$(sysctl_preset_content "$preset_choice")"; then
+        log_warning "无效选择"
+        return 1
+    fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 $preset_file 并执行 sysctl --system"
+        log_info "[DRY RUN] 将检查 tcp_bbr、写入含 fq + BBR 的 ${preset_file}，并执行 sysctl --system"
         return 0
+    fi
+    if ! modprobe tcp_bbr 2>/dev/null; then
+        log_error "当前内核未提供 tcp_bbr，未应用性能预设"
+        return 1
     fi
     create_backup "$preset_file" >/dev/null
     mkdir -p /etc/sysctl.d
     printf "%s\n" "$content" > "$preset_file"
-    sysctl --system > /dev/null 2>&1 || log_warning "sysctl 应用失败"
-    log_success "sysctl 预设已应用: $preset_file"
+    if ! sysctl --system > /dev/null 2>&1; then
+        log_error "sysctl 应用失败"
+        return 1
+    fi
+    current_control="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    if [ "$current_control" != "bbr" ] || [ "$current_qdisc" != "fq" ]; then
+        log_error "性能预设未完全生效 (拥塞控制=${current_control:-unknown}, qdisc=${current_qdisc:-unknown})"
+        return 1
+    fi
+    log_success "sysctl 预设已应用并启用 BBR: $preset_file"
 }
 
 # --- 模块: 磁盘工具 ---
@@ -6921,6 +7396,8 @@ run_script_static_self_check() {
         action_security_audit
         action_docker_compose_backup
         action_module_status_overview
+        action_system_overview
+        check_network
         action_script_quality
         action_profile_plan_apply
         profile_baseline_modules
@@ -8889,23 +9366,25 @@ show_diagnostics_menu() {
     local choice
     while true; do
         menu_header "诊断与测试" "先诊断本机，再运行外部测评脚本。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 系统资源检查"
-        printf '%b\n' "${GREEN}2.${PLAIN} 网络连接检查"
-        printf '%b\n' "${GREEN}3.${PLAIN} 服务健康检查"
-        printf '%b\n' "${GREEN}4.${PLAIN} 监控 / 告警基础"
-        printf '%b\n' "${GREEN}5.${PLAIN} 服务器测评脚本（远程脚本需二次确认）"
-        printf '%b\n' "${GREEN}6.${PLAIN} 模块状态总览"
+        printf '%b\n' "${GREEN}1.${PLAIN} 一键完整机器概览"
+        printf '%b\n' "${GREEN}2.${PLAIN} 系统资源检查"
+        printf '%b\n' "${GREEN}3.${PLAIN} 出口 IP / 双栈诊断"
+        printf '%b\n' "${GREEN}4.${PLAIN} 服务健康检查"
+        printf '%b\n' "${GREEN}5.${PLAIN} 监控 / 告警基础"
+        printf '%b\n' "${GREEN}6.${PLAIN} 服务器测评脚本（远程脚本需二次确认）"
+        printf '%b\n' "${GREEN}7.${PLAIN} 模块状态总览"
         printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
         printf '%b\n' "${GREEN}0.${PLAIN} 退出"
         printf '%b\n' ""
         read -r -p "请选择: " choice
         case "$choice" in
-            1) run_menu_action check_system_resources ;;
-            2) run_menu_action check_network ;;
-            3) run_menu_action action_service_health ;;
-            4) run_menu_flow action_monitoring_alerts ;;
-            5) run_menu_flow action_run_test_scripts ;;
-            6) action_module_status_overview ;;
+            1) run_menu_action action_system_overview ;;
+            2) run_menu_action check_system_resources ;;
+            3) run_menu_action check_network ;;
+            4) run_menu_action action_service_health ;;
+            5) run_menu_flow action_monitoring_alerts ;;
+            6) run_menu_flow action_run_test_scripts ;;
+            7) action_module_status_overview ;;
             b|B) return ;;
             0) exit 0 ;;
             *) menu_invalid_choice ;;
@@ -9056,11 +9535,35 @@ handle_signal() {
 
 # --- 主程序 ---
 main() {
+    case "${1:-}" in
+        --network|network)
+            NETWORK_DIAGNOSTIC_ONLY=1
+            SYSTEM_OVERVIEW_ONLY=0
+            ;;
+        --overview|overview)
+            SYSTEM_OVERVIEW_ONLY=1
+            NETWORK_DIAGNOSTIC_ONLY=0
+            ;;
+    esac
     if [ "$DRY_RUN" = "1" ]; then
         LOG_FILE="/tmp/init_script_dry_run_$(date +%Y%m%d_%H%M%S)_$$.log"
         LOG_READY=false
     fi
     validate_runtime_modes || exit 2
+
+    if [ "$SYSTEM_OVERVIEW_ONLY" = "1" ]; then
+        LOG_FILE="/tmp/init_script_overview_$(date +%Y%m%d_%H%M%S)_$$.log"
+        LOG_READY=false
+        action_system_overview
+        exit 0
+    fi
+
+    if [ "$NETWORK_DIAGNOSTIC_ONLY" = "1" ]; then
+        LOG_FILE="/tmp/init_script_network_$(date +%Y%m%d_%H%M%S)_$$.log"
+        LOG_READY=false
+        check_network
+        exit 0
+    fi
 
     if [ "$PLAN_ONLY" = "1" ] && { [ -n "$PROFILE_FILE" ] || [ -n "$INIT_PROFILE" ]; }; then
         if [ ! -w "$(dirname "$LOG_FILE")" ]; then
