@@ -1,0 +1,44 @@
+# -------------------------------------------------
+# 1. 定义一个“本地代理”节点，指向你的抓包工具
+# -------------------------------------------------
+proxies:
+  - name: "MITM-Capture"   # 给这个节点起个名
+    type: http             # 类型选 http (Fiddler/Charles/mitmproxy 默认都支持 http 代理协议)
+    server: 127.0.0.1      # 本地 IP
+    port: 8080             # 你的抓包工具监听端口
+
+# -------------------------------------------------
+# 2. 定义策略组 (可选，也可以直接在规则里引用节点)
+# -------------------------------------------------
+proxy-groups:
+  - name: "CloudDrive-Debug"
+    type: select
+    proxies:
+      - "MITM-Capture"     # 选中上面的抓包节点
+      - DIRECT             # 方便你随时关掉抓包，切回直连
+
+# -------------------------------------------------
+# 3. 关键：配置规则 (注意顺序！)
+# -------------------------------------------------
+rules:
+  # === 第一步：防止死循环 (非常重要) ===
+  # 必须让抓包工具本身的流量直连 (DIRECT)，否则它发出的请求会被 TUN 抓回来又发给它自己
+  # 请根据你使用的工具进程名修改：
+  - PROCESS-NAME,Fiddler.exe,DIRECT
+  - PROCESS-NAME,Charles.exe,DIRECT
+  - PROCESS-NAME,mitmproxy.exe,DIRECT
+  - PROCESS-NAME,mitmweb.exe,DIRECT
+
+  # === 第二步：捕获 CloudDrive 流量 ===
+  # 将 CloudDrive 的进程流量导向你的抓包节点
+  # CloudDrive 可能会有多个进程名，建议都写上
+  - PROCESS-NAME,clouddrive.exe,MITM-Capture
+  - PROCESS-NAME,clouddrive.service.exe,MITM-Capture
+
+  # 如果进程匹配不准，也可以尝试用域名匹配 (如果不走 IP 直连的话)
+  - DOMAIN-SUFFIX,aliyundrive.com,MITM-Capture
+  - DOMAIN-SUFFIX,115.com,MITM-Capture
+  - DOMAIN-KEYWORD,clouddrive,MITM-Capture
+
+  # === 第三步：其他流量正常处理 ===
+  - MATCH,DIRECT

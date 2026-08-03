@@ -1,0 +1,12 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.95.0@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
+    container_name: glm-proxy
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      ZAI_API_KEY: ${ZAI_API_KEY:?Set ZAI_API_KEY before starting the proxy}
+    command: ["--config", "/app/config.yaml"]
+    restart: unless-stopped

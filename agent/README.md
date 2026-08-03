@@ -24,6 +24,8 @@ mode `0600`.
   management for Claude Code and Codex, with direct and Agent-guided setup.
 - [`skillsctl/`](./skillsctl/README.md) — canonical portable skill storage,
   inherited frontend/backend packs, safe target links, and encrypted recovery.
+- [`recipes/`](./recipes/) — focused integration examples that complement the
+  controllers without becoming part of their install or credential lifecycle.
 
 Client/provider setup, MCP configuration, skills, and persistent instructions
 keep independent install and uninstall lifecycles. `agentctl workspace` can

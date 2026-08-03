@@ -172,11 +172,24 @@ sudo env INIT_PROFILE=secure-server ./server-toolkit.sh
 sudo env PROFILE_FILE=/root/init-profile-secure-server.env ./server-toolkit.sh
 ```
 
+## 配套工具与配方
+
+仓库还保留少量不进入交互菜单的独立工具：Cloudflare IPv4 DDNS、vnStat
+月流量阈值检查，以及临时 User-Agent 请求捕获服务。它们位于
+[`tools/`](./tools/README.md)，拥有独立参数和安全边界。
+
+QNAP、Nginx PWA 反向代理和 CloudDrive MITM 调试资料位于
+[`recipes/`](./recipes/README.md)。这些文件只是需要人工审查和改写的参考配置，
+不会由主脚本自动执行。
+
 ## 检查
 
 ```bash
 bash -n server-toolkit.sh
+for script in tools/*.sh; do bash -n "$script"; done
 ./tests/test_init_safety.sh
+./tests/cloudflare-ddns-test.sh
+./tests/vnstat-traffic-firewall-test.sh
 ```
 
 脚本菜单中的“脚本与运维”还提供静态自检、ShellCheck、安全测试、外部资源信任清单和系统变更报告。

@@ -1,0 +1,6 @@
+# 禁止 Adobe 通信
+# - DOMAIN-KEYWORD,adobe,REJECT
+- PROCESS-NAME,AdobeGCClient.exe,REJECT
+- PROCESS-NAME,AdobeIPCBroker.exe,REJECT
+- PROCESS-NAME,Photoshop.exe,REJECT
+- PROCESS-NAME,Adobe Premiere Pro.exe,REJECT

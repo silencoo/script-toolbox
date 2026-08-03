@@ -10,12 +10,15 @@ documentation so scripts can evolve without crowding the repository root.
 | --- | --- |
 | [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
+| [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
 | [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Visual Codex quota, credit, value, turn, and daily usage dashboard |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/gemini-session-batch-delete/`](./userscripts/gemini-session-batch-delete/) | Review, filter, and permanently delete multiple Gemini conversations |
+| [`userscripts/linux-do/`](./userscripts/linux-do/) | Archive Linux.do topics locally or publish them to WordPress |
+| [`userscripts/netease-music-toolkit/`](./userscripts/netease-music-toolkit/) | Third-party NetEase Music download, cloud-transfer, metadata, and playback toolkit |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
@@ -139,12 +142,15 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh mihomo-subscription-manager/setup.sh
+bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tools/cloudflare-ddns-ipv4.sh linux-server-toolkit/tools/vnstat-traffic-firewall.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh mihomo-subscription-manager/setup.sh
 ./linux-server-toolkit/tests/test_init_safety.sh
+./linux-server-toolkit/tests/cloudflare-ddns-test.sh
+./linux-server-toolkit/tests/vnstat-traffic-firewall-test.sh
 ./ghostty/tests/setup-test.sh
 ./ghostty/tests/ssh-terminfo-test.sh
 ./workstation-utils/tests/macos-test.sh
 python3 mihomo-subscription-manager/test_manager.py
+python3 -m py_compile linux-server-toolkit/tools/user-agent-capture-server.py
 python3 sing-box/generate-client-config.py --help
 node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
 python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests

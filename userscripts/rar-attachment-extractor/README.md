@@ -4,7 +4,7 @@ A Userscript that adds "Extract & Preview" capabilities to RAR file links on any
 
 ## Features
 
-- **In-Browser Extraction**: Uses `libunrar-js` (WebAssembly) to extract RAR files directly in the browser.
+- **In-Browser Extraction**: Uses `libunrar-js` to extract RAR files directly in the browser.
 - **Instant Preview**:
   - **Text Files**: View content of `.txt`, `.nfo`, `.log`, `.json`, etc., directly in the page.
   - **Copy**: One-click copy for text content.
@@ -18,8 +18,11 @@ A Userscript that adds "Extract & Preview" capabilities to RAR file links on any
 ## Technical Details
 
 - **Core**: Powered by [libunrar-js](https://github.com/wcchoi/libunrar-js).
-- **Caching**: Caches the WASM module to reduce bandwidth usage.
-- **Security**: All processing happens locally in your browser memory; no files are uploaded to any server.
+- **Isolation**: Runs the extraction adapter inside a generated Web Worker.
+- **Caching**: Downloads and caches the upstream `libunrar.js` and memory file.
+- **Security boundary**: Archive processing stays in the browser, but the
+  userscript fetches executable code from the pinned upstream URL at runtime.
+  Review the configured source before installation.
 
 ## Configuration
 
@@ -32,3 +35,10 @@ A Userscript that adds "Extract & Preview" capabilities to RAR file links on any
 2. Look for the "RAR 解压助手" panel that appears near the link.
 3. Click "解压预览" (Extract Preview).
 4. Browse the file list, read text files, or download extracted items.
+
+## Legacy migration
+
+Version `0.2.1` incorporates the corrected result harvesting and Worker-based
+extraction path from the former Gist. The old wrapper, generated `libunrar.js`,
+RPC helper, Worker helper, and basic userscript are intentionally not vendored
+here because they were incomplete as a standalone bundle.

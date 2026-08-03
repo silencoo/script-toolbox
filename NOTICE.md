@@ -15,6 +15,14 @@ third-party-derived files.
 - Files under `userscripts/sht-helper/` were imported from
   `silencoo/sht-helper`. The upstream documentation identifies the userscript
   as MIT licensed.
+- `userscripts/netease-music-toolkit/netease-music-toolkit.user.js` is a
+  snapshot of Cinvin's `myuserscripts` NetEase Music userscript. Its source
+  header identifies Cinvin as the author and declares the MIT license.
+- `resources/network/adobe-blocking/` and
+  `resources/network/pt-tracker-direct-rules.yaml` were migrated from local
+  Gists. The Adobe hosts list did not include complete upstream provenance or
+  license metadata, so the repository-level MIT license does not assert rights
+  over that list.
 - Files under `agent/promptctl/advanced/claude/` were copied from
   `silencoo/claude-keysmith`. They retain their bundled MIT license and
   attribution.
