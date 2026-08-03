@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.6.1
+// @version      0.6.2
 // @description  Keep Gemini defaults, download generated images concurrently, export full-size images, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -168,6 +168,13 @@
     return "jpg";
   }
 
+  async function uint8ArrayFromBlob(blob) {
+    if (!blob || typeof blob.arrayBuffer !== "function") {
+      throw new TypeError("ZIP input must be a Blob-like value.");
+    }
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
   function normalizeModeLabel(value) {
     return String(value || "").replace(/\s+/gu, " ").trim();
   }
@@ -215,6 +222,7 @@
       normalizeGeneratedImageUrl,
       parseFullSizeImageRefs,
       rewriteGoogleusercontentGgToRdGg,
+      uint8ArrayFromBlob,
     };
     return;
   }
@@ -2168,9 +2176,14 @@
             state.removeWatermark,
             controller.signal,
           );
+          ui.exportProgress.textContent =
+            `Preparing ${completed + 1}/${pendingImageRecords.length} for ZIP…`;
+          const zipBytes = await uint8ArrayFromBlob(result.blob);
+          if (controller.signal.aborted) return;
           zip.file(
             generatedImageFilename(record, result.blob.type),
-            result.blob,
+            zipBytes,
+            { binary: true },
           );
           exported += 1;
           if (result.watermarkError) watermarkFallbacks += 1;
@@ -2218,12 +2231,19 @@
         );
       }
       ui.exportProgress.textContent = "Building ZIP…";
-      const archive = await zip.generateAsync(
-        { type: "blob", compression: "STORE" },
-        ({ percent }) => {
-          ui.exportProgress.textContent = `Building ZIP ${Math.round(percent)}%…`;
+      const archiveBytes = await zip.generateAsync(
+        {
+          type: "uint8array",
+          compression: "STORE",
+          streamFiles: true,
+        },
+        ({ percent, currentFile }) => {
+          const current = currentFile ? ` · ${currentFile}` : "";
+          ui.exportProgress.textContent =
+            `Building ZIP ${Math.round(percent)}%${current}…`;
         },
       );
+      const archive = new Blob([archiveBytes], { type: "application/zip" });
       const conversation =
         getCurrentConversationId().replace(/^c_/u, "") || "conversation";
       saveBlob(

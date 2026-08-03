@@ -10,6 +10,7 @@ const {
   normalizeGeneratedImageUrl,
   parseFullSizeImageRefs,
   rewriteGoogleusercontentGgToRdGg,
+  uint8ArrayFromBlob,
 } = require("../gemini-toolkit.user.js");
 
 test("normalizes Gemini preview transforms to an asset URL", () => {
@@ -107,6 +108,14 @@ test("maps supported image MIME types to stable extensions", () => {
   assert.equal(extensionForMimeType("image/png"), "png");
   assert.equal(extensionForMimeType("image/webp"), "webp");
   assert.equal(extensionForMimeType("image/jpeg"), "jpg");
+});
+
+test("normalizes ZIP inputs to typed arrays before archive generation", async () => {
+  const bytes = await uint8ArrayFromBlob(
+    new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])]),
+  );
+  assert.ok(bytes instanceof Uint8Array);
+  assert.deepEqual([...bytes], [0x89, 0x50, 0x4e, 0x47]);
 });
 
 test("vendored Gargantua core exposes adaptive watermark maps", async () => {
