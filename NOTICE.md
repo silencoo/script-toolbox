@@ -18,6 +18,11 @@ third-party-derived files.
 - `userscripts/netease-music-toolkit/netease-music-toolkit.user.js` is a
   snapshot of Cinvin's `myuserscripts` NetEase Music userscript. Its source
   header identifies Cinvin as the author and declares the MIT license.
+- `userscripts/gemini-session-batch-delete/vendor/gargantua-core.js` is a
+  browser-only image-pipeline extract from GargantuaX's
+  `gemini-watermark-remover`, as vendored and adapted by `silencoo/web2gem-plus`.
+  The upstream MIT attribution is retained beside it in
+  `vendor/LICENSE.gargantua`.
 - `resources/network/adobe-blocking/` and
   `resources/network/pt-tracker-direct-rules.yaml` were migrated from local
   Gists. The Adobe hosts list did not include complete upstream provenance or
