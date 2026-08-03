@@ -16,7 +16,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
 | [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Visual Codex quota, credit, value, turn, and daily usage dashboard |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
-| [`userscripts/gemini-session-batch-delete/`](./userscripts/gemini-session-batch-delete/) | Keep Gemini defaults, concurrently download/export full-size images, and safely manage conversations |
+| [`userscripts/gemini-toolkit/`](./userscripts/gemini-toolkit/) | Keep Gemini defaults, concurrently download/export full-size images, and safely manage conversations |
 | [`userscripts/linux-do/`](./userscripts/linux-do/) | Archive Linux.do topics locally or publish them to WordPress |
 | [`userscripts/netease-music-toolkit/`](./userscripts/netease-music-toolkit/) | Third-party NetEase Music download, cloud-transfer, metadata, and playback toolkit |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
@@ -153,7 +153,7 @@ python3 mihomo-subscription-manager/test_manager.py
 python3 -m py_compile linux-server-toolkit/tools/user-agent-capture-server.py
 python3 sing-box/generate-client-config.py --help
 node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
-node --test userscripts/gemini-session-batch-delete/tests/*.test.cjs
+node --test userscripts/gemini-toolkit/tests/*.test.cjs
 python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests
 node agent/agentctl/orchestrator-client.test.mjs
 python3 -m pytest agent/promptctl/advanced/claude/tests

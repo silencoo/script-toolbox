@@ -35,7 +35,7 @@ so review the selection carefully before confirming it.
 1. Install [Tampermonkey](https://www.tampermonkey.net/) or
    [Violentmonkey](https://violentmonkey.github.io/).
 2. Open the
-   [raw userscript](https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-session-batch-delete/gemini-session-batch-delete.user.js).
+   [raw userscript](https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-toolkit/gemini-toolkit.user.js).
 3. Confirm the installation in your userscript manager.
 4. Sign in at [Gemini](https://gemini.google.com/).
 
@@ -43,7 +43,8 @@ so review the selection carefully before confirming it.
 
 ### Model defaults and conversation management
 
-1. Open Gemini and select **Gemini Toolkit** in the lower-right corner.
+1. Open Gemini, select the compact **Toolkit** dock, then choose
+   **Manage conversations**.
 2. Choose the **Model** and **Thinking** defaults. The initial configuration is
    **Latest Pro** with **Extended on**.
 3. Select **Apply now** to correct the current chat immediately. If you change
@@ -68,7 +69,7 @@ deleted before cancellation cannot be restored.
 - Turn on **Remove image watermark** in **Gemini Toolkit** when single-image and
   bulk downloads should be processed. It is off by default and persists until
   changed.
-- Select **Export all full-size images** next to **Gemini Toolkit**, review the
+- Open the **Toolkit** dock and select **Export full-size images**, review the
   detected image count and watermark setting, then select **Export ZIP**. The
   browser receives one ZIP download after all available images are fetched.
 
@@ -96,9 +97,9 @@ The userscript is a build-free JavaScript file. After making changes, update its
 metadata version and run:
 
 ```sh
-node --check userscripts/gemini-session-batch-delete/gemini-session-batch-delete.user.js
-node --check userscripts/gemini-session-batch-delete/vendor/gargantua-core.js
-node --test userscripts/gemini-session-batch-delete/tests/*.test.cjs
+node --check userscripts/gemini-toolkit/gemini-toolkit.user.js
+node --check userscripts/gemini-toolkit/vendor/gargantua-core.js
+node --test userscripts/gemini-toolkit/tests/*.test.cjs
 ```
 
 ## License

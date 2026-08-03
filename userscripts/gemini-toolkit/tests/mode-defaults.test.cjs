@@ -5,7 +5,7 @@ const {
   modelLabelMatches,
   modeLabelHasExtended,
   normalizeModeLabel,
-} = require("../gemini-session-batch-delete.user.js");
+} = require("../gemini-toolkit.user.js");
 
 test("normalizes Gemini mode labels", () => {
   assert.equal(normalizeModeLabel("  3.1   Pro\nExtended  "), "3.1 Pro Extended");

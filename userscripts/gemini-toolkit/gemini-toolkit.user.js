@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.4.0
+// @version      0.5.0
 // @description  Keep Gemini defaults, download generated images concurrently, export full-size images, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -13,7 +13,7 @@
 // @connect      lh3.googleusercontent.com
 // @connect      *.googleusercontent.com
 // @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
-// @require      https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-session-batch-delete/vendor/gargantua-core.js
+// @require      https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-toolkit/vendor/gargantua-core.js
 // @noframes
 // ==/UserScript==
 
@@ -26,7 +26,7 @@
   });
   const PAGE_SIZE = 20;
   const MAX_PAGES_PER_GROUP = 500;
-  const HOST_ID = "gemini-batch-delete-userscript";
+  const HOST_ID = "gemini-toolkit-userscript";
   const FULL_SIZE_BUTTON_SELECTOR =
     'button[aria-label="Download full size image"]';
   const IMAGE_DOWNLOAD_CONCURRENCY = 3;
@@ -1067,11 +1067,23 @@
         .launchers {
           position: fixed;
           z-index: 2147483645;
-          right: 24px;
-          bottom: 24px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
+          top: 50%;
+          right: 16px;
+          transform: translateY(-50%);
+        }
+        .launcher-menu {
+          position: absolute;
+          right: 0;
+          bottom: calc(100% + 8px);
+          display: grid;
+          gap: 6px;
+          min-width: 218px;
+          padding: 7px;
+          color: var(--text);
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, .2);
         }
         .launcher {
           border: 1px solid var(--strong);
@@ -1082,6 +1094,17 @@
           box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
           font-weight: 700;
           letter-spacing: .01em;
+        }
+        .launcher-toggle {
+          min-width: 84px;
+          padding: 9px 12px;
+        }
+        .launcher-menu .launcher {
+          width: 100%;
+          padding: 10px 12px;
+          box-shadow: none;
+          text-align: left;
+          white-space: nowrap;
         }
         .launcher.secondary {
           color: var(--text);
@@ -1144,8 +1167,8 @@
         .toast {
           position: fixed;
           z-index: 2147483647;
-          right: 24px;
-          bottom: 78px;
+          right: 16px;
+          bottom: 24px;
           max-width: min(420px, calc(100vw - 32px));
           padding: 10px 13px;
           color: var(--strong-text);
@@ -1343,14 +1366,17 @@
             border-radius: 0;
           }
           .launchers {
-            right: 14px;
-            bottom: 14px;
+            right: 12px;
             max-width: calc(100vw - 28px);
-            flex-wrap: wrap;
-            justify-content: flex-end;
           }
+          .launcher-menu { min-width: min(218px, calc(100vw - 24px)); }
           .launcher { padding: 10px 12px; }
-          .toast { right: 14px; bottom: 112px; }
+          .launcher-toggle { min-width: 76px; }
+          .toast {
+            top: 14px;
+            right: 12px;
+            bottom: auto;
+          }
           .search { min-width: 100%; }
           .field-group { flex: 1 1 180px; }
           .field-group select { flex: 1; }
@@ -1428,18 +1454,34 @@
     const launchers = addElement(shadow, "div", {
       className: "launchers",
     });
-    const exportLauncher = addButton(
+    const launcherToggle = addButton(
       launchers,
+      "launcher-toggle",
+      "launcher launcher-toggle",
+      "Toolkit",
+    );
+    launcherToggle.setAttribute("aria-controls", "launcher-menu");
+    launcherToggle.setAttribute("aria-expanded", "false");
+    launcherToggle.setAttribute("aria-haspopup", "menu");
+    const launcherMenu = addElement(launchers, "div", {
+      id: "launcher-menu",
+      className: "launcher-menu hidden",
+      attributes: { role: "menu" },
+    });
+    const launcher = addButton(
+      launcherMenu,
+      "launcher",
+      "launcher",
+      "Manage conversations",
+    );
+    launcher.setAttribute("role", "menuitem");
+    const exportLauncher = addButton(
+      launcherMenu,
       "export-launcher",
       "launcher secondary",
-      "Export all full-size images",
+      "Export full-size images",
     );
-    const launcher = addButton(
-      launchers,
-      "launcher",
-      "launcher",
-      "Gemini Toolkit",
-    );
+    exportLauncher.setAttribute("role", "menuitem");
     const overlay = addElement(shadow, "div", {
       id: "overlay",
       className: "overlay hidden",
@@ -1752,6 +1794,8 @@
       host,
       shadow,
       launchers,
+      launcherToggle,
+      launcherMenu,
       launcher,
       exportLauncher,
       overlay,
@@ -1792,6 +1836,11 @@
 
   let imageToastTimer = 0;
   let pendingImageRecords = [];
+
+  function setLauncherMenuOpen(open) {
+    ui.launcherMenu.classList.toggle("hidden", !open);
+    ui.launcherToggle.setAttribute("aria-expanded", String(open));
+  }
 
   function setImageToast(message, error = false) {
     pageWindow.clearTimeout(imageToastTimer);
@@ -2436,8 +2485,17 @@
     scheduleModeDefaults({ force: true, delay: 0 });
   });
 
-  ui.launcher.addEventListener("click", openDialog);
-  ui.exportLauncher.addEventListener("click", openExportDialog);
+  ui.launcherToggle.addEventListener("click", () => {
+    setLauncherMenuOpen(ui.launcherMenu.classList.contains("hidden"));
+  });
+  ui.launcher.addEventListener("click", () => {
+    setLauncherMenuOpen(false);
+    openDialog();
+  });
+  ui.exportLauncher.addEventListener("click", () => {
+    setLauncherMenuOpen(false);
+    openExportDialog();
+  });
   ui.closeExport.addEventListener("click", closeExportDialog);
   ui.exportRemoveWatermark.addEventListener("change", () => {
     persistWatermarkSetting(ui.exportRemoveWatermark.checked);
@@ -2498,6 +2556,11 @@
   ui.deleteSelected.addEventListener("click", () => void runDeletion());
   ui.cancel.addEventListener("click", () => state.abortController?.abort());
   pageWindow.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !ui.launcherMenu.classList.contains("hidden")) {
+      setLauncherMenuOpen(false);
+      ui.launcherToggle.focus();
+      return;
+    }
     if (
       event.key === "Escape" &&
       !ui.exportOverlay.classList.contains("hidden")
@@ -2510,6 +2573,11 @@
       return;
     }
     keepFocusInsideDialog(event);
+  });
+  pageWindow.addEventListener("click", (event) => {
+    if (!event.composedPath().includes(ui.host)) {
+      setLauncherMenuOpen(false);
+    }
   });
   pageWindow.addEventListener("beforeunload", (event) => {
     if (state.deleting || state.exportingImages) {

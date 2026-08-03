@@ -10,6 +10,10 @@ TEST_HOME="${TEST_ROOT}/home"
 STORE="${TEST_ROOT}/store"
 FAKE_BIN="${TEST_ROOT}/bin"
 
+# The suite owns all configuration paths. Caller-provided XDG roots would make
+# HOME-based assertions inspect a different location from the controller.
+unset XDG_CONFIG_HOME XDG_STATE_HOME
+
 cleanup() {
   rm -rf "$TEST_ROOT"
 }
@@ -487,9 +491,11 @@ printf '\n9\n' |
 INTERACTIVE_CHOSEN_HOME="${TEST_ROOT}/interactive-chosen-home"
 INTERACTIVE_CHOSEN_STORE="${TEST_ROOT}/interactive-chosen-store"
 INTERACTIVE_UNUSED_STORE="${TEST_ROOT}/interactive-unused-store"
+INTERACTIVE_CHOSEN_PREFERENCES="${INTERACTIVE_CHOSEN_HOME}/.config/mcpctl/preferences.json"
 mkdir -p "$INTERACTIVE_CHOSEN_HOME"
 printf '3\n%s\n1\n9\n' "$INTERACTIVE_CHOSEN_STORE" |
   HOME="$INTERACTIVE_CHOSEN_HOME" \
+    MCPCTL_PREFERENCES="$INTERACTIVE_CHOSEN_PREFERENCES" \
     "$MCPCTL" interactive --store "$INTERACTIVE_UNUSED_STORE" \
       >"$TEST_ROOT/interactive-chosen.out" 2>&1 ||
   fail "interactive store selection before initialization failed"
@@ -499,7 +505,7 @@ printf '3\n%s\n1\n9\n' "$INTERACTIVE_CHOSEN_STORE" |
   fail "interactive store selection initialized the abandoned path"
 jq -e --arg store "$INTERACTIVE_CHOSEN_STORE" \
   '.store == $store' \
-  "$INTERACTIVE_CHOSEN_HOME/.config/mcpctl/preferences.json" >/dev/null ||
+  "$INTERACTIVE_CHOSEN_PREFERENCES" >/dev/null ||
   fail "interactive store selection was not remembered"
 
 # Applying from the menu always runs a visible plan first and asks for a

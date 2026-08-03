@@ -6,7 +6,7 @@ const {
   extensionForMimeType,
   normalizeGeneratedImageUrl,
   rewriteGoogleusercontentGgToRdGg,
-} = require("../gemini-session-batch-delete.user.js");
+} = require("../gemini-toolkit.user.js");
 
 test("normalizes Gemini preview transforms to an asset URL", () => {
   assert.equal(
