@@ -31,6 +31,7 @@
 # - NETWORK_DIAGNOSTIC_HOST=www.cloudflare.com  双栈 DNS 检查域名
 # - SYSTEM_OVERVIEW_ONLY=1  只显示完整机器概览，不要求 root
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
+# - APT_SOURCE_RECOVERY=prompt  已知失效独立第三方源的恢复策略: prompt/auto-known/never
 #
 # 使用示例:
 # - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1 ALLOW_DANGEROUS=1 ./init.sh
@@ -74,6 +75,8 @@ NETWORK_DIAGNOSTIC_ONLY="${NETWORK_DIAGNOSTIC_ONLY:-0}"  # 1=只运行只读网�
 NETWORK_DIAGNOSTIC_HOST="${NETWORK_DIAGNOSTIC_HOST:-www.cloudflare.com}"
 SYSTEM_OVERVIEW_ONLY="${SYSTEM_OVERVIEW_ONLY:-0}"  # 1=只运行只读机器概览
 EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permissive
+APT_SOURCE_RECOVERY="${APT_SOURCE_RECOVERY:-prompt}"  # prompt/auto-known/never
+APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
 REMOTE_SCRIPT_SHA256="${REMOTE_SCRIPT_SHA256:-}"
 REMOTE_SCRIPT_CHECKSUM_FILE="${REMOTE_SCRIPT_CHECKSUM_FILE:-/root/init-remote-scripts.sha256}"
 ALLOW_UNVERIFIED_REMOTE="${ALLOW_UNVERIFIED_REMOTE:-0}"
@@ -208,6 +211,13 @@ validate_runtime_modes() {
         auto|prompt|always|never) ;;
         *)
             log_error "无效的 ACTION_ROLLBACK_MODE: $ACTION_ROLLBACK_MODE"
+            return 1
+            ;;
+    esac
+    case "$APT_SOURCE_RECOVERY" in
+        prompt|auto-known|never) ;;
+        *)
+            log_error "无效的 APT_SOURCE_RECOVERY: $APT_SOURCE_RECOVERY"
             return 1
             ;;
     esac
@@ -1315,15 +1325,107 @@ acquire_script_lock() {
     fi
 }
 
+apt_update_log_has_known_ookla_failure() {
+    local start_line="${1:-1}"
+    [ -f "$LOG_FILE" ] || return 1
+    tail -n "+${start_line}" "$LOG_FILE" 2>/dev/null | grep -F \
+        'packagecloud.io/ookla/speedtest-cli' > /dev/null || return 1
+    tail -n "+${start_line}" "$LOG_FILE" 2>/dev/null | grep -E \
+        '402[[:space:]]+Payment Required|no longer signed|does not have a Release file' \
+        > /dev/null
+}
+
+known_ookla_apt_source_files() {
+    local file base
+    [ -d "$APT_SOURCES_DIR" ] || return 0
+    for file in "$APT_SOURCES_DIR"/*; do
+        [ -f "$file" ] && [ ! -L "$file" ] || continue
+        base="$(basename "$file")"
+        case "$base" in
+            ookla_speedtest-cli.list|ookla_speedtest-cli.sources|ookla-speedtest-cli.list|ookla-speedtest-cli.sources)
+                grep -Fq 'packagecloud.io/ookla/speedtest-cli' "$file" && printf '%s\n' "$file"
+                ;;
+        esac
+    done
+}
+
+quarantine_known_ookla_apt_sources() {
+    local file disabled timestamp moved=0
+    local -a candidates=()
+    while IFS= read -r file; do
+        [ -n "$file" ] && candidates+=("$file")
+    done < <(known_ookla_apt_source_files)
+
+    if [ "${#candidates[@]}" -eq 0 ]; then
+        log_warning "APT 日志指向失效的 Ookla Packagecloud 源，但未找到独立的官方 source 文件"
+        log_warning "请检查: grep -RIn 'packagecloud.io/ookla/speedtest-cli' /etc/apt/sources.list /etc/apt/sources.list.d"
+        return 1
+    fi
+
+    case "$APT_SOURCE_RECOVERY" in
+        never)
+            log_warning "APT_SOURCE_RECOVERY=never：未修改失效的 Ookla source"
+            return 1
+            ;;
+        prompt)
+            if [ "$NON_INTERACTIVE" = "1" ]; then
+                log_warning "非交互模式不会自动禁用第三方源；确认后可设置 APT_SOURCE_RECOVERY=auto-known 重试"
+                return 1
+            fi
+            printf '%b\n' "${YELLOW}检测到 Ookla Packagecloud 返回 402/签名错误，正在阻断所有 apt 操作。${PLAIN}"
+            printf '%s\n' "将备份并临时隔离以下独立 source 文件；不会卸载 speedtest："
+            printf '  %s\n' "${candidates[@]}"
+            confirm_action "是否隔离该失效源并重试 apt update?" "n" || return 1
+            ;;
+        auto-known) ;;
+    esac
+
+    timestamp="$(date +%Y%m%d_%H%M%S)"
+    for file in "${candidates[@]}"; do
+        disabled="${file}.disabled-by-init-${timestamp}-$$"
+        [ ! -e "$disabled" ] && [ ! -L "$disabled" ] || {
+            log_error "APT source 隔离目标已存在: $disabled"
+            return 1
+        }
+        create_backup "$file" "隔离失效 Ookla APT source" > /dev/null || return 1
+        if [ "$DRY_RUN" = "1" ]; then
+            log_info "[DRY RUN] 将隔离 $file -> $disabled"
+            continue
+        fi
+        mv -- "$file" "$disabled" || return 1
+        record_created_file "$disabled" "隔离后的 Ookla APT source"
+        log_warning "已隔离失效源: $file -> $disabled"
+        moved=1
+    done
+    [ "$DRY_RUN" = "1" ] || [ "$moved" -eq 1 ]
+}
+
 update_apt_once() {
+    local log_start=1 retry_start=1
     if [ "$APT_UPDATED" = false ]; then
         log_info "更新软件包列表..."
+        ensure_log_file || return 1
+        log_start=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || printf '0') + 1 ))
         if execute_with_progress_argv "更新软件包列表" \
             apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 update; then
             APT_UPDATED=true
             log_success "软件包列表更新完成"
         else
             APT_UPDATED=false
+            if apt_update_log_has_known_ookla_failure "$log_start" &&
+               quarantine_known_ookla_apt_sources; then
+                log_info "重试更新软件包列表..."
+                retry_start=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || printf '0') + 1 ))
+                if execute_with_progress_argv "重试更新软件包列表" \
+                    apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 update; then
+                    APT_UPDATED=true
+                    log_success "隔离失效第三方源后，软件包列表更新完成"
+                    return 0
+                fi
+                if apt_update_log_has_known_ookla_failure "$retry_start"; then
+                    log_warning "仍检测到 Ookla source；请检查其他 APT source 文件"
+                fi
+            fi
             log_error "软件包列表更新失败；本次安装已中止，可稍后重试"
             return 1
         fi
@@ -8772,7 +8874,7 @@ function action_install_terminal_tools() {
     
     # Update & Install deps
     log_info "更新系统并安装基础依赖..."
-    update_apt_once
+    update_apt_once || return 1
     run_cmd "安装基础依赖" "apt-get install -y git curl wget unzip tar build-essential zsh tmux ripgrep fd-find \
         p7zip-full p7zip-rar unrar xz-utils bzip2 zstd lz4 pigz \
         fzf jq yq btop ncdu duf git-delta"
@@ -8791,7 +8893,8 @@ function action_install_terminal_tools() {
             run_cmd "导入 eza GPG 密钥" "gpg --dearmor -o /etc/apt/keyrings/gierens.gpg --yes \"$eza_key_tmp\""
             run_cmd "写入 eza 源" "echo \"deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main\" | tee /etc/apt/sources.list.d/gierens.list"
             run_cmd "更新 eza 源权限" "chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list"
-            run_cmd "更新软件包列表" "apt-get update"
+            APT_UPDATED=false
+            update_apt_once || return 1
         else
             log_warning "已跳过 eza 仓库配置"
         fi

@@ -49,11 +49,26 @@ line-oriented guided flow. See [`tui/`](./tui/) for the views, keys, safety
 confirmations, and build contract.
 
 To make those names available from any directory, preview and apply the
-reversible symlink installer:
+standalone installer:
 
 ```bash
 ./install-commands.sh --prefix "$HOME/.local/bin"
 ./install-commands.sh --prefix "$HOME/.local/bin" --yes
+```
+
+It copies a minimal runtime—not the repository—to
+`~/.local/share/script-toolbox/agent`, then creates reversible command links.
+The checkout can be removed afterward. `--link` retains the old
+repository-backed development mode.
+
+All controllers expose the same atomic suite updater, so any one of these
+commands updates all four entrypoints without mixing runtime revisions:
+
+```bash
+agentctl update --check
+mcpctl update --yes
+promptctl update --yes
+skillsctl update --yes
 ```
 
 Every model menu also has a custom model-ID entry. All selections can be
@@ -146,9 +161,9 @@ same repository; prompts read from `/dev/tty`, so one-shot interactive use
 still works. Scripts that update JSON install `jq` automatically through
 apt, dnf/yum, Homebrew, or apk when it is missing.
 
-The repository-backed `agentctl`, `mcpctl`, `promptctl`, and `skillsctl`
-frontends share [`ctl-lib.sh`](./ctl-lib.sh) for consistent launch checks,
-menus, confirmations, and terminal messages, plus the committed
+The standalone and repository-backed `agentctl`, `mcpctl`, `promptctl`, and
+`skillsctl` frontends share [`ctl-lib.sh`](./ctl-lib.sh) for consistent launch
+checks, menus, confirmations, and terminal messages, plus the committed
 [`tui/dist/toolbox-tui.mjs`](./tui/dist/toolbox-tui.mjs) dashboard. This does
 not add a repository dependency to Raw URL setup scripts.
 

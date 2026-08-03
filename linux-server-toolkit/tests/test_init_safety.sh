@@ -77,6 +77,57 @@ fi
 pass "invalid SYSTEM_TIMEZONE fails before execution"
 SYSTEM_TIMEZONE=""
 
+APT_SOURCE_RECOVERY="invalid"
+if validate_runtime_modes > /dev/null 2>&1; then
+    fail "invalid APT_SOURCE_RECOVERY should fail runtime validation"
+fi
+pass "invalid APT_SOURCE_RECOVERY fails before execution"
+APT_SOURCE_RECOVERY="prompt"
+
+APT_SOURCES_DIR="$TEST_TMP/apt-sources"
+mkdir -p "$APT_SOURCES_DIR"
+ookla_source="$APT_SOURCES_DIR/ookla_speedtest-cli.list"
+printf '%s\n' \
+    'deb https://packagecloud.io/ookla/speedtest-cli/debian bookworm main' > "$ookla_source"
+printf '%s\n' \
+    'deb https://packagecloud.io/ookla/speedtest-cli/debian bookworm main' > "$APT_SOURCES_DIR/combined.list"
+known_sources="$(known_ookla_apt_source_files)"
+assert_contains "$known_sources" "$ookla_source" \
+    "known Ookla recovery locates the dedicated official source file"
+assert_not_contains "$known_sources" "$APT_SOURCES_DIR/combined.list" \
+    "known Ookla recovery does not disable an arbitrary combined source file"
+
+printf '%s\n' \
+    'E: Failed to fetch https://packagecloud.io/ookla/speedtest-cli/debian/dists/bookworm/InRelease 402 Payment Required' \
+    'unrelated later log line' > "$LOG_FILE"
+if apt_update_log_has_known_ookla_failure 2; then
+    fail "APT recovery should ignore failures from an older log segment"
+fi
+pass "APT recovery scopes diagnosis to the current apt update attempt"
+printf '%s\n' \
+    "E: The repository 'https://packagecloud.io/ookla/speedtest-cli/debian bookworm InRelease' is no longer signed." \
+    >> "$LOG_FILE"
+apt_update_log_has_known_ookla_failure 3 || fail "current Ookla failure should be recognized"
+pass "APT recovery recognizes the current Ookla 402/signature failure"
+
+(
+    APT_SOURCE_RECOVERY="auto-known"
+    NON_INTERACTIVE=1
+    DRY_RUN=0
+    BACKUP_DIR="$TEST_TMP/apt-backups"
+    OPERATION_HISTORY=()
+    OPERATION_TARGETS=()
+    OPERATION_BACKUPS=()
+    OPERATION_DESCRIPTIONS=()
+    OPERATION_TYPES=()
+    quarantine_known_ookla_apt_sources
+)
+[ ! -e "$ookla_source" ] || fail "known broken Ookla source was not quarantined"
+disabled_ookla_source="$(find "$APT_SOURCES_DIR" -maxdepth 1 -type f \
+    -name 'ookla_speedtest-cli.list.disabled-by-init-*' -print -quit)"
+[ -n "$disabled_ookla_source" ] || fail "quarantined Ookla source was not preserved"
+pass "auto-known recovery backs up and quarantines only the dedicated Ookla source"
+
 SWAP_SIZE_MB="511"
 if validate_runtime_modes > /dev/null 2>&1; then
     fail "SWAP_SIZE_MB below 512 should fail runtime validation"

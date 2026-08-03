@@ -293,7 +293,8 @@ try {
   $workspace = Join-Path $launch 'workspace with spaces'
   New-Item -ItemType Directory -Path $workspace -Force | Out-Null
   if ((Invoke-ManagerCase $launch @(
-        'run', 'shell', $workspace, '--name', 'test-shell'
+        'run', 'shell', $workspace, '--name', 'test-shell',
+        '--root-size', '40g', '--docker-size', '80g'
       )) -ne 0) {
     Stop-Test 'sandbox launch helper failed'
   }
@@ -305,6 +306,14 @@ try {
   Assert-TextContains (Join-Path $launch 'log') " shell $resolvedWorkspace"
   Assert-LogContains (Join-Path $launch 'log') 'kit-line-endings lf'
   Assert-LogContains (Join-Path $launch 'log') 'kit-static-files present'
+  Assert-LogContains (Join-Path $launch 'log') 'root-size-env 40g'
+  Assert-LogContains (Join-Path $launch 'log') 'docker-size-env 80g'
+  Assert-TextContains (Join-Path $launch 'output') (
+    'DOCKER_SANDBOXES_ROOT_SIZE=40g'
+  )
+  Assert-TextContains (Join-Path $launch 'output') (
+    'DOCKER_SANDBOXES_DOCKER_SIZE=80g'
+  )
 
   # Existing names use reattach-only syntax.
   $reattach = Initialize-Case 'reattach'
@@ -317,7 +326,8 @@ try {
   New-Item -ItemType Directory -Path $reattachWorkspace -Force | Out-Null
   $reattachArguments = @(
     'run', 'claude', $reattachWorkspace,
-    '--name', 'test-claude'
+    '--name', 'test-claude',
+    '--root-size', '40g', '--docker-size', '80g'
   )
   if ((Invoke-ManagerCase -CaseDir $reattach `
         -ManagerArguments $reattachArguments) -ne 0) {
@@ -368,6 +378,11 @@ try {
   if ($wrongReattach.Count -gt 0) {
     Stop-Test 'reattach command retained sandbox creation arguments'
   }
+  Assert-TextContains $reattachOutput (
+    "Ignoring creation-only options while reattaching to 'test-claude'."
+  )
+  Assert-TextExcludes $reattachOutput 'DOCKER_SANDBOXES_ROOT_SIZE=40g'
+  Assert-TextExcludes $reattachOutput 'DOCKER_SANDBOXES_DOCKER_SIZE=80g'
 
   Write-Output 'PASS: PowerShell sbx-manager setup, policy, and run flow'
 } finally {

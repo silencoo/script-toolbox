@@ -51,6 +51,8 @@ cask "stats" if false
 brew "restic" if false
 # workstation-package|maintenance|brew|rclone|rclone|required
 brew "rclone" if false
+# workstation-package|maintenance|brew|mole|Mole|required
+brew "mole" if false
 # workstation-package|maintenance|cask|appcleaner|AppCleaner|optional
 cask "appcleaner" if false
 

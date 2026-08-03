@@ -20,6 +20,10 @@ operations. Use `promptctl tui` for the explicit dashboard entrypoint or
 configure, inspect, locate, or uninstall instructions.
 Every write is previewed and requires a separate `y` confirmation.
 
+When installed with `agent/install-commands.sh`, use `promptctl update --check`
+to inspect the latest suite revision or `promptctl update --yes` to update all
+four controllers atomically.
+
 For automation or an Agent-guided workflow, use explicit commands:
 
 ```bash

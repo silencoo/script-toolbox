@@ -1,6 +1,6 @@
 # Shared agent TUI
 
-The four repository-backed controllers share one terminal dashboard built with
+The four standalone or repository-backed controllers share one terminal dashboard built with
 Node.js 22, Ink 7, and React 19. It is a view and action layer over the existing
 controller operations, so the explicit CLI commands remain the automation API.
 

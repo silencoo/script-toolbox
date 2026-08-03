@@ -66,6 +66,7 @@ function usage() {
 
 Usage:
   skillsctl tui
+  skillsctl update [--check|--yes]
   skillsctl init [--store <dir>] [--yes]
   skillsctl list [--store <dir>]
   skillsctl status [--store <dir>]

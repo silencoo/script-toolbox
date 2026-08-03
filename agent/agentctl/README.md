@@ -225,9 +225,9 @@ an apply writes only the chosen selection and its dependencies to
 directory on Windows), then invokes the existing controller transaction. Agent
 provider, model, and API-key configuration always remain local.
 
-## Optional PATH commands
+## Standalone PATH commands
 
-Preview and then install repository-backed command symlinks:
+Preview and then install the minimal standalone runtime and command links:
 
 ```bash
 ./agent/install-commands.sh --prefix "$HOME/.local/bin"
@@ -239,9 +239,31 @@ mcpctl current --target codex
 promptctl status all
 ```
 
-The installer refuses existing commands by default. `--force` first moves a
-conflict to a tracked backup. Uninstall removes only matching managed links and
-restores those backups:
+The runtime lives at `~/.local/share/script-toolbox/agent` by default. It
+contains only controller entrypoints, shared runtime modules, provider setup
+backends, templates, adapters, and the built TUI; it excludes Git metadata,
+tests, Worker sources, TUI sources, and unrelated toolbox utilities. The source
+checkout can be moved or deleted after installation.
+
+Check or install updates through any controller. Every entrypoint updates the
+same suite atomically because the controllers share runtime modules:
+
+```bash
+agentctl update --check
+mcpctl update --yes
+promptctl update --yes
+skillsctl update --yes
+```
+
+For development, `--link` keeps repository-backed links instead:
+
+```bash
+./agent/install-commands.sh --link --prefix "$HOME/.local/bin" --yes
+```
+
+The installer refuses existing commands or runtime directories by default.
+`--force` first moves a conflict to a tracked backup. Uninstall removes only
+matching managed links/runtime and restores tracked conflicts:
 
 ```bash
 ./agent/install-commands.sh --prefix "$HOME/.local/bin" --uninstall

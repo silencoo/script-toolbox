@@ -54,6 +54,25 @@ sudo env NON_INTERACTIVE=1 DRY_RUN=1 ./server-toolkit.sh
 PLAN_ONLY=1 INIT_PROFILE=docker-host ./server-toolkit.sh
 ```
 
+## APT 第三方源恢复
+
+Debian/Ubuntu 的 `apt update` 会读取系统里所有已配置的 source；因此即使正在安装
+Zsh，一个早先添加、现已失效的第三方仓库也会让终端模块失败。脚本会识别 Ookla
+Packagecloud 独立 source 返回的 `402 Payment Required`、`no longer signed` 或缺少
+Release 文件错误。在交互模式下，它会询问是否先备份并将该 source 重命名为
+`.disabled-by-init-*`，确认后重试 `apt update`；不会卸载已经安装的 `speedtest`。
+
+非交互模式默认不修改第三方 source。确认允许脚本仅隔离这一已知的独立 Ookla
+source 时，可显式设置：
+
+```bash
+sudo env NON_INTERACTIVE=1 APT_SOURCE_RECOVERY=auto-known \
+  INIT_PROFILE=dev-box ./server-toolkit.sh
+```
+
+设置 `APT_SOURCE_RECOVERY=never` 可完全关闭该恢复逻辑。混合了多个仓库的自定义
+source 文件不会被自动隔离，脚本只报告人工检查命令。
+
 ## 时区、Swap 与 sysctl
 
 默认不会修改服务器现有时区。需要统一时区时，传入有效的 IANA 时区名：

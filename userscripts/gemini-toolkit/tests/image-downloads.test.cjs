@@ -2,9 +2,13 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildFullSizeImageRpcPayload,
   buildFullSizeProbeUrls,
+  buildGeneratedImageFallbackUrls,
   extensionForMimeType,
+  fullSizeImageUrlFromRpc,
   normalizeGeneratedImageUrl,
+  parseFullSizeImageRefs,
   rewriteGoogleusercontentGgToRdGg,
 } = require("../gemini-toolkit.user.js");
 
@@ -39,6 +43,63 @@ test("does not rewrite an existing rd-gg URL", () => {
       "https://lh3.googleusercontent.com/rd-gg/asset-token",
     ),
     "",
+  );
+});
+
+test("extracts native full-size RPC references from Gemini button metadata", () => {
+  assert.deepEqual(
+    parseFullSizeImageRefs(
+      '185865;BardVeMetadataKey:[["r_reply","c_chat",null,"rc_candidate"]]',
+      "2",
+    ),
+    {
+      responseId: "r_reply",
+      conversationId: "c_chat",
+      responseCandidateId: "rc_candidate",
+      imageId: "http://googleusercontent.com/image_generation_content/2",
+    },
+  );
+});
+
+test("builds Gemini's mode-19 full-size image RPC payload", () => {
+  const refs = {
+    responseId: "r_reply",
+    conversationId: "c_chat",
+    responseCandidateId: "rc_candidate",
+    imageId: "http://googleusercontent.com/image_generation_content/0",
+  };
+  const payload = buildFullSizeImageRpcPayload(refs);
+  assert.deepEqual(payload[0][1], [refs.imageId, 0]);
+  assert.deepEqual(payload[0][3], [19, ""]);
+  assert.deepEqual(payload[1], [
+    "r_reply",
+    "rc_candidate",
+    "c_chat",
+    null,
+    "",
+  ]);
+});
+
+test("extracts only an HTTP URL from the full-size RPC response", () => {
+  assert.equal(
+    fullSizeImageUrlFromRpc(["https://lh3.googleusercontent.com/gg/full"]),
+    "https://lh3.googleusercontent.com/gg/full",
+  );
+  assert.equal(fullSizeImageUrlFromRpc(["not-a-url"]), "");
+});
+
+test("falls back through large CDN transforms without using download probes", () => {
+  assert.deepEqual(
+    buildGeneratedImageFallbackUrls(
+      "https://lh3.googleusercontent.com/gg/asset=s1024-rj",
+    ),
+    [
+      "https://lh3.googleusercontent.com/gg/asset=s4096-rj",
+      "https://lh3.googleusercontent.com/gg/asset=s2048-rj",
+      "https://lh3.googleusercontent.com/gg/asset=s0",
+      "https://lh3.googleusercontent.com/gg/asset=d",
+      "https://lh3.googleusercontent.com/gg/asset=s1024-rj",
+    ],
   );
 });
 

@@ -127,6 +127,20 @@ agent when a shell is not needed:
 ./sbx-manager.sh run claude /path/to/project --name project-claude --clone
 ```
 
+Set the two independent disk sizes when creating a sandbox:
+
+```bash
+./sbx-manager.sh run shell /path/to/project --name large-project \
+  --root-size 40g --docker-size 80g
+```
+
+`--root-size` configures the sandbox root filesystem (`/`) through
+`DOCKER_SANDBOXES_ROOT_SIZE`. `--docker-size` configures the nested Docker data
+disk (`/var/lib/docker`) through `DOCKER_SANDBOXES_DOCKER_SIZE`. Both options
+apply only when a sandbox is first created. Docker sbx does not currently
+support resizing an existing sandbox; the managers warn and ignore these
+options when reattaching.
+
 On macOS and Linux, `shell` is the default when the first argument after `run`
 is a workspace path or an option. Write an agent name explicitly only when the
 sandbox should attach directly to that agent.

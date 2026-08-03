@@ -204,6 +204,12 @@ switch ($command) {
     Write-Output 'kit added'
   }
   'run' {
+    Add-Content -LiteralPath $env:SBX_TEST_LOG -Value (
+      "root-size-env $($env:DOCKER_SANDBOXES_ROOT_SIZE)"
+    )
+    Add-Content -LiteralPath $env:SBX_TEST_LOG -Value (
+      "docker-size-env $($env:DOCKER_SANDBOXES_DOCKER_SIZE)"
+    )
     $kitIndex = [Array]::IndexOf([object[]] $args, '--kit')
     if ($kitIndex -ge 0) {
       if ($kitIndex + 1 -ge $args.Count) {

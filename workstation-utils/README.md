@@ -20,7 +20,7 @@ identifier, built-in alternative, opt-in choice, and safety note.
 | --- | --- |
 | `core` | KeePassXC, archives, local transfer, disk usage, search, media/PDF viewing, and window layout |
 | `media` | yt-dlp, gallery-dl, FFmpeg, HandBrake, ImageMagick, ExifTool, aria2, and optional mpv |
-| `maintenance` | Manual uninstall/duplicate inspection, qpdf, drive health, hardware monitoring, restic, and rclone |
+| `maintenance` | Manual uninstall/duplicate inspection, Mole, qpdf, drive health, hardware monitoring, restic, and rclone |
 | `desktop` | Screenshot or wake tools, LocalSend/layout tools, and opt-in launchers/clipboard history |
 | `admin` | Explicit system/network inspection, private networking, Moonlight/Sunshine streaming, recovery, and encryption tools |
 

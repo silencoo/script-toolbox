@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.5.0
+// @version      0.6.0
 // @description  Keep Gemini defaults, download generated images concurrently, export full-size images, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -23,6 +23,7 @@
   const RPC = Object.freeze({
     listConversations: "MaZiqc",
     deleteConversation: "GzXR5e",
+    getFullSizeImage: "c8o8Fe",
   });
   const PAGE_SIZE = 20;
   const MAX_PAGES_PER_GROUP = 500;
@@ -94,6 +95,71 @@
     return candidates;
   }
 
+  function buildGeneratedImageFallbackUrls(value) {
+    const base = normalizeGeneratedImageUrl(value);
+    if (!base) return [];
+    return [
+      `${base}=s4096-rj`,
+      `${base}=s2048-rj`,
+      `${base}=s0`,
+      `${base}=d`,
+      value,
+    ].filter(
+      (candidate, index, all) =>
+        candidate && all.indexOf(candidate) === index,
+    );
+  }
+
+  function parseFullSizeImageRefs(value, imageIndex = 0) {
+    const jslog = String(value || "").replace(/&quot;/gu, '"');
+    const match = jslog.match(
+      /\[\["(r_[^"]+)","(c_[^"]+)",null,"(rc_[^"]+)"/u,
+    );
+    if (!match) return null;
+    const index = Math.max(0, Number.parseInt(String(imageIndex), 10) || 0);
+    return {
+      responseId: match[1],
+      conversationId: match[2],
+      responseCandidateId: match[3],
+      imageId: `http://googleusercontent.com/image_generation_content/${index}`,
+    };
+  }
+
+  function buildFullSizeImageRpcPayload(refs) {
+    return [
+      [
+        [null, null, null, [null, null, null, null, null, ""]],
+        [refs.imageId, 0],
+        null,
+        [19, ""],
+        null,
+        null,
+        null,
+        null,
+        null,
+        "",
+      ],
+      [
+        refs.responseId,
+        refs.responseCandidateId,
+        refs.conversationId,
+        null,
+        "",
+      ],
+      1,
+      0,
+      1,
+    ];
+  }
+
+  function fullSizeImageUrlFromRpc(value) {
+    return Array.isArray(value) &&
+      typeof value[0] === "string" &&
+      /^https?:\/\//iu.test(value[0])
+      ? value[0]
+      : "";
+  }
+
   function extensionForMimeType(value) {
     const type = String(value || "").toLocaleLowerCase();
     if (type.includes("png")) return "png";
@@ -138,12 +204,16 @@
     module?.exports
   ) {
     module.exports = {
+      buildFullSizeImageRpcPayload,
       buildFullSizeProbeUrls,
+      buildGeneratedImageFallbackUrls,
       extensionForMimeType,
+      fullSizeImageUrlFromRpc,
       modelLabelMatches,
       modeLabelHasExtended,
       normalizeModeLabel,
       normalizeGeneratedImageUrl,
+      parseFullSizeImageRefs,
       rewriteGoogleusercontentGgToRdGg,
     };
     return;
@@ -329,6 +399,9 @@
         headers: {
           "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
           "x-same-domain": "1",
+          "x-goog-ext-525001261-jspb":
+            "[1,null,null,null,null,null,null,null,[4]]",
+          "x-goog-ext-73010989-jspb": "[0]",
         },
         body: body.toString(),
         signal,
@@ -812,8 +885,7 @@
     });
   }
 
-  async function fetchFullSizeImageBlob(sourceUrl, signal) {
-    const probes = buildFullSizeProbeUrls(sourceUrl);
+  async function fetchImageBlobFromProbes(probes, signal) {
     let lastError = null;
 
     for (const probe of probes) {
@@ -852,6 +924,44 @@
     throw lastError || new Error("No full-size image source was found.");
   }
 
+  async function fetchFullSizeImageBlob(record, signal) {
+    let rpcError = null;
+    if (record.fullSizeRefs) {
+      try {
+        const resolved = fullSizeImageUrlFromRpc(
+          await executeRpc(
+            RPC.getFullSizeImage,
+            buildFullSizeImageRpcPayload(record.fullSizeRefs),
+            signal,
+          ),
+        );
+        if (!resolved) {
+          throw new Error("Gemini returned no full-size image URL.");
+        }
+        return await fetchImageBlobFromProbes(
+          buildFullSizeProbeUrls(resolved),
+          signal,
+        );
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        rpcError = error;
+        console.warn(
+          "[Gemini Toolkit] Native full-size image lookup failed; trying CDN fallbacks",
+          error,
+        );
+      }
+    }
+
+    try {
+      return await fetchImageBlobFromProbes(
+        buildGeneratedImageFallbackUrls(record.sourceUrl),
+        signal,
+      );
+    } catch (fallbackError) {
+      throw rpcError || fallbackError;
+    }
+  }
+
   function findImageForDownloadButton(button) {
     let parent = button;
     for (let depth = 0; parent && depth < 7; depth += 1) {
@@ -877,12 +987,19 @@
     const normalizedSource = normalizeGeneratedImageUrl(sourceUrl);
     if (!normalizedSource) return null;
     const jslog = button.getAttribute("jslog") || "";
-    const responseId = jslog.match(/\[\["(r_[^"]+)"/u)?.[1] || "";
+    const imageIndex =
+      button
+        .closest("single-image")
+        ?.getAttribute("data-image-attachment-index") ||
+      0;
+    const fullSizeRefs = parseFullSizeImageRefs(jslog, imageIndex);
+    const responseId = fullSizeRefs?.responseId || "";
     return {
       button,
       image,
       sourceUrl: normalizedSource,
       responseId,
+      fullSizeRefs,
       index,
     };
   }
@@ -1052,6 +1169,12 @@
           --overlay: rgba(0, 0, 0, .58);
           font-family: Arial, "Helvetica Neue", system-ui, sans-serif;
         }
+        :host(.header-docked) {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          margin-right: 4px;
+        }
         * { box-sizing: border-box; }
         button, input, select { font: inherit; }
         input[type="checkbox"] { accent-color: var(--strong); }
@@ -1071,6 +1194,12 @@
           right: 16px;
           transform: translateY(-50%);
         }
+        :host(.header-docked) .launchers {
+          position: relative;
+          top: auto;
+          right: auto;
+          transform: none;
+        }
         .launcher-menu {
           position: absolute;
           right: 0;
@@ -1084,6 +1213,10 @@
           border: 1px solid var(--border);
           border-radius: 10px;
           box-shadow: 0 10px 30px rgba(0, 0, 0, .2);
+        }
+        :host(.header-docked) .launcher-menu {
+          top: calc(100% + 8px);
+          bottom: auto;
         }
         .launcher {
           border: 1px solid var(--strong);
@@ -1837,6 +1970,33 @@
   let imageToastTimer = 0;
   let pendingImageRecords = [];
 
+  function mountLauncherNearConversationActions() {
+    const conversationActions = document.querySelector(
+      "conversation-actions-icon",
+    );
+    const nativeButton =
+      conversationActions?.querySelector("button") ||
+      document.querySelector(
+        'button[aria-label="Open menu for conversation actions."]',
+      );
+    const anchor =
+      conversationActions ||
+      nativeButton?.closest("gem-icon-button") ||
+      nativeButton;
+    const parent = anchor?.parentElement;
+    if (parent) {
+      if (ui.host.parentElement !== parent || ui.host.nextSibling !== anchor) {
+        parent.insertBefore(ui.host, anchor);
+      }
+      ui.host.classList.add("header-docked");
+      return;
+    }
+    if (!ui.host.isConnected) {
+      document.documentElement.append(ui.host);
+    }
+    ui.host.classList.remove("header-docked");
+  }
+
   function setLauncherMenuOpen(open) {
     ui.launcherMenu.classList.toggle("hidden", !open);
     ui.launcherToggle.setAttribute("aria-expanded", String(open));
@@ -1861,7 +2021,7 @@
   }
 
   async function prepareDownloadedImage(record, removeWatermark, signal) {
-    const originalBlob = await fetchFullSizeImageBlob(record.sourceUrl, signal);
+    const originalBlob = await fetchFullSizeImageBlob(record, signal);
     if (!removeWatermark) {
       return { blob: originalBlob, removed: false, watermarkError: null };
     }
@@ -2621,6 +2781,7 @@
   );
 
   const modeObserver = new pageWindow.MutationObserver((mutations) => {
+    mountLauncherNearConversationActions();
     if (manualModeOverride || !getModeButton()) {
       return;
     }
@@ -2666,5 +2827,6 @@
     scheduleModeDefaults({ delay: 500 });
   }, 500);
 
+  mountLauncherNearConversationActions();
   scheduleModeDefaults({ delay: 250 });
 })();

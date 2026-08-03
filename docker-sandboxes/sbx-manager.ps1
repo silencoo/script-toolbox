@@ -17,8 +17,8 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference `
 
 $script:ScriptName = Split-Path -Leaf $PSCommandPath
 $script:ScriptDir = Split-Path -Parent $PSCommandPath
-$script:ScriptVersion = '1.2.2'
-$script:CatalogDate = '2026-07-20'
+$script:ScriptVersion = '1.3.0'
+$script:CatalogDate = '2026-08-04'
 $script:AssumeYes = $false
 $script:SkipLogin = $false
 $script:RestartRequired = $false
@@ -26,6 +26,7 @@ $script:TemporaryDirectories = [Collections.Generic.List[string]]::new()
 $script:ManagedEnvironmentNames = @(
   'DOCKER_SANDBOXES_PROXY',
   'DOCKER_SANDBOXES_NO_PROXY',
+  'DOCKER_SANDBOXES_ROOT_SIZE',
   'DOCKER_SANDBOXES_DOCKER_SIZE',
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -177,6 +178,7 @@ $($script:ColorBold)Run helper$($script:ColorReset)
     --minimal                Use Claude's minimal template (Claude only).
     -t, --template IMAGE     Use an explicit template image.
     -d, --detached           Create/start without attaching.
+    --root-size SIZE         Set sandbox root filesystem size, e.g. 40g.
     --docker-size SIZE       Set internal Docker volume size, e.g. 10g.
     --no-shell-kit           Do not install or refresh the default zsh shell kit.
 
@@ -1614,6 +1616,7 @@ function Invoke-RunCommand {
   $minimal = $false
   $detached = $false
   $template = ''
+  $rootSize = ''
   $dockerSize = ''
   $shellKit = $true
   $shellKitExplicitlyDisabled = $false
@@ -1643,6 +1646,13 @@ function Invoke-RunCommand {
         $index++
       }
       { $_ -in @('-d', '--detached') } { $detached = $true }
+      '--root-size' {
+        if ($index -ge $CommandArguments.Count) {
+          Stop-Manager '--root-size requires a value such as 40g'
+        }
+        $rootSize = $CommandArguments[$index]
+        $index++
+      }
       '--docker-size' {
         if ($index -ge $CommandArguments.Count) {
           Stop-Manager '--docker-size requires a value such as 10g'
@@ -1705,7 +1715,7 @@ function Invoke-RunCommand {
       'workspace are preserved.'
     )
     if ($clone -or $noDocker -or $minimal -or $detached -or $template -or
-        $dockerSize -or $shellKitExplicitlyDisabled) {
+        $rootSize -or $dockerSize -or $shellKitExplicitlyDisabled) {
       Write-WarnLine "Ignoring creation-only options while reattaching to '$name'."
     }
     if ($workspaceProvided) {
@@ -1798,6 +1808,10 @@ function Invoke-RunCommand {
     ForEach-Object { Format-CommandArgument $_ }
   Write-Line "Command: $($displayArguments -join ' ')"
 
+  if (-not $reattach -and $rootSize) {
+    $env:DOCKER_SANDBOXES_ROOT_SIZE = $rootSize
+    Write-Line "DOCKER_SANDBOXES_ROOT_SIZE=$rootSize"
+  }
   if (-not $reattach -and $dockerSize) {
     $env:DOCKER_SANDBOXES_DOCKER_SIZE = $dockerSize
     Write-Line "DOCKER_SANDBOXES_DOCKER_SIZE=$dockerSize"

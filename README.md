@@ -77,8 +77,8 @@ dashboard on its relevant section. It shows redacted live status across the
 four controller domains and provides remote-first, selective Workspace actions;
 the explicit subcommands remain available for scripts and automation.
 
-Optionally expose those names on `PATH` with reversible repository-backed
-symlinks:
+Install a minimal standalone controller runtime and expose the four commands on
+`PATH` with reversible links:
 
 ```bash
 ./agent/install-commands.sh --prefix "$HOME/.local/bin"
@@ -86,6 +86,18 @@ symlinks:
 agentctl status all
 agentctl workspace status
 ```
+
+The runtime is copied to `~/.local/share/script-toolbox/agent`; it excludes the
+rest of this repository and keeps working if the checkout is removed. Update
+the shared runtime through any controller:
+
+```bash
+agentctl update --check
+skillsctl update --yes
+```
+
+Use `./agent/install-commands.sh --link --yes` only when repository-backed
+development links are preferred.
 
 See [`agent/`](./agent/) for the per-agent convention and the full list of
 agents. Today:

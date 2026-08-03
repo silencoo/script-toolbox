@@ -87,6 +87,12 @@ assert_contains "$optional_output" 'cask   appcleaner' \
 assert_contains "$optional_output" 'cask   stats' \
   'Maintenance plan did not include Stats'
 
+maintenance_output="$("$setup_script" plan maintenance)"
+assert_contains "$maintenance_output" 'brew   mole' \
+  'Maintenance plan did not include Mole'
+assert_not_contains "$maintenance_output" 'cask   appcleaner' \
+  'Optional AppCleaner appeared in the default maintenance plan'
+
 admin_output="$("$setup_script" plan admin)"
 assert_contains "$admin_output" 'cask   moonlight' \
   'Admin plan did not include Moonlight'
@@ -112,7 +118,7 @@ assert_contains "$dry_run_output" \
 
 uninstall_dry_run_output="$(
   "$setup_script" uninstall \
-    --packages keepassxc,stats,restic \
+    --packages keepassxc,stats,restic,mole \
     --dry-run \
     --yes
 )"
@@ -125,6 +131,9 @@ assert_contains "$uninstall_dry_run_output" \
 assert_contains "$uninstall_dry_run_output" \
   'brew uninstall --formula restic' \
   'Uninstall dry run omitted the selected formula'
+assert_contains "$uninstall_dry_run_output" \
+  'brew uninstall --formula mole' \
+  'Uninstall dry run omitted Mole'
 assert_contains "$uninstall_dry_run_output" \
   'never uses Homebrew zap, autoremove, or cleanup' \
   'Uninstall plan omitted its package-only safety boundary'

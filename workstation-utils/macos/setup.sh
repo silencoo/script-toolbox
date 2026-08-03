@@ -128,7 +128,7 @@ show_profiles() {
   printf '  %-13s %s\n' media \
     'Media download, inspection, playback, and conversion'
   printf '  %-13s %s\n' maintenance \
-    'Inspection, hardware monitoring, drive health, and backup'
+    'Inspection, maintenance, hardware monitoring, drive health, and backup'
   printf '  %-13s %s\n' desktop \
     'Transfer, window layout, wake control, and opt-in launchers'
   printf '  %-13s %s\n' admin \

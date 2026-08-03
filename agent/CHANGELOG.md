@@ -1,5 +1,20 @@
 # Changelog — agent/
 
+## 2026-08-04 — standalone controller runtime and self-update
+
+- Replaced the default repository-backed PATH installation with a minimal
+  standalone runtime under `~/.local/share/script-toolbox/agent`. The package
+  contains only controller entrypoints, provider backends, shared modules,
+  templates/adapters, and the built TUI; it excludes the rest of the toolbox,
+  development dependencies, sources, tests, and Git metadata.
+- Added `update` to `agentctl`, `mcpctl`, `promptctl`, and `skillsctl`. Every
+  entrypoint checks or transactionally replaces the same shared suite so an
+  update cannot leave controllers on mixed runtime revisions.
+- Kept `install-commands.sh --link` as an explicit development mode, added
+  migration from the previous v1 link manifest, and extended reversible
+  uninstall to remove only a verified managed runtime while restoring tracked
+  command or runtime conflicts.
+
 ## 2026-08-03 — unified Node 22 terminal dashboard
 
 - Added one Ink 7 / React 19 TUI shared by `agentctl`, `mcpctl`, `skillsctl`,

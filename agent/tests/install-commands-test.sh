@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Isolated tests for the reversible PATH command-link installer.
+# Isolated tests for standalone installation, updates, compatibility links, and recovery.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${AGENT_DIR}/.." && pwd)"
 INSTALLER="${AGENT_DIR}/install-commands.sh"
 TEST_ROOT="$(mktemp -d)"
 
-cleanup() {
-  rm -rf "$TEST_ROOT"
-}
+cleanup() { rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 
 fail() {
@@ -23,73 +22,156 @@ mode_of() {
 }
 
 PREFIX="${TEST_ROOT}/bin"
-"$INSTALLER" --prefix "$PREFIX" >"$TEST_ROOT/preview.out"
-[ ! -e "$PREFIX" ] || fail "install preview created the prefix"
-grep -q '\[preview\] no links were changed' "$TEST_ROOT/preview.out" ||
-  fail "install preview did not explain how to apply"
+RUNTIME="${TEST_ROOT}/runtime"
 
-"$INSTALLER" --prefix "$PREFIX" --yes >"$TEST_ROOT/install.out" 2>&1
+"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v1 \
+  >"$TEST_ROOT/preview.out"
+[ ! -e "$PREFIX" ] || fail "install preview created the prefix"
+[ ! -e "$RUNTIME" ] || fail "install preview created the runtime"
+grep -q '\[preview\] no files or links were changed' "$TEST_ROOT/preview.out" ||
+  fail "install preview did not explain how to apply"
+if "$INSTALLER" --prefix "$TEST_ROOT/unsafe/bin" --runtime "$TEST_ROOT" --yes \
+  >"$TEST_ROOT/unsafe.out" 2>&1; then
+  fail "installer accepted a runtime containing the command prefix"
+fi
+
+"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v1 --yes \
+  >"$TEST_ROOT/install.out" 2>&1
 for name in agentctl mcpctl promptctl skillsctl; do
   [ -L "$PREFIX/$name" ] || fail "installer did not create $name"
+  case "$(readlink "$PREFIX/$name")" in
+    "$RUNTIME"/*) ;;
+    *) fail "$name does not point into the standalone runtime" ;;
+  esac
 done
+[ -f "$RUNTIME/.script-toolbox-agent-runtime" ] || fail "runtime marker is missing"
 [ "$(mode_of "$PREFIX/.script-toolbox-agent-commands")" = "600" ] ||
   fail "command manifest is not mode 600"
+[ "$(mode_of "$RUNTIME/.script-toolbox-agent-runtime")" = "600" ] ||
+  fail "runtime marker is not mode 600"
+[ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
+[ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
+
 [ "$("$PREFIX/agentctl" --version)" = "agentctl 0.5.0" ] ||
-  fail "agentctl did not work through its installed symlink"
-"$PREFIX/mcpctl" --help >/dev/null ||
-  fail "mcpctl did not work through its installed symlink"
-"$PREFIX/promptctl" --help >/dev/null ||
-  fail "promptctl did not work through its installed symlink"
-"$PREFIX/skillsctl" --help >/dev/null ||
-  fail "skillsctl did not work through its installed symlink"
+  fail "agentctl did not work through its standalone link"
+"$PREFIX/mcpctl" --help >/dev/null || fail "mcpctl standalone command failed"
+"$PREFIX/promptctl" --help >/dev/null || fail "promptctl standalone command failed"
+"$PREFIX/skillsctl" --help >/dev/null || fail "skillsctl standalone command failed"
 
-"$INSTALLER" --prefix "$PREFIX" --yes >"$TEST_ROOT/reinstall.out" 2>&1
+# Every public controller exposes its own update entrypoint. They all inspect
+# and replace the shared suite, avoiding mixed controller/runtime revisions.
+for name in agentctl mcpctl promptctl skillsctl; do
+  "$PREFIX/$name" update --check \
+    --source "$REPO_ROOT" --release-id test-v2 >"$TEST_ROOT/update-$name.out"
+  grep -q 'Latest:  test-v2' "$TEST_ROOT/update-$name.out" ||
+    fail "$name update did not reach the shared updater"
+done
+"$PREFIX/skillsctl" update --yes \
+  --source "$REPO_ROOT" --release-id test-v2 >"$TEST_ROOT/update-apply.out" 2>&1
+grep -q '^release_id=test-v2$' "$RUNTIME/.script-toolbox-agent-runtime" ||
+  fail "standalone update did not replace runtime metadata"
+
+"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v2 --yes \
+  >"$TEST_ROOT/reinstall.out" 2>&1
 grep -q "keep     $PREFIX/agentctl" "$TEST_ROOT/reinstall.out" ||
-  fail "reinstall was not idempotent"
+  fail "standalone reinstall was not link-idempotent"
 
-"$INSTALLER" --prefix "$PREFIX" --uninstall >"$TEST_ROOT/uninstall-preview.out"
+"$RUNTIME/install-commands.sh" --prefix "$PREFIX" --uninstall \
+  >"$TEST_ROOT/uninstall-preview.out"
 [ -L "$PREFIX/agentctl" ] || fail "uninstall preview removed a command"
-"$INSTALLER" --prefix "$PREFIX" --uninstall --yes >/dev/null
-[ ! -e "$PREFIX/agentctl" ] ||
-  fail "uninstall left an owned command"
-[ ! -e "$PREFIX/.script-toolbox-agent-commands" ] ||
-  fail "uninstall left its manifest"
+[ -d "$RUNTIME" ] || fail "uninstall preview removed the runtime"
+"$RUNTIME/install-commands.sh" --prefix "$PREFIX" --uninstall --yes >/dev/null
+[ ! -e "$PREFIX/agentctl" ] || fail "uninstall left an owned command"
+[ ! -e "$RUNTIME" ] || fail "uninstall left the standalone runtime"
+[ ! -e "$PREFIX/.script-toolbox-agent-commands" ] || fail "uninstall left its manifest"
 
-# An unowned collision is refused by default. --force preserves it as a
-# tracked backup, and uninstall restores it byte-for-byte.
+# An unowned command collision is refused. --force preserves it, and uninstall
+# restores it byte-for-byte while removing the standalone runtime.
 mkdir -p "$PREFIX"
 printf '%s\n' 'user-owned-mcpctl' > "$PREFIX/mcpctl"
 cp "$PREFIX/mcpctl" "$TEST_ROOT/mcpctl.before"
-if "$INSTALLER" --prefix "$PREFIX" --yes >"$TEST_ROOT/conflict.out" 2>&1; then
+if "$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id conflict --yes \
+  >"$TEST_ROOT/conflict.out" 2>&1; then
   fail "installer replaced an unowned command without --force"
 fi
-cmp -s "$PREFIX/mcpctl" "$TEST_ROOT/mcpctl.before" ||
-  fail "refused conflict was modified"
+cmp -s "$PREFIX/mcpctl" "$TEST_ROOT/mcpctl.before" || fail "refused conflict was modified"
 
-"$INSTALLER" --prefix "$PREFIX" --force --yes >/dev/null 2>&1
+"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id conflict \
+  --force --yes >/dev/null 2>&1
 [ -L "$PREFIX/mcpctl" ] || fail "--force did not install over the tracked backup"
-"$INSTALLER" --prefix "$PREFIX" --uninstall --yes >/dev/null
+"$RUNTIME/install-commands.sh" --prefix "$PREFIX" --uninstall --yes >/dev/null
 [ -f "$PREFIX/mcpctl" ] && [ ! -L "$PREFIX/mcpctl" ] ||
   fail "uninstall did not restore the user-owned command"
-cmp -s "$PREFIX/mcpctl" "$TEST_ROOT/mcpctl.before" ||
-  fail "restored command differs from the original"
+cmp -s "$PREFIX/mcpctl" "$TEST_ROOT/mcpctl.before" || fail "restored command changed"
 
-# If one installed path changes later, uninstall fails before removing any
-# other link and retains the manifest for an explicit recovery.
+# An unowned runtime is likewise preserved only with --force, and uninstall
+# restores the original directory after removing the verified managed runtime.
+RUNTIME_PREFIX="${TEST_ROOT}/runtime-conflict-bin"
+RUNTIME_CONFLICT="${TEST_ROOT}/runtime-conflict"
+mkdir -p "$RUNTIME_CONFLICT"
+printf '%s\n' 'user-owned-runtime' > "$RUNTIME_CONFLICT/sentinel"
+if "$INSTALLER" --prefix "$RUNTIME_PREFIX" --runtime "$RUNTIME_CONFLICT" \
+  --release-id conflict --yes >"$TEST_ROOT/runtime-conflict.out" 2>&1; then
+  fail "installer replaced an unowned runtime without --force"
+fi
+[ -f "$RUNTIME_CONFLICT/sentinel" ] || fail "refused runtime conflict was modified"
+"$INSTALLER" --prefix "$RUNTIME_PREFIX" --runtime "$RUNTIME_CONFLICT" \
+  --release-id conflict --force --yes >/dev/null 2>&1
+[ -f "$RUNTIME_CONFLICT/.script-toolbox-agent-runtime" ] ||
+  fail "--force did not install over the tracked runtime backup"
+"$RUNTIME_CONFLICT/install-commands.sh" --prefix "$RUNTIME_PREFIX" --uninstall --yes >/dev/null
+[ -f "$RUNTIME_CONFLICT/sentinel" ] || fail "uninstall did not restore unowned runtime"
+
+# Changed installed paths stop uninstall before any managed path is removed.
 CHANGED_PREFIX="${TEST_ROOT}/changed-bin"
-"$INSTALLER" --prefix "$CHANGED_PREFIX" --yes >/dev/null 2>&1
+CHANGED_RUNTIME="${TEST_ROOT}/changed-runtime"
+"$INSTALLER" --prefix "$CHANGED_PREFIX" --runtime "$CHANGED_RUNTIME" \
+  --release-id changed --yes >/dev/null 2>&1
 rm -f "$CHANGED_PREFIX/promptctl"
 ln -s "$TEST_ROOT/unowned-target" "$CHANGED_PREFIX/promptctl"
-if "$INSTALLER" --prefix "$CHANGED_PREFIX" --uninstall --yes \
+if "$CHANGED_RUNTIME/install-commands.sh" --prefix "$CHANGED_PREFIX" --uninstall --yes \
   >"$TEST_ROOT/changed.out" 2>&1; then
   fail "uninstall accepted a changed command path"
 fi
-[ -L "$CHANGED_PREFIX/agentctl" ] ||
-  fail "failed uninstall partially removed other commands"
-[ -f "$CHANGED_PREFIX/.script-toolbox-agent-commands" ] ||
-  fail "failed uninstall removed its recovery manifest"
+[ -L "$CHANGED_PREFIX/agentctl" ] || fail "failed uninstall partially removed commands"
+[ -d "$CHANGED_RUNTIME" ] || fail "failed uninstall removed the runtime"
 rm -f "$CHANGED_PREFIX/promptctl"
-ln -s "${AGENT_DIR}/promptctl/promptctl" "$CHANGED_PREFIX/promptctl"
-"$INSTALLER" --prefix "$CHANGED_PREFIX" --uninstall --yes >/dev/null
+ln -s "$CHANGED_RUNTIME/promptctl/promptctl" "$CHANGED_PREFIX/promptctl"
+"$CHANGED_RUNTIME/install-commands.sh" --prefix "$CHANGED_PREFIX" --uninstall --yes >/dev/null
 
-printf '%s\n' "ok  : reversible command install, conflicts, and recovery"
+# Repository-backed links remain available as an explicit development mode.
+LINK_PREFIX="${TEST_ROOT}/link-bin"
+"$INSTALLER" --link --prefix "$LINK_PREFIX" --yes >/dev/null 2>&1
+[ "$(readlink "$LINK_PREFIX/agentctl")" = "$AGENT_DIR/agentctl/agentctl" ] ||
+  fail "--link did not retain repository-backed compatibility"
+"$INSTALLER" --link --prefix "$LINK_PREFIX" --uninstall --yes >/dev/null
+
+# A v1 repository-link manifest from installer 0.1 migrates to standalone
+# without --force and without losing its ownership record.
+LEGACY_PREFIX="${TEST_ROOT}/legacy-bin"
+LEGACY_RUNTIME="${TEST_ROOT}/legacy-runtime"
+mkdir -p "$LEGACY_PREFIX"
+for name in agentctl mcpctl promptctl skillsctl; do
+  case "$name" in
+    agentctl) legacy_target="$AGENT_DIR/agentctl/agentctl" ;;
+    mcpctl) legacy_target="$AGENT_DIR/mcpctl/mcpctl" ;;
+    promptctl) legacy_target="$AGENT_DIR/promptctl/promptctl" ;;
+    skillsctl) legacy_target="$AGENT_DIR/skillsctl/skillsctl" ;;
+  esac
+  ln -s "$legacy_target" "$LEGACY_PREFIX/$name"
+done
+{
+  printf '%s\n' '# script-toolbox-agent-commands v1'
+  printf 'agentctl\t%s\t\n' "$AGENT_DIR/agentctl/agentctl"
+  printf 'mcpctl\t%s\t\n' "$AGENT_DIR/mcpctl/mcpctl"
+  printf 'promptctl\t%s\t\n' "$AGENT_DIR/promptctl/promptctl"
+  printf 'skillsctl\t%s\t\n' "$AGENT_DIR/skillsctl/skillsctl"
+} > "$LEGACY_PREFIX/.script-toolbox-agent-commands"
+chmod 600 "$LEGACY_PREFIX/.script-toolbox-agent-commands"
+"$INSTALLER" --prefix "$LEGACY_PREFIX" --runtime "$LEGACY_RUNTIME" \
+  --release-id migrated --yes >/dev/null 2>&1
+[ "$(readlink "$LEGACY_PREFIX/agentctl")" = "$LEGACY_RUNTIME/agentctl/agentctl" ] ||
+  fail "v1 repository-link installation did not migrate to standalone"
+"$LEGACY_RUNTIME/install-commands.sh" --prefix "$LEGACY_PREFIX" --uninstall --yes >/dev/null
+
+printf '%s\n' "ok  : standalone install, shared updates, conflicts, and recovery"

@@ -18,6 +18,10 @@ needed only when using a SOPS-encrypted secret file. Individual local MCP
 servers retain their own runtime requirements, such as Node.js for Chrome
 DevTools MCP.
 
+When installed with `agent/install-commands.sh`, use `mcpctl update --check` to
+inspect the latest suite revision or `mcpctl update --yes` to update all four
+controllers atomically.
+
 ## Quick start
 
 Run without arguments in a terminal to open the shared dashboard directly on

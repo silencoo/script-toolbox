@@ -12,6 +12,10 @@ Node.js 22 or newer is required. Run `skillsctl` in a terminal or use
 `skillsctl tui` to open the shared dashboard directly on Skills. Explicit
 commands remain the stable automation interface.
 
+When installed with `agent/install-commands.sh`, use `skillsctl update --check`
+to inspect the latest suite revision or `skillsctl update --yes` to update all
+four controllers atomically.
+
 ## Quick start
 
 ```bash

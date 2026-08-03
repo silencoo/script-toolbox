@@ -35,6 +35,7 @@ Usage:
   agentctl
   agentctl tui
   agentctl interactive
+  agentctl update [--check|--yes]
   agentctl setup <claude|codex|opencode|pi> [setup options]
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl providers <claude|codex|opencode|pi>
@@ -62,6 +63,8 @@ Commands:
               transactional development preset with plan/apply/rollback.
   doctor      Inspect providers, local selections, preset drift, secrets,
               remote stores, and session-restart guidance.
+  update      Check for or install the latest standalone ctl suite. All four
+              controllers share one runtime and update together.
 
 Run without arguments in a terminal for the unified TUI. Use "interactive"
 for the guided Shell menu. Setup options after the
@@ -726,6 +729,10 @@ case "${1:-}" in
   interactive)
     shift
     run_interactive "$@"
+    ;;
+  update)
+    shift
+    run_ctl_update "${SCRIPT_DIR}/../update-commands.sh" agentctl "$@"
     ;;
   setup|init|configure)
     [ $# -ge 2 ] || die "$1 requires a client name"

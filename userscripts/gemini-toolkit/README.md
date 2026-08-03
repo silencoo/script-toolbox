@@ -12,8 +12,9 @@ exporting a conversation's full-size images, and safely managing conversations.
   on, off, or Gemini's own choice
 - Re-applies defaults after Gemini navigation without overriding a manual
   model change in the current chat
-- Replaces the native full-size image click handler so different images can
-  download concurrently instead of disabling every image button
+- Resolves Gemini's current full-size asset URL before replacing the native
+  click handler, so different images can download concurrently instead of
+  disabling every image button
 - Exports all generated images currently loaded in a conversation as one ZIP,
   with up to three full-size requests in parallel
 - Provides one persistent, independently controlled watermark-removal switch
@@ -43,8 +44,8 @@ so review the selection carefully before confirming it.
 
 ### Model defaults and conversation management
 
-1. Open Gemini, select the compact **Toolkit** dock, then choose
-   **Manage conversations**.
+1. Open Gemini, select **Toolkit** immediately to the left of Gemini's
+   conversation-actions menu, then choose **Manage conversations**.
 2. Choose the **Model** and **Thinking** defaults. The initial configuration is
    **Latest Pro** with **Extended on**.
 3. Select **Apply now** to correct the current chat immediately. If you change
@@ -69,7 +70,7 @@ deleted before cancellation cannot be restored.
 - Turn on **Remove image watermark** in **Gemini Toolkit** when single-image and
   bulk downloads should be processed. It is off by default and persists until
   changed.
-- Open the **Toolkit** dock and select **Export full-size images**, review the
+- Open **Toolkit** and select **Export full-size images**, review the
   detected image count and watermark setting, then select **Export ZIP**. The
   browser receives one ZIP download after all available images are fetched.
 
@@ -80,11 +81,11 @@ scroll through it once before opening the export confirmation.
 ## Privacy and compatibility
 
 The script stores model and watermark preferences in userscript-manager
-storage. Conversation requests stay on `gemini.google.com`; image downloads go
-directly to the Googleusercontent asset URLs already embedded by Gemini. It
-does not send conversation data, prompts, images, or preferences to an
-analytics service. Userscript dependencies are downloaded from jsDelivr and
-this repository's raw GitHub URL when the userscript manager installs or
+storage. Conversation and full-size image lookup requests stay on
+`gemini.google.com`; resolved image downloads go directly to Googleusercontent
+asset URLs. It does not send conversation data, prompts, images, or preferences
+to an analytics service. Userscript dependencies are downloaded from jsDelivr
+and this repository's raw GitHub URL when the userscript manager installs or
 updates the script.
 
 Gemini's conversation endpoints, image URL transforms, page bootstrap data,

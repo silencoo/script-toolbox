@@ -123,3 +123,12 @@ run_agent_tui() {
     die "agent TUI bundle not found: $bundle (run npm run build in agent/tui)"
   exec node "$bundle" --section "$section" "$@"
 }
+
+run_ctl_update() {
+  # Usage: run_ctl_update <updater> <caller-name> [update options]
+  local updater="$1" caller="$2"
+  shift 2
+  [ -x "$updater" ] ||
+    die "controller updater not found or not executable: $updater"
+  SCRIPT_TOOLBOX_UPDATE_CALLER="$caller" exec "$updater" "$@"
+}

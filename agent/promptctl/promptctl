@@ -35,6 +35,7 @@ Usage:
   promptctl
   promptctl tui
   promptctl interactive [--home <directory>]
+  promptctl update [--check|--yes]
   promptctl install <claude|codex|all> [options]
   promptctl status <claude|codex|all> [options]
   promptctl path <claude|codex|all> [options]
@@ -226,6 +227,10 @@ fi
 if [ "${1:-}" = "tui" ]; then
   shift
   run_agent_tui "$TUI_CLIENT" prompts "$@"
+fi
+if [ "${1:-}" = "update" ]; then
+  shift
+  run_ctl_update "${SCRIPT_DIR}/../update-commands.sh" promptctl "$@"
 fi
 
 case "${1:-}" in

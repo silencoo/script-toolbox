@@ -2,7 +2,7 @@
 
 This catalog records the choices made by the platform installers. Package
 identifiers were checked against the WinGet community manifests and the
-Homebrew Formulae API on 2026-08-03.
+Homebrew Formulae API on 2026-08-04.
 
 Built-in operating-system tools are preferred when they already cover the
 need. An entry marked **optional** is installed only when the caller explicitly
@@ -55,12 +55,18 @@ owner, applicable law, and the service's terms.
 | Hardware and sensor monitoring | HWiNFO (`REALiX.HWiNFO`) | Stats (`stats`) |
 | Encrypted backups | `restic.restic` | `restic` |
 | Storage copy/sync | `Rclone.Rclone` | `rclone` |
+| Interactive system maintenance | — | Mole (`mole`) |
 | System backup | — | Time Machine (built in) |
 
 The duplicate finders are installed as inspection tools. Neither initializer
 runs them or deletes duplicate files. Homebrew-managed macOS applications
 should normally be removed with `brew uninstall --cask <application>`;
 AppCleaner is reserved for manually installed applications.
+
+Mole is installed as a command-line tool but is never run by the initializer.
+Its cleanup, uninstall, purge, and optimization commands can remove files or
+change system state; preview supported operations with Mole's `--dry-run`
+option and review the selection before confirming.
 
 HWiNFO supports Windows, while Stats is the macOS menu-bar counterpart. HWiNFO
 is freeware for non-commercial use. The initializer installs these monitors
@@ -108,7 +114,7 @@ streaming access, VPN membership, capture permissions, or encryption volumes.
 ## Deliberate exclusions
 
 The catalog does not include registry cleaners, RAM optimizers, automatic
-driver updaters, broad "debloat" scripts, all-in-one cleaners, or tools that
+driver updaters, broad "debloat" scripts, unattended cleaners, or tools that
 disable Defender, Gatekeeper, SIP, telemetry, or operating-system updates.
 
 The initializers never:

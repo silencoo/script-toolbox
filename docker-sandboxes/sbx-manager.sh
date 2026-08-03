@@ -13,8 +13,8 @@ set -Eeuo pipefail
 
 SCRIPT_NAME="${0##*/}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-SCRIPT_VERSION="1.2.2"
-CATALOG_DATE="2026-07-20"
+SCRIPT_VERSION="1.3.0"
+CATALOG_DATE="2026-08-04"
 
 ASSUME_YES=0
 EXPERIMENTAL_DEBIAN=0
@@ -154,6 +154,7 @@ ${C_BOLD}Run helper${C_RESET}
     --minimal                Use Claude's minimal template (Claude only).
     -t, --template IMAGE     Use an explicit template image.
     -d, --detached           Create/start without attaching.
+    --root-size SIZE         Set sandbox root filesystem size, e.g. 40g.
     --docker-size SIZE       Set internal Docker volume size, e.g. 10g.
     --no-shell-kit           Do not install or refresh the default zsh shell kit.
 
@@ -1379,6 +1380,7 @@ run_command() {
   local minimal=0
   local detached=0
   local template=''
+  local root_size=''
   local docker_size=''
   local shell_kit=1
   local base=''
@@ -1413,6 +1415,10 @@ run_command() {
         template="$1"; shift
         ;;
       -d|--detached) detached=1 ;;
+      --root-size)
+        [ "$#" -ge 1 ] || die "--root-size requires a value such as 40g"
+        root_size="$1"; shift
+        ;;
       --docker-size)
         [ "$#" -ge 1 ] || die "--docker-size requires a value such as 10g"
         docker_size="$1"; shift
@@ -1458,7 +1464,8 @@ run_command() {
     info "Reattaching to existing sandbox '$name'; its original agent and workspace are preserved."
     if [ "$clone" -eq 1 ] || [ "$no_docker" -eq 1 ] \
       || [ "$minimal" -eq 1 ] || [ "$detached" -eq 1 ] \
-      || [ -n "$template" ] || [ -n "$docker_size" ]; then
+      || [ -n "$template" ] || [ -n "$root_size" ] \
+      || [ -n "$docker_size" ]; then
       warn "Ignoring creation-only options while reattaching to '$name'."
     fi
     if [ "$workspace_provided" -eq 1 ] && [ "$generated_name" -eq 0 ]; then
@@ -1527,6 +1534,10 @@ run_command() {
   printf 'Command:'
   shell_quote_command "${cmd[@]}"
 
+  if [ "$reattach" -eq 0 ] && [ -n "$root_size" ]; then
+    export DOCKER_SANDBOXES_ROOT_SIZE="$root_size"
+    say "DOCKER_SANDBOXES_ROOT_SIZE=$root_size"
+  fi
   if [ "$reattach" -eq 0 ] && [ -n "$docker_size" ]; then
     export DOCKER_SANDBOXES_DOCKER_SIZE="$docker_size"
     say "DOCKER_SANDBOXES_DOCKER_SIZE=$docker_size"

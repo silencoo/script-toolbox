@@ -186,6 +186,10 @@ case "${1:-}" in
     esac
     ;;
   run)
+    printf 'root-size-env %s\n' \
+      "${DOCKER_SANDBOXES_ROOT_SIZE:-}" >> "$SBX_TEST_LOG"
+    printf 'docker-size-env %s\n' \
+      "${DOCKER_SANDBOXES_DOCKER_SIZE:-}" >> "$SBX_TEST_LOG"
     kit_path=''
     previous_argument=''
     for argument in "$@"; do

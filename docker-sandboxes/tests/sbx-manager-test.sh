@@ -448,6 +448,31 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
 assert_contains "$TEST_TMP_DIR/no-shell-kit/log" \
   "run --name plain-shell shell $TEST_TMP_DIR/no-shell-kit/workspace"
 
+# Root and nested-Docker disk sizes are creation-time environment settings.
+mkdir -p "$TEST_TMP_DIR/disk-sizes/home" \
+  "$TEST_TMP_DIR/disk-sizes/config" \
+  "$TEST_TMP_DIR/disk-sizes/workspace"
+printf '%s\n' 'allow-all' > "$TEST_TMP_DIR/disk-sizes/policy-state"
+: > "$TEST_TMP_DIR/disk-sizes/auth-state"
+: > "$TEST_TMP_DIR/disk-sizes/log"
+PATH="$FIXTURE_DIR:/usr/bin:/bin" \
+  HOME="$TEST_TMP_DIR/disk-sizes/home" \
+  XDG_CONFIG_HOME="$TEST_TMP_DIR/disk-sizes/config" \
+  NO_COLOR=1 \
+  SBX_TEST_LOG="$TEST_TMP_DIR/disk-sizes/log" \
+  SBX_TEST_POLICY_STATE="$TEST_TMP_DIR/disk-sizes/policy-state" \
+  SBX_TEST_AUTH_STATE="$TEST_TMP_DIR/disk-sizes/auth-state" \
+  "$ROOT_DIR/sbx-manager.sh" run shell \
+    "$TEST_TMP_DIR/disk-sizes/workspace" --name sized-shell \
+    --root-size 40g --docker-size 80g --no-shell-kit \
+  > "$TEST_TMP_DIR/disk-sizes/output" 2>&1
+assert_contains "$TEST_TMP_DIR/disk-sizes/log" 'root-size-env 40g'
+assert_contains "$TEST_TMP_DIR/disk-sizes/log" 'docker-size-env 80g'
+assert_text_contains "$TEST_TMP_DIR/disk-sizes/output" \
+  'DOCKER_SANDBOXES_ROOT_SIZE=40g'
+assert_text_contains "$TEST_TMP_DIR/disk-sizes/output" \
+  'DOCKER_SANDBOXES_DOCKER_SIZE=80g'
+
 # Omitting the agent makes the manager open a persistent shell workspace.
 mkdir -p "$TEST_TMP_DIR/default-shell/home" \
   "$TEST_TMP_DIR/default-shell/config" \
@@ -536,6 +561,7 @@ PATH="$FIXTURE_DIR:/usr/bin:/bin" \
   SBX_TEST_SANDBOX_NAMES='test-claude' \
   "$ROOT_DIR/sbx-manager.sh" run claude \
     "$TEST_TMP_DIR/reattach/workspace" --name test-claude \
+    --root-size 40g --docker-size 80g \
     -- --resume session-123 \
   > "$TEST_TMP_DIR/reattach/output" 2>&1
 assert_contains "$TEST_TMP_DIR/reattach/log" \
@@ -543,6 +569,12 @@ assert_contains "$TEST_TMP_DIR/reattach/log" \
 if grep -Fq "run --name test-claude claude" "$TEST_TMP_DIR/reattach/log"; then
   fail "reattach command retained sandbox creation arguments"
 fi
+assert_text_contains "$TEST_TMP_DIR/reattach/output" \
+  "Ignoring creation-only options while reattaching to 'test-claude'."
+assert_text_excludes "$TEST_TMP_DIR/reattach/output" \
+  'DOCKER_SANDBOXES_ROOT_SIZE=40g'
+assert_text_excludes "$TEST_TMP_DIR/reattach/output" \
+  'DOCKER_SANDBOXES_DOCKER_SIZE=80g'
 
 # Existing named sandboxes predate the current kit marker. Reattaching must
 # apply the current kit once instead of silently keeping stale dotfiles.

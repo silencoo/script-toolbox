@@ -48,6 +48,7 @@ Usage:
   mcpctl tui
   mcpctl interactive [--store <directory>] [--secrets <file>]
                      [--remote-config <file>]
+  mcpctl update [--check|--yes]
   mcpctl --target <claude|codex|opencode> --profile <name> [options]
   mcpctl apply   --target <target> --profile <name> [options]
   mcpctl plan    --target <target> --profile <name> [options]
@@ -939,6 +940,10 @@ if [ "${1:-}" = "interactive" ]; then
   shift
   run_interactive "$@"
   exit $?
+fi
+if [ "${1:-}" = "update" ]; then
+  shift
+  run_ctl_update "${SCRIPT_DIR}/../update-commands.sh" mcpctl "$@"
 fi
 
 ENABLED=()
