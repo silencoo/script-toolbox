@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.6.0
+// @version      0.6.1
 // @description  Keep Gemini defaults, download generated images concurrently, export full-size images, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -1170,10 +1170,11 @@
           font-family: Arial, "Helvetica Neue", system-ui, sans-serif;
         }
         :host(.header-docked) {
-          position: relative;
+          position: fixed;
+          z-index: 2147483645;
           display: inline-flex;
           align-items: center;
-          margin-right: 4px;
+          margin: 0;
         }
         * { box-sizing: border-box; }
         button, input, select { font: inherit; }
@@ -1195,7 +1196,7 @@
           transform: translateY(-50%);
         }
         :host(.header-docked) .launchers {
-          position: relative;
+          position: static;
           top: auto;
           right: auto;
           transform: none;
@@ -1983,18 +1984,28 @@
       conversationActions ||
       nativeButton?.closest("gem-icon-button") ||
       nativeButton;
-    const parent = anchor?.parentElement;
-    if (parent) {
-      if (ui.host.parentElement !== parent || ui.host.nextSibling !== anchor) {
-        parent.insertBefore(ui.host, anchor);
+    if (anchor) {
+      if (ui.host.parentElement !== document.documentElement) {
+        document.documentElement.append(ui.host);
       }
       ui.host.classList.add("header-docked");
+      const anchorRect = anchor.getBoundingClientRect();
+      const launcherRect = ui.launcherToggle.getBoundingClientRect();
+      const launcherWidth = launcherRect.width || 84;
+      const launcherHeight = launcherRect.height || anchorRect.height;
+      ui.host.style.left = `${Math.max(8, anchorRect.left - launcherWidth - 6)}px`;
+      ui.host.style.top = `${Math.max(
+        8,
+        anchorRect.top + (anchorRect.height - launcherHeight) / 2,
+      )}px`;
       return;
     }
     if (!ui.host.isConnected) {
       document.documentElement.append(ui.host);
     }
     ui.host.classList.remove("header-docked");
+    ui.host.style.removeProperty("left");
+    ui.host.style.removeProperty("top");
   }
 
   function setLauncherMenuOpen(open) {
@@ -2739,6 +2750,7 @@
       setLauncherMenuOpen(false);
     }
   });
+  pageWindow.addEventListener("resize", mountLauncherNearConversationActions);
   pageWindow.addEventListener("beforeunload", (event) => {
     if (state.deleting || state.exportingImages) {
       event.preventDefault();
