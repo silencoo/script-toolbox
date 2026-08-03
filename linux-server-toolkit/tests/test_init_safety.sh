@@ -84,6 +84,12 @@ fi
 pass "invalid APT_SOURCE_RECOVERY fails before execution"
 APT_SOURCE_RECOVERY="prompt"
 
+prompt_output="$(confirm_dangerous_action "测试操作" "测试说明" <<< "YES")"
+assert_contains "$prompt_output" $'\033[0;31m确认执行此操作?' \
+    "dangerous confirmation renders an ANSI-colored prompt"
+assert_not_contains "$prompt_output" '\033[0;31m确认执行此操作?' \
+    "dangerous confirmation does not print literal color escapes"
+
 APT_SOURCES_DIR="$TEST_TMP/apt-sources"
 mkdir -p "$APT_SOURCES_DIR"
 ookla_source="$APT_SOURCES_DIR/ookla_speedtest-cli.list"
@@ -124,9 +130,73 @@ pass "APT recovery recognizes the current Ookla 402/signature failure"
 )
 [ ! -e "$ookla_source" ] || fail "known broken Ookla source was not quarantined"
 disabled_ookla_source="$(find "$APT_SOURCES_DIR" -maxdepth 1 -type f \
-    -name 'ookla_speedtest-cli.list.disabled-by-init-*' -print -quit)"
+    -name 'ookla_speedtest-cli.list.disabled-by-init-*.save' -print -quit)"
 [ -n "$disabled_ookla_source" ] || fail "quarantined Ookla source was not preserved"
-pass "auto-known recovery backs up and quarantines only the dedicated Ookla source"
+pass "auto-known recovery preserves the source with an APT-silent suffix"
+
+fake_apt_bin="$TEST_TMP/fake-apt-bin"
+mkdir -p "$fake_apt_bin"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'case "$2" in' \
+    '  available) printf "  Candidate: 1.2.3\\n" ;;' \
+    '  missing) printf "  Candidate: (none)\\n" ;;' \
+    'esac' > "$fake_apt_bin/apt-cache"
+chmod +x "$fake_apt_bin/apt-cache"
+PATH="$fake_apt_bin:$PATH" apt_package_has_candidate available || \
+    fail "available APT package candidate should be accepted"
+pass "APT candidate detection accepts an available package"
+if PATH="$fake_apt_bin:$PATH" apt_package_has_candidate missing; then
+    fail "missing APT package candidate should be rejected"
+fi
+pass "APT candidate detection rejects a package without a candidate"
+
+fake_shell_bin="$TEST_TMP/fake-shell-bin"
+mkdir -p "$fake_shell_bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$fake_shell_bin/zsh"
+chmod +x "$fake_shell_bin/zsh"
+test_shells_file="$TEST_TMP/shells"
+printf '%s\n' "$fake_shell_bin/zsh" > "$test_shells_file"
+original_shells_file="$LOGIN_SHELLS_FILE"
+LOGIN_SHELLS_FILE="$test_shells_file"
+resolved_zsh="$(PATH="$fake_shell_bin:$PATH" resolve_zsh_login_shell)"
+[ "$resolved_zsh" = "$fake_shell_bin/zsh" ] || \
+    fail "Zsh resolver did not select the registered executable"
+pass "Zsh login-shell resolution requires an executable registered in /etc/shells"
+: > "$test_shells_file"
+if PATH="$fake_shell_bin:$PATH" resolve_zsh_login_shell > /dev/null; then
+    fail "Zsh resolver accepted an executable absent from the shell registry"
+fi
+pass "Zsh login-shell resolution rejects an unregistered executable"
+LOGIN_SHELLS_FILE="$original_shells_file"
+
+original_resolve_zsh_login_shell="$(declare -f resolve_zsh_login_shell)"
+test_login_shell="/bin/bash"
+getent() {
+    [ "$1" = "passwd" ] || return 1
+    printf 'shell-test:x:1000:1000::/home/shell-test:%s\n' "$test_login_shell"
+}
+resolve_zsh_login_shell() {
+    printf '%s\n' /bin/zsh
+}
+usermod() {
+    [ "$1" = "--shell" ] || return 1
+    test_login_shell="$2"
+}
+set_user_login_shell_to_zsh shell-test > /dev/null || \
+    fail "verified login-shell change should succeed"
+[ "$test_login_shell" = "/bin/zsh" ] || fail "login-shell changer did not target Zsh"
+pass "login-shell change is applied and verified"
+test_login_shell="/bin/bash"
+usermod() {
+    return 0
+}
+if set_user_login_shell_to_zsh shell-test > /dev/null 2>&1; then
+    fail "unapplied login-shell change should fail verification"
+fi
+pass "login-shell change cannot report success without passwd verification"
+unset -f getent usermod
+eval "$original_resolve_zsh_login_shell"
 
 SWAP_SIZE_MB="511"
 if validate_runtime_modes > /dev/null 2>&1; then

@@ -32,6 +32,7 @@
 # - SYSTEM_OVERVIEW_ONLY=1  只显示完整机器概览，不要求 root
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 # - APT_SOURCE_RECOVERY=prompt  已知失效独立第三方源的恢复策略: prompt/auto-known/never
+# - TARGET_USER=alice  用户级运行时/终端配置的明确目标账户
 #
 # 使用示例:
 # - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1 ALLOW_DANGEROUS=1 ./init.sh
@@ -77,6 +78,7 @@ SYSTEM_OVERVIEW_ONLY="${SYSTEM_OVERVIEW_ONLY:-0}"  # 1=只运行只读机器概�
 EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permissive
 APT_SOURCE_RECOVERY="${APT_SOURCE_RECOVERY:-prompt}"  # prompt/auto-known/never
 APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+LOGIN_SHELLS_FILE="${LOGIN_SHELLS_FILE:-/etc/shells}"
 REMOTE_SCRIPT_SHA256="${REMOTE_SCRIPT_SHA256:-}"
 REMOTE_SCRIPT_CHECKSUM_FILE="${REMOTE_SCRIPT_CHECKSUM_FILE:-/root/init-remote-scripts.sha256}"
 ALLOW_UNVERIFIED_REMOTE="${ALLOW_UNVERIFIED_REMOTE:-0}"
@@ -1246,7 +1248,10 @@ confirm_dangerous_action() {
     printf '%b\n' "${YELLOW}操作: ${action}${PLAIN}"
     printf '%b\n' "${YELLOW}说明: ${message}${PLAIN}"
     printf '%b\n' ""
-    read -r -p "${RED}确认执行此操作? (输入 'YES' 继续, 回车取消): ${PLAIN}" confirm
+    # Bash read -p prints prompt bytes literally and does not expand the
+    # backslash escapes used by the color constants above.
+    printf '%b' "${RED}确认执行此操作? (输入 'YES' 继续, 回车取消): ${PLAIN}"
+    IFS= read -r confirm
     if [ "$confirm" != "YES" ]; then
         printf '%b\n' "${YELLOW}默认操作: 取消${PLAIN}"
         log_warning "操作已取消"
@@ -1382,7 +1387,10 @@ quarantine_known_ookla_apt_sources() {
 
     timestamp="$(date +%Y%m%d_%H%M%S)"
     for file in "${candidates[@]}"; do
-        disabled="${file}.disabled-by-init-${timestamp}-$$"
+        # APT silently ignores its conventional .save suffix. Keeping that
+        # suffix last avoids an "invalid filename extension" notice on every
+        # later apt invocation while preserving the source for rollback.
+        disabled="${file}.disabled-by-init-${timestamp}-$$.save"
         [ ! -e "$disabled" ] && [ ! -L "$disabled" ] || {
             log_error "APT source 隔离目标已存在: $disabled"
             return 1
@@ -1430,6 +1438,13 @@ update_apt_once() {
             return 1
         fi
     fi
+}
+
+apt_package_has_candidate() {
+    local package="${1%%=*}" candidate
+    candidate="$(LC_ALL=C apt-cache policy "$package" 2>/dev/null |
+        awk '/^[[:space:]]*Candidate:/ { print $2; exit }')"
+    [ -n "$candidate" ] && [ "$candidate" != "(none)" ]
 }
 
 # --- 安装验证函数 ---
@@ -3012,6 +3027,73 @@ function run_as_user() {
     else
         sudo -H -u "$INSTALL_USER" env HOME="$INSTALL_HOME" USER="$INSTALL_USER" LOGNAME="$INSTALL_USER" bash -c "$cmd"
     fi
+}
+
+get_user_login_shell() {
+    local user="$1"
+    getent passwd "$user" 2>/dev/null | awk -F: 'NR == 1 { print $7 }'
+}
+
+resolve_zsh_login_shell() {
+    local detected="" candidate
+    detected="$(command -v zsh 2>/dev/null || true)"
+
+    for candidate in "$detected" /bin/zsh /usr/bin/zsh; do
+        [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+        if [ -f "$LOGIN_SHELLS_FILE" ] && grep -Fqx "$candidate" "$LOGIN_SHELLS_FILE"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+login_shell_matches() {
+    local actual="$1" expected="$2"
+    [ "$actual" = "$expected" ] && return 0
+    [ -e "$actual" ] && [ -e "$expected" ] && [ "$actual" -ef "$expected" ]
+}
+
+set_user_login_shell_to_zsh() {
+    local user="$1" zsh_shell current_shell actual_shell
+
+    if ! getent passwd "$user" > /dev/null 2>&1; then
+        log_error "终端配置目标用户不存在: $user"
+        return 1
+    fi
+    if ! zsh_shell="$(resolve_zsh_login_shell)"; then
+        log_error "未找到同时可执行且已登记在 $LOGIN_SHELLS_FILE 的 Zsh"
+        return 1
+    fi
+
+    current_shell="$(get_user_login_shell "$user")"
+    if login_shell_matches "$current_shell" "$zsh_shell"; then
+        log_info "默认登录 Shell 已是 Zsh: $user -> $current_shell"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = "1" ]; then
+        log_info "[DRY RUN] 将默认登录 Shell 设置为: $user -> $zsh_shell"
+        return 0
+    fi
+
+    if command -v usermod > /dev/null 2>&1; then
+        if ! usermod --shell "$zsh_shell" "$user"; then
+            log_error "usermod 无法修改 $user 的登录 Shell"
+            return 1
+        fi
+    elif ! chsh -s "$zsh_shell" "$user"; then
+        log_error "chsh 无法修改 $user 的登录 Shell"
+        return 1
+    fi
+
+    actual_shell="$(get_user_login_shell "$user")"
+    if ! login_shell_matches "$actual_shell" "$zsh_shell"; then
+        log_error "登录 Shell 验证失败: $user 当前仍为 ${actual_shell:-未知}，期望 $zsh_shell"
+        return 1
+    fi
+
+    log_success "默认登录 Shell 已设置并验证: $user -> $actual_shell"
 }
 
 
@@ -8872,12 +8954,51 @@ function action_install_terminal_tools() {
     fi
     log_info "用户级配置目标: $INSTALL_USER ($user_home)"
     
-    # Update & Install deps
+    # Update & Install deps. Keep the portable foundation separate from
+    # repository-dependent enhancements so one unavailable optional package
+    # cannot cancel the entire zsh/toolchain transaction.
     log_info "更新系统并安装基础依赖..."
     update_apt_once || return 1
-    run_cmd "安装基础依赖" "apt-get install -y git curl wget unzip tar build-essential zsh tmux ripgrep fd-find \
-        p7zip-full p7zip-rar unrar xz-utils bzip2 zstd lz4 pigz \
-        fzf jq yq btop ncdu duf git-delta"
+    local -a core_packages=(
+        git curl wget unzip tar build-essential zsh tmux xz-utils bzip2
+    )
+    local -a enhancement_candidates=(
+        ripgrep fd-find p7zip-full zstd lz4 pigz fzf jq yq btop ncdu duf git-delta
+    )
+    local -a enhancement_packages=()
+    local -a rar_candidates=(unrar p7zip-rar unrar-free unar)
+    local package rar_package=""
+
+    install_packages_batch "${core_packages[@]}" || return 1
+
+    for package in "${enhancement_candidates[@]}"; do
+        if apt_package_has_candidate "$package"; then
+            enhancement_packages+=("$package")
+        else
+            log_warning "当前 APT 源没有可安装的可选包，已跳过: $package"
+        fi
+    done
+
+    # unrar and p7zip-rar live in non-free on Debian. Prefer them when the
+    # administrator has enabled that component, otherwise use a free fallback.
+    for package in "${rar_candidates[@]}"; do
+        if apt_package_has_candidate "$package"; then
+            rar_package="$package"
+            enhancement_packages+=("$package")
+            break
+        fi
+    done
+    if [ -n "$rar_package" ]; then
+        log_info "RAR 解压支持将使用: $rar_package"
+    else
+        log_warning "当前 APT 源没有可用的 RAR 解压工具，已跳过"
+    fi
+
+    if [ "${#enhancement_packages[@]}" -gt 0 ]; then
+        if ! install_packages_batch "${enhancement_packages[@]}"; then
+            log_warning "部分终端增强工具安装失败；核心 zsh 环境已安装，可稍后单独重试"
+        fi
+    fi
     if ! run_cmd "安装 tldr" "apt-get install -y tldr"; then
         log_warning "tldr 安装失败，尝试安装 tealdeer 作为替代..."
         run_cmd "安装 tealdeer" "apt-get install -y tealdeer"
@@ -9085,13 +9206,9 @@ NVM_EOF
     fi
 
     log_info "切换默认 Shell 到 Zsh..."
-    if command -v zsh > /dev/null 2>&1; then
-        chsh -s "$(command -v zsh)" "$INSTALL_USER"
-    else
-        log_error "未找到 zsh 可执行文件，无法切换默认 Shell"
-    fi
+    set_user_login_shell_to_zsh "$INSTALL_USER" || return 1
     
-    log_success "终端环境初始化完成！请断开 SSH 并重新连接以应用更改。"
+    log_success "终端环境初始化完成！目标用户: $INSTALL_USER；请结束旧 tmux/screen 会话并重新 SSH。"
 }
 
 function action_toggle_zsh_icons() {

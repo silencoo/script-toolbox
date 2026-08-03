@@ -60,7 +60,8 @@ Debian/Ubuntu 的 `apt update` 会读取系统里所有已配置的 source；因
 Zsh，一个早先添加、现已失效的第三方仓库也会让终端模块失败。脚本会识别 Ookla
 Packagecloud 独立 source 返回的 `402 Payment Required`、`no longer signed` 或缺少
 Release 文件错误。在交互模式下，它会询问是否先备份并将该 source 重命名为
-`.disabled-by-init-*`，确认后重试 `apt update`；不会卸载已经安装的 `speedtest`。
+`.disabled-by-init-*.save`，确认后重试 `apt update`；不会卸载已经安装的
+`speedtest`，后续 APT 命令也不会再为隔离文件输出无效后缀提示。
 
 非交互模式默认不修改第三方 source。确认允许脚本仅隔离这一已知的独立 Ookla
 source 时，可显式设置：
@@ -72,6 +73,22 @@ sudo env NON_INTERACTIVE=1 APT_SOURCE_RECOVERY=auto-known \
 
 设置 `APT_SOURCE_RECOVERY=never` 可完全关闭该恢复逻辑。混合了多个仓库的自定义
 source 文件不会被自动隔离，脚本只报告人工检查命令。
+
+终端模块会先安装 Git、Zsh、Tmux 等核心包，再按当前 APT 仓库的候选版本安装增强
+工具。Bookworm 未提供 `git-delta`，或系统未启用 `non-free` 而无法提供 `unrar` /
+`p7zip-rar` 时，脚本会跳过它们并尝试 `unrar-free`、`unar` 等可用替代，不会让一个
+可选包取消整批核心安装。
+
+用户级终端配置默认使用 `sudo` 的调用用户，并在结束前回读系统账户数据库，确认
+登录 Shell 已切换到 `/etc/shells` 中登记的 Zsh。若直接以 root 运行但实际要配置
+其他 SSH 用户，请明确传入目标账户：
+
+```bash
+sudo env TARGET_USER=alice ./server-toolkit.sh
+```
+
+重新 SSH 后可用 `getent passwd "$USER" | cut -d: -f7` 检查账户的默认登录 Shell；
+已有的 tmux/screen 会话不会因账户设置变化而自动从 Bash 变成 Zsh，需要结束旧会话。
 
 ## 时区、Swap 与 sysctl
 
