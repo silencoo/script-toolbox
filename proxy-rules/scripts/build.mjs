@@ -10,6 +10,57 @@ const ruleSets = [
   { source: "openai.rules", name: "OpenAI", policy: "AI" },
   { source: "claude.rules", name: "Claude", policy: "AI" },
   { source: "other-ai.rules", name: "OtherAI", policy: "AI" },
+  {
+    source: "ai-models.rules",
+    name: "AI Models",
+    file: "AIModels",
+    policy: "AI Models",
+    notices: [
+      "# SOURCES: live Civitai services; Hugging Face Hub download docs",
+      "# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0",
+      "# CURATED: 2026-08-05; first-party model hub and download domains",
+    ],
+  },
+  {
+    source: "bytedance.rules",
+    name: "ByteDance",
+    policy: "WeChat",
+    notices: [
+      "# SOURCE: fmz200/wool_scripts ByteDance.list",
+      "# LICENSE: GPL-3.0-only; see proxy-rules/LICENSE.GPL-3.0",
+      "# MODIFIED: 2026-08-05; normalized and separated from TikTok",
+    ],
+  },
+  {
+    source: "tiktok.rules",
+    name: "TikTok",
+    policy: "TikTok",
+    notices: [
+      "# SOURCE: blackmatrix7/ios_rule_script TikTok.list",
+      "# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0",
+      "# MODIFIED: 2026-08-05; normalized client-neutral source",
+    ],
+  },
+  {
+    source: "github.rules",
+    name: "GitHub",
+    policy: "GitHub",
+    notices: [
+      "# SOURCE: blackmatrix7/ios_rule_script GitHub.list",
+      "# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0",
+      "# MODIFIED: 2026-08-05; normalized client-neutral source",
+    ],
+  },
+  {
+    source: "docker.rules",
+    name: "Docker",
+    policy: "Docker",
+    notices: [
+      "# SOURCE: blackmatrix7/ios_rule_script Docker.list",
+      "# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0",
+      "# MODIFIED: 2026-08-05; normalized client-neutral source",
+    ],
+  },
 ];
 
 const qxType = new Map([
@@ -19,6 +70,7 @@ const qxType = new Map([
   ["IP-CIDR", "IP-CIDR"],
   ["IP-CIDR6", "IP-CIDR6"],
   ["IP-ASN", "IP-ASN"],
+  ["USER-AGENT", "USER-AGENT"],
 ]);
 
 function parseRules(text, source) {
@@ -45,10 +97,11 @@ function parseRules(text, source) {
   return rules;
 }
 
-function quantumultXOutput(name, policy, rules) {
+function quantumultXOutput(name, policy, rules, notices = []) {
   return [
     `# NAME: ${name}`,
     "# GENERATED: scripts/build.mjs; edit sources/*.rules instead",
+    ...notices,
     `# TOTAL: ${rules.length}`,
     ...rules.map(([type, value]) => `${qxType.get(type)},${value},${policy}`),
     "",
@@ -79,7 +132,7 @@ for (const ruleSet of ruleSets) {
   const rules = parseRules(sourceText, ruleSet.source);
   await emit(
     `rules/quantumultx/${ruleSet.file ?? ruleSet.name}.list`,
-    quantumultXOutput(ruleSet.name, ruleSet.policy, rules),
+    quantumultXOutput(ruleSet.name, ruleSet.policy, rules, ruleSet.notices),
   );
 }
 

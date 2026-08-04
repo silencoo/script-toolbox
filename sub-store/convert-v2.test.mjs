@@ -192,3 +192,180 @@ test("allows each URL-test group class to use its own interval", async () => {
   assert.equal(groups.get("Japan").interval, 900);
   assert.equal(groups.get("Fallback").interval, 600);
 });
+
+test("routes speed tests through a dedicated proxy-first policy", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  assert.ok(groups.has("Speedtest"));
+  assert.equal(groups.get("Speedtest").proxies[0], "Proxies");
+  assert.equal(
+    profile["rule-providers"].Speedtest.url,
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Speedtest/Speedtest.list",
+  );
+
+  const speedtest = profile.rules.indexOf("RULE-SET,Speedtest,Speedtest");
+  const cdn = profile.rules.indexOf("RULE-SET,StaticResources,CDN");
+  const netflix = profile.rules.indexOf("DOMAIN-SUFFIX,fast.com,Netflix");
+  assert.ok(speedtest >= 0 && speedtest < cdn && speedtest < netflix);
+
+  const template = await readFile(
+    new URL("../proxy-rules/templates/quantumult-x.conf", import.meta.url),
+    "utf8",
+  );
+  assert.match(template, /^static=Speedtest, proxy, direct,/m);
+  assert.match(
+    template,
+    /QuantumultX\/Speedtest\/Speedtest\.list, tag=Speedtest, force-policy=Speedtest/,
+  );
+  assert.doesNotMatch(template, /host-keyword,\s*speedtest\.net,\s*direct/i);
+});
+
+test("routes AI model hubs and downloads before generic CDN rules", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  assert.ok(groups.has("AI Models"));
+  assert.equal(groups.get("AI Models").proxies[0], "Proxies");
+  assert.equal(
+    profile["rule-providers"].AIModels.url,
+    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/ai-models.rules",
+  );
+
+  const aiModels = profile.rules.indexOf("RULE-SET,AIModels,AI Models");
+  for (const provider of [
+    "StaticResources",
+    "CDNResources",
+    "AdditionalCDNResources",
+  ]) {
+    const cdn = profile.rules.indexOf(`RULE-SET,${provider},CDN`);
+    assert.ok(aiModels >= 0 && aiModels < cdn);
+  }
+
+  const source = await readFile(
+    new URL("../proxy-rules/sources/ai-models.rules", import.meta.url),
+    "utf8",
+  );
+  for (const domain of [
+    "civitai.com",
+    "civitai.red",
+    "civitai.green",
+    "civitai.tech",
+    "huggingface.co",
+    "hf.co",
+  ]) {
+    assert.match(
+      source,
+      new RegExp(`^DOMAIN-SUFFIX,${domain.replaceAll(".", "\\.")}$`, "m"),
+    );
+  }
+
+  const template = await readFile(
+    new URL("../proxy-rules/templates/quantumult-x.conf", import.meta.url),
+    "utf8",
+  );
+  assert.match(template, /^static=AI Models, proxy, direct,/m);
+  assert.match(template, /rules\/quantumultx\/AIModels\.list, tag=AI Models/);
+});
+
+test("keeps domestic ByteDance rules separate and ahead of TikTok", async () => {
+  const byteDanceSource = await readFile(
+    new URL("../proxy-rules/sources/bytedance.rules", import.meta.url),
+    "utf8",
+  );
+  const tiktokSource = await readFile(
+    new URL("../proxy-rules/sources/tiktok.rules", import.meta.url),
+    "utf8",
+  );
+  const rules = (source) =>
+    new Set(
+      source
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#")),
+    );
+  const byteDanceRules = rules(byteDanceSource);
+  const tiktokRules = rules(tiktokSource);
+
+  assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,ixigua.com"));
+  assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,douyin.com"));
+  assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,toutiao.com"));
+  assert.ok(!byteDanceRules.has("DOMAIN-SUFFIX,unpkg.com"));
+  assert.ok(!byteDanceRules.has("DOMAIN-SUFFIX,center.html"));
+  for (const rule of byteDanceRules) assert.ok(!tiktokRules.has(rule));
+
+  const template = await readFile(
+    new URL("../proxy-rules/templates/quantumult-x.conf", import.meta.url),
+    "utf8",
+  );
+  const byteDance = template.indexOf("rules/quantumultx/ByteDance.list");
+  const tiktok = template.indexOf("rules/quantumultx/TikTok.list");
+  assert.ok(byteDance >= 0 && byteDance < tiktok);
+  assert.doesNotMatch(template, /fmz200\/wool_scripts.*ByteDance\.list/);
+  assert.doesNotMatch(template, /host-keyword,\s*(?:douyin|ixigua)\.com/i);
+
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  assert.equal(
+    profile["rule-providers"].TikTok.url,
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/TikTok/TikTok.list",
+  );
+});
+
+test("routes GitHub and Docker through independent developer policies", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  for (const name of ["GitHub", "Docker"]) {
+    assert.ok(groups.has(name));
+    assert.equal(groups.get(name).proxies[0], "Proxies");
+    assert.ok(profile.rules.includes(`RULE-SET,${name},${name}`));
+  }
+  assert.equal(
+    profile["rule-providers"].GitHub.url,
+    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/github.rules",
+  );
+  assert.equal(
+    profile["rule-providers"].Docker.url,
+    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/docker.rules",
+  );
+
+  const github = profile.rules.indexOf("RULE-SET,GitHub,GitHub");
+  const docker = profile.rules.indexOf("RULE-SET,Docker,Docker");
+  const cdn = profile.rules.indexOf("RULE-SET,StaticResources,CDN");
+  assert.ok(github >= 0 && github < cdn);
+  assert.ok(docker >= 0 && docker < cdn);
+
+  const template = await readFile(
+    new URL("../proxy-rules/templates/quantumult-x.conf", import.meta.url),
+    "utf8",
+  );
+  assert.match(template, /^static=GitHub, proxy, direct,/m);
+  assert.match(template, /^static=Docker, proxy, direct,/m);
+  assert.match(template, /rules\/quantumultx\/GitHub\.list, tag=GitHub/);
+  assert.match(template, /rules\/quantumultx\/Docker\.list, tag=Docker/);
+  assert.doesNotMatch(template, /^host-keyword,\s*github/m);
+  assert.doesNotMatch(template, /^host-keyword,\s*docker\.com/m);
+  assert.doesNotMatch(template, /^host,\s*(?:t3|www|ssl)\.gstatic\.com/m);
+  assert.doesNotMatch(
+    template,
+    /^host-keyword,\s*(?:cdnfhnfile\.115cdn\.net|123\.com|pikpak)/m,
+  );
+});

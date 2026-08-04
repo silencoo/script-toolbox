@@ -1,0 +1,13 @@
+# NAME: Docker
+# GENERATED: scripts/build.mjs; edit sources/*.rules instead
+# SOURCE: blackmatrix7/ios_rule_script Docker.list
+# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0
+# MODIFIED: 2026-08-05; normalized client-neutral source
+# TOTAL: 7
+HOST,d1q6f0aelx0por.cloudfront.net,Docker
+HOST,d2wy8f7a9ursnm.cloudfront.net,Docker
+HOST,d36jcksde1wxzq.cloudfront.net,Docker
+HOST-SUFFIX,compose-spec.io,Docker
+HOST-SUFFIX,docker.com,Docker
+HOST-SUFFIX,docker.io,Docker
+HOST-SUFFIX,dockerhub.com,Docker

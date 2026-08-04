@@ -1,0 +1,12 @@
+# NAME: AI Models
+# GENERATED: scripts/build.mjs; edit sources/*.rules instead
+# SOURCES: live Civitai services; Hugging Face Hub download docs
+# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0
+# CURATED: 2026-08-05; first-party model hub and download domains
+# TOTAL: 6
+HOST-SUFFIX,civitai.com,AI Models
+HOST-SUFFIX,civitai.red,AI Models
+HOST-SUFFIX,civitai.green,AI Models
+HOST-SUFFIX,civitai.tech,AI Models
+HOST-SUFFIX,huggingface.co,AI Models
+HOST-SUFFIX,hf.co,AI Models

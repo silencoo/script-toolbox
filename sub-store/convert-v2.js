@@ -245,7 +245,7 @@ const ruleProviders = {
     behavior: "classical",
     format: "text",
     interval: 86400,
-    url: "https://gcore.jsdelivr.net/gh/powerfullz/override-rules@master/ruleset/TikTok.list",
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/TikTok/TikTok.list",
     path: "./ruleset/TikTok.list",
   },
   EHentai: {
@@ -303,6 +303,38 @@ const ruleProviders = {
     interval: 86400,
     url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/PrivateTracker/PrivateTracker.list",
     path: "./ruleset/PrivateTracker.list",
+  },
+  Speedtest: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Speedtest/Speedtest.list",
+    path: "./ruleset/Speedtest.list",
+  },
+  AIModels: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/ai-models.rules",
+    path: "./ruleset/AIModels.list",
+  },
+  GitHub: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/github.rules",
+    path: "./ruleset/GitHub.list",
+  },
+  Docker: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/docker.rules",
+    path: "./ruleset/Docker.list",
   },
 };
 
@@ -382,6 +414,16 @@ const staticRules = [
   "RULE-SET,ADBlock,AdBlock",
   "RULE-SET,AdditionalFilter,AdBlock",
   `RULE-SET,SogouInput,${PROXY_GROUPS.DIRECT}`,
+
+  // Speed tests must stay above CDN, Netflix, and generic direct fallbacks.
+  "RULE-SET,Speedtest,Speedtest",
+
+  // Model hubs and their large downloads must stay above generic CDN rules.
+  "RULE-SET,AIModels,AI Models",
+
+  // Developer downloads and registries stay independently selectable.
+  "RULE-SET,GitHub,GitHub",
+  "RULE-SET,Docker,Docker",
 
   // CDN 资源
   "RULE-SET,StaticResources,CDN",
@@ -824,6 +866,30 @@ function buildProxyGroups({
     {
       name: "YouTube",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
+      type: "select",
+      proxies: serviceProxies,
+    },
+    {
+      name: "Speedtest",
+      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Speedtest.png",
+      type: "select",
+      proxies: serviceProxies,
+    },
+    {
+      name: "AI Models",
+      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Download.png",
+      type: "select",
+      proxies: serviceProxies,
+    },
+    {
+      name: "GitHub",
+      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/GitHub.png",
+      type: "select",
+      proxies: serviceProxies,
+    },
+    {
+      name: "Docker",
+      icon: "https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png",
       type: "select",
       proxies: serviceProxies,
     },

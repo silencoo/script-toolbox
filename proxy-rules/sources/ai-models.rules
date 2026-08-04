@@ -1,0 +1,15 @@
+# AI model hubs and their first-party download/storage endpoints.
+# Curated 2026-08-05 from live Civitai services and Hugging Face Hub docs.
+# Keep this list ahead of generic CDN rules so large model downloads remain
+# independently selectable without capturing whole cloud-storage providers.
+
+# Civitai frontends, legacy aliases, images, and Backblaze-backed downloads.
+DOMAIN-SUFFIX,civitai.com
+DOMAIN-SUFFIX,civitai.red
+DOMAIN-SUFFIX,civitai.green
+DOMAIN-SUFFIX,civitai.tech
+
+# Hugging Face Hub, LFS, Xet, and first-party CDN endpoints. Hugging Face
+# recommends these suffixes instead of pinning the current storage hostnames.
+DOMAIN-SUFFIX,huggingface.co
+DOMAIN-SUFFIX,hf.co

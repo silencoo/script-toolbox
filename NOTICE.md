@@ -8,8 +8,11 @@ third-party-derived files.
   KOP-XIAO/Shawn. Use and redistribution of that file remain subject to any
   applicable upstream terms.
 - `proxy-rules/` contains curated rule content derived in part from
-  `blackmatrix7/ios_rule_script` and is distributed under GPL-2.0 as documented
-  in `proxy-rules/LICENSE.GPL-2.0`. Its generated ad-domain output combines
+  `blackmatrix7/ios_rule_script`; that material is distributed under GPL-2.0 as
+  documented in `proxy-rules/LICENSE.GPL-2.0`. The ByteDance source and
+  generated list derive from `fmz200/wool_scripts` and remain GPL-3.0-only as
+  documented in `proxy-rules/LICENSE.GPL-3.0`. Its generated ad-domain output
+  combines
   `8680/GOODBYEADS` with `Cats-Team/AdRules`. GOODBYEADS is MIT licensed and
   aggregates constituent upstream lists that may retain separate terms.
   Cats-Team's `script` branch is 0BSD, while its generated `main`-branch rules
@@ -19,6 +22,9 @@ third-party-derived files.
   Sub-Store PT provider derive from Blackmatrix7's GPL-2.0 PrivateTracker list.
   `gemini.list` also incorporates the exact hosts published in Google Workspace
   Help's "Gemini App firewall settings," licensed under CC BY 4.0.
+  `AIModels.list` incorporates Civitai's observed first-party service domains
+  and the Hub download suffixes recommended by Hugging Face's official
+  documentation.
 - Files under `userscripts/e-hentai/` were imported from `silencoo/hh_script`.
   Their source headers identify their author and mark them as MIT licensed.
 - Files under `userscripts/123pan-fastlink/` were imported from a local mirror
