@@ -28,6 +28,10 @@ expensive residential node.
   are shared with YouTube, Maps, Google images, analytics, or ads; Quantumult X
   domain rules cannot distinguish a Gemini-initiated request from the same host
   opened elsewhere.
+- YouTube uses a dedicated proxy-first policy so high-bandwidth video traffic
+  can use a cheaper node instead of the general `Global Media` selection. The
+  Gemini resource stays first, so its shared exact hosts keep the Gemini exit;
+  remaining YouTube hosts, including video CDNs, use the YouTube policy.
 - Shared static hosts `t3.gstatic.com`, `www.gstatic.com`, and
   `ssl.gstatic.com` use the cheaper `Gemini` policy, not the more expensive
   general `AI` policy and not `reject`.
@@ -62,7 +66,12 @@ https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/Claude.list, tag=Claude, update-interval=172800, opt-parser=false, enabled=true
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/OtherAI.list, tag=Other AI, update-interval=172800, opt-parser=false, enabled=true
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/PT.list, tag=Private Trackers, update-interval=172800, opt-parser=false, enabled=true
+https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/YouTube/YouTube.list, tag=YouTube, force-policy=YouTube, update-interval=172800, opt-parser=false, enabled=true
 ```
+
+Keep the Gemini resource above Ads and YouTube. This preserves a consistent
+Gemini exit for shared exact Google hosts while routing the bulk YouTube video
+traffic independently.
 
 Do not enable the old all-in-one AI resource at the same time. Its broad Google
 suffixes would overlap these isolated policies.
