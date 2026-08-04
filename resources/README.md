@@ -5,7 +5,6 @@ navigable without being promoted to standalone tools.
 
 | Resource | Format | Intended use | Important caveat |
 | --- | --- | --- | --- |
-| [`network/pt-tracker-direct-rules.yaml`](./network/pt-tracker-direct-rules.yaml) | Mihomo/Clash classical rule-provider payload | Route listed tracker domains directly | Domain lists become stale and need periodic review |
 | [`network/adobe-blocking/adobe-process-block-rules.yaml`](./network/adobe-blocking/adobe-process-block-rules.yaml) | Process rules | Local reference for blocking selected Adobe processes | May disrupt licensing, updates, fonts, libraries, or cloud features |
 | [`network/adobe-blocking/adobe-activation-blocklist.hosts`](./network/adobe-blocking/adobe-activation-blocklist.hosts) | Hosts entries | Historical activation-domain blocklist | Provenance is incomplete; do not treat it as a maintained security list |
 | [`database/supabase-rls-allow-all.sql`](./database/supabase-rls-allow-all.sql) | PostgreSQL SQL | Short-lived development or emergency diagnosis | Grants unrestricted row access and is unsafe for production |

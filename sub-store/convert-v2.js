@@ -75,12 +75,22 @@ const TRAFFIC_KEYWORDS =
 // 白名单：包含以下字符的依然视为普通节点
 const WHITELIST_KEYWORDS = /(赞助|Node|节点)/i;
 
-const AI_TAGS = ["ai", "openai", "chatgpt", "claude", "gemini", "copilot"];
+const AI_TAGS = [
+  "ai",
+  "openai",
+  "chatgpt",
+  "claude",
+  "gemini",
+  "copilot",
+  "perplexity",
+  "grok",
+  "xai",
+];
 const PREMIUM_TAGS = ["pro"];
 const RESIDENTIAL_TAGS = ["res", "home", "isp", "residential", "家宽"];
 
 const AI_NODE_KEYWORDS =
-  /\b(AI|OpenAI|ChatGPT|Claude|Gemini|Copilot|Perplexity)\b|人工智能|智算/i;
+  /\b(AI|OpenAI|ChatGPT|Claude|Gemini|Copilot|Perplexity|Grok|xAI)\b|人工智能|智算/i;
 const RESIDENTIAL_NODE_KEYWORDS =
   /(家宽|家庭宽带|住宅|原生|Residential|Resident|ISP|Home)/i;
 
@@ -247,6 +257,14 @@ const ruleProviders = {
     url: "https://gcore.jsdelivr.net/gh/powerfullz/override-rules@master/ruleset/Crypto.list",
     path: "./ruleset/Crypto.list",
   },
+  PrivateTracker: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/PrivateTracker/PrivateTracker.list",
+    path: "./ruleset/PrivateTracker.list",
+  },
 };
 
 // 静态规则列表 (来自 clash-2.yaml)
@@ -338,7 +356,53 @@ const staticRules = [
   "DOMAIN-SUFFIX,smtcdns.net,Bilibili",
   "DOMAIN,b23.tv,Bilibili",
 
-  // Google 静态规则（不含 YouTube 重叠域名）
+  // Shared Google static endpoints are not ads. Keep them on the cheaper
+  // Google-compatible route, before the broad Google suffix rules.
+  "DOMAIN,t3.gstatic.com,Google AI",
+  "DOMAIN,www.gstatic.com,Google AI",
+  "DOMAIN,ssl.gstatic.com,Google AI",
+
+  // Google AI routes must stay before the broad Google rules below.
+  "DOMAIN-SUFFIX,gemini.google.com,Google AI",
+  "DOMAIN-SUFFIX,bard.google.com,Google AI",
+  "DOMAIN,ai.google.dev,Google AI",
+  "DOMAIN,aistudio.google.com,Google AI",
+  "DOMAIN,makersuite.google.com,Google AI",
+  "DOMAIN,alkalimakersuite-pa.clients6.google.com,Google AI",
+  "DOMAIN,generativelanguage.googleapis.com,Google AI",
+  "DOMAIN,proactivebackend-pa.googleapis.com,Google AI",
+  "DOMAIN-SUFFIX,generativeai.google,Google AI",
+  "DOMAIN,notebooklm.google.com,Google AI",
+  "DOMAIN-SUFFIX,notebooklm.google,Google AI",
+  "DOMAIN,accounts.google.com,Google AI",
+  "DOMAIN,apis.google.com,Google AI",
+  "DOMAIN,ogs.google.com,Google AI",
+
+  // Perplexity, Microsoft Copilot, and xAI Grok stay in the general AI group.
+  "DOMAIN,pplx-res.cloudinary.com,AI",
+  "DOMAIN-SUFFIX,perplexity.ai,AI",
+  "DOMAIN-SUFFIX,perplexity.com,AI",
+  "DOMAIN-SUFFIX,pplx.ai,AI",
+  "DOMAIN,api.msn.com,AI",
+  "DOMAIN,assets.msn.com,AI",
+  "DOMAIN,copilot.microsoft.com,AI",
+  "DOMAIN,gateway.bingviz.microsoft.net,AI",
+  "DOMAIN,gateway.bingviz.microsoftapp.net,AI",
+  "DOMAIN,in.appcenter.ms,AI",
+  "DOMAIN,location.microsoft.com,AI",
+  "DOMAIN,odc.officeapps.live.com,AI",
+  "DOMAIN,r.bing.com,AI",
+  "DOMAIN,self.events.data.microsoft.com,AI",
+  "DOMAIN,services.bingapis.com,AI",
+  "DOMAIN,sydney.bing.com,AI",
+  "DOMAIN,www.bing.com,AI",
+  "DOMAIN-SUFFIX,api.microsoftapp.net,AI",
+  "DOMAIN-SUFFIX,bing-shopping.microsoft-falcon.io,AI",
+  "DOMAIN-SUFFIX,edgeservices.bing.com,AI",
+  "DOMAIN-SUFFIX,grok.com,AI",
+  "DOMAIN-SUFFIX,x.ai,AI",
+
+  // General Google rules (excluding YouTube overlaps).
   "DOMAIN,www.google.com,Google",
   "DOMAIN,www.google.com.hk,Google",
   "DOMAIN,www.google.co.jp,Google",
@@ -347,7 +411,6 @@ const staticRules = [
   "DOMAIN,www.google.com.tw,Google",
   "DOMAIN,www.google.com.au,Google",
   "DOMAIN,www.google.ca,Google",
-  "DOMAIN,apis.google.com,Google",
   "DOMAIN,google.com,Google",
   "DOMAIN-SUFFIX,google.com,Google",
   "DOMAIN-SUFFIX,google.com.hk,Google",
@@ -410,6 +473,7 @@ const staticRules = [
   // 其他
   `RULE-SET,SteamFix,${PROXY_GROUPS.DIRECT}`,
   `RULE-SET,GoogleFCM,${PROXY_GROUPS.DIRECT}`,
+  `RULE-SET,PrivateTracker,${PROXY_GROUPS.DIRECT}`,
   `DOMAIN,services.googleapis.cn,${PROXY_GROUPS.MANUAL}`,
   "GEOSITE,GOOGLE-PLAY@CN,Direct",
   "GEOSITE,CATEGORY-AI-!CN,AI",
@@ -636,6 +700,12 @@ function buildProxyGroups({
     {
       name: "AI",
       icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/chatgpt.png",
+      type: "select",
+      proxies: aiDefaultProxies,
+    },
+    {
+      name: "Google AI",
+      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google_Search.png",
       type: "select",
       proxies: aiDefaultProxies,
     },

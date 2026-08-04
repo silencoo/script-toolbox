@@ -1,0 +1,45 @@
+name: Update proxy rules
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */12 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-proxy-rules
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Update external rule outputs
+        working-directory: proxy-rules
+        run: npm run update:external
+
+      - name: Validate generated rules
+        working-directory: proxy-rules
+        run: npm run check
+
+      - name: Commit changed outputs
+        run: |
+          if git diff --quiet -- proxy-rules/rules; then
+            echo "No rule changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add proxy-rules/rules
+          git commit -m "chore(proxy-rules): update external rule outputs"
+          git push

@@ -28,6 +28,11 @@ jobs:
         run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Test Gemini Toolkit
         run: node --test userscripts/gemini-toolkit/tests/*.test.cjs
+      - name: Test Sub-Store profile conversion
+        run: node --test sub-store/*.test.mjs
+      - name: Validate generated proxy rules
+        working-directory: proxy-rules
+        run: npm run check
       - name: Check Bash syntax
         run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-subscription-manager/setup.sh
       - name: Test Mihomo subscription manager

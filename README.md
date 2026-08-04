@@ -10,6 +10,7 @@ documentation so scripts can evolve without crowding the repository root.
 | --- | --- |
 | [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
+| [`proxy-rules/`](./proxy-rules/) | Reusable Quantumult X profile plus generated AI and ad rules |
 | [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
@@ -143,6 +144,12 @@ Actions. The Worker tests can also be run locally with:
 
 ```sh
 node --test workers/cloudflare-vless/worker.test.mjs
+```
+
+Generated proxy rules can be checked with:
+
+```sh
+npm run check --prefix proxy-rules
 ```
 
 Shell scripts under `agent/` can be syntax-checked with:

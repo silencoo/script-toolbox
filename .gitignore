@@ -14,3 +14,6 @@ jpopsuki-rss-autobrr/data/subscriptions.json
 # Local Gist migration staging. These files remain outside the public repo.
 /todo/
 /gists/.gist-history/
+
+# Editable Quantumult X profiles can contain account-bound subscription URLs.
+/proxy-rules/templates/quantumult-x.local.conf

@@ -14,3 +14,10 @@ https://raw.githubusercontent.com/silencoo/script-toolbox/main/quantumult-x/reso
 
 The source file retains its upstream attribution. See the repository
 [`NOTICE.md`](../NOTICE.md) before redistributing it.
+
+## Reusable profile
+
+[`../proxy-rules/templates/quantumult-x.conf`](../proxy-rules/templates/quantumult-x.conf)
+is an English profile template that discovers subscription nodes dynamically.
+Copy it, replace the single subscription URL placeholder, and keep the edited
+copy private because subscription URLs often contain credentials.
