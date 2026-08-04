@@ -93,6 +93,8 @@ Oh My Zsh、Starship、Zoxide、uv、Eza、Bat 和 Neovim 属于可选增强项�
 `.zshrc` 会先检测对应文件或命令，未安装的增强项不会在每次登录时产生报错。
 安装过程也会分别验证 Oh My Zsh 的 `oh-my-zsh.sh` 以及 Starship/uv 的实际可执行
 路径；仅有 `.oh-my-zsh` 目录不再被视为安装成功，避免插件目录造成假阳性。
+Starship、uv、Zoxide 和 Oh My Zsh 的官方安装器按其要求使用 POSIX `sh` 执行；
+其他明确需要 Bash 的远程脚本仍使用 Bash，避免解释器不匹配导致假安装。
 
 ## 时区、Swap 与 sysctl
 

@@ -707,13 +707,18 @@ run_remote_script_unverified() {
     run_remote_script_with_policy allow-unverified "$@"
 }
 
-run_remote_script_as_user_with_policy() {
-    local pin_policy="$1" url="$2" description="$3"
-    shift 3
+run_remote_script_as_user_with_policy_interpreter() {
+    local pin_policy="$1" interpreter="$2" url="$3" description="$4"
+    shift 4
     local script_path status=0 target_user="${INSTALL_USER:-root}" target_home="${INSTALL_HOME:-/root}"
 
+    case "$interpreter" in
+        bash|sh) ;;
+        *) log_error "不支持的远程脚本解释器: $interpreter"; return 1 ;;
+    esac
+
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 以用户 $target_user 执行远程脚本: ${description}（实际下载和执行均已阻止）"
+        log_info "[DRY RUN] 以用户 $target_user 使用 $interpreter 执行远程脚本: ${description}（实际下载和执行均已阻止）"
         return 0
     fi
 
@@ -724,7 +729,8 @@ run_remote_script_as_user_with_policy() {
     fi
 
     if [ "$target_user" = "root" ]; then
-        if bash "$script_path" "$@"; then
+        if env HOME="$target_home" USER="$target_user" LOGNAME="$target_user" \
+            "$interpreter" "$script_path" "$@"; then
             return 0
         else
             status=$?
@@ -733,7 +739,7 @@ run_remote_script_as_user_with_policy() {
         # 由 root 打开已校验文件并通过 stdin 交给目标用户，避免 chown 后的校验-执行竞态。
         if sudo -H -u "$target_user" \
             env HOME="$target_home" USER="$target_user" LOGNAME="$target_user" \
-            bash -s -- "$@" < "$script_path"; then
+            "$interpreter" -s -- "$@" < "$script_path"; then
             return 0
         else
             status=$?
@@ -743,12 +749,22 @@ run_remote_script_as_user_with_policy() {
     return "$status"
 }
 
+run_remote_script_as_user_with_policy() {
+    local pin_policy="$1"
+    shift
+    run_remote_script_as_user_with_policy_interpreter "$pin_policy" bash "$@"
+}
+
 run_remote_script_as_user() {
     run_remote_script_as_user_with_policy required "$@"
 }
 
 run_remote_script_as_user_unverified() {
     run_remote_script_as_user_with_policy allow-unverified "$@"
+}
+
+run_remote_script_as_user_unverified_sh() {
+    run_remote_script_as_user_with_policy_interpreter allow-unverified sh "$@"
 }
 
 # --- 原子文件写入与验证 ---
@@ -9097,7 +9113,7 @@ function action_install_terminal_tools() {
         log_success "zoxide 安装成功"
     else
         log_warning "apt 源中未能安装 zoxide，准备回退到官方安装脚本"
-        run_remote_script_as_user_unverified "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "zoxide 官方安装脚本" || log_warning "已跳过 zoxide 安装"
+        run_remote_script_as_user_unverified_sh "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "zoxide 官方安装脚本" || log_warning "已跳过 zoxide 安装"
     fi
     
     # Starship
@@ -9110,7 +9126,7 @@ function action_install_terminal_tools() {
         log_success "starship 安装成功"
     else
         log_warning "apt 源中未能安装 starship，准备回退到官方安装脚本"
-        run_remote_script_as_user_unverified "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
+        run_remote_script_as_user_unverified_sh "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
     fi
     starship_path="$(terminal_user_command_path starship || true)"
     if [ -n "$starship_path" ]; then
@@ -9157,7 +9173,7 @@ function action_install_terminal_tools() {
     local uv_path
     uv_path="$(terminal_user_command_path uv || true)"
     if [ -z "$uv_path" ]; then
-        run_remote_script_as_user_unverified "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
+        run_remote_script_as_user_unverified_sh "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
         uv_path="$(terminal_user_command_path uv || true)"
     fi
     if [ -n "$uv_path" ]; then
@@ -9178,7 +9194,7 @@ function action_install_terminal_tools() {
             log_warning "检测到不完整的 Oh My Zsh 目录（缺少 oh-my-zsh.sh）: $user_home/.oh-my-zsh"
             log_warning "为避免覆盖现有文件，本次不会自动删除该目录；请先移动它再重试安装"
         else
-            run_remote_script_as_user_unverified \
+            run_remote_script_as_user_unverified_sh \
                 "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" \
                 "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
             [ -r "$omz_main" ] && omz_ready=true

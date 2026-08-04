@@ -244,6 +244,22 @@ pass "non-interactive unpinned installer still requires ALLOW_UNVERIFIED_REMOTE"
 ) || fail "non-interactive unpinned installer should retain dangerous-action opt-in"
 pass "non-interactive unpinned installer still requires ALLOW_DANGEROUS"
 
+terminal_action_source="$(declare -f action_install_terminal_tools)"
+assert_contains "$terminal_action_source" \
+    'run_remote_script_as_user_unverified_sh "https://starship.rs/install.sh"' \
+    "Starship installer uses its required POSIX shell"
+assert_contains "$terminal_action_source" \
+    'run_remote_script_as_user_unverified_sh "https://astral.sh/uv/install.sh"' \
+    "uv installer uses POSIX shell"
+assert_contains "$terminal_action_source" \
+    'run_remote_script_as_user_unverified_sh' \
+    "terminal upstream installers use the explicit POSIX runner"
+if run_remote_script_as_user_with_policy_interpreter \
+    allow-unverified python https://example.test/install.py "不支持的解释器" > /dev/null 2>&1; then
+    fail "remote script runner should reject an unsupported interpreter"
+fi
+pass "remote script runner restricts interpreter selection"
+
 SWAP_SIZE_MB="511"
 if validate_runtime_modes > /dev/null 2>&1; then
     fail "SWAP_SIZE_MB below 512 should fail runtime validation"
