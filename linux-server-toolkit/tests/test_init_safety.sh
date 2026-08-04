@@ -198,6 +198,52 @@ pass "login-shell change cannot report success without passwd verification"
 unset -f getent usermod
 eval "$original_resolve_zsh_login_shell"
 
+zshrc_block="$(terminal_zshrc_block)"
+assert_contains "$zshrc_block" '[[ -r "$ZSH/oh-my-zsh.sh" ]]' \
+    "generated zshrc guards Oh My Zsh loading"
+assert_contains "$zshrc_block" 'command -v starship' \
+    "generated zshrc guards Starship initialization"
+assert_contains "$zshrc_block" 'command -v uv' \
+    "generated zshrc guards uv completion"
+assert_contains "$zshrc_block" '$HOME/.cargo/bin' \
+    "generated zshrc includes user Cargo binaries"
+assert_not_contains "$zshrc_block" $'\nsource $ZSH/oh-my-zsh.sh' \
+    "generated zshrc has no unconditional Oh My Zsh source"
+
+remote_policy_dest="$TEST_TMP/remote-policy-script"
+(
+    confirm_remote_script_execution() { return 0; }
+    remote_script_expected_sha256() { return 1; }
+    fetch_file() { printf '%s\n' '#!/bin/sh' 'exit 0' > "$2"; }
+    NON_INTERACTIVE=0
+    ALLOW_UNVERIFIED_REMOTE=0
+    download_remote_script_with_policy allow-unverified \
+        https://example.test/install.sh "$remote_policy_dest" "测试安装器" > /dev/null
+) || fail "interactive typed confirmation should authorize an explicitly allowed unpinned installer"
+pass "interactive confirmation does not require ALLOW_UNVERIFIED_REMOTE"
+(
+    confirm_remote_script_execution() { return 0; }
+    remote_script_expected_sha256() { return 1; }
+    fetch_file() { printf '%s\n' '#!/bin/sh' 'exit 0' > "$2"; }
+    NON_INTERACTIVE=1
+    ALLOW_DANGEROUS=1
+    ALLOW_UNVERIFIED_REMOTE=0
+    ! download_remote_script_with_policy allow-unverified \
+        https://example.test/install.sh "$remote_policy_dest" "测试安装器" > /dev/null 2>&1
+) || fail "non-interactive unpinned installer should require its explicit opt-in"
+pass "non-interactive unpinned installer still requires ALLOW_UNVERIFIED_REMOTE"
+(
+    confirm_remote_script_execution() { return 0; }
+    remote_script_expected_sha256() { return 1; }
+    fetch_file() { printf '%s\n' '#!/bin/sh' 'exit 0' > "$2"; }
+    NON_INTERACTIVE=1
+    ALLOW_DANGEROUS=0
+    ALLOW_UNVERIFIED_REMOTE=1
+    ! download_remote_script_with_policy allow-unverified \
+        https://example.test/install.sh "$remote_policy_dest" "测试安装器" > /dev/null 2>&1
+) || fail "non-interactive unpinned installer should retain dangerous-action opt-in"
+pass "non-interactive unpinned installer still requires ALLOW_DANGEROUS"
+
 SWAP_SIZE_MB="511"
 if validate_runtime_modes > /dev/null 2>&1; then
     fail "SWAP_SIZE_MB below 512 should fail runtime validation"

@@ -89,6 +89,10 @@ sudo env TARGET_USER=alice ./server-toolkit.sh
 
 重新 SSH 后可用 `getent passwd "$USER" | cut -d: -f7` 检查账户的默认登录 Shell；
 已有的 tmux/screen 会话不会因账户设置变化而自动从 Bash 变成 Zsh，需要结束旧会话。
+Oh My Zsh、Starship、Zoxide、uv、Eza、Bat 和 Neovim 属于可选增强项；生成的
+`.zshrc` 会先检测对应文件或命令，未安装的增强项不会在每次登录时产生报错。
+安装过程也会分别验证 Oh My Zsh 的 `oh-my-zsh.sh` 以及 Starship/uv 的实际可执行
+路径；仅有 `.oh-my-zsh` 目录不再被视为安装成功，避免插件目录造成假阳性。
 
 ## 时区、Swap 与 sysctl
 
@@ -157,6 +161,7 @@ sudo env \
   ALLOW_EXTERNAL=1 \
   ALLOW_REMOTE_EXEC=1 \
   ALLOW_DANGEROUS=1 \
+  ALLOW_UNVERIFIED_REMOTE=1 \
   ./server-toolkit.sh
 ```
 
@@ -189,7 +194,11 @@ sudo env \
 SHA256 URL
 ```
 
-不建议使用 `ALLOW_UNVERIFIED_REMOTE=1` 绕过摘要校验。
+交互模式下，对于代码中明确标记为允许未固定摘要的上游安装器，来源确认和大写
+`YES` 危险确认已经构成完整授权，不再额外要求环境变量。非交互模式无法完成这两次
+人工确认，因此仍需同时设置 `ALLOW_EXTERNAL=1`、`ALLOW_REMOTE_EXEC=1`、
+`ALLOW_DANGEROUS=1` 和 `ALLOW_UNVERIFIED_REMOTE=1`。能提供固定摘要时仍应优先使用
+`REMOTE_SCRIPT_SHA256` 或 root-only 校验文件。
 
 DD 重装和痕迹清理不能加入内置或自定义 Profile。它们只保留在
 “高级 / 高风险”菜单中，并继续要求输入原有的文字确认。

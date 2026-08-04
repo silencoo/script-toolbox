@@ -18,7 +18,7 @@
 # - ALLOW_DANGEROUS=1  非交互模式允许危险操作；未固定摘要的远程脚本还需要此开关
 # - REMOTE_SCRIPT_SHA256=<sha256>  为本次远程脚本执行提供可信摘要
 # - REMOTE_SCRIPT_CHECKSUM_FILE=/root/init-remote-scripts.sha256  每行格式: SHA256 URL
-# - ALLOW_UNVERIFIED_REMOTE=1  仅允许代码中显式标注的“未固定摘要”调用点（不推荐）
+# - ALLOW_UNVERIFIED_REMOTE=1  非交互模式允许代码中显式标注的未固定摘要调用点
 # - ACTION_ROLLBACK_MODE=auto  动作失败后的文件回滚策略: auto/prompt/always/never
 # - RESOURCE_CHECK_STRICT=1  资源告警返回非零；默认仅告警并返回成功
 # - DRY_RUN=1          仅输出计划操作，不执行
@@ -628,13 +628,15 @@ download_remote_script_with_policy() {
             log_error "请通过 REMOTE_SCRIPT_SHA256 或 root-only 的 $REMOTE_SCRIPT_CHECKSUM_FILE 提供可信摘要"
             return 1
         fi
-        if [ "$ALLOW_UNVERIFIED_REMOTE" != "1" ]; then
-            log_error "该调用点允许显式例外，但未设置 ALLOW_UNVERIFIED_REMOTE=1: $url"
-            return 1
-        fi
-        if [ "$NON_INTERACTIVE" = "1" ] && [ "$ALLOW_DANGEROUS" != "1" ]; then
-            log_error "非交互执行未固定摘要的远程脚本还需要 ALLOW_DANGEROUS=1"
-            return 1
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            if [ "$ALLOW_UNVERIFIED_REMOTE" != "1" ]; then
+                log_error "非交互执行未固定摘要的远程脚本需要 ALLOW_UNVERIFIED_REMOTE=1: $url"
+                return 1
+            fi
+            if [ "$ALLOW_DANGEROUS" != "1" ]; then
+                log_error "非交互执行未固定摘要的远程脚本还需要 ALLOW_DANGEROUS=1"
+                return 1
+            fi
         fi
         log_warning "正在执行代码中显式标注、但未固定摘要的远程脚本"
     fi
@@ -765,6 +767,12 @@ validate_json_candidate() {
     local candidate="$1"
     command -v jq > /dev/null 2>&1 || return 0
     jq empty "$candidate" > /dev/null 2>&1
+}
+
+validate_zsh_candidate() {
+    local candidate="$1"
+    command -v zsh > /dev/null 2>&1 || return 1
+    zsh -n "$candidate" > /dev/null 2>&1
 }
 
 validate_sshd_candidate() {
@@ -3094,6 +3102,59 @@ set_user_login_shell_to_zsh() {
     fi
 
     log_success "默认登录 Shell 已设置并验证: $user -> $actual_shell"
+}
+
+terminal_user_command_path() {
+    local command_name="$1"
+    run_as_user "PATH=\"$INSTALL_HOME/.local/bin:$INSTALL_HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\" command -v \"$command_name\" 2>/dev/null"
+}
+
+terminal_zshrc_block() {
+    cat << 'EOF'
+# User command path must be available before optional tool detection.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+export EDITOR='nvim'
+
+# Load Oh My Zsh only when its installer completed successfully.
+export ZSH="$HOME/.oh-my-zsh"
+if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
+    ZSH_THEME=""
+    plugins=(
+        git
+        extract
+        zsh-autosuggestions
+        zsh-syntax-highlighting
+    )
+    source "$ZSH/oh-my-zsh.sh"
+fi
+
+# Optional prompt and navigation tools.
+if command -v starship > /dev/null 2>&1; then
+    eval "$(starship init zsh)"
+fi
+if command -v zoxide > /dev/null 2>&1; then
+    eval "$(zoxide init zsh)"
+fi
+
+# Define aliases only for commands that are actually installed.
+if command -v nvim > /dev/null 2>&1; then
+    alias vim="nvim"
+fi
+if command -v eza > /dev/null 2>&1; then
+    alias ls="eza --icons"
+    alias ll="eza --icons -l"
+    alias la="eza --icons -la"
+    alias tree="eza --icons --tree"
+fi
+if command -v bat > /dev/null 2>&1; then
+    alias cat="bat"
+fi
+alias ip="ip -c"
+
+if command -v uv > /dev/null 2>&1; then
+    eval "$(uv generate-shell-completion zsh)"
+fi
+EOF
 }
 
 
@@ -9041,13 +9102,21 @@ function action_install_terminal_tools() {
     
     # Starship
     log_info "安装 Starship (终端提示符)..."
-    if command -v starship > /dev/null 2>&1; then
-        log_info "starship 已安装"
+    local starship_path
+    starship_path="$(terminal_user_command_path starship || true)"
+    if [ -n "$starship_path" ]; then
+        log_info "starship 已安装: $starship_path"
     elif run_cmd "尝试通过 apt 安装 starship" "apt-get install -y starship"; then
         log_success "starship 安装成功"
     else
         log_warning "apt 源中未能安装 starship，准备回退到官方安装脚本"
         run_remote_script_as_user_unverified "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
+    fi
+    starship_path="$(terminal_user_command_path starship || true)"
+    if [ -n "$starship_path" ]; then
+        log_success "Starship 可执行文件验证通过: $starship_path"
+    else
+        log_warning "Starship 未安装或不在目标用户 PATH 中；.zshrc 将跳过初始化"
     fi
     
     # Neovim
@@ -9085,25 +9154,55 @@ function action_install_terminal_tools() {
     
     # uv
     log_info "安装 uv (Python 包管理器)..."
-    run_remote_script_as_user_unverified "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
+    local uv_path
+    uv_path="$(terminal_user_command_path uv || true)"
+    if [ -z "$uv_path" ]; then
+        run_remote_script_as_user_unverified "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
+        uv_path="$(terminal_user_command_path uv || true)"
+    fi
+    if [ -n "$uv_path" ]; then
+        log_success "uv 可执行文件验证通过: $uv_path"
+    else
+        log_warning "uv 未安装或不在目标用户 PATH 中；.zshrc 将跳过补全初始化"
+    fi
     
     # Oh My Zsh
     log_info "安装 Oh My Zsh..."
-    if [ -d "$user_home/.oh-my-zsh" ]; then
-        log_info "Oh My Zsh 已存在，跳过安装。"
+    local omz_main="$user_home/.oh-my-zsh/oh-my-zsh.sh"
+    local omz_ready=false
+    if [ -r "$omz_main" ]; then
+        omz_ready=true
+        log_info "Oh My Zsh 已安装: $omz_main"
     else
-        run_remote_script_as_user_unverified "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
+        if [ -d "$user_home/.oh-my-zsh" ]; then
+            log_warning "检测到不完整的 Oh My Zsh 目录（缺少 oh-my-zsh.sh）: $user_home/.oh-my-zsh"
+            log_warning "为避免覆盖现有文件，本次不会自动删除该目录；请先移动它再重试安装"
+        else
+            run_remote_script_as_user_unverified \
+                "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" \
+                "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
+            [ -r "$omz_main" ] && omz_ready=true
+        fi
+    fi
+    if [ "$omz_ready" = true ]; then
+        log_success "Oh My Zsh 主文件验证通过: $omz_main"
+    else
+        log_warning "Oh My Zsh 未完整安装；.zshrc 将跳过加载"
     fi
     
     # Plugins
-    log_info "下载 Zsh 插件..."
-    local zsh_custom="${ZSH_CUSTOM:-$user_home/.oh-my-zsh/custom}"
-    run_as_user "mkdir -p \"$zsh_custom/plugins\""
-    if [ ! -d "$zsh_custom/plugins/zsh-autosuggestions" ]; then
-        run_as_user "git clone https://github.com/zsh-users/zsh-autosuggestions \"$zsh_custom/plugins/zsh-autosuggestions\""
-    fi
-    if [ ! -d "$zsh_custom/plugins/zsh-syntax-highlighting" ]; then
-        run_as_user "git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \"$zsh_custom/plugins/zsh-syntax-highlighting\""
+    if [ "$omz_ready" = true ]; then
+        log_info "下载 Zsh 插件..."
+        local zsh_custom="${ZSH_CUSTOM:-$user_home/.oh-my-zsh/custom}"
+        run_as_user "mkdir -p \"$zsh_custom/plugins\""
+        if [ ! -d "$zsh_custom/plugins/zsh-autosuggestions" ]; then
+            run_as_user "git clone https://github.com/zsh-users/zsh-autosuggestions \"$zsh_custom/plugins/zsh-autosuggestions\""
+        fi
+        if [ ! -d "$zsh_custom/plugins/zsh-syntax-highlighting" ]; then
+            run_as_user "git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \"$zsh_custom/plugins/zsh-syntax-highlighting\""
+        fi
+    else
+        log_warning "Oh My Zsh 不完整，已跳过插件目录创建"
     fi
     
     # .zshrc
@@ -9112,50 +9211,12 @@ function action_install_terminal_tools() {
     local zsh_marker_start="### INIT.SH ZSHRC BEGIN"
     local zsh_marker_end="### INIT.SH ZSHRC END"
     local zshrc_block
-    zshrc_block=$(cat << 'EOF'
-# Path to your oh-my-zsh installation.
-export ZSH="$HOME/.oh-my-zsh"
-
-# 主题设置为 vercel (或者你可以留空，因为我们会用 starship)
-ZSH_THEME=""
-
-# 启用插件
-plugins=(
-    git
-    extract
-    zsh-autosuggestions
-    zsh-syntax-highlighting
-)
-
-source $ZSH/oh-my-zsh.sh
-
-# User configuration
-export PATH=$HOME/.local/bin:$PATH
-export EDITOR='nvim'
-
-# 初始化 Starship (提示符)
-eval "$(starship init zsh)"
-
-# 初始化 Zoxide (智能跳转)
-eval "$(zoxide init zsh)"
-
-# 常用别名 (Aliases)
-alias vim="nvim"
-alias ls="eza --icons"
-alias ll="eza --icons -l"
-alias la="eza --icons -la"
-alias tree="eza --icons --tree"
-alias cat="bat"
-alias ip="ip -c"
-
-# UV 补全
-eval "$(uv generate-shell-completion zsh)"
-EOF
-)
+    zshrc_block="$(terminal_zshrc_block)"
     if [ -f "$zshrc_file" ]; then
         create_backup "$zshrc_file" >/dev/null
     fi
-    ensure_block_in_file "$zshrc_file" "$zsh_marker_start" "$zsh_marker_end" "$zshrc_block"
+    ensure_block_in_file "$zshrc_file" "$zsh_marker_start" "$zsh_marker_end" \
+        "$zshrc_block" "Zsh 配置块" validate_zsh_candidate || return 1
 
     # --- Compatibility Migration (Auto-detect & Sync) ---
     log_info "正在迁移现有配置到 .zshrc ..."
