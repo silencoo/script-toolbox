@@ -1,6 +1,6 @@
 # Proxy routing rules
 
-This directory keeps Google AI separate from OpenAI, Claude, Perplexity,
+This directory keeps Gemini separate from OpenAI, Claude, Perplexity,
 Microsoft Copilot, and xAI Grok. A private profile can assign different exits
 to those policies without sending unrelated Google or Drive traffic through an
 expensive residential node.
@@ -24,8 +24,12 @@ expensive residential node.
 - Broad shared suffixes such as `google.com`, `googleapis.com`,
   `googleusercontent.com`, `gstatic.com`, `amazonaws.com`, and `cloudflare.com`
   are deliberately excluded.
+- Google's exact Gemini App firewall hosts are routed through `Gemini`. Several
+  are shared with YouTube, Maps, Google images, analytics, or ads; Quantumult X
+  domain rules cannot distinguish a Gemini-initiated request from the same host
+  opened elsewhere.
 - Shared static hosts `t3.gstatic.com`, `www.gstatic.com`, and
-  `ssl.gstatic.com` use the cheaper `Google AI` policy, not the more expensive
+  `ssl.gstatic.com` use the cheaper `Gemini` policy, not the more expensive
   general `AI` policy and not `reject`.
 
 Run:
@@ -53,7 +57,7 @@ template without cloning, make the same replacement in a private copy.
 For an existing profile, add the individual resources directly:
 
 ```ini
-https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/GoogleAI.list, tag=Google AI, update-interval=172800, opt-parser=false, enabled=true
+https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/gemini.list, tag=Gemini, update-interval=172800, opt-parser=false, enabled=true
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/OpenAI.list, tag=OpenAI, update-interval=172800, opt-parser=false, enabled=true
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/Claude.list, tag=Claude, update-interval=172800, opt-parser=false, enabled=true
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/OtherAI.list, tag=Other AI, update-interval=172800, opt-parser=false, enabled=true
@@ -63,7 +67,7 @@ https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules
 Do not enable the old all-in-one AI resource at the same time. Its broad Google
 suffixes would overlap these isolated policies.
 
-The public template keeps `Google AI` limited to the built-in `proxy` and
+The public template keeps `Gemini` limited to the built-in `proxy` and
 `direct` choices. A single `Residential` child policy uses narrow resource and
 server tag regexes aligned with `sub-store/convert-v2.js`; it reads only the
 `Primary Subscription` resource and includes residential, home, ISP,
@@ -100,6 +104,8 @@ Initial coverage was compared against:
 
 - `blackmatrix7/ios_rule_script` Gemini, OpenAI, Claude, Google, and GoogleDrive
   rules (GPL-2.0).
+- Google Workspace Help's "Gemini App firewall settings" exact-host list
+  (CC BY 4.0).
 - `ddgksf2013/Filter` and the separately hosted `Ai.yaml` resource.
 - `8680/GOODBYEADS` domain and allowlist outputs (MIT repository; constituent
   upstream lists retain their own licenses).

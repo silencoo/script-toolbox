@@ -10,7 +10,61 @@ async function loadConverter(args = {}) {
   return context.__convertV2Main;
 }
 
-test("keeps Google AI isolated while general Google traffic stays normal", async () => {
+const officialGeminiHosts = [
+  "lh5.googleusercontent.com",
+  "www.googleapis.com",
+  "ssl.gstatic.com",
+  "fonts.googleapis.com",
+  "play.google.com",
+  "ogs.google.com",
+  "www.google.com",
+  "apis.google.com",
+  "jnn-pa.googleapis.com",
+  "waa-pa.clients6.google.com",
+  "i.ytimg.com",
+  "yt3.ggpht.com",
+  "lh3.googleusercontent.com",
+  "maps.gstatic.com",
+  "lh3.google.com",
+  "ogads-pa.clients6.google.com",
+  "csp.withgoogle.com",
+  "www.googletagmanager.com",
+  "www.youtube.com",
+  "fonts.gstatic.com",
+  "maps.googleapis.com",
+  "static.doubleclick.net",
+  "www.gstatic.com",
+  "gemini.google.com",
+  "td.doubleclick.net",
+  "googleads.g.doubleclick.net",
+  "www.google-analytics.com",
+  "optimizationguide-pa.googleapis.com",
+  "encrypted-tbn0.gstatic.com",
+  "encrypted-tbn1.gstatic.com",
+  "encrypted-tbn2.gstatic.com",
+  "encrypted-tbn3.gstatic.com",
+  "streetviewpixels-pa.googleapis.com",
+  "content-autofill.googleapis.com",
+];
+
+test("keeps Quantumult X and convert-v2 official Gemini hosts aligned", async () => {
+  const source = await readFile(
+    new URL("../proxy-rules/sources/gemini.rules", import.meta.url),
+    "utf8",
+  );
+  const sourceRules = new Set(
+    source
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+
+  for (const host of officialGeminiHosts) {
+    assert.ok(sourceRules.has(`DOMAIN,${host}`));
+  }
+});
+
+test("keeps Gemini isolated while general Google traffic stays normal", async () => {
   const convert = await loadConverter();
   const profile = convert({
     proxies: [
@@ -27,9 +81,9 @@ test("keeps Google AI isolated while general Google traffic stays normal", async
     profile["proxy-groups"].map((group) => [group.name, group]),
   );
   assert.ok(groups.has("AI"));
-  assert.ok(groups.has("Google AI"));
+  assert.ok(groups.has("Gemini"));
   assert.ok(groups.get("AI").proxies.includes("[grok] Residential AI"));
-  assert.deepEqual(Array.from(groups.get("Google AI").proxies), [
+  assert.deepEqual(Array.from(groups.get("Gemini").proxies), [
     "Proxies",
     "Auto",
     "Japan",
@@ -39,10 +93,8 @@ test("keeps Google AI isolated while general Google traffic stays normal", async
     "Fallback",
     "Direct",
   ]);
-  assert.ok(!groups.get("Google AI").proxies.includes("Hong Kong"));
-  assert.ok(
-    !groups.get("Google AI").proxies.includes("[grok] Residential AI"),
-  );
+  assert.ok(!groups.get("Gemini").proxies.includes("Hong Kong"));
+  assert.ok(!groups.get("Gemini").proxies.includes("[grok] Residential AI"));
 
   for (const name of [
     "Japan",
@@ -73,13 +125,23 @@ test("keeps Google AI isolated while general Google traffic stays normal", async
     assert.equal(group["expected-status"], 204);
   }
 
-  const gemini = profile.rules.indexOf("DOMAIN-SUFFIX,gemini.google.com,Google AI");
+  const gemini = profile.rules.indexOf("DOMAIN,gemini.google.com,Gemini");
   const google = profile.rules.indexOf("DOMAIN-SUFFIX,google.com,Google");
-  const staticGoogleAI = profile.rules.indexOf("DOMAIN,t3.gstatic.com,Google AI");
+  const staticGemini = profile.rules.indexOf("DOMAIN,t3.gstatic.com,Gemini");
   const staticGoogle = profile.rules.indexOf("DOMAIN-SUFFIX,gstatic.com,Google");
+  const geminiYouTube = profile.rules.indexOf("DOMAIN,www.youtube.com,Gemini");
+  const generalYouTube = profile.rules.indexOf(
+    "DOMAIN-SUFFIX,youtube.com,YouTube",
+  );
+  const adRules = profile.rules.indexOf("RULE-SET,ADBlock,AdBlock");
 
   assert.ok(gemini >= 0 && gemini < google);
-  assert.ok(staticGoogleAI >= 0 && staticGoogleAI < staticGoogle);
+  assert.ok(staticGemini >= 0 && staticGemini < staticGoogle);
+  assert.ok(geminiYouTube >= 0 && geminiYouTube < generalYouTube);
+  assert.ok(gemini >= 0 && gemini < adRules);
+  for (const host of officialGeminiHosts) {
+    assert.ok(profile.rules.includes(`DOMAIN,${host},Gemini`));
+  }
   assert.ok(profile.rules.includes("DOMAIN-SUFFIX,perplexity.ai,AI"));
   assert.ok(profile.rules.includes("DOMAIN,copilot.microsoft.com,AI"));
   assert.ok(profile.rules.includes("DOMAIN-SUFFIX,grok.com,AI"));

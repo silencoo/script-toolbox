@@ -306,8 +306,69 @@ const ruleProviders = {
   },
 };
 
+// Exact Gemini App hosts published by Google Workspace Help. These rules must
+// precede ad, YouTube, and broad Google rules because several hosts are shared
+// with those services. Keep broad Google suffixes out of this policy so Drive
+// and unrelated Google downloads can continue using the normal Google route.
+const GEMINI_OFFICIAL_HOSTS = [
+  "lh5.googleusercontent.com",
+  "www.googleapis.com",
+  "ssl.gstatic.com",
+  "fonts.googleapis.com",
+  "play.google.com",
+  "ogs.google.com",
+  "www.google.com",
+  "apis.google.com",
+  "jnn-pa.googleapis.com",
+  "waa-pa.clients6.google.com",
+  "i.ytimg.com",
+  "yt3.ggpht.com",
+  "lh3.googleusercontent.com",
+  "maps.gstatic.com",
+  "lh3.google.com",
+  "ogads-pa.clients6.google.com",
+  "csp.withgoogle.com",
+  "www.googletagmanager.com",
+  "www.youtube.com",
+  "fonts.gstatic.com",
+  "maps.googleapis.com",
+  "static.doubleclick.net",
+  "www.gstatic.com",
+  "gemini.google.com",
+  "td.doubleclick.net",
+  "googleads.g.doubleclick.net",
+  "www.google-analytics.com",
+  "optimizationguide-pa.googleapis.com",
+  "encrypted-tbn0.gstatic.com",
+  "encrypted-tbn1.gstatic.com",
+  "encrypted-tbn2.gstatic.com",
+  "encrypted-tbn3.gstatic.com",
+  "streetviewpixels-pa.googleapis.com",
+  "content-autofill.googleapis.com",
+];
+
+const GEMINI_RULES = [
+  ...GEMINI_OFFICIAL_HOSTS.map((host) => `DOMAIN,${host},Gemini`),
+  "DOMAIN,bard.google.com,Gemini",
+  "DOMAIN,ai.google.dev,Gemini",
+  "DOMAIN,aistudio.google.com,Gemini",
+  "DOMAIN,makersuite.google.com,Gemini",
+  "DOMAIN,alkalimakersuite-pa.clients6.google.com,Gemini",
+  "DOMAIN,generativelanguage.googleapis.com,Gemini",
+  "DOMAIN,proactivebackend-pa.googleapis.com,Gemini",
+  "DOMAIN-SUFFIX,generativeai.google,Gemini",
+  "DOMAIN,notebooklm.google.com,Gemini",
+  "DOMAIN-SUFFIX,notebooklm.google,Gemini",
+  "DOMAIN,accounts.google.com,Gemini",
+  "DOMAIN,t3.gstatic.com,Gemini",
+];
+
 // 静态规则列表 (来自 clash-2.yaml)
 const staticRules = [
+  // Gemini must remain first to keep one exit IP across its shared Google
+  // session endpoints.
+  ...GEMINI_RULES,
+
   // 广告拦截
   "RULE-SET,ADBlock,AdBlock",
   "RULE-SET,AdditionalFilter,AdBlock",
@@ -334,7 +395,7 @@ const staticRules = [
   "IP-CIDR,91.108.0.0/16,Telegram,no-resolve",
   "IP-CIDR,5.28.192.0/18,Telegram,no-resolve",
 
-  // YouTube 静态规则（置于 Google 之前，避免被 Google 规则抢先匹配）
+  // Remaining YouTube traffic stays before the broad Google rules below.
   "DOMAIN-SUFFIX,ggpht.cn,YouTube",
   "DOMAIN-SUFFIX,ggpht.com,YouTube",
   "DOMAIN-SUFFIX,googlevideo.com,YouTube",
@@ -394,28 +455,6 @@ const staticRules = [
   "DOMAIN-SUFFIX,hdslb.com,Bilibili",
   "DOMAIN-SUFFIX,smtcdns.net,Bilibili",
   "DOMAIN,b23.tv,Bilibili",
-
-  // Shared Google static endpoints are not ads. Keep them on the cheaper
-  // Google-compatible route, before the broad Google suffix rules.
-  "DOMAIN,t3.gstatic.com,Google AI",
-  "DOMAIN,www.gstatic.com,Google AI",
-  "DOMAIN,ssl.gstatic.com,Google AI",
-
-  // Google AI routes must stay before the broad Google rules below.
-  "DOMAIN-SUFFIX,gemini.google.com,Google AI",
-  "DOMAIN-SUFFIX,bard.google.com,Google AI",
-  "DOMAIN,ai.google.dev,Google AI",
-  "DOMAIN,aistudio.google.com,Google AI",
-  "DOMAIN,makersuite.google.com,Google AI",
-  "DOMAIN,alkalimakersuite-pa.clients6.google.com,Google AI",
-  "DOMAIN,generativelanguage.googleapis.com,Google AI",
-  "DOMAIN,proactivebackend-pa.googleapis.com,Google AI",
-  "DOMAIN-SUFFIX,generativeai.google,Google AI",
-  "DOMAIN,notebooklm.google.com,Google AI",
-  "DOMAIN-SUFFIX,notebooklm.google,Google AI",
-  "DOMAIN,accounts.google.com,Google AI",
-  "DOMAIN,apis.google.com,Google AI",
-  "DOMAIN,ogs.google.com,Google AI",
 
   // Perplexity, Microsoft Copilot, and xAI Grok stay in the general AI group.
   "DOMAIN,pplx-res.cloudinary.com,AI",
@@ -679,16 +718,16 @@ function buildProxyGroups({
 
   const pools = Object.assign({ ai: [], residential: [] }, nodePools);
   const autoRefs = standardProxyNames.length > 0 ? [PROXY_GROUPS.AUTO] : [];
-  const googleAICountryRefs = [
+  const geminiCountryRefs = [
     "Japan",
     "Singapore",
     "United States",
     "Taiwan",
   ].filter((country) => t.includes(country));
-  const googleAIProxies = uniqueList([
+  const geminiProxies = uniqueList([
     PROXY_GROUPS.MANUAL,
     ...autoRefs,
-    ...googleAICountryRefs,
+    ...geminiCountryRefs,
     PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.DIRECT,
   ]);
@@ -756,10 +795,10 @@ function buildProxyGroups({
       proxies: aiDefaultProxies,
     },
     {
-      name: "Google AI",
+      name: "Gemini",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google_Search.png",
       type: "select",
-      proxies: googleAIProxies,
+      proxies: geminiProxies,
     },
     {
       name: "Telegram",

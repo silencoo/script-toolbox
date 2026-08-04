@@ -6,7 +6,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
 
 const ruleSets = [
-  { source: "google-ai.rules", name: "GoogleAI", policy: "Google AI" },
+  { source: "gemini.rules", name: "Gemini", file: "gemini", policy: "Gemini" },
   { source: "openai.rules", name: "OpenAI", policy: "AI" },
   { source: "claude.rules", name: "Claude", policy: "AI" },
   { source: "other-ai.rules", name: "OtherAI", policy: "AI" },
@@ -78,7 +78,7 @@ for (const ruleSet of ruleSets) {
   const sourceText = await readFile(resolve(root, "sources", ruleSet.source), "utf8");
   const rules = parseRules(sourceText, ruleSet.source);
   await emit(
-    `rules/quantumultx/${ruleSet.name}.list`,
+    `rules/quantumultx/${ruleSet.file ?? ruleSet.name}.list`,
     quantumultXOutput(ruleSet.name, ruleSet.policy, rules),
   );
 }

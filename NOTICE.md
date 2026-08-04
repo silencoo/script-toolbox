@@ -17,6 +17,8 @@ third-party-derived files.
   terms catalogued in Cats-Team's `Source.md`. The generated `Ads.list` remains
   subject to those applicable upstream terms. Generated PT rules and the
   Sub-Store PT provider derive from Blackmatrix7's GPL-2.0 PrivateTracker list.
+  `gemini.list` also incorporates the exact hosts published in Google Workspace
+  Help's "Gemini App firewall settings," licensed under CC BY 4.0.
 - Files under `userscripts/e-hentai/` were imported from `silencoo/hh_script`.
   Their source headers identify their author and mark them as MIT licensed.
 - Files under `userscripts/123pan-fastlink/` were imported from a local mirror
