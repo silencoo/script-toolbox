@@ -1,9 +1,18 @@
 // author=silencoo; profile-patch=codex-5.6 sol extra high
 // v2: tag-aware profile. [pro]/AI/residential nodes are kept out of country
 // auto groups and exposed directly through the AI policy group.
+// URL-test args: autotestinterval=1800, countrytestinterval=600,
+// fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
+// urltestinterval overrides all three intervals; 0 disables periodic tests.
 const NODE_SUFFIX = "";
 const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
 const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
+const URL_TEST_URL = "https://www.gstatic.com/generate_204";
+const DEFAULT_AUTO_TEST_INTERVAL = 1800;
+const DEFAULT_COUNTRY_TEST_INTERVAL = 600;
+const DEFAULT_FALLBACK_TEST_INTERVAL = 300;
+const MIN_URL_TEST_INTERVAL = 300;
+const DEFAULT_URL_TEST_TOLERANCE = 100;
 
 function setProfileSubscriptionInfo() {
   if (typeof $options !== "object" || !$options) return;
@@ -33,6 +42,11 @@ function parseNumber(e, t = 0) {
   return isNaN(o) ? t : o;
 }
 
+function parseUrlTestInterval(value, fallback) {
+  const interval = parseNumber(value, fallback);
+  return interval === 0 ? 0 : Math.max(MIN_URL_TEST_INTERVAL, interval);
+}
+
 function buildFeatureFlags(e) {
   const t = Object.entries({
     loadbalance: "loadBalance",
@@ -42,7 +56,27 @@ function buildFeatureFlags(e) {
     fakeip: "fakeIPEnabled",
     quic: "quicEnabled",
   }).reduce((t, [o, r]) => ((t[r] = parseBool(e[o]) || !1), t), {});
-  return ((t.countryThreshold = parseNumber(e.threshold, 0)), t);
+  const sharedUrlTestInterval =
+    null == e.urltestinterval ? null : e.urltestinterval;
+  t.countryThreshold = parseNumber(e.threshold, 0);
+  t.autoTestInterval = parseUrlTestInterval(
+    sharedUrlTestInterval ?? e.autotestinterval,
+    DEFAULT_AUTO_TEST_INTERVAL,
+  );
+  t.countryTestInterval = parseUrlTestInterval(
+    sharedUrlTestInterval ?? e.countrytestinterval,
+    DEFAULT_COUNTRY_TEST_INTERVAL,
+  );
+  t.fallbackTestInterval = parseUrlTestInterval(
+    sharedUrlTestInterval ?? e.fallbacktestinterval,
+    DEFAULT_FALLBACK_TEST_INTERVAL,
+  );
+  t.urlTestTolerance = Math.max(
+    0,
+    parseNumber(e.urltesttolerance, DEFAULT_URL_TEST_TOLERANCE),
+  );
+  t.urlTestLazy = "urltestlazy" in e ? parseBool(e.urltestlazy) : true;
+  return t;
 }
 
 const rawArgs = "undefined" != typeof $arguments ? $arguments : {},
@@ -54,6 +88,11 @@ const rawArgs = "undefined" != typeof $arguments ? $arguments : {},
     fakeIPEnabled: fakeIPEnabled,
     quicEnabled: quicEnabled,
     countryThreshold: countryThreshold,
+    autoTestInterval: autoTestInterval,
+    countryTestInterval: countryTestInterval,
+    fallbackTestInterval: fallbackTestInterval,
+    urlTestTolerance: urlTestTolerance,
+    urlTestLazy: urlTestLazy,
   } = buildFeatureFlags(rawArgs);
 
 function getCountryGroupNames(e, t) {
@@ -571,17 +610,20 @@ function buildHealthCheckedGroup({
   icon: icon,
   type: type,
   proxies: proxies,
-  interval: interval = 180,
+  interval: interval,
 }) {
   return {
     name: name,
     icon: icon,
     type: type,
-    url: "https://cp.cloudflare.com/generate_204",
+    url: URL_TEST_URL,
     proxies: uniqueList(proxies),
     interval: interval,
-    tolerance: 20,
-    lazy: false,
+    tolerance: urlTestTolerance,
+    lazy: urlTestLazy,
+    timeout: 5000,
+    "max-failed-times": 3,
+    "expected-status": 204,
   };
 }
 
@@ -607,10 +649,13 @@ function buildCountryProxyGroups({
     };
     o ||
       Object.assign(i, {
-        url: "https://cp.cloudflare.com/generate_204",
-        interval: 60,
-        tolerance: 20,
-        lazy: !1,
+        url: URL_TEST_URL,
+        interval: countryTestInterval,
+        tolerance: urlTestTolerance,
+        lazy: urlTestLazy,
+        timeout: 5000,
+        "max-failed-times": 3,
+        "expected-status": 204,
       });
     r.push(i);
   }
@@ -634,13 +679,19 @@ function buildProxyGroups({
 
   const pools = Object.assign({ ai: [], residential: [] }, nodePools);
   const autoRefs = standardProxyNames.length > 0 ? [PROXY_GROUPS.AUTO] : [];
-  const countryRefs = [
-    "Hong Kong",
-    "Taiwan",
+  const googleAICountryRefs = [
     "Japan",
-    "United States",
     "Singapore",
+    "United States",
+    "Taiwan",
   ].filter((country) => t.includes(country));
+  const googleAIProxies = uniqueList([
+    PROXY_GROUPS.MANUAL,
+    ...autoRefs,
+    ...googleAICountryRefs,
+    PROXY_GROUPS.FALLBACK,
+    PROXY_GROUPS.DIRECT,
+  ]);
 
   const groups = [
     {
@@ -668,7 +719,7 @@ function buildProxyGroups({
         icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Auto.png",
         type: "url-test",
         proxies: standardProxyNames,
-        interval: 60,
+        interval: autoTestInterval,
       }),
     );
   }
@@ -679,6 +730,7 @@ function buildProxyGroups({
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Bypass.png",
       type: "fallback",
       proxies: i,
+      interval: fallbackTestInterval,
     }),
   );
 
@@ -707,7 +759,7 @@ function buildProxyGroups({
       name: "Google AI",
       icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google_Search.png",
       type: "select",
-      proxies: aiDefaultProxies,
+      proxies: googleAIProxies,
     },
     {
       name: "Telegram",
