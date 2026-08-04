@@ -45,7 +45,6 @@ Moving the scripts into categories changes their GitHub raw URLs:
 
 | Previous path | New path |
 | --- | --- |
-| `convert.js` | `sub-store/convert.js` |
 | `convert_v2.js` | `sub-store/convert-v2.js` |
 | `substore-ios-adapter.js` | `sub-store/ios-adapter.js` |
 | `quanx.js` | `quantumult-x/resource-parser.js` |
@@ -55,6 +54,9 @@ Moving the scripts into categories changes their GitHub raw URLs:
 
 Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
+
+The legacy `convert.js` script has been removed. Migrate existing Sub-Store
+operators to `sub-store/convert-v2.js`.
 
 ## agent
 
