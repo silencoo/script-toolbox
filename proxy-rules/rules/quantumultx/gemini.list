@@ -1,6 +1,6 @@
 # NAME: Gemini
 # GENERATED: scripts/build.mjs; edit sources/*.rules instead
-# TOTAL: 46
+# TOTAL: 48
 HOST,lh5.googleusercontent.com,Gemini
 HOST,www.googleapis.com,Gemini
 HOST,ssl.gstatic.com,Gemini
@@ -42,6 +42,8 @@ HOST,makersuite.google.com,Gemini
 HOST,alkalimakersuite-pa.clients6.google.com,Gemini
 HOST,generativelanguage.googleapis.com,Gemini
 HOST,proactivebackend-pa.googleapis.com,Gemini
+HOST,robinfrontend-pa.googleapis.com,Gemini
+HOST,signaler-pa.googleapis.com,Gemini
 HOST-SUFFIX,generativeai.google,Gemini
 HOST,notebooklm.google.com,Gemini
 HOST-SUFFIX,notebooklm.google,Gemini

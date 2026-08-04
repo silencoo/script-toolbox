@@ -347,8 +347,17 @@ const GEMINI_OFFICIAL_HOSTS = [
   "content-autofill.googleapis.com",
 ];
 
+// Exact Gemini backends observed in live web sessions but not included in the
+// published Workspace firewall list. Keep these exact to avoid routing every
+// googleapis.com request, including unrelated Drive traffic, through Gemini.
+const GEMINI_OBSERVED_HOSTS = [
+  "robinfrontend-pa.googleapis.com",
+  "signaler-pa.googleapis.com",
+];
+
 const GEMINI_RULES = [
   ...GEMINI_OFFICIAL_HOSTS.map((host) => `DOMAIN,${host},Gemini`),
+  ...GEMINI_OBSERVED_HOSTS.map((host) => `DOMAIN,${host},Gemini`),
   "DOMAIN,bard.google.com,Gemini",
   "DOMAIN,ai.google.dev,Gemini",
   "DOMAIN,aistudio.google.com,Gemini",

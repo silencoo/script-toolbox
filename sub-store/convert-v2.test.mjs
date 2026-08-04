@@ -47,7 +47,12 @@ const officialGeminiHosts = [
   "content-autofill.googleapis.com",
 ];
 
-test("keeps Quantumult X and convert-v2 official Gemini hosts aligned", async () => {
+const observedGeminiHosts = [
+  "robinfrontend-pa.googleapis.com",
+  "signaler-pa.googleapis.com",
+];
+
+test("keeps Quantumult X and convert-v2 exact Gemini hosts aligned", async () => {
   const source = await readFile(
     new URL("../proxy-rules/sources/gemini.rules", import.meta.url),
     "utf8",
@@ -59,7 +64,7 @@ test("keeps Quantumult X and convert-v2 official Gemini hosts aligned", async ()
       .filter(Boolean),
   );
 
-  for (const host of officialGeminiHosts) {
+  for (const host of [...officialGeminiHosts, ...observedGeminiHosts]) {
     assert.ok(sourceRules.has(`DOMAIN,${host}`));
   }
 });
@@ -139,7 +144,7 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   assert.ok(staticGemini >= 0 && staticGemini < staticGoogle);
   assert.ok(geminiYouTube >= 0 && geminiYouTube < generalYouTube);
   assert.ok(gemini >= 0 && gemini < adRules);
-  for (const host of officialGeminiHosts) {
+  for (const host of [...officialGeminiHosts, ...observedGeminiHosts]) {
     assert.ok(profile.rules.includes(`DOMAIN,${host},Gemini`));
   }
   assert.ok(profile.rules.includes("DOMAIN-SUFFIX,perplexity.ai,AI"));
