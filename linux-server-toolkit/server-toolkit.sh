@@ -1908,6 +1908,19 @@ overview_section() {
     printf '\n%b\n' "${CYAN}── $1 ──${PLAIN}"
 }
 
+overview_os_pretty_name() {
+    local os_release_file="${1:-/etc/os-release}"
+    [ -r "$os_release_file" ] || return 1
+    awk '
+        /^PRETTY_NAME=/ {
+            value = substr($0, index($0, "=") + 1)
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "$os_release_file"
+}
+
 overview_field() {
     local label="$1" value="${2:-N/A}"
     printf '  %-24s %s\n' "$label" "$value"
@@ -1932,15 +1945,56 @@ overview_sysctl_value() {
     printf '%s' "${value:-N/A}"
 }
 
+systemd_unit_load_state() {
+    local unit="$1"
+    command -v systemctl > /dev/null 2>&1 || return 1
+    systemctl show "$unit" --property=LoadState --value 2>/dev/null || true
+}
+
+overview_service_status_text() {
+    local load_state="$1" active="$2" enabled="$3"
+    local active_text enabled_text
+
+    case "$load_state" in
+        not-found|"") printf '%s' '未安装'; return 0 ;;
+        loaded) ;;
+        *) printf 'unit 加载异常（%s）' "$load_state"; return 0 ;;
+    esac
+
+    case "$active" in
+        active) active_text='运行中' ;;
+        inactive) active_text='已停止' ;;
+        failed) active_text='启动失败' ;;
+        activating) active_text='启动中' ;;
+        deactivating) active_text='停止中' ;;
+        reloading) active_text='重载中' ;;
+        *) active_text="状态未知（${active:-unknown}）" ;;
+    esac
+    case "$enabled" in
+        enabled) enabled_text='开机启动已启用' ;;
+        disabled) enabled_text='开机启动未启用' ;;
+        static) enabled_text='静态 unit' ;;
+        masked) enabled_text='已屏蔽' ;;
+        generated) enabled_text='动态生成' ;;
+        indirect) enabled_text='间接启用' ;;
+        alias) enabled_text='别名 unit' ;;
+        *) enabled_text="启动策略=${enabled:-unknown}" ;;
+    esac
+    printf '%s，%s' "$active_text" "$enabled_text"
+}
+
 overview_service_status() {
-    local label="$1" unit="$2" active="N/A" enabled="N/A"
-    if command -v systemctl > /dev/null 2>&1; then
+    local label="$1" unit="$2" load_state="" active="" enabled=""
+    if ! command -v systemctl > /dev/null 2>&1; then
+        overview_field "$label" 'systemd 不可用'
+        return 0
+    fi
+    load_state="$(systemd_unit_load_state "$unit")"
+    if [ "$load_state" = "loaded" ]; then
         active="$(systemctl is-active "$unit" 2>/dev/null || true)"
         enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
-        active="${active:-not-found}"
-        enabled="${enabled:-not-found}"
     fi
-    overview_field "$label" "active=$active, enabled=$enabled"
+    overview_field "$label" "$(overview_service_status_text "$load_state" "$active" "$enabled")"
 }
 
 overview_ssh_auth_summary() {
@@ -1997,7 +2051,7 @@ action_system_overview() {
     local network_warning="无"
 
     log_info "=== 一键完整机器概览（只读） ==="
-    [ -r /etc/os-release ] && os_name="$(awk -F= '$1 == "PRETTY_NAME" { value=$2; gsub(/^\"|\"$/, "", value); print value; exit }' /etc/os-release)"
+    os_name="$(overview_os_pretty_name /etc/os-release 2>/dev/null || true)"
     host_name="$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf 'N/A')"
     timezone="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
     [ -z "$timezone" ] && [ -r /etc/timezone ] && timezone="$(awk 'NF { print; exit }' /etc/timezone)"
@@ -6309,13 +6363,22 @@ function action_service_health() {
     local services=("ssh" "sshd" "ufw" "fail2ban" "docker")
     printf "%-12s %-10s %-10s\n" "服务" "状态" "开机启动"
     for svc in "${services[@]}"; do
-        local active="inactive"
-        local enabled="disabled"
-        if systemctl is-active --quiet "$svc" 2>/dev/null; then
-            active="active"
-        fi
-        if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
-            enabled="enabled"
+        local load_state="" active="inactive" enabled="disabled"
+        load_state="$(systemd_unit_load_state "$svc")"
+        if [ -z "$load_state" ] || [ "$load_state" = "not-found" ]; then
+            active="未安装"
+            enabled="-"
+        else
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                active="运行中"
+            else
+                active="已停止"
+            fi
+            if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+                enabled="已启用"
+            else
+                enabled="未启用"
+            fi
         fi
         printf "%-12s %-10s %-10s\n" "$svc" "$active" "$enabled"
     done
@@ -7578,15 +7641,19 @@ print_command_status() {
 print_systemd_status() {
     local name="$1"
     local unit="$2"
-    local active="n/a"
-    local enabled="n/a"
+    local load_state="" active="" enabled=""
 
     if command -v systemctl > /dev/null 2>&1; then
-        active="$(systemctl is-active "$unit" 2>/dev/null || true)"
-        enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+        load_state="$(systemd_unit_load_state "$unit")"
+        if [ "$load_state" = "loaded" ]; then
+            active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+            enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+        fi
+        printf "%-32s %s\n" "$name" \
+            "$(overview_service_status_text "$load_state" "$active" "$enabled")"
+    else
+        printf "%-32s %s\n" "$name" "systemd 不可用"
     fi
-
-    printf "%-32s active=%-12s enabled=%-12s\n" "$name" "$active" "$enabled"
 }
 
 function action_module_status_overview() {

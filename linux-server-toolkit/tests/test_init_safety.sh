@@ -347,6 +347,31 @@ assert_contains "$(overview_ssh_auth_summary no yes no)" "仅密码" \
 assert_contains "$(overview_ssh_auth_summary N/A N/A N/A)" "无法完整读取" \
     "system overview does not misclassify unreadable SSH settings"
 
+test_os_release="$TEST_TMP/os-release"
+printf '%s\n' 'NAME=Debian' 'PRETTY_NAME="Debian GNU/Linux 12=bookworm"' > "$test_os_release"
+overview_awk_warning="$TEST_TMP/overview-awk-warning"
+overview_os_name="$(overview_os_pretty_name "$test_os_release" 2> "$overview_awk_warning")"
+[ "$overview_os_name" = "Debian GNU/Linux 12=bookworm" ] || \
+    fail "system overview did not parse PRETTY_NAME losslessly"
+pass "system overview parses quoted PRETTY_NAME values containing equals signs"
+[ ! -s "$overview_awk_warning" ] || fail "system overview PRETTY_NAME parser emitted an AWK warning"
+pass "system overview PRETTY_NAME parser emits no AWK escape warning"
+
+missing_service_text="$(overview_service_status_text not-found inactive not-found)"
+assert_contains "$missing_service_text" "未安装" \
+    "system overview identifies a missing systemd unit as not installed"
+assert_not_contains "$missing_service_text" "inactive" \
+    "missing systemd unit is not mislabeled inactive"
+assert_contains "$(overview_service_status_text loaded active enabled)" \
+    "运行中，开机启动已启用" \
+    "system overview describes a running enabled service"
+assert_contains "$(overview_service_status_text loaded inactive disabled)" \
+    "已停止，开机启动未启用" \
+    "system overview distinguishes an installed stopped service"
+assert_contains "$(overview_service_status_text loaded failed enabled)" \
+    "启动失败" \
+    "system overview exposes a failed service distinctly"
+
 overview_action="$(declare -f action_system_overview)"
 assert_contains "$overview_action" "UTC 时间" \
     "system overview includes UTC time"
