@@ -6,6 +6,7 @@ CERT_PATH="/etc/sing-box/cert.crt"
 KEY_PATH="/etc/sing-box/private.key"
 LINK_PATH="/root/sing-box-node.txt"
 CLIENT_CONFIG_PATH="/root/sing-box-client.json"
+BBR_SYSCTL_PATH="${BBR_SYSCTL_PATH:-/etc/sysctl.d/99-sing-box-bbr.conf}"
 
 SERVICE_NAME="sing-box"
 LISTEN_ADDR="::"
@@ -16,6 +17,7 @@ NODE_NAME=""
 SERVER_HOST=""
 PASSWORD=""
 SKIP_INSTALL=0
+SKIP_BBR=0
 ASSUME_YES=0
 
 tmp_config=""
@@ -38,6 +40,7 @@ Options:
   --link-file PATH    File path for the generated share link. Default: /root/sing-box-node.txt.
   --client-file PATH  File path for the generated client config. Default: /root/sing-box-client.json.
   --skip-install      Skip the official sing-box deb installer.
+  --skip-bbr          Do not check or enable BBR congestion control.
   -y, --yes           Non-interactive mode. Use detected/default values.
   -h, --help          Show this help.
 
@@ -237,6 +240,10 @@ parse_args() {
         SKIP_INSTALL=1
         shift
         ;;
+      --skip-bbr)
+        SKIP_BBR=1
+        shift
+        ;;
       -y|--yes)
         ASSUME_YES=1
         shift
@@ -290,6 +297,107 @@ install_sing_box() {
 
   log "Installing sing-box with the official deb installer."
   curl -fsSL https://sing-box.app/deb-install.sh | bash
+}
+
+sysctl_value() {
+  sysctl -n "$1" 2>/dev/null || true
+}
+
+congestion_control_available() {
+  local algorithms
+  algorithms="$(sysctl_value net.ipv4.tcp_available_congestion_control)"
+  [[ " ${algorithms} " == *" bbr "* ]]
+}
+
+configure_bbr() {
+  local current_control current_qdisc original_control original_qdisc config_dir tmp_bbr_config
+
+  if (( SKIP_BBR )); then
+    log "Skipping BBR check."
+    return 0
+  fi
+
+  if ! command -v sysctl >/dev/null 2>&1; then
+    log "WARNING: sysctl is unavailable; cannot check or enable BBR."
+    return 1
+  fi
+
+  current_control="$(sysctl_value net.ipv4.tcp_congestion_control)"
+  current_qdisc="$(sysctl_value net.core.default_qdisc)"
+  original_control="${current_control}"
+  original_qdisc="${current_qdisc}"
+  if [[ "${current_control}" == "bbr" && "${current_qdisc}" == "fq" ]]; then
+    log "BBR is already enabled (qdisc: fq)."
+    return 0
+  fi
+
+  if ! congestion_control_available; then
+    if command -v modprobe >/dev/null 2>&1; then
+      modprobe tcp_bbr >/dev/null 2>&1 || true
+    fi
+    if ! congestion_control_available; then
+      log "WARNING: This kernel does not expose tcp_bbr; leaving congestion control unchanged (${current_control:-unknown})."
+      return 1
+    fi
+  fi
+
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe sch_fq >/dev/null 2>&1 || true
+  fi
+
+  if ! sysctl -q -w net.ipv4.tcp_congestion_control=bbr; then
+    log "WARNING: Failed to enable BBR."
+    return 1
+  fi
+  if ! sysctl -q -w net.core.default_qdisc=fq; then
+    if [[ -n "${original_control}" ]]; then
+      sysctl -q -w "net.ipv4.tcp_congestion_control=${original_control}" >/dev/null 2>&1 || true
+    fi
+    log "WARNING: Failed to set the default qdisc to fq; restored the previous congestion control where possible."
+    return 1
+  fi
+
+  current_control="$(sysctl_value net.ipv4.tcp_congestion_control)"
+  current_qdisc="$(sysctl_value net.core.default_qdisc)"
+  if [[ "${current_control}" != "bbr" || "${current_qdisc}" != "fq" ]]; then
+    if [[ -n "${original_control}" ]]; then
+      sysctl -q -w "net.ipv4.tcp_congestion_control=${original_control}" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${original_qdisc}" ]]; then
+      sysctl -q -w "net.core.default_qdisc=${original_qdisc}" >/dev/null 2>&1 || true
+    fi
+    log "WARNING: BBR verification failed (congestion control: ${current_control:-unknown}, qdisc: ${current_qdisc:-unknown})."
+    return 1
+  fi
+
+  config_dir="$(dirname "${BBR_SYSCTL_PATH}")"
+  if ! mkdir -p "${config_dir}"; then
+    log "WARNING: BBR is active for this boot, but ${config_dir} could not be created for persistence."
+    return 1
+  fi
+  if ! tmp_bbr_config="$(mktemp "${BBR_SYSCTL_PATH}.tmp.XXXXXX")"; then
+    log "WARNING: BBR is active for this boot, but a temporary sysctl file could not be created."
+    return 1
+  fi
+  if ! printf '%s\n' \
+    'net.core.default_qdisc = fq' \
+    'net.ipv4.tcp_congestion_control = bbr' >"${tmp_bbr_config}"; then
+    rm -f "${tmp_bbr_config}"
+    log "WARNING: BBR is active for this boot, but its persistent configuration could not be written."
+    return 1
+  fi
+  if ! chmod 644 "${tmp_bbr_config}"; then
+    rm -f "${tmp_bbr_config}"
+    log "WARNING: BBR is active for this boot, but its persistent configuration permissions could not be set."
+    return 1
+  fi
+  if ! mv "${tmp_bbr_config}" "${BBR_SYSCTL_PATH}"; then
+    rm -f "${tmp_bbr_config}"
+    log "WARNING: BBR is active for this boot, but ${BBR_SYSCTL_PATH} could not be installed."
+    return 1
+  fi
+
+  log "BBR enabled and persisted in ${BBR_SYSCTL_PATH} (qdisc: fq)."
 }
 
 backup_existing_files() {
@@ -556,6 +664,9 @@ main() {
 
   resolve_inputs
   install_sing_box
+  if ! configure_bbr; then
+    log "WARNING: BBR setup was unavailable or incomplete; continuing sing-box installation."
+  fi
   write_config
   check_config
   restart_service
@@ -563,4 +674,6 @@ main() {
   write_client_config
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -42,6 +42,13 @@ The script writes:
 - `/root/sing-box-node.txt`: single-node `anytls://` link.
 - `/root/sing-box-client.json`: client config for this one node.
 
+Before writing the sing-box configuration, the installer checks the active TCP
+congestion control. If the kernel supports BBR, it enables `bbr` with the `fq`
+queue discipline immediately and persists both settings in
+`/etc/sysctl.d/99-sing-box-bbr.conf`. An unsupported kernel or a restricted
+container produces a warning but does not abort the node installation. Use
+`--skip-bbr` to leave the host network settings untouched.
+
 The single-node link is also printed to the console.
 
 ## Compose Multiple Nodes
