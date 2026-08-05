@@ -33,6 +33,7 @@
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 # - APT_SOURCE_RECOVERY=prompt  已知失效独立第三方源的恢复策略: prompt/auto-known/never
 # - TARGET_USER=alice  用户级运行时/终端配置的明确目标账户
+# - TOOLKIT_LANG=en|zh|auto  菜单语言；默认 en，auto 在 UTF-8 locale 下选择中文
 #
 # 使用示例:
 # - NON_INTERACTIVE=1 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1 ALLOW_DANGEROUS=1 ./init.sh
@@ -93,6 +94,8 @@ LOG_READY=false
 ACTIVE_CHILD_PID=""
 ACTIVE_CHILD_IS_GROUP=false
 SCRIPT_LOCK_FILE="${SCRIPT_LOCK_FILE:-/run/lock/init-script.lock}"
+TOOLKIT_LANG="${TOOLKIT_LANG:-en}"     # en/zh/auto；默认英文以兼容非 UTF-8 终端
+TOOLKIT_EFFECTIVE_LANG="en"
 
 # --- 全局颜色 ---
 RED='\033[0;31m'
@@ -102,6 +105,50 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
 BOLD='\033[1m'
+
+# --- User interface language ---
+# Keep language selection dependency-free: minimal server images may not have
+# generated locales or gettext installed. English strings are ASCII so menus
+# remain usable even when the terminal cannot decode UTF-8.
+resolve_toolkit_language() {
+    local requested="${TOOLKIT_LANG:-en}" charmap=""
+    requested="$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]')"
+    case "$requested" in
+        en|english|en_*)
+            TOOLKIT_EFFECTIVE_LANG="en"
+            ;;
+        zh|chinese|zh_*)
+            TOOLKIT_EFFECTIVE_LANG="zh"
+            ;;
+        auto)
+            charmap="$(locale charmap 2>/dev/null || true)"
+            charmap="$(printf '%s' "$charmap" | tr '[:lower:]' '[:upper:]')"
+            case "$charmap" in
+                UTF-8|UTF8) TOOLKIT_EFFECTIVE_LANG="zh" ;;
+                *) TOOLKIT_EFFECTIVE_LANG="en" ;;
+            esac
+            ;;
+        *)
+            printf 'Invalid TOOLKIT_LANG: %s (expected en, zh, or auto)\n' \
+                "$TOOLKIT_LANG" >&2
+            return 1
+            ;;
+    esac
+}
+
+ui_text() {
+    local english="${1:-}" chinese="${2:-}"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "zh" ]; then
+        printf '%s' "$chinese"
+    else
+        printf '%s' "$english"
+    fi
+}
+
+ui_read() {
+    local variable_name="$1" english_prompt="$2" chinese_prompt="$3"
+    builtin read -r -p "$(ui_text "$english_prompt" "$chinese_prompt")" "$variable_name"
+}
 
 # --- 日志函数 ---
 ensure_log_file() {
@@ -202,6 +249,7 @@ configure_system_timezone() {
 }
 
 validate_runtime_modes() {
+    resolve_toolkit_language || return 1
     case "$EXTERNAL_TRUST_MODE" in
         strict|standard|permissive) ;;
         *)
@@ -1167,7 +1215,7 @@ execute_with_progress() {
     fi
     ACTIVE_CHILD_PID=""
     printf '\r%b\n' "${RED}${message} ✗${PLAIN}" >&2
-    printf '%b\n' "${RED}执行失败，错误日志:${PLAIN}" >&2
+    printf '%b\n' "${RED}$(ui_text "Command failed; recent log output:" "执行失败，错误日志:")${PLAIN}" >&2
     printf '%s\n' '----------------------------------------' >&2
     tail -n 10 "$LOG_FILE" >&2 || true
     printf '%s\n' '----------------------------------------' >&2
@@ -1226,10 +1274,10 @@ confirm_action() {
 
     if [ "$default" = "y" ]; then
         prompt="[Y/n]"
-        default_desc="默认: Y"
+        default_desc="$(ui_text "default: Y" "默认: Y")"
     else
         prompt="[y/N]"
-        default_desc="默认: N"
+        default_desc="$(ui_text "default: N" "默认: N")"
     fi
     
     printf '%b' "${YELLOW}${message} ${prompt}: ${PLAIN}"
@@ -1240,7 +1288,7 @@ confirm_action() {
     
     if [ -z "$confirm" ]; then
         confirm=$default
-        printf '%b\n' "\033[1A\033[K${YELLOW}${message} ${prompt}: ${GREEN}${default_desc} (自动选择)${PLAIN}"
+        printf '%b\n' "\033[1A\033[K${YELLOW}${message} ${prompt}: ${GREEN}${default_desc} $(ui_text "(selected automatically)" "(自动选择)")${PLAIN}"
     fi
     
     case "$confirm" in
@@ -1266,19 +1314,25 @@ confirm_dangerous_action() {
         return 1
     fi
     printf '%b\n' ""
-    printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
-    printf '%b\n' "${RED}║  ⚠️  警告: 危险操作                    ║${PLAIN}"
-    printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
-    printf '%b\n' "${YELLOW}操作: ${action}${PLAIN}"
-    printf '%b\n' "${YELLOW}说明: ${message}${PLAIN}"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "zh" ]; then
+        printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
+        printf '%b\n' "${RED}║  ⚠️  警告: 危险操作                    ║${PLAIN}"
+        printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
+    else
+        printf '%b\n' "${RED}+----------------------------------------+${PLAIN}"
+        printf '%b\n' "${RED}|  WARNING: DANGEROUS OPERATION          |${PLAIN}"
+        printf '%b\n' "${RED}+----------------------------------------+${PLAIN}"
+    fi
+    printf '%b\n' "${YELLOW}$(ui_text "Action" "操作"): ${action}${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Details" "说明"): ${message}${PLAIN}"
     printf '%b\n' ""
     # Bash read -p prints prompt bytes literally and does not expand the
     # backslash escapes used by the color constants above.
-    printf '%b' "${RED}确认执行此操作? (输入 'YES' 继续, 回车取消): ${PLAIN}"
+    printf '%b' "${RED}$(ui_text "Proceed? (type 'YES' to continue; Enter cancels): " "确认执行此操作? (输入 'YES' 继续, 回车取消): ")${PLAIN}"
     IFS= read -r confirm
     if [ "$confirm" != "YES" ]; then
-        printf '%b\n' "${YELLOW}默认操作: 取消${PLAIN}"
-        log_warning "操作已取消"
+        printf '%b\n' "${YELLOW}$(ui_text "Default action: cancel" "默认操作: 取消")${PLAIN}"
+        log_warning "$(ui_text "Operation cancelled" "操作已取消")"
         return 1
     fi
     return 0
@@ -4798,21 +4852,21 @@ function action_install_runtime() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#            Runtime 安装管理器                #${PLAIN}"
+        printf '%b\n' "${CYAN}#            $(ui_text "Runtime Manager" "Runtime 安装管理器")                #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}请选择要安装的 Runtime:${PLAIN}"
+        printf '%b\n' "${YELLOW}$(ui_text "Choose a runtime to install:" "请选择要安装的 Runtime:")${PLAIN}"
         printf '%b\n' ""
-        printf '%b\n' "${GREEN}[1]${PLAIN} Node.js (使用 nvm)"
-        printf '%b\n' "${GREEN}[2]${PLAIN} Python (使用 pyenv)"
-        printf '%b\n' "${GREEN}[3]${PLAIN} PHP (使用 ondrej PPA)"
-        printf '%b\n' "${GREEN}[4]${PLAIN} Java (使用 Adoptium)"
-        printf '%b\n' "${GREEN}[5]${PLAIN} Go (官方二进制包)"
-        printf '%b\n' "${GREEN}[6]${PLAIN} .NET (官方安装)"
-        printf '%b\n' "${GREEN}[7]${PLAIN} 批量安装（选择多个）"
-        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}[1]${PLAIN} Node.js ($(ui_text "nvm" "使用 nvm"))"
+        printf '%b\n' "${GREEN}[2]${PLAIN} Python ($(ui_text "pyenv" "使用 pyenv"))"
+        printf '%b\n' "${GREEN}[3]${PLAIN} PHP ($(ui_text "ondrej PPA" "使用 ondrej PPA"))"
+        printf '%b\n' "${GREEN}[4]${PLAIN} Java ($(ui_text "Adoptium" "使用 Adoptium"))"
+        printf '%b\n' "${GREEN}[5]${PLAIN} Go ($(ui_text "official binary" "官方二进制包"))"
+        printf '%b\n' "${GREEN}[6]${PLAIN} .NET ($(ui_text "official packages" "官方安装"))"
+        printf '%b\n' "${GREEN}[7]${PLAIN} $(ui_text "Batch install (select multiple)" "批量安装（选择多个）")"
+        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' ""
-        read -r -p "请输入 [0-7]: " choice
+        ui_read choice "Enter [0-7]: " "请输入 [0-7]: "
 
         case "$choice" in
             1) run_menu_action install_nodejs ;;
@@ -4832,10 +4886,10 @@ function action_install_runtime() {
 function install_runtime_batch() {
     clear
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#            批量安装 Runtime                   #${PLAIN}"
+    printf '%b\n' "${CYAN}#            $(ui_text "Batch Runtime Install" "批量安装 Runtime")                   #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}请选择要安装的 Runtime（可多选，用空格分隔）:${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Choose runtimes (separate multiple choices with spaces):" "请选择要安装的 Runtime（可多选，用空格分隔）:")${PLAIN}"
     printf '%b\n' ""
     printf '%b\n' "${GREEN}[1]${PLAIN} Node.js"
     printf '%b\n' "${GREEN}[2]${PLAIN} Python"
@@ -4844,7 +4898,7 @@ function install_runtime_batch() {
     printf '%b\n' "${GREEN}[5]${PLAIN} Go"
     printf '%b\n' "${GREEN}[6]${PLAIN} .NET"
     printf '%b\n' ""
-    read -r -p "请输入选择 (例如: 1 2): " selections
+    ui_read selections "Enter choices (for example: 1 2): " "请输入选择 (例如: 1 2): "
     
     local runtimes=()
     for sel in $selections; do
@@ -4865,7 +4919,7 @@ function install_runtime_batch() {
     
     printf '%b\n' ""
     log_info "将安装以下 Runtime: ${runtimes[*]}"
-    read -r -p "确认安装? [y/n]: " confirm
+    ui_read confirm "Proceed with installation? [y/n]: " "确认安装? [y/n]: "
     case "$confirm" in
         y|Y|yes|YES)
             for runtime in "${runtimes[@]}"; do
@@ -5037,18 +5091,18 @@ select_ssh_key_target() {
         preferred_user="$(detect_preferred_user)"
         if [ -n "$preferred_user" ] && id "$preferred_user" > /dev/null 2>&1 && \
            [ "$(id -u "$preferred_user")" -ne 0 ]; then
-            printf '%b\n' "${CYAN}SSH 公钥目标账户:${PLAIN}"
+            printf '%b\n' "${CYAN}$(ui_text "SSH public-key target account:" "SSH 公钥目标账户:")${PLAIN}"
             printf '%b\n' "  1) root"
-            printf '%b\n' "  2) 已有普通用户 ${CYAN}[建议: $preferred_user]${PLAIN}"
-            printf '%b\n' "  3) 不处理 authorized_keys，仅配置 SSH 服务"
-            read -r -p "请选择 [1-3，默认 2]: " choice || return 1
+            printf '%b\n' "  2) $(ui_text "Existing non-root user" "已有普通用户") ${CYAN}[$(ui_text "suggested" "建议"): $preferred_user]${PLAIN}"
+            printf '%b\n' "  3) $(ui_text "Do not modify authorized_keys; configure only the SSH service" "不处理 authorized_keys，仅配置 SSH 服务")"
+            ui_read choice "Choose [1-3, default 2]: " "请选择 [1-3，默认 2]: " || return 1
             choice="${choice:-2}"
         else
-            printf '%b\n' "${CYAN}SSH 公钥目标账户:${PLAIN}"
+            printf '%b\n' "${CYAN}$(ui_text "SSH public-key target account:" "SSH 公钥目标账户:")${PLAIN}"
             printf '%b\n' "  1) root"
-            printf '%b\n' "  2) 已有普通用户"
-            printf '%b\n' "  3) 不处理 authorized_keys，仅配置 SSH 服务"
-            read -r -p "请选择 [1-3，默认 1]: " choice || return 1
+            printf '%b\n' "  2) $(ui_text "Existing non-root user" "已有普通用户")"
+            printf '%b\n' "  3) $(ui_text "Do not modify authorized_keys; configure only the SSH service" "不处理 authorized_keys，仅配置 SSH 服务")"
+            ui_read choice "Choose [1-3, default 1]: " "请选择 [1-3，默认 1]: " || return 1
             choice="${choice:-1}"
         fi
 
@@ -5057,7 +5111,9 @@ select_ssh_key_target() {
                 target_spec="root"
                 ;;
             2)
-                read -r -p "请输入已有普通用户名${preferred_user:+ [默认 $preferred_user]}: " target_spec || return 1
+                ui_read target_spec \
+                    "Existing non-root username${preferred_user:+ [default $preferred_user]}: " \
+                    "请输入已有普通用户名${preferred_user:+ [默认 $preferred_user]}: " || return 1
                 target_spec="${target_spec:-$preferred_user}"
                 [ -n "$target_spec" ] || {
                     log_error "普通用户名不能为空"
@@ -5311,19 +5367,19 @@ function action_run_test_scripts() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#           服务器测试脚本选择                  #${PLAIN}"
+        printf '%b\n' "${CYAN}#           $(ui_text "Server Benchmark Scripts" "服务器测试脚本选择")                  #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}请选择要运行的测试脚本:${PLAIN}"
+        printf '%b\n' "${YELLOW}$(ui_text "Choose a benchmark script:" "请选择要运行的测试脚本:")${PLAIN}"
         printf '%b\n' ""
-        printf '%b\n' "${GREEN}[1]${PLAIN} NodeQuality - 节点质量检测"
-        printf '%b\n' "${GREEN}[2]${PLAIN} Yabs - Yet Another Benchmark Script (性能测试)"
-        printf '%b\n' "${GREEN}[3]${PLAIN} RegionRestrictionCheck - 流媒体解锁检测"
-        printf '%b\n' "${GREEN}[4]${PLAIN} IP质量体检脚本 - IP 质量检测"
-        printf '%b\n' "${GREEN}[5]${PLAIN} 融合怪测评脚本 - 综合性能测试"
-        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}[1]${PLAIN} NodeQuality - $(ui_text "node quality" "节点质量检测")"
+        printf '%b\n' "${GREEN}[2]${PLAIN} Yabs - Yet Another Benchmark Script ($(ui_text "performance" "性能测试"))"
+        printf '%b\n' "${GREEN}[3]${PLAIN} RegionRestrictionCheck - $(ui_text "streaming availability" "流媒体解锁检测")"
+        printf '%b\n' "${GREEN}[4]${PLAIN} IP Quality Check - $(ui_text "IP reputation" "IP 质量检测")"
+        printf '%b\n' "${GREEN}[5]${PLAIN} Fusion Monster - $(ui_text "comprehensive benchmark" "综合性能测试")"
+        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' ""
-        read -r -p "请输入 [0-5]: " choice
+        ui_read choice "Enter [0-5]: " "请输入 [0-5]: "
 
         case "$choice" in
             1)
@@ -5378,16 +5434,16 @@ function action_run_test_scripts() {
 function action_dd_reinstall() {
     clear
     printf '%b\n' "${RED}################################################${PLAIN}"
-    printf '%b\n' "${RED}#            ⚠️  危险警告: DD 系统重装            #${PLAIN}"
+    printf '%b\n' "${RED}#            $(ui_text "DANGER: DD SYSTEM REINSTALL" "⚠️  危险警告: DD 系统重装")            #${PLAIN}"
     printf '%b\n' "${RED}################################################${PLAIN}"
     printf '%b\n' ""
-    printf '%b\n' "${RED}此操作将【擦除所有数据】并重装操作系统！${PLAIN}"
-    printf '%b\n' "${RED}此操作不可逆！请确保你已备份所有重要数据！${PLAIN}"
-    printf '%b\n' "${YELLOW}脚本来源: https://github.com/bin456789/reinstall${PLAIN}"
+    printf '%b\n' "${RED}$(ui_text "This operation ERASES ALL DATA and reinstalls the operating system." "此操作将【擦除所有数据】并重装操作系统！")${PLAIN}"
+    printf '%b\n' "${RED}$(ui_text "This cannot be undone. Back up all important data first." "此操作不可逆！请确保你已备份所有重要数据！")${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Script source" "脚本来源"): https://github.com/bin456789/reinstall${PLAIN}"
     printf '%b\n' ""
     
     # 强制确认
-    read -r -p "请输入 'install' 以确认执行 DD 重装 (输入其他取消): " confirm_dd
+    ui_read confirm_dd "Type 'install' to confirm the DD reinstall (anything else cancels): " "请输入 'install' 以确认执行 DD 重装 (输入其他取消): "
     if [ "$confirm_dd" != "install" ]; then
         log_info "操作已取消"
         return
@@ -5407,19 +5463,19 @@ function action_dd_reinstall() {
     log_success "DD 脚本下载成功"
     
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}请选择重装目标系统:${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Choose the target operating system:" "请选择重装目标系统:")${PLAIN}"
     printf '%b\n' "${GREEN}[1]${PLAIN} Debian 12 (Bookworm)"
     printf '%b\n' "${GREEN}[2]${PLAIN} Debian 11 (Bullseye)"
     printf '%b\n' "${GREEN}[3]${PLAIN} Ubuntu 22.04 (Jammy)"
     printf '%b\n' "${GREEN}[4]${PLAIN} Ubuntu 20.04 (Focal)"
     printf '%b\n' "${GREEN}[5]${PLAIN} CentOS 7"
     printf '%b\n' "${GREEN}[6]${PLAIN} Alpine Linux"
-    printf '%b\n' "${GREEN}[7]${PLAIN} Windows 11 (需要大内存)"
-    printf '%b\n' "${GREEN}[8]${PLAIN} 自定义命令 (手动输入参数)"
-    printf '%b\n' "${GREEN}[0]${PLAIN} 取消"
+    printf '%b\n' "${GREEN}[7]${PLAIN} Windows 11 ($(ui_text "requires substantial RAM" "需要大内存"))"
+    printf '%b\n' "${GREEN}[8]${PLAIN} $(ui_text "Custom command (enter arguments manually)" "自定义命令 (手动输入参数)")"
+    printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Cancel" "取消")"
     printf '%b\n' ""
     
-    read -r -p "请输入选择 [0-8]: " dd_choice
+    ui_read dd_choice "Enter [0-8]: " "请输入选择 [0-8]: "
     
     local dd_args=()
     case "$dd_choice" in
@@ -5726,26 +5782,26 @@ submenu_docker_container() {
 
     while true; do
         clear
-        echo "Docker 容器列表"
+        echo "$(ui_text "Docker containers" "Docker 容器列表")"
         docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" || true
         echo ""
-        printf '%b\n' "${CYAN}容器操作${PLAIN}"
+        printf '%b\n' "${CYAN}$(ui_text "Container actions" "容器操作")${PLAIN}"
         echo "------------------------"
-        echo "1. 创建新的容器"
+        echo "1. $(ui_text "Create a container" "创建新的容器")"
         echo "------------------------"
-        echo "2. 启动指定容器             6. 启动所有容器"
-        echo "3. 停止指定容器             7. 停止所有容器"
-        echo "4. 删除指定容器             8. 删除所有容器"
-        echo "5. 重启指定容器             9. 重启所有容器"
+        echo "2. $(ui_text "Start a container             6. Start all containers" "启动指定容器             6. 启动所有容器")"
+        echo "3. $(ui_text "Stop a container              7. Stop all containers" "停止指定容器             7. 停止所有容器")"
+        echo "4. $(ui_text "Delete a container            8. Delete all containers" "删除指定容器             8. 删除所有容器")"
+        echo "5. $(ui_text "Restart a container           9. Restart all containers" "重启指定容器             9. 重启所有容器")"
         echo "------------------------"
-        echo "11. 进入指定容器           12. 查看容器日志"
-        echo "13. 查看容器网络           14. 查看容器占用"
+        echo "11. $(ui_text "Open a container shell       12. View container logs" "进入指定容器           12. 查看容器日志")"
+        echo "13. $(ui_text "View container network       14. View resource usage" "查看容器网络           14. 查看容器占用")"
         echo "------------------------"
-        echo "15. 清除容器 IP 限制       16. 限制容器仅允许指定 IPv4"
+        echo "15. $(ui_text "Clear container IP rules     16. Allow only one source IPv4" "清除容器 IP 限制       16. 限制容器仅允许指定 IPv4")"
         echo "------------------------"
-        echo "0. 返回上一级"
+        echo "0. $(ui_text "Back" "返回上一级")"
         echo "------------------------"
-        read -r -e -p "请输入你的选择: " sub_choice
+        ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
             1)
                 docker_args=()
@@ -5829,19 +5885,19 @@ submenu_docker_image() {
     local -a ids
     while true; do
         clear
-        echo "Docker 镜像列表"
+        echo "$(ui_text "Docker images" "Docker 镜像列表")"
         docker image ls || true
         echo ""
-        printf '%b\n' "${CYAN}镜像操作${PLAIN}"
+        printf '%b\n' "${CYAN}$(ui_text "Image actions" "镜像操作")${PLAIN}"
         echo "------------------------"
-        echo "1. 拉取镜像"
-        echo "2. 更新镜像"
-        echo "3. 删除镜像"
-        echo "4. 删除所有镜像"
+        echo "1. $(ui_text "Pull image" "拉取镜像")"
+        echo "2. $(ui_text "Update image" "更新镜像")"
+        echo "3. $(ui_text "Delete image" "删除镜像")"
+        echo "4. $(ui_text "Delete all images" "删除所有镜像")"
         echo "------------------------"
-        echo "0. 返回上一级"
+        echo "0. $(ui_text "Back" "返回上一级")"
         echo "------------------------"
-        read -r -e -p "请输入你的选择: " sub_choice
+        ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
             1|2)
                 read -r -e -p "请输入镜像名: " imagenames
@@ -5872,19 +5928,19 @@ submenu_docker_network() {
     local sub_choice name net con
     while true; do
         clear
-        echo "Docker 网络列表"
+        echo "$(ui_text "Docker networks" "Docker 网络列表")"
         docker network ls || true
         echo ""
-        printf '%b\n' "${CYAN}网络操作${PLAIN}"
+        printf '%b\n' "${CYAN}$(ui_text "Network actions" "网络操作")${PLAIN}"
         echo "------------------------"
-        echo "1. 创建网络"
-        echo "2. 加入网络"
-        echo "3. 退出网络"
-        echo "4. 删除网络"
+        echo "1. $(ui_text "Create network" "创建网络")"
+        echo "2. $(ui_text "Connect container" "加入网络")"
+        echo "3. $(ui_text "Disconnect container" "退出网络")"
+        echo "4. $(ui_text "Delete network" "删除网络")"
         echo "------------------------"
-        echo "0. 返回上一级"
+        echo "0. $(ui_text "Back" "返回上一级")"
         echo "------------------------"
-        read -r -e -p "请输入你的选择: " sub_choice
+        ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
             1)
                 read -r -e -p "网络名: " name
@@ -5918,44 +5974,44 @@ submenu_docker_manager() {
     while true; do
       clear
       printf '%b\n' "${CYAN}=================================================${PLAIN}"
-      printf '%b\n' "${CYAN}           Docker 管理器 (by kejilion.sh)${PLAIN}"
+      printf '%b\n' "${CYAN}           $(ui_text "Docker Manager" "Docker 管理器") (by kejilion.sh)${PLAIN}"
       printf '%b\n' "${CYAN}=================================================${PLAIN}"
       docker_tato
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}1.${PLAIN}   安装/更新 Docker 环境 ${YELLOW}★${PLAIN}"
+      printf '%b\n' "${GREEN}1.${PLAIN}   $(ui_text "Install/update Docker" "安装/更新 Docker 环境") ${YELLOW}*${PLAIN}"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}2.${PLAIN}   查看 Docker 全局状态 ${YELLOW}★${PLAIN}"
+      printf '%b\n' "${GREEN}2.${PLAIN}   $(ui_text "View Docker status" "查看 Docker 全局状态") ${YELLOW}*${PLAIN}"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}3.${PLAIN}   Docker 容器管理 ${YELLOW}★${PLAIN}"
-      printf '%b\n' "${GREEN}4.${PLAIN}   Docker 镜像管理"
-      printf '%b\n' "${GREEN}5.${PLAIN}   Docker 网络管理"
+      printf '%b\n' "${GREEN}3.${PLAIN}   $(ui_text "Manage containers" "Docker 容器管理") ${YELLOW}*${PLAIN}"
+      printf '%b\n' "${GREEN}4.${PLAIN}   $(ui_text "Manage images" "Docker 镜像管理")"
+      printf '%b\n' "${GREEN}5.${PLAIN}   $(ui_text "Manage networks" "Docker 网络管理")"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}8.${PLAIN}   更换 Docker 源 (国内加速)"
+      printf '%b\n' "${GREEN}8.${PLAIN}   $(ui_text "Configure a China registry mirror" "更换 Docker 源 (国内加速)")"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}0.${PLAIN}   返回主菜单"
+      printf '%b\n' "${GREEN}0.${PLAIN}   $(ui_text "Back to main menu" "返回主菜单")"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      read -e -p "请输入你的选择: " sub_choice
+      ui_read sub_choice "Select: " "请输入你的选择: "
 
       case $sub_choice in
           1)
             clear
             action_install_add_docker
-            read -r -p "按 Enter 继续..."
+            menu_pause
             ;;
           2)
               clear
               docker info
-              read -r -p "按 Enter 继续..."
+              menu_pause
               ;;
           3) submenu_docker_container ;;
           4) submenu_docker_image ;;
           5) submenu_docker_network ;;
           8)
               install_add_docker_cn
-              read -r -p "按 Enter 继续..."
+              menu_pause
               ;;
           0) break ;;
-          *) echo "无效输入"; sleep 1 ;;
+          *) menu_invalid_choice ;;
       esac
     done
 }
@@ -5964,19 +6020,19 @@ submenu_app_market() {
     while true; do
         clear
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
-        printf '%b\n' "${CYAN}           应用市场 (精选)                         ${PLAIN}"
+        printf '%b\n' "${CYAN}           $(ui_text "Application Catalog" "应用市场 (精选)")                         ${PLAIN}"
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 1Panel 面板 (现代化管理面板)"
-        printf '%b\n' "${GREEN}2.${PLAIN} aaPanel (宝塔国际版)"
-        printf '%b\n' "${GREEN}3.${PLAIN} 宝塔面板 (官方版)"
+        printf '%b\n' "${GREEN}1.${PLAIN} 1Panel ($(ui_text "modern control panel" "现代化管理面板"))"
+        printf '%b\n' "${GREEN}2.${PLAIN} aaPanel ($(ui_text "international edition" "宝塔国际版"))"
+        printf '%b\n' "${GREEN}3.${PLAIN} BT Panel ($(ui_text "official edition" "官方版"))"
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
-        printf '%b\n' "${GREEN}4.${PLAIN} Nginx Proxy Manager (反向代理面板)"
-        printf '%b\n' "${GREEN}5.${PLAIN} Portainer (Docker 管理面板)"
-        printf '%b\n' "${GREEN}6.${PLAIN} Uptime Kuma (监控工具)"
+        printf '%b\n' "${GREEN}4.${PLAIN} Nginx Proxy Manager ($(ui_text "reverse-proxy UI" "反向代理面板"))"
+        printf '%b\n' "${GREEN}5.${PLAIN} Portainer ($(ui_text "Docker UI" "Docker 管理面板"))"
+        printf '%b\n' "${GREEN}6.${PLAIN} Uptime Kuma ($(ui_text "monitoring" "监控工具"))"
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
-        read -r -p "请输入选择: " app_choice
+        ui_read app_choice "Select: " "请输入选择: "
         
         case "$app_choice" in
             1)
@@ -6030,9 +6086,9 @@ submenu_app_market() {
                  fi
                  ;;
             0) break ;;
-            *) echo "无效选项" ;;
+            *) menu_invalid_choice ;;
         esac
-        if [ "$app_choice" != "0" ]; then read -r -p "按 Enter 继续..."; fi
+        if [ "$app_choice" != "0" ]; then menu_pause; fi
     done
 }
 
@@ -6058,13 +6114,13 @@ function cd2_get_compose_cmd() {
 
 function action_cd2_mount_helper() {
     printf '%b\n' ""
-    printf '%b\n' "${CYAN}CloudDrive2 挂载共享设置${PLAIN}"
+    printf '%b\n' "${CYAN}$(ui_text "CloudDrive2 shared-mount setup" "CloudDrive2 挂载共享设置")${PLAIN}"
     printf '%b\n' "------------------------"
-    printf '%b\n' "${GREEN}1.${PLAIN} Docker 为 systemd 服务 (写入 MountFlags=shared)"
-    printf '%b\n' "${GREEN}2.${PLAIN} 临时 make-shared (重启后需重做)"
-    printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+    printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Docker is a systemd service (write MountFlags=shared)" "Docker 为 systemd 服务 (写入 MountFlags=shared)")"
+    printf '%b\n' "${GREEN}2.${PLAIN} $(ui_text "Temporary make-shared (must be repeated after reboot)" "临时 make-shared (重启后需重做)")"
+    printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back" "返回")"
     printf '%b\n' "------------------------"
-    read -r -p "请输入选择 [0-2]: " mount_choice
+    ui_read mount_choice "Enter [0-2]: " "请输入选择 [0-2]: "
 
     case "$mount_choice" in
         1)
@@ -6243,23 +6299,23 @@ function action_setup_cd2() {
     while true; do
         clear
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
-        printf '%b\n' "${CYAN}           CloudDrive2 (CD2) 安装向导            ${PLAIN}"
+        printf '%b\n' "${CYAN}           CloudDrive2 (CD2) $(ui_text "Setup Wizard" "安装向导")            ${PLAIN}"
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} Docker Compose 安装 (推荐)"
-        printf '%b\n' "${GREEN}2.${PLAIN} 原生安装 (install_cd2.sh)"
-        printf '%b\n' "${GREEN}3.${PLAIN} 挂载共享设置 (MountFlags/make-shared)"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Docker Compose setup (recommended)" "Docker Compose 安装 (推荐)")"
+        printf '%b\n' "${GREEN}2.${PLAIN} $(ui_text "Native setup (install_cd2.sh)" "原生安装 (install_cd2.sh)")"
+        printf '%b\n' "${GREEN}3.${PLAIN} $(ui_text "Shared-mount setup (MountFlags/make-shared)" "挂载共享设置 (MountFlags/make-shared)")"
+        printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
-        read -r -p "请输入选择: " cd2_choice
+        ui_read cd2_choice "Select: " "请输入选择: "
 
         case "$cd2_choice" in
             1) action_setup_cd2_docker_compose ;;
             2) action_setup_cd2_native ;;
             3) action_cd2_mount_helper ;;
             0) break ;;
-            *) echo "无效选项"; sleep 1 ;;
+            *) menu_invalid_choice ;;
         esac
-        if [ "$cd2_choice" != "0" ]; then read -r -p "按 Enter 继续..."; fi
+        if [ "$cd2_choice" != "0" ]; then menu_pause; fi
     done
 }
 
@@ -6305,31 +6361,31 @@ function action_toolbox() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              系统工具箱                      #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "System Toolbox" "系统工具箱")                      #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' ""
-        printf '%b\n' "${GREEN}[1]${PLAIN} DD 系统重装 (危险)"
-        printf '%b\n' "${GREEN}[2]${PLAIN} 1Panel 面板 (快捷)"
-        printf '%b\n' "${GREEN}[3]${PLAIN} 配置炫酷 MOTD (登录欢迎信息)"
-        printf '%b\n' "${GREEN}[4]${PLAIN} 清理系统 (移除无用包/缓存)"
-        printf '%b\n' "${GREEN}[5]${PLAIN} 查看系统信息"
-        printf '%b\n' "${GREEN}[6]${PLAIN} 开启 BBR (如果未开启)"
-        printf '%b\n' "${GREEN}[7]${PLAIN} 清理痕迹/历史记录 (危险)"
-        printf '%b\n' "${GREEN}[8]${PLAIN} 服务健康检查 (SSH/UFW/Fail2ban/Docker)"
-        printf '%b\n' "${GREEN}[9]${PLAIN} 性能优化预设 (sysctl)"
-        printf '%b\n' "${GREEN}[10]${PLAIN} 磁盘工具 (挂载/SMART/Trim)"
-        printf '%b\n' "${GREEN}[11]${PLAIN} 用户管理 (新建用户/SSH/Sudo/禁用Root)"
-        printf '%b\n' "${GREEN}[12]${PLAIN} 备份/恢复 (restic/borg)"
-        printf '%b\n' "${GREEN}[13]${PLAIN} 监控/告警基础"
-        printf '%b\n' "${GREEN}[14]${PLAIN} 证书/反向代理"
-        printf '%b\n' "${GREEN}[15]${PLAIN} 安全审计"
-        printf '%b\n' "${GREEN}[16]${PLAIN} Docker Compose 项目备份"
-        printf '%b\n' "${GREEN}[17]${PLAIN} 模块状态总览"
-        printf '%b\n' "${GREEN}[18]${PLAIN} 脚本自检/ShellCheck"
-        printf '%b\n' "${GREEN}[19]${PLAIN} 运维增强中心 (Profile/报告/安全基线)"
-        printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+        printf '%b\n' "${GREEN}[1]${PLAIN} $(ui_text "DD operating-system reinstall (dangerous)" "DD 系统重装 (危险)")"
+        printf '%b\n' "${GREEN}[2]${PLAIN} $(ui_text "1Panel quick install" "1Panel 面板 (快捷)")"
+        printf '%b\n' "${GREEN}[3]${PLAIN} $(ui_text "Configure MOTD (login message)" "配置炫酷 MOTD (登录欢迎信息)")"
+        printf '%b\n' "${GREEN}[4]${PLAIN} $(ui_text "Clean unused packages and caches" "清理系统 (移除无用包/缓存)")"
+        printf '%b\n' "${GREEN}[5]${PLAIN} $(ui_text "View system information" "查看系统信息")"
+        printf '%b\n' "${GREEN}[6]${PLAIN} $(ui_text "Enable BBR" "开启 BBR (如果未开启)")"
+        printf '%b\n' "${GREEN}[7]${PLAIN} $(ui_text "Clear traces/history (dangerous)" "清理痕迹/历史记录 (危险)")"
+        printf '%b\n' "${GREEN}[8]${PLAIN} $(ui_text "Service health check (SSH/UFW/Fail2ban/Docker)" "服务健康检查 (SSH/UFW/Fail2ban/Docker)")"
+        printf '%b\n' "${GREEN}[9]${PLAIN} $(ui_text "Performance presets (sysctl)" "性能优化预设 (sysctl)")"
+        printf '%b\n' "${GREEN}[10]${PLAIN} $(ui_text "Disk tools (mount/SMART/Trim)" "磁盘工具 (挂载/SMART/Trim)")"
+        printf '%b\n' "${GREEN}[11]${PLAIN} $(ui_text "User management (create/SSH/sudo/disable root)" "用户管理 (新建用户/SSH/Sudo/禁用Root)")"
+        printf '%b\n' "${GREEN}[12]${PLAIN} $(ui_text "Backup/restore (restic/borg)" "备份/恢复 (restic/borg)")"
+        printf '%b\n' "${GREEN}[13]${PLAIN} $(ui_text "Monitoring/alerting basics" "监控/告警基础")"
+        printf '%b\n' "${GREEN}[14]${PLAIN} $(ui_text "TLS/reverse proxy" "证书/反向代理")"
+        printf '%b\n' "${GREEN}[15]${PLAIN} $(ui_text "Security audit" "安全审计")"
+        printf '%b\n' "${GREEN}[16]${PLAIN} $(ui_text "Docker Compose project backup" "Docker Compose 项目备份")"
+        printf '%b\n' "${GREEN}[17]${PLAIN} $(ui_text "Module status overview" "模块状态总览")"
+        printf '%b\n' "${GREEN}[18]${PLAIN} $(ui_text "Script checks/ShellCheck" "脚本自检/ShellCheck")"
+        printf '%b\n' "${GREEN}[19]${PLAIN} $(ui_text "Operations enhancements (profiles/reports/security)" "运维增强中心 (Profile/报告/安全基线)")"
+        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-19]: " tool_choice
+        ui_read tool_choice "Enter [0-19]: " "请输入选择 [0-19]: "
 
         case "$tool_choice" in
             1) run_menu_action action_dd_reinstall ;;
@@ -6440,10 +6496,10 @@ EOF
 
 function action_sysctl_presets() {
     log_info "sysctl 性能预设..."
-    printf '%b\n' "${GREEN}[1]${PLAIN} 保守 (conservative，含 BBR)"
-    printf '%b\n' "${GREEN}[2]${PLAIN} 标准 (standard，含 BBR)"
-    printf '%b\n' "${GREEN}[3]${PLAIN} 激进 (aggressive，含 BBR)"
-    read -r -p "请选择 [1-3]: " preset_choice
+    printf '%b\n' "${GREEN}[1]${PLAIN} $(ui_text "Conservative (includes BBR)" "保守 (conservative，含 BBR)")"
+    printf '%b\n' "${GREEN}[2]${PLAIN} $(ui_text "Standard (includes BBR)" "标准 (standard，含 BBR)")"
+    printf '%b\n' "${GREEN}[3]${PLAIN} $(ui_text "Aggressive (includes BBR)" "激进 (aggressive，含 BBR)")"
+    ui_read preset_choice "Choose [1-3]: " "请选择 [1-3]: "
     local preset_file="/etc/sysctl.d/99-init-presets.conf"
     local content="" current_control="" current_qdisc=""
 
@@ -6572,13 +6628,13 @@ configure_restic_local_backup() {
     local backend backend_choice
     local aws_access_key="" aws_secret_key="" b2_account_id="" b2_account_key=""
 
-    printf '%b\n' "${YELLOW}请选择 restic 仓库后端:${PLAIN}"
-    printf '%b\n' "${GREEN}1.${PLAIN} 本地目录"
+    printf '%b\n' "${YELLOW}$(ui_text "Choose the restic repository backend:" "请选择 restic 仓库后端:")${PLAIN}"
+    printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Local directory" "本地目录")"
     printf '%b\n' "${GREEN}2.${PLAIN} SFTP (user@host:/path)"
-    printf '%b\n' "${GREEN}3.${PLAIN} S3 兼容存储"
+    printf '%b\n' "${GREEN}3.${PLAIN} $(ui_text "S3-compatible storage" "S3 兼容存储")"
     printf '%b\n' "${GREEN}4.${PLAIN} Backblaze B2"
-    printf '%b\n' "${GREEN}5.${PLAIN} 自定义 restic repository 字符串"
-    read -r -p "请选择 [1-5，默认 1]: " backend_choice
+    printf '%b\n' "${GREEN}5.${PLAIN} $(ui_text "Custom restic repository string" "自定义 restic repository 字符串")"
+    ui_read backend_choice "Choose [1-5, default 1]: " "请选择 [1-5，默认 1]: "
     backend_choice="${backend_choice:-1}"
 
     case "$backend_choice" in
@@ -6906,18 +6962,18 @@ function action_backup_restore() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              备份 / 恢复                     #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "Backup / Restore" "备份 / 恢复")                     #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 安装备份工具 (restic/borgbackup)"
-        printf '%b\n' "${GREEN}2.${PLAIN} 配置本地 restic 定时备份"
-        printf '%b\n' "${GREEN}3.${PLAIN} 立即执行 restic 备份"
-        printf '%b\n' "${GREEN}4.${PLAIN} 查看 restic 快照"
-        printf '%b\n' "${GREEN}5.${PLAIN} 预览 restic 快照"
-        printf '%b\n' "${GREEN}6.${PLAIN} 恢复 restic 快照"
-        printf '%b\n' "${GREEN}7.${PLAIN} restic 恢复演练"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Install backup tools (restic/borgbackup)" "安装备份工具 (restic/borgbackup)"
+        menu_option "$GREEN" "2" "Configure scheduled local restic backups" "配置本地 restic 定时备份"
+        menu_option "$GREEN" "3" "Run a restic backup now" "立即执行 restic 备份"
+        menu_option "$GREEN" "4" "List restic snapshots" "查看 restic 快照"
+        menu_option "$GREEN" "5" "Preview a restic snapshot" "预览 restic 快照"
+        menu_option "$GREEN" "6" "Restore a restic snapshot" "恢复 restic 快照"
+        menu_option "$GREEN" "7" "Run a restic restore drill" "restic 恢复演练"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-7]: " choice
+        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
         case "$choice" in
             1) run_menu_action install_backup_tools ;;
             2) run_menu_action configure_restic_local_backup ;;
@@ -7070,15 +7126,15 @@ function action_monitoring_alerts() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              监控 / 告警基础                 #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "Monitoring / Alerts" "监控 / 告警基础")                 #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 配置 journald 持久化"
-        printf '%b\n' "${GREEN}2.${PLAIN} 安装 node_exporter"
-        printf '%b\n' "${GREEN}3.${PLAIN} 安装本机健康检查定时器"
-        printf '%b\n' "${GREEN}4.${PLAIN} 查看监控状态"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Configure persistent journald storage" "配置 journald 持久化"
+        menu_option "$GREEN" "2" "Install node_exporter" "安装 node_exporter"
+        menu_option "$GREEN" "3" "Install the local health-check timer" "安装本机健康检查定时器"
+        menu_option "$GREEN" "4" "View monitoring status" "查看监控状态"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-4]: " choice
+        ui_read choice "Enter [0-4]: " "请输入选择 [0-4]: "
         case "$choice" in
             1) run_menu_action configure_journald_persistent ;;
             2) run_menu_action install_node_exporter ;;
@@ -7191,13 +7247,13 @@ function action_reverse_proxy_cert() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              证书 / 反向代理                 #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "TLS / Reverse Proxy" "证书 / 反向代理")                 #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} Caddy 自动 HTTPS 反代 (推荐)"
-        printf '%b\n' "${GREEN}2.${PLAIN} Nginx + Certbot 反代"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Caddy automatic HTTPS reverse proxy (recommended)" "Caddy 自动 HTTPS 反代 (推荐)"
+        menu_option "$GREEN" "2" "Nginx + Certbot reverse proxy" "Nginx + Certbot 反代"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-2]: " choice
+        ui_read choice "Enter [0-2]: " "请输入选择 [0-2]: "
         case "$choice" in
             1) run_menu_action configure_caddy_reverse_proxy ;;
             2) run_menu_action configure_nginx_certbot_proxy ;;
@@ -7245,18 +7301,18 @@ function action_security_audit() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              安全审计                         #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "Security Audit" "安全审计")                         #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 安装 Lynis / debsums"
-        printf '%b\n' "${GREEN}2.${PLAIN} 运行 Lynis 快速审计"
-        printf '%b\n' "${GREEN}3.${PLAIN} 检查 Debian 包文件校验 (debsums)"
-        printf '%b\n' "${GREEN}4.${PLAIN} SSH 配置审计"
-        printf '%b\n' "${GREEN}5.${PLAIN} 端口暴露扫描"
-        printf '%b\n' "${GREEN}6.${PLAIN} Docker 安全基线"
-        printf '%b\n' "${GREEN}7.${PLAIN} 外部资源信任清单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Install Lynis / debsums" "安装 Lynis / debsums"
+        menu_option "$GREEN" "2" "Run a quick Lynis audit" "运行 Lynis 快速审计"
+        menu_option "$GREEN" "3" "Verify Debian package files (debsums)" "检查 Debian 包文件校验 (debsums)"
+        menu_option "$GREEN" "4" "Audit SSH configuration" "SSH 配置审计"
+        menu_option "$GREEN" "5" "Scan exposed ports" "端口暴露扫描"
+        menu_option "$GREEN" "6" "Check Docker security baseline" "Docker 安全基线"
+        menu_option "$GREEN" "7" "Show external-resource trust inventory" "外部资源信任清单"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-7]: " choice
+        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
         case "$choice" in
             1) run_menu_action install_security_audit_tools ;;
             2) run_menu_action run_lynis_quick_audit ;;
@@ -7605,16 +7661,16 @@ function action_docker_compose_backup() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#           Docker Compose 项目备份             #${PLAIN}"
+        printf '%b\n' "${CYAN}#           Docker Compose $(ui_text "Project Backup" "项目备份")             #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 立即备份 Compose 项目"
-        printf '%b\n' "${GREEN}2.${PLAIN} 配置 Compose 项目定时备份"
-        printf '%b\n' "${GREEN}3.${PLAIN} 查看 Compose 备份定时器"
-        printf '%b\n' "${GREEN}4.${PLAIN} Docker 安全基线检查"
-        printf '%b\n' "${GREEN}5.${PLAIN} Docker 镜像更新检查"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Back up a Compose project now" "立即备份 Compose 项目"
+        menu_option "$GREEN" "2" "Schedule Compose project backups" "配置 Compose 项目定时备份"
+        menu_option "$GREEN" "3" "View Compose backup timers" "查看 Compose 备份定时器"
+        menu_option "$GREEN" "4" "Check Docker security baseline" "Docker 安全基线检查"
+        menu_option "$GREEN" "5" "Check Docker image updates" "Docker 镜像更新检查"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-5]: " choice
+        ui_read choice "Enter [0-5]: " "请输入选择 [0-5]: "
         case "$choice" in
             1) run_menu_action run_docker_compose_backup_once ;;
             2) run_menu_action install_docker_compose_backup_timer ;;
@@ -7828,15 +7884,15 @@ function action_script_quality() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              脚本自检 / ShellCheck           #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "Script Checks / ShellCheck" "脚本自检 / ShellCheck")           #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 静态自检 (bash -n / 函数 / 菜单分区 / 远程执行扫描)"
-        printf '%b\n' "${GREEN}2.${PLAIN} 运行 ShellCheck"
-        printf '%b\n' "${GREEN}3.${PLAIN} 运行安全/故障注入回归测试"
-        printf '%b\n' "${GREEN}4.${PLAIN} 查看模块状态总览"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "Static checks (bash -n / functions / menus / remote execution)" "静态自检 (bash -n / 函数 / 菜单分区 / 远程执行扫描)"
+        menu_option "$GREEN" "2" "Run ShellCheck" "运行 ShellCheck"
+        menu_option "$GREEN" "3" "Run safety/fault-injection regression tests" "运行安全/故障注入回归测试"
+        menu_option "$GREEN" "4" "View module status" "查看模块状态总览"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-4]: " choice
+        ui_read choice "Enter [0-4]: " "请输入选择 [0-4]: "
         case "$choice" in
             1) run_menu_action run_script_static_self_check ;;
             2) run_menu_action run_shellcheck_scan ;;
@@ -8183,16 +8239,16 @@ action_profile_plan_apply() {
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#           Profile / Plan / Apply             #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${GREEN}1.${PLAIN} 查看内置 Profile"
-        printf '%b\n' "${GREEN}2.${PLAIN} 选择 Profile 并查看计划"
-        printf '%b\n' "${GREEN}3.${PLAIN} 选择 Profile 并执行"
-        printf '%b\n' "${GREEN}4.${PLAIN} 导出内置 Profile 到文件"
-        printf '%b\n' "${GREEN}5.${PLAIN} 导入 Profile 文件并查看计划"
-        printf '%b\n' "${GREEN}6.${PLAIN} 导入 Profile 文件并执行"
-        printf '%b\n' "${GREEN}7.${PLAIN} 创建自定义 Profile"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "1" "List built-in profiles" "查看内置 Profile"
+        menu_option "$GREEN" "2" "Choose a profile and view its plan" "选择 Profile 并查看计划"
+        menu_option "$GREEN" "3" "Choose and apply a profile" "选择 Profile 并执行"
+        menu_option "$GREEN" "4" "Export a built-in profile" "导出内置 Profile 到文件"
+        menu_option "$GREEN" "5" "Import a profile file and view its plan" "导入 Profile 文件并查看计划"
+        menu_option "$GREEN" "6" "Import and apply a profile file" "导入 Profile 文件并执行"
+        menu_option "$GREEN" "7" "Create a custom profile" "创建自定义 Profile"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-7]: " choice
+        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
         case "$choice" in
             1)
                 profile_presets | while IFS= read -r p; do
@@ -8594,20 +8650,20 @@ action_ops_enhancements() {
     while true; do
         clear
         printf '%b\n' "${CYAN}################################################${PLAIN}"
-        printf '%b\n' "${CYAN}#              运维增强中心                    #${PLAIN}"
+        printf '%b\n' "${CYAN}#              $(ui_text "Operations Enhancements" "运维增强中心")                    #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${GREEN}1.${PLAIN} Profile / Plan / Apply"
-        printf '%b\n' "${GREEN}2.${PLAIN} 生成系统变更报告"
-        printf '%b\n' "${GREEN}3.${PLAIN} 端口暴露扫描"
-        printf '%b\n' "${GREEN}4.${PLAIN} SSH 配置审计"
-        printf '%b\n' "${GREEN}5.${PLAIN} 外部资源信任清单"
-        printf '%b\n' "${GREEN}6.${PLAIN} 自动更新维护窗口"
-        printf '%b\n' "${GREEN}7.${PLAIN} Docker 安全基线"
-        printf '%b\n' "${GREEN}8.${PLAIN} Docker 镜像更新检查"
-        printf '%b\n' "${GREEN}9.${PLAIN} restic 恢复演练"
-        printf '%b\n' "${GREEN}0.${PLAIN} 返回"
+        menu_option "$GREEN" "2" "Generate a system change report" "生成系统变更报告"
+        menu_option "$GREEN" "3" "Scan exposed ports" "端口暴露扫描"
+        menu_option "$GREEN" "4" "Audit SSH configuration" "SSH 配置审计"
+        menu_option "$GREEN" "5" "Show external-resource trust inventory" "外部资源信任清单"
+        menu_option "$GREEN" "6" "Configure the update maintenance window" "自动更新维护窗口"
+        menu_option "$GREEN" "7" "Check Docker security baseline" "Docker 安全基线"
+        menu_option "$GREEN" "8" "Check Docker image updates" "Docker 镜像更新检查"
+        menu_option "$GREEN" "9" "Run a restic restore drill" "restic 恢复演练"
+        menu_option "$GREEN" "0" "Back" "返回"
         printf '%b\n' ""
-        read -r -p "请输入选择 [0-9]: " choice
+        ui_read choice "Enter [0-9]: " "请输入选择 [0-9]: "
         case "$choice" in
             1) run_menu_flow action_profile_plan_apply ;;
             2) run_menu_action generate_system_change_report ;;
@@ -8747,27 +8803,43 @@ function task_init_with_mirror() {
 function task_custom_init() {
     clear
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#           自定义初始化 - 选择模块            #${PLAIN}"
+    printf '%b\n' "${CYAN}#           $(ui_text "Custom Initialization - Modules" "自定义初始化 - 选择模块")            #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}请选择要安装/配置的模块（可多选，用空格分隔，如: 1 3 5）${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Choose modules (separate multiple choices with spaces, for example: 1 3 5)" "请选择要安装/配置的模块（可多选，用空格分隔，如: 1 3 5）")${PLAIN}"
     printf '%b\n' ""
     
     # 定义模块列表
     declare -A modules
-    modules[1]="换源 (更换为阿里云镜像源)"
-    modules[2]="安装基础工具 (curl, wget, vim, git 等)"
-    modules[3]="系统优化 (内核参数、limits、BBR 等)"
-    modules[4]="Swap 配置 (交换空间)"
-    modules[5]="SSH 安全配置 (端口、密钥、禁用密码)"
-    modules[6]="防火墙配置 (UFW)"
-    modules[7]="Fail2ban 配置 (防暴力破解)"
-    modules[8]="自动安全更新 (unattended-upgrades)"
-    modules[9]="Docker 安装 (Docker Engine + Compose)"
-    modules[10]="Runtime 安装 (Node.js/Python/PHP/Java/Go/.NET)"
-    modules[11]="备份工具 (restic/borgbackup)"
-    modules[12]="监控/日志基础 (journald 持久化 + 健康检查)"
-    modules[13]="安全审计工具 (Lynis/debsums)"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "en" ]; then
+        modules[1]="Change apt sources (Alibaba Cloud mirror)"
+        modules[2]="Install essential tools (curl, wget, vim, git, etc.)"
+        modules[3]="System optimization (kernel settings, limits, BBR)"
+        modules[4]="Configure Swap"
+        modules[5]="Secure SSH (port, keys, password login)"
+        modules[6]="Configure firewall (UFW)"
+        modules[7]="Configure Fail2ban"
+        modules[8]="Automatic security updates (unattended-upgrades)"
+        modules[9]="Install Docker Engine + Compose"
+        modules[10]="Install runtimes (Node.js/Python/PHP/Java/Go/.NET)"
+        modules[11]="Backup tools (restic/borgbackup)"
+        modules[12]="Monitoring/logging (persistent journald + health checks)"
+        modules[13]="Security audit tools (Lynis/debsums)"
+    else
+        modules[1]="换源 (更换为阿里云镜像源)"
+        modules[2]="安装基础工具 (curl, wget, vim, git 等)"
+        modules[3]="系统优化 (内核参数、limits、BBR 等)"
+        modules[4]="Swap 配置 (交换空间)"
+        modules[5]="SSH 安全配置 (端口、密钥、禁用密码)"
+        modules[6]="防火墙配置 (UFW)"
+        modules[7]="Fail2ban 配置 (防暴力破解)"
+        modules[8]="自动安全更新 (unattended-upgrades)"
+        modules[9]="Docker 安装 (Docker Engine + Compose)"
+        modules[10]="Runtime 安装 (Node.js/Python/PHP/Java/Go/.NET)"
+        modules[11]="备份工具 (restic/borgbackup)"
+        modules[12]="监控/日志基础 (journald 持久化 + 健康检查)"
+        modules[13]="安全审计工具 (Lynis/debsums)"
+    fi
     
     # 显示模块列表
     for i in {1..13}; do
@@ -8775,11 +8847,11 @@ function task_custom_init() {
         printf '%b\n' "${GREEN}[$i]${PLAIN} ${modules[$i]}"
     done
     printf '%b\n' ""
-    printf '%b\n' "${GREEN}[a]${PLAIN} 全选"
-    printf '%b\n' "${GREEN}[0]${PLAIN} 返回主菜单"
+    printf '%b\n' "${GREEN}[a]${PLAIN} $(ui_text "Select all" "全选")"
+    printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
     printf '%b\n' ""
     
-    read -r -p "请输入选择 (例如: 1 3 5 或 a): " selections
+    ui_read selections "Enter choices (for example: 1 3 5 or a): " "请输入选择 (例如: 1 3 5 或 a): "
     
     # 处理全选
     if [[ "$selections" == "a" || "$selections" == "A" ]]; then
@@ -9427,7 +9499,11 @@ menu_header() {
     local subtitle="${2:-}"
     clear
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#  Linux 运维一键脚本 v8.5                    #${PLAIN}"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "zh" ]; then
+        printf '%b\n' "${CYAN}#  Linux 运维一键脚本 v8.5                    #${PLAIN}"
+    else
+        printf '%b\n' "${CYAN}#  Linux Server Toolkit v8.5                   #${PLAIN}"
+    fi
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${BOLD}${title}${PLAIN}"
     if [ -n "$subtitle" ]; then
@@ -9439,12 +9515,22 @@ menu_header() {
 menu_pause() {
     local _
     printf '%b\n' ""
-    read -r -p "按 Enter 键继续..." _
+    ui_read _ "Press Enter to continue..." "按 Enter 键继续..."
 }
 
 menu_invalid_choice() {
-    printf '%b\n' "${RED}输入错误${PLAIN}"
+    printf '%b\n' "${RED}$(ui_text "Invalid choice" "输入错误")${PLAIN}"
     sleep 1
+}
+
+menu_option() {
+    local color="$1" key="$2" english="$3" chinese="$4"
+    printf '%b\n' "${color}${key}.${PLAIN} $(ui_text "$english" "$chinese")"
+}
+
+menu_back_and_exit() {
+    menu_option "$GREEN" "b" "Back to main menu" "返回主菜单"
+    menu_option "$GREEN" "0" "Exit" "退出"
 }
 
 dry_run_action_plan() {
@@ -9557,7 +9643,38 @@ run_menu_flow() {
 }
 
 show_recommended_modules() {
-    menu_header "推荐模块组合" "按服务器用途选择，避免一上来全装。"
+    menu_header \
+        "$(ui_text "Recommended module sets" "推荐模块组合")" \
+        "$(ui_text "Choose by server role instead of installing everything." "按服务器用途选择，避免一上来全装。")"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "en" ]; then
+        printf '%b\n' "${GREEN}New VPS baseline:${PLAIN}"
+        printf '%b\n' "  1) Essential tools"
+        printf '%b\n' "  2) SSH security"
+        printf '%b\n' "  3) UFW firewall + Fail2ban"
+        printf '%b\n' "  4) Automatic security updates"
+        printf '%b\n' "  5) System resource check"
+        printf '%b\n' "  6) Exportable minimal profile"
+        printf '%b\n' "  Optional: configure Swap or a sysctl preset for the actual workload"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}Docker / application host:${PLAIN}"
+        printf '%b\n' "  Official Docker apt install, management, app catalog, TLS/reverse proxy, Compose backup, security baseline, image updates, and health checks"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}Development host:${PLAIN}"
+        printf '%b\n' "  dev-box adds runtimes, a terminal environment, and network/HTTP tools to the VPS security baseline"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}Storage / media host:${PLAIN}"
+        printf '%b\n' "  Backup/restore, rclone, CloudDrive2, disk tools, and shared-mount helpers"
+        printf '%b\n' ""
+        printf '%b\n' "${GREEN}Operations baseline:${PLAIN}"
+        printf '%b\n' "  Profile/Plan/Apply, change reports, exposed-port scans, SSH audits, trust inventory, maintenance windows, old-kernel cleanup previews, and restore drills"
+        printf '%b\n' ""
+        printf '%b\n' "${YELLOW}Use with care:${PLAIN}"
+        printf '%b\n' "  DD reinstall, trace cleanup, third-party control panels, and benchmark scripts"
+        printf '%b\n' ""
+        printf '%b\n' "${CYAN}Suggestion:${PLAIN} start with Quick start -> Custom initialization, then add role-specific modules."
+        menu_pause
+        return
+    fi
     printf '%b\n' "${GREEN}新 VPS 基线:${PLAIN}"
     printf '%b\n' "  1) 基础工具"
     printf '%b\n' "  2) SSH 安全配置"
@@ -9589,15 +9706,16 @@ show_recommended_modules() {
 show_quick_start_menu() {
     local choice
     while true; do
-        menu_header "快速开始" "选择初始化工作流；单项配置请进入对应功能分区。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 标准初始化（不换源）"
-        printf '%b\n' "${GREEN}2.${PLAIN} 国内镜像初始化（阿里源）"
-        printf '%b\n' "${GREEN}3.${PLAIN} 自定义初始化（批量选择模块）${CYAN} [推荐]${PLAIN}"
-        printf '%b\n' "${GREEN}4.${PLAIN} Profile / Plan / Apply"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Quick start" "快速开始")" \
+            "$(ui_text "Choose an initialization workflow; use the other sections for individual tasks." "选择初始化工作流；单项配置请进入对应功能分区。")"
+        menu_option "$GREEN" "1" "Standard initialization (keep current apt sources)" "标准初始化（不换源）"
+        menu_option "$GREEN" "2" "China mirror initialization (Alibaba Cloud)" "国内镜像初始化（阿里源）"
+        printf '%b\n' "${GREEN}3.${PLAIN} $(ui_text "Custom initialization (select modules)" "自定义初始化（批量选择模块）")${CYAN} $(ui_text "[recommended]" "[推荐]")${PLAIN}"
+        menu_option "$GREEN" "4" "Profile / Plan / Apply" "Profile / Plan / Apply"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action task_init_no_mirror ;;
             2) run_menu_action task_init_with_mirror ;;
@@ -9613,19 +9731,20 @@ show_quick_start_menu() {
 show_security_menu() {
     local choice
     while true; do
-        menu_header "安全与访问" "账号、SSH、防火墙、防暴力破解集中在这里。"
-        printf '%b\n' "${GREEN}1.${PLAIN} SSH 安全配置（端口 / 选择密钥账户 / 禁用密码）"
-        printf '%b\n' "${GREEN}2.${PLAIN} 用户管理（新建用户 / SSH / sudo / 禁用 root）"
-        printf '%b\n' "${GREEN}3.${PLAIN} UFW 防火墙"
-        printf '%b\n' "${GREEN}4.${PLAIN} Fail2ban"
-        printf '%b\n' "${GREEN}5.${PLAIN} 自动安全更新"
-        printf '%b\n' "${GREEN}6.${PLAIN} 安全审计 (Lynis/debsums)"
-        printf '%b\n' "${GREEN}7.${PLAIN} SSH 配置审计"
-        printf '%b\n' "${GREEN}8.${PLAIN} 端口暴露扫描"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Security and access" "安全与访问")" \
+            "$(ui_text "Accounts, SSH, firewall, and brute-force protection." "账号、SSH、防火墙、防暴力破解集中在这里。")"
+        menu_option "$GREEN" "1" "SSH security (port / key account / password login)" "SSH 安全配置（端口 / 选择密钥账户 / 禁用密码）"
+        menu_option "$GREEN" "2" "User management (create / SSH / sudo / disable root)" "用户管理（新建用户 / SSH / sudo / 禁用 root）"
+        menu_option "$GREEN" "3" "UFW firewall" "UFW 防火墙"
+        menu_option "$GREEN" "4" "Fail2ban" "Fail2ban"
+        menu_option "$GREEN" "5" "Automatic security updates" "自动安全更新"
+        menu_option "$GREEN" "6" "Security audit (Lynis/debsums)" "安全审计 (Lynis/debsums)"
+        menu_option "$GREEN" "7" "SSH configuration audit" "SSH 配置审计"
+        menu_option "$GREEN" "8" "Exposed-port scan" "端口暴露扫描"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_configure_ssh ;;
             2) run_menu_action action_user_manager ;;
@@ -9645,18 +9764,19 @@ show_security_menu() {
 show_system_menu() {
     local choice
     while true; do
-        menu_header "系统与维护" "基础软件、系统参数、Swap、更新、清理和回滚。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 安装基础工具"
-        printf '%b\n' "${GREEN}2.${PLAIN} 系统优化"
-        printf '%b\n' "${GREEN}3.${PLAIN} Swap 配置"
-        printf '%b\n' "${GREEN}4.${PLAIN} 性能优化预设（sysctl）"
-        printf '%b\n' "${GREEN}5.${PLAIN} 自动更新维护窗口"
-        printf '%b\n' "${GREEN}6.${PLAIN} 清理无用包"
-        printf '%b\n' "${GREEN}7.${PLAIN} 回滚已备份配置"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "System and maintenance" "系统与维护")" \
+            "$(ui_text "Base packages, system settings, Swap, updates, cleanup, and rollback." "基础软件、系统参数、Swap、更新、清理和回滚。")"
+        menu_option "$GREEN" "1" "Install essential tools" "安装基础工具"
+        menu_option "$GREEN" "2" "System optimization" "系统优化"
+        menu_option "$GREEN" "3" "Swap configuration" "Swap 配置"
+        menu_option "$GREEN" "4" "Performance presets (sysctl)" "性能优化预设（sysctl）"
+        menu_option "$GREEN" "5" "Automatic-update maintenance window" "自动更新维护窗口"
+        menu_option "$GREEN" "6" "Remove unused packages" "清理无用包"
+        menu_option "$GREEN" "7" "Roll back backed-up configuration" "回滚已备份配置"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_install_essentials ;;
             2) run_menu_action action_optimize_system ;;
@@ -9675,18 +9795,19 @@ show_system_menu() {
 show_docker_app_menu() {
     local choice
     while true; do
-        menu_header "Docker 与应用" "容器运行环境、应用市场、面板、反向代理与备份。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 安装 Docker Engine + Compose（官方 apt 仓库）"
-        printf '%b\n' "${GREEN}2.${PLAIN} Docker 管理器"
-        printf '%b\n' "${GREEN}3.${PLAIN} 应用市场（1Panel / aaPanel / NPM / Portainer）"
-        printf '%b\n' "${GREEN}4.${PLAIN} 证书 / 反向代理"
-        printf '%b\n' "${GREEN}5.${PLAIN} Docker Compose 项目备份"
-        printf '%b\n' "${GREEN}6.${PLAIN} Docker 安全基线"
-        printf '%b\n' "${GREEN}7.${PLAIN} Docker 镜像更新检查"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Docker and applications" "Docker 与应用")" \
+            "$(ui_text "Container runtime, app catalog, control panels, reverse proxy, and backups." "容器运行环境、应用市场、面板、反向代理与备份。")"
+        menu_option "$GREEN" "1" "Install Docker Engine + Compose (official apt repository)" "安装 Docker Engine + Compose（官方 apt 仓库）"
+        menu_option "$GREEN" "2" "Docker manager" "Docker 管理器"
+        menu_option "$GREEN" "3" "Application catalog (1Panel / aaPanel / NPM / Portainer)" "应用市场（1Panel / aaPanel / NPM / Portainer）"
+        menu_option "$GREEN" "4" "TLS certificates / reverse proxy" "证书 / 反向代理"
+        menu_option "$GREEN" "5" "Docker Compose project backup" "Docker Compose 项目备份"
+        menu_option "$GREEN" "6" "Docker security baseline" "Docker 安全基线"
+        menu_option "$GREEN" "7" "Docker image update check" "Docker 镜像更新检查"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_install_docker ;;
             2) run_menu_flow submenu_docker_manager ;;
@@ -9705,15 +9826,16 @@ show_docker_app_menu() {
 show_dev_menu() {
     local choice
     while true; do
-        menu_header "开发与终端" "语言运行时、Shell 环境和常用开发工具。"
-        printf '%b\n' "${GREEN}1.${PLAIN} Runtime 安装管理器（Node/Python/PHP/Java/Go/.NET）"
-        printf '%b\n' "${GREEN}2.${PLAIN} 终端环境（Zsh / Starship / Neovim / Eza）"
-        printf '%b\n' "${GREEN}3.${PLAIN} 切换 Zsh 图标显示"
-        printf '%b\n' "${GREEN}4.${PLAIN} 网络/HTTP 工具集"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Development and terminal" "开发与终端")" \
+            "$(ui_text "Language runtimes, shell environment, and development tools." "语言运行时、Shell 环境和常用开发工具。")"
+        menu_option "$GREEN" "1" "Runtime manager (Node/Python/PHP/Java/Go/.NET)" "Runtime 安装管理器（Node/Python/PHP/Java/Go/.NET）"
+        menu_option "$GREEN" "2" "Terminal environment (Zsh / Starship / Neovim / Eza)" "终端环境（Zsh / Starship / Neovim / Eza）"
+        menu_option "$GREEN" "3" "Toggle Zsh icons" "切换 Zsh 图标显示"
+        menu_option "$GREEN" "4" "Network/HTTP tools" "网络/HTTP 工具集"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_flow action_install_runtime ;;
             2) run_menu_action action_install_terminal_tools ;;
@@ -9729,18 +9851,19 @@ show_dev_menu() {
 show_diagnostics_menu() {
     local choice
     while true; do
-        menu_header "诊断与测试" "先诊断本机，再运行外部测评脚本。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 一键完整机器概览"
-        printf '%b\n' "${GREEN}2.${PLAIN} 系统资源检查"
-        printf '%b\n' "${GREEN}3.${PLAIN} 出口 IP / 双栈诊断"
-        printf '%b\n' "${GREEN}4.${PLAIN} 服务健康检查"
-        printf '%b\n' "${GREEN}5.${PLAIN} 监控 / 告警基础"
-        printf '%b\n' "${GREEN}6.${PLAIN} 服务器测评脚本（远程脚本需二次确认）"
-        printf '%b\n' "${GREEN}7.${PLAIN} 模块状态总览"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Diagnostics and tests" "诊断与测试")" \
+            "$(ui_text "Diagnose this host before running external benchmark scripts." "先诊断本机，再运行外部测评脚本。")"
+        menu_option "$GREEN" "1" "Complete system overview" "一键完整机器概览"
+        menu_option "$GREEN" "2" "System resource check" "系统资源检查"
+        menu_option "$GREEN" "3" "Public IP / dual-stack diagnostics" "出口 IP / 双栈诊断"
+        menu_option "$GREEN" "4" "Service health check" "服务健康检查"
+        menu_option "$GREEN" "5" "Monitoring / alerting basics" "监控 / 告警基础"
+        menu_option "$GREEN" "6" "Server benchmark scripts (requires extra confirmation)" "服务器测评脚本（远程脚本需二次确认）"
+        menu_option "$GREEN" "7" "Module status overview" "模块状态总览"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_system_overview ;;
             2) run_menu_action check_system_resources ;;
@@ -9759,18 +9882,19 @@ show_diagnostics_menu() {
 show_storage_menu() {
     local choice
     while true; do
-        menu_header "存储与备份" "磁盘、云盘、备份恢复、文件传输和同步工具。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 磁盘工具（挂载 / SMART / Trim）"
-        printf '%b\n' "${GREEN}2.${PLAIN} CloudDrive2 安装向导"
-        printf '%b\n' "${GREEN}3.${PLAIN} CloudDrive2 共享挂载辅助"
-        printf '%b\n' "${GREEN}4.${PLAIN} 备份 / 恢复 (restic/borg)"
-        printf '%b\n' "${GREEN}5.${PLAIN} rclone"
-        printf '%b\n' "${GREEN}6.${PLAIN} croc 文件传输"
-        printf '%b\n' "${GREEN}7.${PLAIN} restic 恢复演练"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Storage and backups" "存储与备份")" \
+            "$(ui_text "Disks, cloud drives, backup/restore, file transfer, and synchronization." "磁盘、云盘、备份恢复、文件传输和同步工具。")"
+        menu_option "$GREEN" "1" "Disk tools (mount / SMART / Trim)" "磁盘工具（挂载 / SMART / Trim）"
+        menu_option "$GREEN" "2" "CloudDrive2 setup wizard" "CloudDrive2 安装向导"
+        menu_option "$GREEN" "3" "CloudDrive2 shared-mount helper" "CloudDrive2 共享挂载辅助"
+        menu_option "$GREEN" "4" "Backup / restore (restic/borg)" "备份 / 恢复 (restic/borg)"
+        menu_option "$GREEN" "5" "rclone" "rclone"
+        menu_option "$GREEN" "6" "croc file transfer" "croc 文件传输"
+        menu_option "$GREEN" "7" "restic restore drill" "restic 恢复演练"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_disk_tools ;;
             2) run_menu_flow action_setup_cd2 ;;
@@ -9789,16 +9913,17 @@ show_storage_menu() {
 show_script_ops_menu() {
     local choice
     while true; do
-        menu_header "脚本与运维" "脚本质量、信任边界、变更记录和日常运维入口。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 脚本自检 / ShellCheck"
-        printf '%b\n' "${GREEN}2.${PLAIN} 外部资源信任清单"
-        printf '%b\n' "${GREEN}3.${PLAIN} 生成系统变更报告"
-        printf '%b\n' "${GREEN}4.${PLAIN} 运维增强中心"
-        printf '%b\n' "${GREEN}5.${PLAIN} 推荐模块说明"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Script and operations" "脚本与运维")" \
+            "$(ui_text "Script quality, trust boundaries, change records, and routine operations." "脚本质量、信任边界、变更记录和日常运维入口。")"
+        menu_option "$GREEN" "1" "Static checks / ShellCheck" "脚本自检 / ShellCheck"
+        menu_option "$GREEN" "2" "External-resource trust inventory" "外部资源信任清单"
+        menu_option "$GREEN" "3" "Generate system change report" "生成系统变更报告"
+        menu_option "$GREEN" "4" "Operations enhancements" "运维增强中心"
+        menu_option "$GREEN" "5" "Recommended modules" "推荐模块说明"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_flow action_script_quality ;;
             2) run_menu_action action_external_trust_inventory ;;
@@ -9815,14 +9940,15 @@ show_script_ops_menu() {
 show_advanced_menu() {
     local choice
     while true; do
-        menu_header "高级 / 高风险" "这里的操作可能破坏系统、清空日志或执行第三方脚本。"
-        printf '%b\n' "${RED}1.${PLAIN} DD 重装系统"
-        printf '%b\n' "${RED}2.${PLAIN} 清理痕迹 / 历史记录"
-        printf '%b\n' "${GREEN}3.${PLAIN} 系统工具箱（含危险操作）"
-        printf '%b\n' "${GREEN}b.${PLAIN} 返回主菜单"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Advanced / high risk" "高级 / 高风险")" \
+            "$(ui_text "These operations may damage the system, erase logs, or run third-party scripts." "这里的操作可能破坏系统、清空日志或执行第三方脚本。")"
+        menu_option "$RED" "1" "DD operating-system reinstall" "DD 重装系统"
+        menu_option "$RED" "2" "Clear traces / history" "清理痕迹 / 历史记录"
+        menu_option "$GREEN" "3" "System toolbox (includes dangerous operations)" "系统工具箱（含危险操作）"
+        menu_back_and_exit
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) run_menu_action action_dd_reinstall ;;
             2) run_menu_action action_clean_traces ;;
@@ -9837,19 +9963,21 @@ show_advanced_menu() {
 show_menu() {
     local choice
     while true; do
-        menu_header "主菜单" "按用途进入九个功能分区。"
-        printf '%b\n' "${GREEN}1.${PLAIN} 快速开始 ${CYAN}[新机器先看这里]${PLAIN}"
-        printf '%b\n' "${GREEN}2.${PLAIN} 安全与访问"
-        printf '%b\n' "${GREEN}3.${PLAIN} 系统与维护"
-        printf '%b\n' "${GREEN}4.${PLAIN} Docker 与应用"
-        printf '%b\n' "${GREEN}5.${PLAIN} 开发与终端"
-        printf '%b\n' "${GREEN}6.${PLAIN} 存储与备份"
-        printf '%b\n' "${GREEN}7.${PLAIN} 诊断与测试"
-        printf '%b\n' "${GREEN}8.${PLAIN} 脚本与运维"
-        printf '%b\n' "${RED}9.${PLAIN} 高级 / 高风险"
-        printf '%b\n' "${GREEN}0.${PLAIN} 退出"
+        menu_header \
+            "$(ui_text "Main menu" "主菜单")" \
+            "$(ui_text "Choose one of nine task-oriented sections." "按用途进入九个功能分区。")"
+        printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Quick start" "快速开始") ${CYAN}$(ui_text "[start here on a new server]" "[新机器先看这里]")${PLAIN}"
+        menu_option "$GREEN" "2" "Security and access" "安全与访问"
+        menu_option "$GREEN" "3" "System and maintenance" "系统与维护"
+        menu_option "$GREEN" "4" "Docker and applications" "Docker 与应用"
+        menu_option "$GREEN" "5" "Development and terminal" "开发与终端"
+        menu_option "$GREEN" "6" "Storage and backups" "存储与备份"
+        menu_option "$GREEN" "7" "Diagnostics and tests" "诊断与测试"
+        menu_option "$GREEN" "8" "Script and operations" "脚本与运维"
+        menu_option "$RED" "9" "Advanced / high risk" "高级 / 高风险"
+        menu_option "$GREEN" "0" "Exit" "退出"
         printf '%b\n' ""
-        read -r -p "请选择: " choice
+        ui_read choice "Select: " "请选择: "
         case "$choice" in
             1) show_quick_start_menu ;;
             2) show_security_menu ;;

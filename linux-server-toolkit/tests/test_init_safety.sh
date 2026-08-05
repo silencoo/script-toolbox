@@ -47,6 +47,65 @@ LOG_FILE="$TEST_TMP/test.log"
 LOG_READY=false
 BACKUP_DIR="$TEST_TMP/backups"
 
+TOOLKIT_LANG="en"
+resolve_toolkit_language || fail "English UI language should be accepted"
+[ "$TOOLKIT_EFFECTIVE_LANG" = "en" ] || fail "English should be the effective UI language"
+assert_contains "$(ui_text "Main menu" "主菜单")" "Main menu" \
+    "English is the default-compatible menu language"
+
+TOOLKIT_LANG="zh"
+resolve_toolkit_language || fail "Chinese UI language should be accepted"
+assert_contains "$(ui_text "Main menu" "主菜单")" "主菜单" \
+    "Chinese menu language remains available"
+
+TOOLKIT_LANG="auto"
+LC_ALL=C resolve_toolkit_language || fail "automatic UI language should be accepted"
+[ "$TOOLKIT_EFFECTIVE_LANG" = "en" ] || fail "C locale should automatically select English"
+pass "automatic language selection falls back to English for a non-UTF-8 locale"
+
+TOOLKIT_LANG="invalid"
+if resolve_toolkit_language > /dev/null 2>&1; then
+    fail "invalid TOOLKIT_LANG should be rejected"
+fi
+pass "invalid TOOLKIT_LANG is rejected"
+TOOLKIT_LANG="en"
+resolve_toolkit_language
+
+english_menu_line="$(menu_option "$GREEN" "1" "Quick start" "快速开始")"
+assert_contains "$english_menu_line" "Quick start" \
+    "English menu options render their ASCII label"
+non_ascii_menu_bytes="$(printf '%s' "$english_menu_line" | LC_ALL=C tr -d '\000-\177')"
+[ -z "$non_ascii_menu_bytes" ] || fail "English menu option should contain ASCII bytes only"
+pass "English menu options are safe for non-UTF-8 terminals"
+
+main_menu_output="$(
+    TOOLKIT_EFFECTIVE_LANG="en"
+    clear() { :; }
+    show_menu <<< "0"
+)"
+assert_contains "$main_menu_output" "Linux Server Toolkit" \
+    "default English main menu renders the compatible title"
+assert_contains "$main_menu_output" "Advanced / high risk" \
+    "default English main menu renders every section"
+non_ascii_menu_bytes="$(printf '%s' "$main_menu_output" | LC_ALL=C tr -d '\000-\177')"
+[ -z "$non_ascii_menu_bytes" ] || fail "English main menu should contain ASCII bytes only"
+pass "complete English main menu is safe for non-UTF-8 terminals"
+
+for menu_function in \
+    show_quick_start_menu show_security_menu show_system_menu \
+    show_docker_app_menu show_dev_menu show_storage_menu \
+    show_diagnostics_menu show_script_ops_menu show_advanced_menu; do
+    section_menu_output="$(
+        TOOLKIT_EFFECTIVE_LANG="en"
+        clear() { :; }
+        "$menu_function" <<< "b"
+    )"
+    non_ascii_menu_bytes="$(printf '%s' "$section_menu_output" | LC_ALL=C tr -d '\000-\177')"
+    [ -z "$non_ascii_menu_bytes" ] || \
+        fail "$menu_function should contain ASCII bytes only in English mode"
+done
+pass "all nine English section menus are safe for non-UTF-8 terminals"
+
 timezone_name_is_valid "Etc/UTC" || fail "Etc/UTC should be a valid timezone"
 pass "valid IANA timezone is accepted"
 if timezone_name_is_valid "../etc/passwd"; then
@@ -84,10 +143,10 @@ fi
 pass "invalid APT_SOURCE_RECOVERY fails before execution"
 APT_SOURCE_RECOVERY="prompt"
 
-prompt_output="$(confirm_dangerous_action "测试操作" "测试说明" <<< "YES")"
-assert_contains "$prompt_output" $'\033[0;31m确认执行此操作?' \
+prompt_output="$(confirm_dangerous_action "test action" "test details" <<< "YES")"
+assert_contains "$prompt_output" $'\033[0;31mProceed?' \
     "dangerous confirmation renders an ANSI-colored prompt"
-assert_not_contains "$prompt_output" '\033[0;31m确认执行此操作?' \
+assert_not_contains "$prompt_output" '\033[0;31mProceed?' \
     "dangerous confirmation does not print literal color escapes"
 
 APT_SOURCES_DIR="$TEST_TMP/apt-sources"

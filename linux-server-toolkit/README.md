@@ -21,6 +21,26 @@ chmod +x server-toolkit.sh
 sudo ./server-toolkit.sh
 ```
 
+### 菜单语言与终端编码
+
+交互菜单默认使用纯 ASCII 英文，以兼容未配置 UTF-8 locale、串口控制台和部分精简
+SSH 终端。无需安装额外 locale 或 `gettext`。
+
+需要中文菜单时可显式指定：
+
+```bash
+sudo env TOOLKIT_LANG=zh ./server-toolkit.sh
+```
+
+也可以让脚本根据 `locale charmap` 选择语言；UTF-8 环境使用中文，其他环境回退英文：
+
+```bash
+sudo env TOOLKIT_LANG=auto ./server-toolkit.sh
+```
+
+`TOOLKIT_LANG=en` 可显式固定英文。支持值为 `en`、`zh` 和 `auto`，无效值会在执行
+任何系统变更前被拒绝。
+
 ## 怎么选
 
 | 你的用途 | 建议入口 | 说明 |
