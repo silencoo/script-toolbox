@@ -12,9 +12,9 @@ header and settings before enabling it.
 
 `convert-v2.js` preserves subscription traffic and expiry labels in the
 `Account Info` group, but converts those display-only entries to named Mihomo
-`direct` outbounds. Manual delay checks use the local controller endpoint
-(`127.0.0.1:9090`, or `9999` with `full=true`), so they complete without proxy
-traffic or an external connectivity request.
+`direct` outbounds. Manual delay checks use Vivo's mainland China connectivity
+endpoint (`http://wifi.vivo.com.cn/generate_204`), which returns an empty 204
+response without consuming proxy subscription traffic.
 
 The legacy `convert.js` operator was removed. Existing configurations should
 migrate to `convert-v2.js`.

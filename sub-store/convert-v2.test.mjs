@@ -175,7 +175,7 @@ test("allows periodic URL tests to be tuned or disabled", async () => {
   }
 });
 
-test("turns account information nodes into local zero-traffic delay targets", async () => {
+test("turns account information nodes into zero-proxy-traffic delay targets", async () => {
   const convert = await loadConverter();
   const profile = convert({
     proxies: [
@@ -205,11 +205,11 @@ test("turns account information nodes into local zero-traffic delay targets", as
     "剩余流量：128 GB",
     "到期时间：2027-01-01",
   ]);
-  assert.equal(account.url, "http://127.0.0.1:9090/version");
+  assert.equal(account.url, "http://wifi.vivo.com.cn/generate_204");
   assert.equal(account.interval, 0);
   assert.equal(account.lazy, true);
   assert.equal(account.timeout, 1000);
-  assert.equal(account["expected-status"], 200);
+  assert.equal(account["expected-status"], 204);
 
   for (const name of account.proxies) {
     const proxy = profile.proxies.find((item) => item.name === name);
@@ -230,7 +230,7 @@ test("turns account information nodes into local zero-traffic delay targets", as
   );
 });
 
-test("uses the full-config controller port for local account delay tests", async () => {
+test("keeps account delay tests independent from the controller port", async () => {
   const convert = await loadConverter({ full: "true" });
   const profile = convert({
     proxies: [{ name: "Traffic: 100 GB", type: "ss" }],
@@ -240,7 +240,7 @@ test("uses the full-config controller port for local account delay tests", async
   );
 
   assert.equal(profile["external-controller"], ":9999");
-  assert.equal(account.url, "http://127.0.0.1:9999/version");
+  assert.equal(account.url, "http://wifi.vivo.com.cn/generate_204");
 });
 
 test("allows each URL-test group class to use its own interval", async () => {

@@ -8,6 +8,7 @@ const NODE_SUFFIX = "";
 const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
 const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
 const URL_TEST_URL = "https://www.gstatic.com/generate_204";
+const ACCOUNT_INFO_TEST_URL = "http://wifi.vivo.com.cn/generate_204";
 const DEFAULT_CONTROLLER_PORT = 9090;
 const FULL_CONFIG_CONTROLLER_PORT = 9999;
 const DEFAULT_AUTO_TEST_INTERVAL = 1800;
@@ -102,10 +103,6 @@ const rawArgs = "undefined" != typeof $arguments ? $arguments : {},
     urlTestTolerance: urlTestTolerance,
     urlTestLazy: urlTestLazy,
   } = buildFeatureFlags(rawArgs);
-const ACCOUNT_INFO_TEST_URL = `http://127.0.0.1:${
-  fullConfig ? FULL_CONFIG_CONTROLLER_PORT : DEFAULT_CONTROLLER_PORT
-}/version`;
-
 function getCountryGroupNames(e, t) {
   return e.filter((e) => e.count >= t).map((e) => e.country);
 }
@@ -826,7 +823,7 @@ function buildProxyGroups({
       interval: 0,
       lazy: true,
       timeout: 1000,
-      "expected-status": 200,
+      "expected-status": 204,
     });
   }
 
