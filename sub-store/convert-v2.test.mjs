@@ -412,3 +412,51 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
     /Koolson\/Qure|lige47\/QuanX-icon-rule|img-url=[^,\s]+\.system/,
   );
 });
+
+test("uses the self-hosted z-icon collection for every convert-v2 group", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "Japan Node", type: "ss" },
+      { name: "Singapore Node", type: "ss" },
+      { name: "Taiwan Node", type: "ss" },
+      { name: "Hong Kong Node", type: "ss" },
+      { name: "United States Node", type: "ss" },
+      { name: "Traffic 100GB", type: "ss" },
+    ],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  for (const group of groups.values()) {
+    assert.match(
+      group.icon,
+      /^https:\/\/raw\.githubusercontent\.com\/silencoo\/z-icon\/main\/icon\//,
+    );
+  }
+
+  const expectedIcons = {
+    Proxies: "proxy-logo/mihomo.png",
+    "Account Info": "apps-cn/testflight.png",
+    Auto: "selfhst/108/speedtest-tracker.png",
+    Fallback: "homarr/108/haproxy.png",
+    CDN: "homarr/108/cloudflare.png",
+    AI: "homarr/108/openai-light.png",
+    Gemini: "homarr/108/google-gemini.png",
+    "AI Models": "homarr/108/hugging-face.png",
+    GitHub: "homarr/108/github-light.png",
+    Direct: "selfhst/108/networking-toolbox.png",
+    AdBlock: "homarr/108/adguard-home.png",
+    GLOBAL: "selfhst/108/world-monitor.png",
+  };
+  for (const [name, suffix] of Object.entries(expectedIcons)) {
+    assert.ok(groups.has(name));
+    assert.ok(groups.get(name).icon.endsWith(`/icon/${suffix}`));
+  }
+
+  assert.doesNotMatch(
+    [...groups.values()].map((group) => group.icon).join("\n"),
+    /Koolson\/Qure|powerfullz\/override-rules|WHATSINStash/,
+  );
+});

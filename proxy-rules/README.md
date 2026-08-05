@@ -11,9 +11,9 @@ expensive residential node.
 - `rules/quantumultx/*.list` contains generated Quantumult X outputs.
 - `templates/quantumult-x.conf` is a reusable profile with one subscription URL
   placeholder and dynamic node discovery.
-- Its policy icons come from the repository owner's `z-icon` collection. The
-  template uses Homarr's 108 px proxy-client assets where available, plus exact
-  China and Quantumult X icons from the same collection's general catalog.
+- Quantumult X and `convert-v2.js` policy icons come from the repository owner's
+  `z-icon` collection. They use 108 px Homarr/SelfHst assets where available,
+  plus exact flags and proxy-client icons from the general catalog.
 - Mihomo/Clash profile generation remains in `../sub-store/convert-v2.js` instead
   of duplicating a second client implementation here.
 - GOODBYEADS domain and allow outputs are merged with Cats-Team AdRules' native

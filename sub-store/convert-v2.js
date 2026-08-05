@@ -13,6 +13,12 @@ const DEFAULT_COUNTRY_TEST_INTERVAL = 600;
 const DEFAULT_FALLBACK_TEST_INTERVAL = 300;
 const MIN_URL_TEST_INTERVAL = 300;
 const DEFAULT_URL_TEST_TOLERANCE = 100;
+const Z_ICON_BASE =
+  "https://raw.githubusercontent.com/silencoo/z-icon/main/icon/";
+
+function zIcon(path) {
+  return Z_ICON_BASE + path;
+}
 
 function setProfileSubscriptionInfo() {
   if (typeof $options !== "object" || !$options) return;
@@ -647,23 +653,23 @@ function buildRules({ quicEnabled: e, countries: o }) {
 const countriesMeta = {
   "Hong Kong": {
     pattern: "(?i)(香港|HK|Hong Kong|HongKong|hongkong|🇭🇰)",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Hong_Kong.png",
+    icon: zIcon("flag/108/HongKong.png"),
   },
   Japan: {
     pattern: "(?i)(日本|JP|Japan|东京|大阪|埼玉|🇯🇵)",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Japan.png",
+    icon: zIcon("flag/108/Japan.png"),
   },
   Taiwan: {
     pattern: "(?i)(台湾|TW|Taiwan|新北|彰化|🇹🇼)",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Taiwan.png",
+    icon: zIcon("flag/108/Taiwan.png"),
   },
   "United States": {
     pattern: "(?i)(美国|US|United States|USA|🇺🇸|圣何塞|洛杉矶|阿什本)",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/United_States.png",
+    icon: zIcon("flag/108/UnitedStatesofAmerica.png"),
   },
   Singapore: {
     pattern: "(?i)(新加坡|SG|Singapore|狮城|🇸🇬)",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Singapore.png",
+    icon: zIcon("flag/108/Singapore.png"),
   },
 };
 
@@ -786,7 +792,7 @@ function buildProxyGroups({
   const groups = [
     {
       name: PROXY_GROUPS.MANUAL,
-      icon: "https://fastly.jsdelivr.net/gh/shindgewongxj/WHATSINStash@master/icon/select.png",
+      icon: zIcon("proxy-logo/mihomo.png"),
       type: "select",
       proxies: n,
     },
@@ -795,8 +801,7 @@ function buildProxyGroups({
   if (trafficNodes.length > 0) {
     groups.push({
       name: PROXY_GROUPS.ACCOUNT,
-      // 已更换为指定的 TestFlight 图标
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/TestFlight.png",
+      icon: zIcon("apps-cn/testflight.png"),
       type: "select",
       proxies: trafficNodes,
     });
@@ -806,7 +811,7 @@ function buildProxyGroups({
     groups.push(
       buildHealthCheckedGroup({
         name: PROXY_GROUPS.AUTO,
-        icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Auto.png",
+        icon: zIcon("selfhst/108/speedtest-tracker.png"),
         type: "url-test",
         proxies: standardProxyNames,
         interval: autoTestInterval,
@@ -817,7 +822,7 @@ function buildProxyGroups({
   groups.push(
     buildHealthCheckedGroup({
       name: PROXY_GROUPS.FALLBACK,
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Bypass.png",
+      icon: zIcon("homarr/108/haproxy.png"),
       type: "fallback",
       proxies: i,
       interval: fallbackTestInterval,
@@ -835,67 +840,67 @@ function buildProxyGroups({
   const commonGroups = [
     {
       name: "CDN",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Cloudflare.png",
+      icon: zIcon("homarr/108/cloudflare.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "AI",
-      icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/chatgpt.png",
+      icon: zIcon("homarr/108/openai-light.png"),
       type: "select",
       proxies: aiDefaultProxies,
     },
     {
       name: "Gemini",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google_Search.png",
+      icon: zIcon("homarr/108/google-gemini.png"),
       type: "select",
       proxies: geminiProxies,
     },
     {
       name: "Telegram",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Telegram.png",
+      icon: zIcon("homarr/108/telegram.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Google",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google.png",
+      icon: zIcon("homarr/108/google.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "YouTube",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png",
+      icon: zIcon("homarr/108/youtube.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Speedtest",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Speedtest.png",
+      icon: zIcon("homarr/108/ookla-speedtest.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "AI Models",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Download.png",
+      icon: zIcon("homarr/108/hugging-face.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "GitHub",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/GitHub.png",
+      icon: zIcon("homarr/108/github-light.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Docker",
-      icon: "https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png",
+      icon: zIcon("homarr/108/docker.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Bilibili",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/bilibili.png",
+      icon: zIcon("homarr/108/bilibili.png"),
       type: "select",
       proxies:
         hasTW && hasHK
@@ -904,55 +909,55 @@ function buildProxyGroups({
     },
     {
       name: "Netflix",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png",
+      icon: zIcon("homarr/108/netflix.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Spotify",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Spotify.png",
+      icon: zIcon("homarr/108/spotify.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Steam",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Steam.png",
+      icon: zIcon("homarr/108/steam.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "TikTok",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/TikTok.png",
+      icon: zIcon("homarr/108/tiktok.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "PikPak",
-      icon: "https://fastly.jsdelivr.net/gh/powerfullz/override-rules@master/icons/PikPak.png",
+      icon: zIcon("apps-cn/pikpak.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "Crypto",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Cryptocurrency_3.png",
+      icon: zIcon("homarr/108/bitcoin.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: "SSH(port 22)",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png",
+      icon: zIcon("selfhst/108/openssh.png"),
       type: "select",
       proxies: serviceProxies,
     },
     {
       name: PROXY_GROUPS.DIRECT,
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Direct.png",
+      icon: zIcon("selfhst/108/networking-toolbox.png"),
       type: "select",
       proxies: ["DIRECT"],
     },
     {
       name: "AdBlock",
-      icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/AdBlack.png",
+      icon: zIcon("homarr/108/adguard-home.png"),
       type: "select",
       proxies: ["REJECT", "REJECT-DROP", PROXY_GROUPS.DIRECT],
     },
@@ -1048,7 +1053,7 @@ function main(e) {
   const groupNames = u.map((e) => e.name);
   u.push({
     name: "GLOBAL",
-    icon: "https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Global.png",
+    icon: zIcon("selfhst/108/world-monitor.png"),
     "include-all": !0,
     type: "select",
     proxies: groupNames,
