@@ -369,3 +369,46 @@ test("routes GitHub and Docker through independent developer policies", async ()
     /^host-keyword,\s*(?:cdnfhnfile\.115cdn\.net|123\.com|pikpak)/m,
   );
 });
+
+test("uses the self-hosted z-icon collection for every Quantumult X policy", async () => {
+  const template = await readFile(
+    new URL("../proxy-rules/templates/quantumult-x.conf", import.meta.url),
+    "utf8",
+  );
+  const policyLines = template
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("static="));
+
+  assert.equal(policyLines.length, 22);
+  for (const line of policyLines) {
+    assert.match(
+      line,
+      /img-url=https:\/\/raw\.githubusercontent\.com\/silencoo\/z-icon\/main\/icon\//,
+    );
+  }
+
+  const homarrPolicies = policyLines.filter((line) =>
+    line.includes("/icon/homarr/108/"),
+  );
+  assert.equal(homarrPolicies.length, 19);
+  assert.match(
+    policyLines.join("\n"),
+    /static=X,.*\/icon\/selfhst\/108\/x\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=Global Media,.*\/icon\/homarr\/108\/stb-proxy\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=China Sites,.*\/icon\/flag\/108\/China\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=Final,.*\/icon\/proxy-logo\/quanx-v2\.png/,
+  );
+  assert.doesNotMatch(
+    policyLines.join("\n"),
+    /Koolson\/Qure|lige47\/QuanX-icon-rule|img-url=[^,\s]+\.system/,
+  );
+});
