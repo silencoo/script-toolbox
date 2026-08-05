@@ -3,9 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function loadConverter(args = {}) {
+async function loadConverter(args = {}, globals = {}) {
   const source = await readFile(new URL("./convert-v2.js", import.meta.url), "utf8");
-  const context = vm.createContext({ $arguments: args });
+  const context = vm.createContext({ $arguments: args, ...globals });
   vm.runInContext(`${source}\n;globalThis.__convertV2Main = main;`, context);
   return context.__convertV2Main;
 }
@@ -173,6 +173,87 @@ test("allows periodic URL tests to be tuned or disabled", async () => {
     assert.equal(groups.get(name).tolerance, 50);
     assert.equal(groups.get(name).lazy, false);
   }
+});
+
+test("turns account information nodes into local zero-traffic delay targets", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      {
+        name: "剩余流量：128 GB",
+        type: "ss",
+        server: "subscription.invalid",
+        port: 443,
+        cipher: "aes-128-gcm",
+        password: "unused",
+      },
+      {
+        name: "到期时间：2027-01-01",
+        type: "vmess",
+        server: "subscription.invalid",
+        port: 443,
+        uuid: "00000000-0000-0000-0000-000000000000",
+      },
+      { name: "Japan Node", type: "ss", server: "jp.example", port: 443 },
+    ],
+  });
+
+  const account = profile["proxy-groups"].find(
+    (group) => group.name === "Account Info",
+  );
+  assert.deepEqual(Array.from(account.proxies), [
+    "剩余流量：128 GB",
+    "到期时间：2027-01-01",
+  ]);
+  assert.equal(account.url, "http://127.0.0.1:9090/version");
+  assert.equal(account.interval, 0);
+  assert.equal(account.lazy, true);
+  assert.equal(account.timeout, 1000);
+  assert.equal(account["expected-status"], 200);
+
+  for (const name of account.proxies) {
+    const proxy = profile.proxies.find((item) => item.name === name);
+    assert.deepEqual(JSON.parse(JSON.stringify(proxy)), {
+      name,
+      type: "direct",
+      udp: true,
+    });
+  }
+
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        profile.proxies.find((proxy) => proxy.name === "Japan Node"),
+      ),
+    ),
+    { name: "Japan Node", type: "ss", server: "jp.example", port: 443 },
+  );
+});
+
+test("uses a neutral profile summary instead of an exhausted fake quota", async () => {
+  const options = {};
+  const convert = await loadConverter({}, { $options: options });
+  convert({ proxies: [{ name: "Japan Node", type: "ss" }] });
+
+  assert.equal(
+    options._res.headers["subscription-userinfo"],
+    "upload=0; download=0; total=1099511627776; expire=4102444799",
+  );
+  assert.equal(options._res.headers["profile-web-page-url"], null);
+  assert.equal(options._res.headers["plan-name"], null);
+});
+
+test("uses the full-config controller port for local account delay tests", async () => {
+  const convert = await loadConverter({ full: "true" });
+  const profile = convert({
+    proxies: [{ name: "Traffic: 100 GB", type: "ss" }],
+  });
+  const account = profile["proxy-groups"].find(
+    (group) => group.name === "Account Info",
+  );
+
+  assert.equal(profile["external-controller"], ":9999");
+  assert.equal(account.url, "http://127.0.0.1:9999/version");
 });
 
 test("allows each URL-test group class to use its own interval", async () => {
@@ -390,7 +471,7 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
   const homarrPolicies = policyLines.filter((line) =>
     line.includes("/icon/homarr/108/"),
   );
-  assert.equal(homarrPolicies.length, 19);
+  assert.equal(homarrPolicies.length, 17);
   assert.match(
     policyLines.join("\n"),
     /static=X,.*\/icon\/selfhst\/108\/x\.png/,
@@ -398,6 +479,14 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
   assert.match(
     policyLines.join("\n"),
     /static=Global Media,.*\/icon\/homarr\/108\/stb-proxy\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=AI,.*\/icon\/apps-proxy\/chatgpt-v2\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=GitHub,.*\/icon\/selfhst\/108\/git\.png/,
   );
   assert.match(
     policyLines.join("\n"),
@@ -442,10 +531,10 @@ test("uses the self-hosted z-icon collection for every convert-v2 group", async 
     Auto: "selfhst/108/speedtest-tracker.png",
     Fallback: "homarr/108/haproxy.png",
     CDN: "homarr/108/cloudflare.png",
-    AI: "homarr/108/openai-light.png",
+    AI: "apps-proxy/chatgpt-v2.png",
     Gemini: "homarr/108/google-gemini.png",
     "AI Models": "homarr/108/hugging-face.png",
-    GitHub: "homarr/108/github-light.png",
+    GitHub: "selfhst/108/git.png",
     Direct: "selfhst/108/networking-toolbox.png",
     AdBlock: "homarr/108/adguard-home.png",
     GLOBAL: "selfhst/108/world-monitor.png",

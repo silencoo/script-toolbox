@@ -5,9 +5,11 @@
 // fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
 // urltestinterval overrides all three intervals; 0 disables periodic tests.
 const NODE_SUFFIX = "";
-const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
-const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
+const PROFILE_PLACEHOLDER_TOTAL_BYTES = 1024 * 1024 * 1024 * 1024;
+const PROFILE_PLACEHOLDER_EXPIRE_TIMESTAMP = 4102444799;
 const URL_TEST_URL = "https://www.gstatic.com/generate_204";
+const DEFAULT_CONTROLLER_PORT = 9090;
+const FULL_CONFIG_CONTROLLER_PORT = 9999;
 const DEFAULT_AUTO_TEST_INTERVAL = 1800;
 const DEFAULT_COUNTRY_TEST_INTERVAL = 600;
 const DEFAULT_FALLBACK_TEST_INTERVAL = 300;
@@ -28,9 +30,9 @@ function setProfileSubscriptionInfo() {
   }
   $options._res.headers["subscription-userinfo"] = [
     "upload=0",
-    "download=8388608",
-    "total=" + PROFILE_FAKE_TOTAL_BYTES,
-    "expire=" + PROFILE_FAKE_EXPIRE_TIMESTAMP
+    "download=0",
+    "total=" + PROFILE_PLACEHOLDER_TOTAL_BYTES,
+    "expire=" + PROFILE_PLACEHOLDER_EXPIRE_TIMESTAMP
   ].join("; ");
   $options._res.headers["profile-web-page-url"] = null;
   $options._res.headers["plan-name"] = null;
@@ -100,6 +102,9 @@ const rawArgs = "undefined" != typeof $arguments ? $arguments : {},
     urlTestTolerance: urlTestTolerance,
     urlTestLazy: urlTestLazy,
   } = buildFeatureFlags(rawArgs);
+const ACCOUNT_INFO_TEST_URL = `http://127.0.0.1:${
+  fullConfig ? FULL_CONFIG_CONTROLLER_PORT : DEFAULT_CONTROLLER_PORT
+}/version`;
 
 function getCountryGroupNames(e, t) {
   return e.filter((e) => e.count >= t).map((e) => e.country);
@@ -119,6 +124,19 @@ const TRAFFIC_KEYWORDS =
   /(建议|重置|官方网站|官网|套餐|流量|剩余|到期|防丢|GB|导航|更新|Expire|Usage|Traffic|Standard|Used|Total)/i;
 // 白名单：包含以下字符的依然视为普通节点
 const WHITELIST_KEYWORDS = /(赞助|Node|节点)/i;
+
+function isTrafficInfoProxy(proxy) {
+  const name = String(proxy?.name || "");
+  return TRAFFIC_KEYWORDS.test(name) && !WHITELIST_KEYWORDS.test(name);
+}
+
+function buildTrafficInfoProxy(proxy) {
+  return {
+    name: proxy.name,
+    type: "direct",
+    udp: true,
+  };
+}
 
 const AI_TAGS = [
   "ai",
@@ -804,6 +822,11 @@ function buildProxyGroups({
       icon: zIcon("apps-cn/testflight.png"),
       type: "select",
       proxies: trafficNodes,
+      url: ACCOUNT_INFO_TEST_URL,
+      interval: 0,
+      lazy: true,
+      timeout: 1000,
+      "expected-status": 200,
     });
   }
 
@@ -846,7 +869,7 @@ function buildProxyGroups({
     },
     {
       name: "AI",
-      icon: zIcon("homarr/108/openai-light.png"),
+      icon: zIcon("apps-proxy/chatgpt-v2.png"),
       type: "select",
       proxies: aiDefaultProxies,
     },
@@ -888,7 +911,7 @@ function buildProxyGroups({
     },
     {
       name: "GitHub",
-      icon: zIcon("homarr/108/github-light.png"),
+      icon: zIcon("selfhst/108/git.png"),
       type: "select",
       proxies: serviceProxies,
     },
@@ -994,18 +1017,17 @@ function main(e) {
   // 去重处理：重复节点 name 自动加序号
   proxies = deduplicateProxies(proxies);
 
-  // 识别逻辑：包含关键词 且 不包含赞助白名单
-  const trafficNodes = proxies
-    .filter(
-      (p) => TRAFFIC_KEYWORDS.test(p.name) && !WHITELIST_KEYWORDS.test(p.name),
-    )
-    .map((p) => p.name);
+  // 信息伪节点只负责展示名称。改为本地直连出站后，Clash 内测速无需
+  // 连接机场提供的无效 server，也不会消耗订阅流量。
+  const trafficInfoProxies = proxies.filter(isTrafficInfoProxy);
+  const trafficNodes = trafficInfoProxies.map((p) => p.name);
+  proxies = proxies.map((p) =>
+    isTrafficInfoProxy(p) ? buildTrafficInfoProxy(p) : p,
+  );
 
   // 识别真实代理
   const realProxyNames = proxies
-    .filter(
-      (p) => !TRAFFIC_KEYWORDS.test(p.name) || WHITELIST_KEYWORDS.test(p.name),
-    )
+    .filter((p) => !isTrafficInfoProxy(p))
     .map((p) => p.name);
 
   const nodePools = {
@@ -1072,7 +1094,7 @@ function main(e) {
     mode: "rule",
     "log-level": "info",
     ipv6: ipv6Enabled,
-    "external-controller": "0.0.0.0:9090",
+    "external-controller": `0.0.0.0:${DEFAULT_CONTROLLER_PORT}`,
     "clash-for-android": {
       "append-system-dns": false,
     },
@@ -1100,7 +1122,7 @@ function main(e) {
 
   if (fullConfig) {
     Object.assign(t, {
-      "external-controller": ":9999",
+      "external-controller": `:${FULL_CONFIG_CONTROLLER_PORT}`,
       profile: Object.assign(t.profile || {}, { "store-selected": true }),
     });
   }
