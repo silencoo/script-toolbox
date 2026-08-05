@@ -15,10 +15,10 @@ exporting a conversation's full-size images, and safely managing conversations.
 - Resolves Gemini's current full-size asset URL before replacing the native
   click handler, so different images can download concurrently instead of
   disabling every image button
-- Exports all generated images currently loaded in a conversation as one ZIP,
-  with up to three full-size requests in parallel
+- Exports all generated images currently loaded in a conversation as separate
+  downloads, fetching and saving only one image at a time
 - Provides one persistent, independently controlled watermark-removal switch
-  for both single-image downloads and ZIP exports
+  for both single-image and bulk downloads
 - Uses web2gem-plus's bottom-right crop strategy and its vendored GargantuaX
   adaptive watermark core, including newer 36/48/96-pixel variants
 - Filters conversations by title, ID, or age
@@ -71,8 +71,9 @@ deleted before cancellation cannot be restored.
   bulk downloads should be processed. It is off by default and persists until
   changed.
 - Open **Toolkit** and select **Export full-size images**, review the
-  detected image count and watermark setting, then select **Export ZIP**. The
-  browser receives one ZIP download after all available images are fetched.
+  detected image count and watermark setting, then select **Download images**.
+  Each image is fetched and downloaded separately before the next one starts;
+  allow multiple downloads if the browser prompts you.
 
 The exporter sees generated images whose full-size buttons are present in the
 loaded conversation DOM. If Gemini virtualizes an unusually long conversation,

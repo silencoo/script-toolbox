@@ -6,11 +6,11 @@ const {
   buildFullSizeProbeUrls,
   buildGeneratedImageFallbackUrls,
   extensionForMimeType,
+  forEachSequential,
   fullSizeImageUrlFromRpc,
   normalizeGeneratedImageUrl,
   parseFullSizeImageRefs,
   rewriteGoogleusercontentGgToRdGg,
-  uint8ArrayFromBlob,
 } = require("../gemini-toolkit.user.js");
 
 test("normalizes Gemini preview transforms to an asset URL", () => {
@@ -110,12 +110,21 @@ test("maps supported image MIME types to stable extensions", () => {
   assert.equal(extensionForMimeType("image/jpeg"), "jpg");
 });
 
-test("normalizes ZIP inputs to typed arrays before archive generation", async () => {
-  const bytes = await uint8ArrayFromBlob(
-    new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])]),
-  );
-  assert.ok(bytes instanceof Uint8Array);
-  assert.deepEqual([...bytes], [0x89, 0x50, 0x4e, 0x47]);
+test("processes bulk image downloads strictly one at a time", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const completed = [];
+
+  await forEachSequential(["first", "second", "third"], async (item) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    completed.push(item);
+    active -= 1;
+  });
+
+  assert.equal(maximumActive, 1);
+  assert.deepEqual(completed, ["first", "second", "third"]);
 });
 
 test("vendored Gargantua core exposes adaptive watermark maps", async () => {

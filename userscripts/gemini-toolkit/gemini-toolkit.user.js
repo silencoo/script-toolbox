@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.6.2
-// @description  Keep Gemini defaults, download generated images concurrently, export full-size images, and safely manage conversations.
+// @version      0.6.3
+// @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
 // @run-at       document-idle
@@ -12,7 +12,6 @@
 // @grant        unsafeWindow
 // @connect      lh3.googleusercontent.com
 // @connect      *.googleusercontent.com
-// @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
 // @require      https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-toolkit/vendor/gargantua-core.js
 // @noframes
 // ==/UserScript==
@@ -30,7 +29,7 @@
   const HOST_ID = "gemini-toolkit-userscript";
   const FULL_SIZE_BUTTON_SELECTOR =
     'button[aria-label="Download full size image"]';
-  const IMAGE_DOWNLOAD_CONCURRENCY = 3;
+  const IMAGE_EXPORT_DOWNLOAD_DELAY = 750;
   const FULL_SIZE_REDIRECT_HOPS = 4;
   const CORNER_CROP_EDGE = 384;
   const MODE_BUTTON_SELECTOR =
@@ -168,11 +167,10 @@
     return "jpg";
   }
 
-  async function uint8ArrayFromBlob(blob) {
-    if (!blob || typeof blob.arrayBuffer !== "function") {
-      throw new TypeError("ZIP input must be a Blob-like value.");
+  async function forEachSequential(items, callback) {
+    for (const [index, item] of items.entries()) {
+      await callback(item, index);
     }
-    return new Uint8Array(await blob.arrayBuffer());
   }
 
   function normalizeModeLabel(value) {
@@ -215,6 +213,7 @@
       buildFullSizeProbeUrls,
       buildGeneratedImageFallbackUrls,
       extensionForMimeType,
+      forEachSequential,
       fullSizeImageUrlFromRpc,
       modelLabelMatches,
       modeLabelHasExtended,
@@ -222,7 +221,6 @@
       normalizeGeneratedImageUrl,
       parseFullSizeImageRefs,
       rewriteGoogleusercontentGgToRdGg,
-      uint8ArrayFromBlob,
     };
     return;
   }
@@ -1140,7 +1138,7 @@
     return `gemini-${conversation.slice(0, 12)}-${String(record.index).padStart(3, "0")}${suffix}.${extensionForMimeType(mimeType)}`;
   }
 
-  function saveBlob(blob, filename) {
+  function saveBlob(blob, filename, revokeDelay = 60_000) {
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
@@ -1149,7 +1147,7 @@
     document.documentElement.append(anchor);
     anchor.click();
     anchor.remove();
-    pageWindow.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    pageWindow.setTimeout(() => URL.revokeObjectURL(objectUrl), revokeDelay);
   }
 
   function createInterface() {
@@ -1904,7 +1902,7 @@
     );
     exportWatermarkLabel.append("Remove watermark before export");
     addElement(exportBody, "p", {
-      text: "Images are fetched with up to three concurrent requests and saved in one ZIP file. Keep this tab open until the archive is ready.",
+      text: "Images are fetched and downloaded one at a time without creating a ZIP file. Keep this tab open and allow multiple downloads if your browser asks.",
     });
     const exportActions = addElement(exportPanel, "footer", {
       className: "export-actions",
@@ -1924,7 +1922,7 @@
       exportActions,
       "confirm-export",
       "button primary",
-      "Export ZIP",
+      "Download images",
     );
     const toast = addElement(shadow, "div", {
       id: "image-toast",
@@ -2144,114 +2142,63 @@
 
   async function exportAllGeneratedImages() {
     if (state.exportingImages || pendingImageRecords.length === 0) return;
-    const Zip = globalThis.JSZip;
-    if (typeof Zip !== "function") {
-      ui.exportProgress.textContent = "ZIP support did not load.";
-      setImageToast("ZIP support did not load. Reinstall the userscript.", true);
-      return;
-    }
 
     persistWatermarkSetting(ui.exportRemoveWatermark.checked);
     const controller = new pageWindow.AbortController();
     state.imageExportAbortController = controller;
     setExportBusy(true);
-    const zip = new Zip();
     const errors = [];
-    let nextIndex = 0;
-    let completed = 0;
     let exported = 0;
     let watermarkFallbacks = 0;
 
-    const worker = async () => {
-      while (!controller.signal.aborted) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= pendingImageRecords.length) return;
-        const record = pendingImageRecords[index];
+    try {
+      await forEachSequential(pendingImageRecords, async (record, index) => {
+        if (controller.signal.aborted) {
+          throw new pageWindow.DOMException("Cancelled", "AbortError");
+        }
         ui.exportProgress.textContent =
-          `Fetching ${completed + 1}/${pendingImageRecords.length}…`;
+          `Downloading ${index + 1}/${pendingImageRecords.length}…`;
         try {
           const result = await prepareDownloadedImage(
             record,
             state.removeWatermark,
             controller.signal,
           );
-          ui.exportProgress.textContent =
-            `Preparing ${completed + 1}/${pendingImageRecords.length} for ZIP…`;
-          const zipBytes = await uint8ArrayFromBlob(result.blob);
-          if (controller.signal.aborted) return;
-          zip.file(
+          if (controller.signal.aborted) {
+            throw new pageWindow.DOMException("Cancelled", "AbortError");
+          }
+          saveBlob(
+            result.blob,
             generatedImageFilename(record, result.blob.type),
-            zipBytes,
-            { binary: true },
+            10_000,
           );
           exported += 1;
           if (result.watermarkError) watermarkFallbacks += 1;
         } catch (error) {
-          if (error?.name === "AbortError") return;
-          errors.push(
-            `${generatedImageFilename(record, "image/jpeg")}: ${error?.message || "Download failed"}`,
-          );
-        } finally {
-          completed += 1;
-          ui.exportProgress.textContent =
-            `Fetched ${completed}/${pendingImageRecords.length} · Saved ${exported}`;
+          if (error?.name === "AbortError") throw error;
+          const message =
+            `${generatedImageFilename(record, "image/jpeg")}: ${error?.message || "Download failed"}`;
+          errors.push(message);
+          console.warn(`[Gemini Toolkit] ${message}`, error);
         }
-      }
-    };
-
-    try {
-      await Promise.all(
-        Array.from(
-          {
-            length: Math.min(
-              IMAGE_DOWNLOAD_CONCURRENCY,
-              pendingImageRecords.length,
-            ),
-          },
-          worker,
-        ),
-      );
-      if (controller.signal.aborted) {
-        throw new pageWindow.DOMException("Cancelled", "AbortError");
-      }
+        ui.exportProgress.textContent =
+          `Processed ${index + 1}/${pendingImageRecords.length} · Downloaded ${exported}`;
+        if (index + 1 < pendingImageRecords.length) {
+          await sleep(IMAGE_EXPORT_DOWNLOAD_DELAY, controller.signal);
+        }
+      });
       if (exported === 0) {
         throw new Error(errors[0] || "No images could be exported.");
       }
-      if (errors.length > 0 || watermarkFallbacks > 0) {
-        zip.file(
-          "export-report.txt",
-          [
-            `Exported: ${exported}`,
-            `Download failures: ${errors.length}`,
-            `Watermark-removal fallbacks: ${watermarkFallbacks}`,
-            "",
-            ...errors,
-          ].join("\n"),
-        );
+      const details = [
+        `Downloaded ${exported} full-size image${exported === 1 ? "" : "s"}`,
+      ];
+      if (errors.length > 0) details.push(`${errors.length} failed`);
+      if (watermarkFallbacks > 0) {
+        details.push(`${watermarkFallbacks} kept the original watermark`);
       }
-      ui.exportProgress.textContent = "Building ZIP…";
-      const archiveBytes = await zip.generateAsync(
-        {
-          type: "uint8array",
-          compression: "STORE",
-          streamFiles: true,
-        },
-        ({ percent, currentFile }) => {
-          const current = currentFile ? ` · ${currentFile}` : "";
-          ui.exportProgress.textContent =
-            `Building ZIP ${Math.round(percent)}%${current}…`;
-        },
-      );
-      const archive = new Blob([archiveBytes], { type: "application/zip" });
-      const conversation =
-        getCurrentConversationId().replace(/^c_/u, "") || "conversation";
-      saveBlob(
-        archive,
-        `gemini-${conversation.slice(0, 12)}-full-size-images.zip`,
-      );
       setImageToast(
-        `Exported ${exported} full-size image${exported === 1 ? "" : "s"} as a ZIP.`,
+        `${details.join(" · ")}.`,
         errors.length > 0 || watermarkFallbacks > 0,
       );
       setExportBusy(false);
