@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.6.3
+// @version      0.6.4
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -70,6 +70,81 @@
     return raw.replace("/gg/", "/rd-gg/");
   }
 
+  function classifyGeminiAssetUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (
+        parsed.hostname !== "googleusercontent.com" &&
+        !parsed.hostname.endsWith(".googleusercontent.com")
+      ) {
+        return null;
+      }
+      const segment = parsed.pathname.split("/").filter(Boolean)[0] || "";
+      const hasDownloadTail = /=(?:d|d-I)$/iu.test(parsed.pathname);
+      if (segment.startsWith("rd-")) {
+        return { original: true, download: segment.endsWith("-dl") };
+      }
+      if (segment === "gg") {
+        return { original: hasDownloadTail, download: hasDownloadTail };
+      }
+      if (!segment.startsWith("gg-")) return null;
+      const variant = segment.slice(3);
+      const download = variant === "dl" || variant.endsWith("-dl");
+      return { original: download || hasDownloadTail, download };
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeOriginalImageUrl(value) {
+    if (classifyGeminiAssetUrl(value)?.original !== true) return "";
+    try {
+      const parsed = new URL(String(value));
+      const path = parsed.pathname;
+      const dimensions = /=w\d+-h\d+([^/]*)$/iu;
+      const nativeDownload = /=(?:d|d-I)$/iu;
+      const size = /=(?:s|w|h)\d+([^/]*)$/iu;
+      if (dimensions.test(path)) {
+        parsed.pathname = path.replace(dimensions, "=s0$1");
+      } else if (nativeDownload.test(path)) {
+        parsed.pathname = path.replace(
+          nativeDownload,
+          (match) => `=s0-${match.slice(1)}`,
+        );
+      } else if (size.test(path)) {
+        parsed.pathname = path.replace(size, "=s0$1");
+      } else {
+        parsed.pathname = `${path}=s0`;
+      }
+      return parsed.toString();
+    } catch {
+      return "";
+    }
+  }
+
+  function decodeEscapedRpcUrl(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\\u003d/giu, "=")
+      .replace(/\\u0026/giu, "&")
+      .replace(/\\u0025/giu, "%")
+      .replace(/\\\\\//gu, "/")
+      .replace(/\\\//gu, "/");
+  }
+
+  function fullSizeImageUrlsFromRpcText(value) {
+    const pattern =
+      /https:(?:(?:\\\\\/)|(?:\\\/)|\/){2}[^\s"'\]]*googleusercontent\.com(?:(?:\\\\\/)|(?:\\\/)|\/)[^\s"'\]]+/giu;
+    const urls = [];
+    for (const match of String(value || "").matchAll(pattern)) {
+      const normalized = normalizeOriginalImageUrl(
+        decodeEscapedRpcUrl(match[0]),
+      );
+      if (normalized && !urls.includes(normalized)) urls.push(normalized);
+    }
+    return urls;
+  }
+
   function buildFullSizeProbeUrls(value) {
     const base = normalizeGeneratedImageUrl(value);
     if (!base) {
@@ -81,6 +156,7 @@
         candidates.push(candidate);
       }
     };
+    add(normalizeOriginalImageUrl(value));
     const addForBase = (candidateBase) => {
       add(`${candidateBase}=s0-d-I?alr=yes`);
       add(`${candidateBase}=d-I?alr=yes`);
@@ -92,21 +168,6 @@
       addForBase(rdGg);
     }
     return candidates;
-  }
-
-  function buildGeneratedImageFallbackUrls(value) {
-    const base = normalizeGeneratedImageUrl(value);
-    if (!base) return [];
-    return [
-      `${base}=s4096-rj`,
-      `${base}=s2048-rj`,
-      `${base}=s0`,
-      `${base}=d`,
-      value,
-    ].filter(
-      (candidate, index, all) =>
-        candidate && all.indexOf(candidate) === index,
-    );
   }
 
   function parseFullSizeImageRefs(value, imageIndex = 0) {
@@ -152,11 +213,7 @@
   }
 
   function fullSizeImageUrlFromRpc(value) {
-    return Array.isArray(value) &&
-      typeof value[0] === "string" &&
-      /^https?:\/\//iu.test(value[0])
-      ? value[0]
-      : "";
+    return fullSizeImageUrlsFromRpcText(JSON.stringify(value))[0] || "";
   }
 
   function extensionForMimeType(value) {
@@ -211,14 +268,17 @@
     module.exports = {
       buildFullSizeImageRpcPayload,
       buildFullSizeProbeUrls,
-      buildGeneratedImageFallbackUrls,
+      classifyGeminiAssetUrl,
+      decodeEscapedRpcUrl,
       extensionForMimeType,
       forEachSequential,
       fullSizeImageUrlFromRpc,
+      fullSizeImageUrlsFromRpcText,
       modelLabelMatches,
       modeLabelHasExtended,
       normalizeModeLabel,
       normalizeGeneratedImageUrl,
+      normalizeOriginalImageUrl,
       parseFullSizeImageRefs,
       rewriteGoogleusercontentGgToRdGg,
     };
@@ -343,6 +403,7 @@
   }
 
   function parseRpcResponse(text, rpcId) {
+    let unsupportedPayload = false;
     for (const line of text.split(/\r?\n/u)) {
       if (!line.trim().startsWith("[")) {
         continue;
@@ -363,7 +424,8 @@
           row[1] === rpcId
         ) {
           if (typeof row[2] !== "string") {
-            throw new RpcError(`RPC ${rpcId} returned an unsupported payload.`);
+            unsupportedPayload = true;
+            continue;
           }
 
           try {
@@ -375,12 +437,16 @@
       }
     }
 
+    if (unsupportedPayload) {
+      throw new RpcError(`RPC ${rpcId} returned an unsupported payload.`);
+    }
+
     throw new RpcError(
       `Gemini did not return a result for RPC ${rpcId}. Its internal interface may have changed.`,
     );
   }
 
-  async function executeRpc(rpcId, rpcPayload, signal) {
+  async function executeRpcText(rpcId, rpcPayload, signal) {
     const config = getPageConfig();
     const query = new URLSearchParams({
       rpcids: rpcId,
@@ -421,7 +487,14 @@
       );
     }
 
-    return parseRpcResponse(await response.text(), rpcId);
+    return response.text();
+  }
+
+  async function executeRpc(rpcId, rpcPayload, signal) {
+    return parseRpcResponse(
+      await executeRpcText(rpcId, rpcPayload, signal),
+      rpcId,
+    );
   }
 
   function conversationFromTuple(tuple, pinned) {
@@ -931,41 +1004,42 @@
   }
 
   async function fetchFullSizeImageBlob(record, signal) {
-    let rpcError = null;
     if (record.fullSizeRefs) {
       try {
-        const resolved = fullSizeImageUrlFromRpc(
-          await executeRpc(
-            RPC.getFullSizeImage,
-            buildFullSizeImageRpcPayload(record.fullSizeRefs),
-            signal,
-          ),
+        const rpcText = await executeRpcText(
+          RPC.getFullSizeImage,
+          buildFullSizeImageRpcPayload(record.fullSizeRefs),
+          signal,
         );
-        if (!resolved) {
-          throw new Error("Gemini returned no full-size image URL.");
+        const resolvedUrls = fullSizeImageUrlsFromRpcText(rpcText);
+        if (resolvedUrls.length === 0) {
+          throw new Error("Gemini returned no original-size image URL.");
         }
         return await fetchImageBlobFromProbes(
-          buildFullSizeProbeUrls(resolved),
+          resolvedUrls.flatMap(buildFullSizeProbeUrls),
           signal,
         );
       } catch (error) {
         if (error?.name === "AbortError") throw error;
-        rpcError = error;
         console.warn(
-          "[Gemini Toolkit] Native full-size image lookup failed; trying CDN fallbacks",
+          "[Gemini Toolkit] Native full-size image lookup failed",
           error,
+        );
+        throw new Error(
+          `Could not resolve Gemini's original-size image. The preview was not downloaded. ${error?.message || ""}`.trim(),
         );
       }
     }
 
-    try {
+    if (classifyGeminiAssetUrl(record.sourceUrl)?.original === true) {
       return await fetchImageBlobFromProbes(
-        buildGeneratedImageFallbackUrls(record.sourceUrl),
+        buildFullSizeProbeUrls(record.sourceUrl),
         signal,
       );
-    } catch (fallbackError) {
-      throw rpcError || fallbackError;
     }
+    throw new Error(
+      "Gemini did not expose an original-size image URL. The preview was not downloaded.",
+    );
   }
 
   function findImageForDownloadButton(button) {

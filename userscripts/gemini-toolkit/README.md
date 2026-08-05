@@ -15,6 +15,8 @@ exporting a conversation's full-size images, and safely managing conversations.
 - Resolves Gemini's current full-size asset URL before replacing the native
   click handler, so different images can download concurrently instead of
   disabling every image button
+- Recognizes current tiered `gg-*-dl` and `rd-*` original-image routes and
+  refuses to silently substitute a smaller preview when original lookup fails
 - Exports all generated images currently loaded in a conversation as separate
   downloads, fetching and saving only one image at a time
 - Provides one persistent, independently controlled watermark-removal switch

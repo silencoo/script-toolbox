@@ -4,11 +4,14 @@ const assert = require("node:assert/strict");
 const {
   buildFullSizeImageRpcPayload,
   buildFullSizeProbeUrls,
-  buildGeneratedImageFallbackUrls,
+  classifyGeminiAssetUrl,
+  decodeEscapedRpcUrl,
   extensionForMimeType,
   forEachSequential,
   fullSizeImageUrlFromRpc,
+  fullSizeImageUrlsFromRpcText,
   normalizeGeneratedImageUrl,
+  normalizeOriginalImageUrl,
   parseFullSizeImageRefs,
   rewriteGoogleusercontentGgToRdGg,
 } = require("../gemini-toolkit.user.js");
@@ -35,6 +38,42 @@ test("builds live and legacy full-size probes for gg and rd-gg", () => {
       "https://lh3.googleusercontent.com/rd-gg/asset-token=d-I?alr=yes",
       "https://lh3.googleusercontent.com/rd-gg/asset-token?alr=yes",
     ],
+  );
+});
+
+test("recognizes current tiered Gemini original download routes", () => {
+  assert.deepEqual(
+    classifyGeminiAssetUrl(
+      "https://lh3.googleusercontent.com/gg-premium-dl/asset=s1024-rj",
+    ),
+    { original: true, download: true },
+  );
+  assert.deepEqual(
+    classifyGeminiAssetUrl(
+      "https://lh3.googleusercontent.com/rd-gg-premium/asset=s1024-rj",
+    ),
+    { original: true, download: false },
+  );
+  assert.deepEqual(
+    classifyGeminiAssetUrl(
+      "https://lh3.googleusercontent.com/gg-premium/asset=s1024-rj",
+    ),
+    { original: false, download: false },
+  );
+});
+
+test("normalizes original routes without turning previews into originals", () => {
+  assert.equal(
+    normalizeOriginalImageUrl(
+      "https://lh3.googleusercontent.com/gg-premium-dl/asset=s1024-rj",
+    ),
+    "https://lh3.googleusercontent.com/gg-premium-dl/asset=s0-rj",
+  );
+  assert.equal(
+    normalizeOriginalImageUrl(
+      "https://lh3.googleusercontent.com/gg-premium/asset=s1024-rj",
+    ),
+    "",
   );
 });
 
@@ -83,24 +122,26 @@ test("builds Gemini's mode-19 full-size image RPC payload", () => {
 
 test("extracts only an HTTP URL from the full-size RPC response", () => {
   assert.equal(
-    fullSizeImageUrlFromRpc(["https://lh3.googleusercontent.com/gg/full"]),
-    "https://lh3.googleusercontent.com/gg/full",
+    fullSizeImageUrlFromRpc([
+      null,
+      ["https://lh3.googleusercontent.com/gg-premium-dl/full=s1024-rj"],
+    ]),
+    "https://lh3.googleusercontent.com/gg-premium-dl/full=s0-rj",
   );
   assert.equal(fullSizeImageUrlFromRpc(["not-a-url"]), "");
 });
 
-test("falls back through large CDN transforms without using download probes", () => {
+test("extracts escaped original URLs from the current RPC response shape", () => {
+  const rpcText = String.raw`[["wrb.fr","c8o8Fe",null,null,["https:\/\/lh3.googleusercontent.com\/gg-premium\/preview=s1024-rj",["https:\/\/lh3.googleusercontent.com\/gg-premium-dl\/original=s1024-rj"]]]]`;
   assert.deepEqual(
-    buildGeneratedImageFallbackUrls(
-      "https://lh3.googleusercontent.com/gg/asset=s1024-rj",
-    ),
+    fullSizeImageUrlsFromRpcText(rpcText),
     [
-      "https://lh3.googleusercontent.com/gg/asset=s4096-rj",
-      "https://lh3.googleusercontent.com/gg/asset=s2048-rj",
-      "https://lh3.googleusercontent.com/gg/asset=s0",
-      "https://lh3.googleusercontent.com/gg/asset=d",
-      "https://lh3.googleusercontent.com/gg/asset=s1024-rj",
+      "https://lh3.googleusercontent.com/gg-premium-dl/original=s0-rj",
     ],
+  );
+  assert.equal(
+    decodeEscapedRpcUrl(String.raw`https:\/\/example.com\/image\u003ds0`),
+    "https://example.com/image=s0",
   );
 });
 
