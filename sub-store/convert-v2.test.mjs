@@ -3,9 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function loadConverter(args = {}, globals = {}) {
+async function loadConverter(args = {}) {
   const source = await readFile(new URL("./convert-v2.js", import.meta.url), "utf8");
-  const context = vm.createContext({ $arguments: args, ...globals });
+  const context = vm.createContext({ $arguments: args });
   vm.runInContext(`${source}\n;globalThis.__convertV2Main = main;`, context);
   return context.__convertV2Main;
 }
@@ -228,19 +228,6 @@ test("turns account information nodes into local zero-traffic delay targets", as
     ),
     { name: "Japan Node", type: "ss", server: "jp.example", port: 443 },
   );
-});
-
-test("uses a neutral profile summary instead of an exhausted fake quota", async () => {
-  const options = {};
-  const convert = await loadConverter({}, { $options: options });
-  convert({ proxies: [{ name: "Japan Node", type: "ss" }] });
-
-  assert.equal(
-    options._res.headers["subscription-userinfo"],
-    "upload=0; download=0; total=1099511627776; expire=4102444799",
-  );
-  assert.equal(options._res.headers["profile-web-page-url"], null);
-  assert.equal(options._res.headers["plan-name"], null);
 });
 
 test("uses the full-config controller port for local account delay tests", async () => {

@@ -5,8 +5,8 @@
 // fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
 // urltestinterval overrides all three intervals; 0 disables periodic tests.
 const NODE_SUFFIX = "";
-const PROFILE_PLACEHOLDER_TOTAL_BYTES = 1024 * 1024 * 1024 * 1024;
-const PROFILE_PLACEHOLDER_EXPIRE_TIMESTAMP = 4102444799;
+const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
+const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
 const URL_TEST_URL = "https://www.gstatic.com/generate_204";
 const DEFAULT_CONTROLLER_PORT = 9090;
 const FULL_CONFIG_CONTROLLER_PORT = 9999;
@@ -30,9 +30,9 @@ function setProfileSubscriptionInfo() {
   }
   $options._res.headers["subscription-userinfo"] = [
     "upload=0",
-    "download=0",
-    "total=" + PROFILE_PLACEHOLDER_TOTAL_BYTES,
-    "expire=" + PROFILE_PLACEHOLDER_EXPIRE_TIMESTAMP
+    "download=8388608",
+    "total=" + PROFILE_FAKE_TOTAL_BYTES,
+    "expire=" + PROFILE_FAKE_EXPIRE_TIMESTAMP
   ].join("; ");
   $options._res.headers["profile-web-page-url"] = null;
   $options._res.headers["plan-name"] = null;

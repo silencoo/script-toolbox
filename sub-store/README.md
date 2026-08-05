@@ -16,9 +16,5 @@ header and settings before enabling it.
 (`127.0.0.1:9090`, or `9999` with `full=true`), so they complete without proxy
 traffic or an external connectivity request.
 
-The generated profile summary uses a neutral placeholder of 1 TiB remaining
-and an expiry date of 2099-12-31. Actual quota and expiry information remains
-visible in the subscription-provided `Account Info` labels.
-
 The legacy `convert.js` operator was removed. Existing configurations should
 migrate to `convert-v2.js`.
