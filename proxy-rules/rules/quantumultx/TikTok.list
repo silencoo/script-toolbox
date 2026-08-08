@@ -2,8 +2,8 @@
 # GENERATED: scripts/build.mjs; edit sources/*.rules instead
 # SOURCE: blackmatrix7/ios_rule_script TikTok.list
 # LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0
-# MODIFIED: 2026-08-05; normalized client-neutral source
-# TOTAL: 32
+# MODIFIED: 2026-08-08; excludes shared mainland Douyin routes
+# TOTAL: 31
 HOST,lf16-effectcdn.byteeffecttos-g.com,TikTok
 HOST,lf16-pkgcdn.pitaya-clientai.com,TikTok
 HOST,p16-tiktokcdn-com.akamaized.net,TikTok
@@ -21,7 +21,6 @@ HOST-SUFFIX,marscode.com,TikTok
 HOST-SUFFIX,muscdn.com,TikTok
 HOST-SUFFIX,musical.ly,TikTok
 HOST-SUFFIX,sgpstatp.com,TikTok
-HOST-SUFFIX,snssdk.com,TikTok
 HOST-SUFFIX,tik-tokapi.com,TikTok
 HOST-SUFFIX,tiktok.com,TikTok
 HOST-SUFFIX,tiktokcdn-us.com,TikTok

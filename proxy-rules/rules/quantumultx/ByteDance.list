@@ -2,8 +2,8 @@
 # GENERATED: scripts/build.mjs; edit sources/*.rules instead
 # SOURCE: fmz200/wool_scripts ByteDance.list
 # LICENSE: GPL-3.0-only; see proxy-rules/LICENSE.GPL-3.0
-# MODIFIED: 2026-08-05; normalized and separated from TikTok
-# TOTAL: 121
+# MODIFIED: 2026-08-08; shared Douyin routes kept on the domestic policy
+# TOTAL: 122
 HOST-SUFFIX,amemv.com,WeChat
 HOST-SUFFIX,douyinpic.com,WeChat
 HOST-SUFFIX,douyinstatic.com,WeChat
@@ -12,6 +12,7 @@ HOST-SUFFIX,idouyinvod.com,WeChat
 HOST-SUFFIX,ixigua.com,WeChat
 HOST-SUFFIX,ixiguavideo.com,WeChat
 HOST-SUFFIX,pstatp.com,WeChat
+HOST-SUFFIX,snssdk.com,WeChat
 HOST-SUFFIX,toutiao.com,WeChat
 HOST-SUFFIX,zijieapi.com,WeChat
 HOST-SUFFIX,awemeughun.com,WeChat

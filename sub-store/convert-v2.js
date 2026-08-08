@@ -261,6 +261,14 @@ const ruleProviders = {
     url: "https://ruleset.skk.moe/Clash/non_ip/cdn.txt",
     path: "./ruleset/CDNResources.txt",
   },
+  ByteDance: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/bytedance.rules",
+    path: "./ruleset/ByteDance.list",
+  },
   TikTok: {
     type: "http",
     behavior: "classical",
@@ -617,7 +625,9 @@ const staticRules = [
   // 加密货币
   "RULE-SET,Crypto,Crypto",
 
-  // TikTok
+  // snssdk.com is shared with mainland Douyin, so domestic ByteDance rules
+  // must win before the upstream TikTok provider.
+  `RULE-SET,ByteDance,${PROXY_GROUPS.DIRECT}`,
   "RULE-SET,TikTok,TikTok",
 
   // 其他

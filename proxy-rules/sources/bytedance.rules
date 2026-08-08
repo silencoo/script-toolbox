@@ -1,7 +1,8 @@
 # ByteDance routing rules derived from fmz200/wool_scripts (NaiSi).
 # Upstream snapshot: 2024-04-22; licensed under GPL-3.0-only.
-# Modified 2026-08-05: removed metadata/client policies, excluded TikTok
-# overlaps, unpkg.com, and center.html. See proxy-rules/LICENSE.GPL-3.0.
+# Modified 2026-08-08: removed metadata/client policies, excluded TikTok-only
+# entries, unpkg.com, and center.html; retained shared Douyin infrastructure.
+# See proxy-rules/LICENSE.GPL-3.0.
 # Source: https://github.com/fmz200/wool_scripts
 
 DOMAIN-SUFFIX,amemv.com
@@ -12,6 +13,7 @@ DOMAIN-SUFFIX,idouyinvod.com
 DOMAIN-SUFFIX,ixigua.com
 DOMAIN-SUFFIX,ixiguavideo.com
 DOMAIN-SUFFIX,pstatp.com
+DOMAIN-SUFFIX,snssdk.com
 DOMAIN-SUFFIX,toutiao.com
 DOMAIN-SUFFIX,zijieapi.com
 DOMAIN-SUFFIX,awemeughun.com

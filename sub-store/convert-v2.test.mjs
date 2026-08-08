@@ -367,6 +367,7 @@ test("keeps domestic ByteDance rules separate and ahead of TikTok", async () => 
 
   assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,ixigua.com"));
   assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,douyin.com"));
+  assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,snssdk.com"));
   assert.ok(byteDanceRules.has("DOMAIN-SUFFIX,toutiao.com"));
   assert.ok(!byteDanceRules.has("DOMAIN-SUFFIX,unpkg.com"));
   assert.ok(!byteDanceRules.has("DOMAIN-SUFFIX,center.html"));
@@ -387,9 +388,16 @@ test("keeps domestic ByteDance rules separate and ahead of TikTok", async () => 
     proxies: [{ name: "Japan Node", type: "ss" }],
   });
   assert.equal(
+    profile["rule-providers"].ByteDance.url,
+    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/bytedance.rules",
+  );
+  assert.equal(
     profile["rule-providers"].TikTok.url,
     "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/TikTok/TikTok.list",
   );
+  const byteDanceRule = profile.rules.indexOf("RULE-SET,ByteDance,Direct");
+  const tiktokRule = profile.rules.indexOf("RULE-SET,TikTok,TikTok");
+  assert.ok(byteDanceRule >= 0 && byteDanceRule < tiktokRule);
 });
 
 test("routes GitHub and Docker through independent developer policies", async () => {

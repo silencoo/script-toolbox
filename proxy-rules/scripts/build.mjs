@@ -28,7 +28,7 @@ const ruleSets = [
     notices: [
       "# SOURCE: fmz200/wool_scripts ByteDance.list",
       "# LICENSE: GPL-3.0-only; see proxy-rules/LICENSE.GPL-3.0",
-      "# MODIFIED: 2026-08-05; normalized and separated from TikTok",
+      "# MODIFIED: 2026-08-08; shared Douyin routes kept on the domestic policy",
     ],
   },
   {
@@ -38,7 +38,7 @@ const ruleSets = [
     notices: [
       "# SOURCE: blackmatrix7/ios_rule_script TikTok.list",
       "# LICENSE: GPL-2.0; see proxy-rules/LICENSE.GPL-2.0",
-      "# MODIFIED: 2026-08-05; normalized client-neutral source",
+      "# MODIFIED: 2026-08-08; excludes shared mainland Douyin routes",
     ],
   },
   {

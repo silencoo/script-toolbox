@@ -25,8 +25,9 @@ expensive residential node.
   Quantumult X `PT.list`.
 - ByteDance and TikTok use local generated lists. Domestic ByteDance domains
   are matched first through the direct-first `WeChat` policy; TikTok follows
-  with the international rules curated by Blackmatrix7. Shared infrastructure
-  appears only in the TikTok source so the generated lists do not conflict.
+  with the international rules curated by Blackmatrix7. The shared
+  `snssdk.com` suffix stays in ByteDance only so mainland Douyin traffic is not
+  sent through the TikTok proxy policy.
 - Civitai and Hugging Face use the independent proxy-first `AI Models` policy.
   Its local source covers Civitai's current and legacy first-party frontends,
   its image and model-download subdomains, and Hugging Face Hub/LFS/Xet/CDN

@@ -1,6 +1,7 @@
 # TikTok routing rules derived from blackmatrix7/ios_rule_script.
-# Upstream snapshot checked 2026-08-05; licensed under GPL-2.0.
-# Modified 2026-08-05: removed metadata and client policy fields.
+# Upstream snapshot checked 2026-08-08; licensed under GPL-2.0.
+# Modified 2026-08-08: removed metadata/client policy fields and the shared
+# snssdk.com suffix used by mainland Douyin.
 # Source: https://github.com/blackmatrix7/ios_rule_script
 
 DOMAIN,lf16-effectcdn.byteeffecttos-g.com
@@ -20,7 +21,6 @@ DOMAIN-SUFFIX,marscode.com
 DOMAIN-SUFFIX,muscdn.com
 DOMAIN-SUFFIX,musical.ly
 DOMAIN-SUFFIX,sgpstatp.com
-DOMAIN-SUFFIX,snssdk.com
 DOMAIN-SUFFIX,tik-tokapi.com
 DOMAIN-SUFFIX,tiktok.com
 DOMAIN-SUFFIX,tiktokcdn-us.com
