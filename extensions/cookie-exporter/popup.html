@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Cookie Exporter</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <path
+              d="M27.7 16.8a4.9 4.9 0 0 1-5.5-6.3 4.9 4.9 0 0 1-6.4-5.4A11.8 11.8 0 1 0 27.7 16.8Z"
+            />
+            <circle cx="11.1" cy="13.2" r="1.6" />
+            <circle cx="15.3" cy="20.4" r="1.5" />
+            <circle cx="8.6" cy="21.4" r="1.2" />
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <h1>Cookie Exporter</h1>
+          <p>按站授权 · 仅在本地处理</p>
+        </div>
+        <span class="local-badge">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4.5 7V5.5a3.5 3.5 0 1 1 7 0V7" />
+            <rect x="3" y="7" width="10" height="7" rx="2" />
+          </svg>
+          Local
+        </span>
+      </header>
+
+      <main>
+        <section class="setup-panel" aria-labelledby="source-heading">
+          <fieldset class="source-fieldset">
+            <legend id="source-heading">Cookie 来源</legend>
+            <div class="source-switch">
+              <label>
+                <input type="radio" name="source" value="current" checked />
+                <span>当前标签页</span>
+              </label>
+              <label>
+                <input type="radio" name="source" value="specified" />
+                <span>指定网址</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div id="current-source" class="source-detail">
+            <span class="detail-label">即将读取</span>
+            <div class="site-line">
+              <span class="site-indicator" aria-hidden="true"></span>
+              <p id="current-site" class="site-url">正在识别当前标签页…</p>
+            </div>
+            <p id="current-site-help" class="field-help">
+              默认包含会发送到该 URL 的父域 Cookie；可在下方切换范围。
+            </p>
+          </div>
+
+          <div id="specified-source" class="source-detail" hidden>
+            <label class="field-label" for="site-url">网站 URL</label>
+            <div class="input-shell">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="10" cy="10" r="7.5" />
+                <path d="M2.8 10h14.4M10 2.5c2 2.1 3 4.6 3 7.5s-1 5.4-3 7.5c-2-2.1-3-4.6-3-7.5s1-5.4 3-7.5Z" />
+              </svg>
+              <input
+                id="site-url"
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                spellcheck="false"
+                placeholder="https://example.com/account"
+                aria-describedby="site-url-help site-url-error"
+              />
+            </div>
+            <p id="site-url-help" class="field-help">
+              可省略 https://；选择“当前 URL”时路径会参与 Cookie 匹配。
+            </p>
+            <p id="site-url-error" class="field-error" role="alert" hidden></p>
+          </div>
+
+          <fieldset class="scope-fieldset" aria-describedby="scope-description permission-summary">
+            <legend>读取范围</legend>
+            <div class="scope-switch">
+              <label>
+                <input type="radio" name="scope" value="url" checked />
+                <span>当前 URL</span>
+              </label>
+              <label>
+                <input type="radio" name="scope" value="site" />
+                <span>整个站点域</span>
+              </label>
+            </div>
+            <p id="scope-description" class="field-help">
+              只导出会发送给完整 URL 的 Cookie，包括合法父域 Cookie。
+            </p>
+            <p id="permission-summary" class="permission-summary">
+              识别网址后会在这里显示申请的主机范围。
+            </p>
+          </fieldset>
+
+          <div class="options-grid">
+            <div class="field-group">
+              <label class="field-label" for="export-format">导出格式</label>
+              <div class="select-shell">
+                <select id="export-format"></select>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="m4 6 4 4 4-4" />
+                </svg>
+              </div>
+              <p id="format-description" class="field-help"></p>
+            </div>
+
+            <label class="privacy-option">
+              <input id="revoke-permission" type="checkbox" checked />
+              <span class="checkbox-control" aria-hidden="true">
+                <svg viewBox="0 0 14 14">
+                  <path d="m3 7 2.5 2.5L11 4" />
+                </svg>
+              </span>
+              <span>
+                <strong>读取后移除本次站点授权</strong>
+                <small>Cookie 仍只保留在本次弹窗中</small>
+              </span>
+            </label>
+          </div>
+
+          <button id="read-cookies" class="button button-primary read-button" type="button">
+            授权并读取 Cookie
+          </button>
+
+          <div id="error-panel" class="error-panel" role="alert" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="8" />
+              <path d="M10 5.8v4.8M10 14.1h.01" />
+            </svg>
+            <p id="error-message"></p>
+          </div>
+        </section>
+
+        <section class="preview-panel" aria-labelledby="preview-heading" aria-busy="false">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Preview</p>
+              <h2 id="preview-heading">读取结果</h2>
+            </div>
+            <label class="value-toggle">
+              <input id="show-values" type="checkbox" disabled />
+              <span>显示值</span>
+            </label>
+          </div>
+
+          <div id="cookie-tools" class="cookie-tools" hidden>
+            <div class="cookie-search-row">
+              <label class="sr-only" for="cookie-search-field">搜索字段</label>
+              <div class="compact-select-shell">
+                <select id="cookie-search-field" aria-label="搜索字段">
+                  <option value="all">全部字段</option>
+                  <option value="name">Name</option>
+                  <option value="value">Value</option>
+                  <option value="domain">Domain</option>
+                  <option value="path">Path</option>
+                  <option value="sameSite">SameSite</option>
+                  <option value="attributes">安全属性</option>
+                  <option value="expirationDate">过期时间</option>
+                  <option value="storeId">Store ID</option>
+                  <option value="partitionKey">Partition Key</option>
+                </select>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="m4 6 4 4 4-4" />
+                </svg>
+              </div>
+              <div class="cookie-search-shell">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="8.5" cy="8.5" r="5.5" />
+                  <path d="m12.5 12.5 4 4" />
+                </svg>
+                <input
+                  id="cookie-search"
+                  type="search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="搜索 Cookie"
+                  aria-describedby="cookie-filter-summary"
+                  aria-controls="preview-content"
+                />
+              </div>
+            </div>
+            <p id="cookie-filter-summary" class="filter-summary"></p>
+          </div>
+
+          <div
+            id="cookie-editor"
+            class="cookie-editor"
+            role="region"
+            aria-labelledby="cookie-editor-heading"
+            hidden
+          >
+            <form id="cookie-edit-form">
+              <div class="editor-heading">
+                <div>
+                  <p class="eyebrow">Edit snapshot</p>
+                  <h3 id="cookie-editor-heading">编辑 Cookie</h3>
+                </div>
+                <span id="cookie-editor-index" class="editor-index"></span>
+              </div>
+
+              <div class="editor-grid">
+                <label class="editor-field editor-span-full">
+                  <span>Name</span>
+                  <input id="edit-cookie-name" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="editor-field editor-span-full">
+                  <span>Value</span>
+                  <textarea
+                    id="edit-cookie-value"
+                    rows="3"
+                    autocomplete="off"
+                    spellcheck="false"
+                  ></textarea>
+                </label>
+                <label class="editor-field">
+                  <span>Domain</span>
+                  <input id="edit-cookie-domain" required autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="editor-field">
+                  <span>Path</span>
+                  <input id="edit-cookie-path" required autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="editor-field">
+                  <span>SameSite</span>
+                  <select id="edit-cookie-same-site">
+                    <option value="unspecified">Unspecified</option>
+                    <option value="no_restriction">None</option>
+                    <option value="lax">Lax</option>
+                    <option value="strict">Strict</option>
+                  </select>
+                </label>
+                <label class="editor-field">
+                  <span>Expires（Unix 秒）</span>
+                  <input id="edit-cookie-expiration" type="number" min="0" step="any" />
+                </label>
+              </div>
+
+              <fieldset class="editor-flags">
+                <legend>属性</legend>
+                <label><input id="edit-cookie-secure" type="checkbox" /> Secure</label>
+                <label><input id="edit-cookie-http-only" type="checkbox" /> HttpOnly</label>
+                <label><input id="edit-cookie-session" type="checkbox" /> Session</label>
+                <label><input id="edit-cookie-host-only" type="checkbox" /> HostOnly</label>
+              </fieldset>
+
+              <details class="editor-advanced">
+                <summary>高级字段</summary>
+                <div class="editor-grid">
+                  <label class="editor-field">
+                    <span>Store ID</span>
+                    <input id="edit-cookie-store-id" required autocomplete="off" />
+                  </label>
+                  <label class="editor-field">
+                    <span>Cross-site ancestor</span>
+                    <select id="edit-cookie-partition-cross-site">
+                      <option value="unset">未设置</option>
+                      <option value="false">False</option>
+                      <option value="true">True</option>
+                    </select>
+                  </label>
+                  <label class="editor-field editor-span-full">
+                    <span>Partition top-level site</span>
+                    <input
+                      id="edit-cookie-partition-site"
+                      type="url"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="https://example.com"
+                    />
+                  </label>
+                </div>
+              </details>
+
+              <p class="editor-note">修改只用于本次复制或导出，不会写回浏览器。</p>
+              <p id="cookie-edit-error" class="field-error" role="alert" hidden></p>
+
+              <div class="editor-actions">
+                <button id="reset-cookie-edit" class="button button-quiet" type="button">
+                  恢复原值
+                </button>
+                <span></span>
+                <button id="cancel-cookie-edit" class="button button-secondary" type="button">
+                  取消
+                </button>
+                <button class="button button-primary" type="submit">保存修改</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="preview-content" class="preview-content">
+            <div class="empty-state">
+              <svg viewBox="0 0 32 32" aria-hidden="true">
+                <path d="M8 5.5h11l5 5V26H8z" />
+                <path d="M19 5.5v5h5M11.5 16h9M11.5 20h7" />
+              </svg>
+              <p>读取后可在这里确认 Cookie 名称与属性。</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="export-bar">
+        <p id="status-message" class="status-message" aria-live="polite">
+          Cookie 值默认隐藏，也不会写入扩展存储。
+        </p>
+        <div class="export-actions">
+          <button id="copy-cookies" class="button button-copy" type="button" disabled>
+            复制
+          </button>
+          <button id="export-cookies" class="button button-export" type="button" disabled>
+            导出文件
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/popup.ts"></script>
+  </body>
+</html>

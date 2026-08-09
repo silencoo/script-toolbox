@@ -24,6 +24,11 @@ jobs:
         run: python -m pip install pytest pyyaml
       - name: Check JavaScript syntax
         run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Validate Cookie Exporter extension
+        run: |
+          npm ci
+          npm run validate
+        working-directory: extensions/cookie-exporter
       - name: Test JPopSuki Autobrr toolkit
         run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Test Gemini Toolkit

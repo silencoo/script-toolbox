@@ -1,7 +1,7 @@
 # Script Toolbox
 
 A collection of standalone proxy utilities, Cloudflare Workers, browser
-userscripts, and AI agent setup scripts. Each tool lives with its own
+extensions and userscripts, and AI agent setup scripts. Each tool lives with its own
 documentation so scripts can evolve without crowding the repository root.
 
 ## Contents
@@ -12,6 +12,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
 | [`proxy-rules/`](./proxy-rules/) | Reusable Quantumult X profile plus generated AI and ad rules |
 | [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
+| [`extensions/cookie-exporter/`](./extensions/cookie-exporter/) | Per-site Chromium Cookie export in JSON, Netscape, request-header, and CSV formats |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
@@ -152,6 +153,13 @@ Generated proxy rules can be checked with:
 
 ```sh
 npm run check --prefix proxy-rules
+```
+
+The Cookie Exporter extension can be type-checked, tested, and built with:
+
+```sh
+npm ci --prefix extensions/cookie-exporter
+npm run validate --prefix extensions/cookie-exporter
 ```
 
 Shell scripts under `agent/` can be syntax-checked with:

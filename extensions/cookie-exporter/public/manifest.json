@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Cookie Exporter",
+  "version": "0.1.0",
+  "description": "按站授权，在本地预览并将 Cookie 导出为 JSON、Netscape、请求头或 CSV。",
+  "minimum_chrome_version": "119",
+  "permissions": ["activeTab", "cookies"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "导出当前网站 Cookie"
+  }
+}
