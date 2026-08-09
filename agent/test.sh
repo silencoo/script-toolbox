@@ -45,7 +45,7 @@ run_dependency_tests() {
 
 run_config_tests() {
   local test_root fake_bin test_home bad_home minimax_home system_path
-  local dry_home key_input insecure_key multiline_key
+  local dry_home key_input insecure_key multiline_key no_statusline_home
   command -v jq >/dev/null 2>&1 || {
     echo "skip: isolated provider config tests require jq" >&2
     return 2
@@ -119,6 +119,27 @@ run_config_tests() {
       >"$test_root/key-claude.out" || { rm -rf "$test_root"; return 1; }
   jq -e '.env.ANTHROPIC_API_KEY == "KEY-FILE-SECRET"' \
     "$test_root/key-claude-home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .statusLine == {
+      "type": "command",
+      "command": "~/.claude/scripts/script-toolbox-statusline.py"
+    }
+  ' "$test_root/key-claude-home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  [ -x "$test_root/key-claude-home/.claude/scripts/script-toolbox-statusline.py" ] ||
+    { rm -rf "$test_root"; return 1; }
+
+  no_statusline_home="$test_root/no-statusline-home"
+  HOME="$no_statusline_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 \
+      --key-file "$key_input" --skip-validate --no-statusline \
+      >"$test_root/no-statusline.out" || { rm -rf "$test_root"; return 1; }
+  jq -e 'has("statusLine") | not' \
+    "$no_statusline_home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  [ ! -e "$no_statusline_home/.claude/.script-toolbox-statusline.json" ] ||
     { rm -rf "$test_root"; return 1; }
 
   HOME="$test_root/key-codex-home" PATH="${fake_bin}:${system_path}" \
@@ -583,7 +604,11 @@ EOF
     .env.ANTHROPIC_AUTH_TOKEN == null
     and .env.ANTHROPIC_API_KEY == null
     and .model == null
+    and .statusLine.command == "~/.claude/scripts/script-toolbox-statusline.py"
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
+  [ -x "$test_home/.claude/scripts/script-toolbox-statusline.py" ] || {
+    rm -rf "$test_root"; return 1;
+  }
 
   rm -rf "$test_root"
 }
@@ -603,6 +628,13 @@ elif [ "$config_test_status" -eq 2 ]; then
   echo "skip: isolated provider config + uninstall (jq unavailable)"
 else
   echo "FAIL: isolated provider config + uninstall" >&2
+  fail=1
+fi
+
+if "$SCRIPT_DIR/claude-code/statusline-test.sh"; then
+  :
+else
+  echo "FAIL: Claude status-line preset tests" >&2
   fail=1
 fi
 

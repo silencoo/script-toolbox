@@ -47,6 +47,15 @@ for client in claude-code codex opencode pi; do
   make_backend "$client"
 done
 
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'printf "statusline"'
+  printf '%s\n' 'for argument in "$@"; do printf " <%s>" "$argument"; done'
+  printf '%s\n' 'printf "\n"'
+} > "$BACKEND_ROOT/claude-code/statusline-setup.sh"
+chmod +x "$BACKEND_ROOT/claude-code/statusline-setup.sh"
+
 mkdir -p "$TEST_HOME" "$FAKE_BIN"
 for command_name in claude codex opencode pi; do
   {
@@ -70,10 +79,14 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.5.0" ] ||
+  "agentctl 0.6.0" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.5.0" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.6.0" ] ||
   fail "version output is incorrect"
+
+[ "$(run_agentctl statusline install --yes --force)" = \
+  "statusline <install> <--yes> <--force>" ] ||
+  fail "statusline command did not reach the Claude preset manager"
 
 [ "$(run_agentctl providers claude)" = "claude-code-provider" ] ||
   fail "Claude alias did not resolve to claude-code"

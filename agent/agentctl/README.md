@@ -1,8 +1,9 @@
 # agentctl
 
 `agentctl` is the public Shell entrypoint for installing a supported coding
-agent, configuring its provider/model/credential, and managing the optional
-unified encrypted Toolbox Workspace.
+agent, configuring its provider/model/credential, managing Claude Code's
+optional status-line preset, and managing the optional unified encrypted
+Toolbox Workspace.
 
 Run it without arguments from the repository root to open the unified terminal
 dashboard:
@@ -53,6 +54,11 @@ The same dashboard can be selected explicitly:
 ./agent/agentctl/agentctl status all
 ./agent/agentctl/agentctl status codex --json
 
+# Preview/install and inspect the Claude Code status-line preset.
+./agent/agentctl/agentctl statusline install
+./agent/agentctl/agentctl statusline install --yes
+./agent/agentctl/agentctl statusline status --json
+
 # Inspect client-specific presets and options.
 ./agent/agentctl/agentctl providers pi
 ./agent/agentctl/agentctl help codex
@@ -75,6 +81,12 @@ All four setup backends accept `--dry-run` and `--key-file PATH`. Dry-run exits
 before validation requests, package installation, or filesystem changes, and
 does not require a key. Key files must be regular, non-symlinked, owner-only
 files containing exactly one non-empty line (normally mode `0600`).
+
+Claude provider setup also installs the status-line preset when no external
+`statusLine` exists. `--no-statusline` opts out. The independent
+`agentctl statusline` lifecycle previews mutations by default, can privately
+preserve an external setting with `install --force --yes`, and restores that
+setting on uninstall. It never prints the saved command.
 
 ## Development presets
 
@@ -272,11 +284,14 @@ matching managed links/runtime and restores tracked conflicts:
 
 ## Ownership boundary
 
-`agentctl` controls the client/provider layer, local development-preset
-transactions, and the optional master Workspace manifest:
+`agentctl` controls the client/provider layer, Claude's optional status-line
+preset, local development-preset transactions, and the optional master
+Workspace manifest:
 
 - It can install a missing CLI through the selected setup backend.
 - It configures provider, model, and owned credential state.
+- It can install or remove a separately owned Claude status-line renderer while
+  preserving an existing external setting.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.
 - Its `workspace` commands attach or detach encrypted child Store capabilities;
   they do not rewrite the child snapshots. The Workspace also owns the shared

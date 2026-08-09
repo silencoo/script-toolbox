@@ -38,6 +38,50 @@ From a clone, use the shared controller from the repository root:
 The Raw URL above and `agent/claude-code/setup.sh` remain supported
 compatibility entrypoints.
 
+## Status-line preset
+
+Provider setup now installs the managed status-line preset when
+`~/.claude/settings.json` has no existing `statusLine`. Existing external
+commands are preserved without claiming ownership; pass `--no-statusline` to
+skip the preset explicitly. The renderer needs Python 3 and shows the current
+directory, Git branch/dirty/upstream state, Claude session line changes, a
+10-cell context bar, token usage, and the model ID or proxy alias.
+
+Manage it independently through `agentctl`:
+
+```bash
+# Preview, apply, inspect, and remove.
+agentctl statusline install
+agentctl statusline install --yes
+agentctl statusline status
+agentctl statusline status --json
+agentctl statusline uninstall --yes
+
+# Preserve and temporarily replace an existing external statusLine.
+agentctl statusline install --force --yes
+```
+
+The forced-install restore point is held in an owner-only state file and is
+restored on uninstall. The manager refuses unrelated files at its dedicated
+`~/.claude/scripts/script-toolbox-statusline.py` path and refuses uninstall if
+the active setting has drifted. Provider uninstall does not remove the preset.
+
+For a one-shot installation without the controller runtime:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/statusline-setup.sh \
+  | bash -s -- install --yes
+```
+
+The hot path uses [Claude Code's current status-line payload](https://code.claude.com/docs/en/statusline)
+directly. It tails `transcript_path` once for third-party model aliases and
+legacy context fallback, and runs one bounded, non-interactive
+`git status --porcelain=v2 --branch` process. `+N -N` are Claude's session
+line-change counters; `*` marks tracked working-tree changes. Empty progress
+cells use explicit `░` glyphs. The preset leaves `refreshInterval` unset, so
+Claude's event-driven refresh policy applies.
+
 ## Persistent instructions
 
 Claude Code `CLAUDE.md` instruction deployment is managed by Promptctl under
@@ -97,6 +141,10 @@ OPENROUTER_API_KEY=sk-or-... \
 ./agent/agentctl/agentctl setup claude \
   --provider anthropic --model claude-sonnet-4-6 --dry-run
 
+# Provider-only setup without the default status-line preset.
+./agent/agentctl/agentctl setup claude \
+  --provider anthropic --model claude-sonnet-4-6 --no-statusline
+
 # For automation, prefer a mode-0600 single-line file over --key.
 ./agent/agentctl/agentctl setup claude \
   --provider anthropic --model claude-sonnet-4-6 \
@@ -145,6 +193,10 @@ GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
 ./agent/agentctl/agentctl uninstall claude
 ./agent/claude-code/mcp.sh --uninstall
 ```
+
+The full `uninstall.sh` also invokes the status-line manager when its ownership
+state exists. The provider-only `agentctl uninstall claude` intentionally leaves
+both MCP and status-line state untouched.
 
 Claude Code installation tries Anthropic's native installer first and falls
 back to `npm install -g @anthropic-ai/claude-code`.

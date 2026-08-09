@@ -1,5 +1,19 @@
 # Changelog — claude-code (agent)
 
+## 2026-08-10 — reversible low-overhead status line
+
+- Added a default managed status-line preset when provider setup finds no
+  external `statusLine`; `--no-statusline` opts out and provider uninstall does
+  not cross the preset's independent ownership boundary. The broader
+  `uninstall.sh` removes it only when its separate ownership state exists.
+- Added preview/install/status/uninstall management with safe external-setting
+  restore, drift detection, private state, and Raw URL support.
+- Reduced the renderer hot path to one bounded Git process and one bounded
+  transcript tail read. Current context and session edit counts come directly
+  from Claude's stdin payload; transcript data is only an alias/legacy fallback.
+- Corrected the output documentation and fractional-bar examples, made empty
+  cells explicit `░`, and removed regex parsing and hard-coded project paths.
+
 ## 2026-08-01 — non-interactive gateway authentication
 
 - DeepSeek now uses `ANTHROPIC_AUTH_TOKEN`, matching its official Claude Code

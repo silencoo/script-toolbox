@@ -8,7 +8,8 @@ mode `0600`.
 - [`agentctl/`](./agentctl/README.md) — shared public Shell entrypoint for
   installing a client and configuring its provider/model.
 - [`claude-code/`](./claude-code/README.md) — Anthropic, DeepSeek, OpenRouter,
-  MiniMax China/global, or a custom Anthropic Messages endpoint.
+  MiniMax China/global, a custom Anthropic Messages endpoint, and the managed
+  low-overhead status-line preset.
 - [`codex/`](./codex/README.md) — OpenAI, OpenRouter, or a custom OpenAI
   Responses endpoint.
 - [`opencode/`](./opencode/README.md) — Anthropic, OpenAI, Google Gemini,
@@ -39,6 +40,7 @@ The public controllers can be called directly:
 ./mcpctl/mcpctl
 ./promptctl/promptctl
 ./skillsctl/skillsctl --help
+./agentctl/agentctl statusline status
 ```
 
 Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and
@@ -92,6 +94,7 @@ private file avoids exposing a key in shell history:
   --provider openai --model gpt-5.6 --key-file /secure/openai-api-key
 ./agentctl/agentctl status all
 ./agentctl/agentctl status codex --json
+./agentctl/agentctl statusline install --yes
 ```
 
 Use `./agentctl/agentctl providers <client>` to see current built-in model IDs
@@ -102,7 +105,7 @@ backward-compatible setup option for MiniMax where MiniMax is supported.
 
 | Controller | Owns | Does not own |
 | --- | --- | --- |
-| `agentctl` | Client installation, provider/model/credential configuration, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
+| `agentctl` | Client installation, provider/model/credential configuration, Claude's status-line preset, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
 | `mcpctl` | Task-oriented MCP profiles and their encrypted backup state | Providers, models, persistent instructions |
 | `promptctl` | Persistent instruction links and initial editable Markdown | Clients, providers, credentials, MCP state |
 | `skillsctl` | Portable skill directories, inherited packs, managed target links, encrypted backups | Providers, MCP state, project-scoped skills |
@@ -115,8 +118,9 @@ It intentionally does not call the broader per-client `uninstall.sh`.
 | File | Required | Purpose |
 |---|---:|---|
 | `setup.sh` | yes | `agentctl` backend and compatible one-shot setup entrypoint. |
+| `statusline-setup.sh` | Claude only | Reversible status-line preset manager; `statusline.py` is its renderer. |
 | `mcp.sh` | when supported | Add the Brave / Exa / Context7 / GitHub / Chrome DevTools MCP pack. Pi has no built-in MCP client. |
-| `uninstall.sh` | yes | Remove setup and MCP entries owned by these scripts. |
+| `uninstall.sh` | yes | Remove setup, MCP, and any separately owned client extras. |
 | `README.md` | yes | Usage and compatibility notes. |
 | `CHANGELOG.md` | yes | Per-agent history. |
 

@@ -40,6 +40,7 @@ LIST_PROVIDERS=0
 INTERACTIVE=0
 CLEAN_SHELL_ENV=0
 DRY_RUN=0
+INSTALL_STATUSLINE=1
 
 SETTINGS_DIR="${HOME}/.claude"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
@@ -71,8 +72,11 @@ ${C_BOLD}Options:${C_RESET}
   --dry-run                  Preview resolution without network/install/writes.
   --clean-shell-env          Back up shell rc files and remove ANTHROPIC auth
                              exports that would override settings.json.
+  --no-statusline            Do not install/update the managed status-line
+                             preset when settings.json has no external one.
   --force                    Replace a provider config not created by this script.
-  --uninstall                Remove only this script's Claude environment/model keys.
+  --uninstall                Remove only this script's Claude environment/model keys;
+                             the independent status-line preset is preserved.
   -h | --help                Show this help.
 
 ${C_BOLD}Examples:${C_RESET}
@@ -110,6 +114,7 @@ while [ $# -gt 0 ]; do
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
     --dry-run)        DRY_RUN=1; shift ;;
     --clean-shell-env) CLEAN_SHELL_ENV=1; shift ;;
+    --no-statusline)   INSTALL_STATUSLINE=0; shift ;;
     --force)          FORCE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -323,6 +328,9 @@ else
 fi
 if [ "$DRY_RUN" = 1 ]; then
   CONFIG_PLAN="$SETTINGS_FILE"
+  if [ "$INSTALL_STATUSLINE" = 1 ]; then
+    CONFIG_PLAN="${CONFIG_PLAN}; managed status-line preset if no external statusLine exists"
+  fi
   if [ "$CLEAN_SHELL_ENV" = 1 ]; then
     CONFIG_PLAN="${CONFIG_PLAN}; matching shell startup exports (with backups)"
   fi
@@ -445,6 +453,44 @@ if { [ "$AUTH_MODE" = "api-key" ] && [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; } ||
    { [ "$AUTH_MODE" = "auth-token" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; }; then
   warn "this already-running shell contains the other Claude credential type."
   warn "After cleaning shell startup files, run: unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL"
+fi
+
+install_default_statusline() {
+  local manager="${SCRIPT_DIR}/statusline-setup.sh" downloaded_manager=""
+
+  # An external command stays completely outside this setup's ownership. This
+  # check also avoids downloading the optional helper for one-shot installs.
+  if jq -e --arg command "~/.claude/scripts/script-toolbox-statusline.py" '
+    has("statusLine")
+    and .statusLine != {"type": "command", "command": $command}
+  ' "$SETTINGS_FILE" >/dev/null 2>&1; then
+    ok "kept the existing Claude Code status line"
+    return 0
+  fi
+
+  if [ ! -x "$manager" ]; then
+    downloaded_manager="$(mktemp)"
+    if ! curl -fsSL \
+      https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/statusline-setup.sh \
+      > "$downloaded_manager"; then
+      rm -f "$downloaded_manager"
+      warn "status-line preset helper could not be downloaded; provider setup is otherwise complete"
+      return 0
+    fi
+    chmod 700 "$downloaded_manager"
+    manager="$downloaded_manager"
+  fi
+
+  if ! AGENTCTL_STATUSLINE_COMMAND="$manager" \
+    "$manager" install --yes --if-missing; then
+    warn "provider setup succeeded, but the optional status-line preset was not installed"
+    warn "Fix the reported issue, then run the status-line manager again"
+  fi
+  [ -z "$downloaded_manager" ] || rm -f "$downloaded_manager"
+}
+
+if [ "$INSTALL_STATUSLINE" = 1 ]; then
+  install_default_statusline
 fi
 
 echo

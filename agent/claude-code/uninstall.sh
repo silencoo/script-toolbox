@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # agent/claude-code/uninstall.sh — remove everything this agent installed.
 #
-# Calls setup.sh --uninstall and mcp.sh --uninstall in sequence, then prints
-# a few manual cleanup hints the script itself can't safely automate.
+# Calls the provider, MCP, and (when owned) status-line uninstallers in
+# sequence, then prints manual cleanup hints the script itself cannot automate.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Minimal inlined logging (no shared lib).
 if [ -t 1 ]; then
-  C_BOLD=$'\033[1m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
 else
-  C_BOLD=""; C_GREEN=""; C_YELLOW=""; C_RESET=""
+  C_BOLD=""; C_DIM=""; C_GREEN=""; C_YELLOW=""; C_RESET=""
 fi
 
 printf '%s%s%s\n' "${C_BOLD}" "Uninstalling claude-code agent…" "${C_RESET}"
@@ -19,6 +19,9 @@ printf '%s\n' "--------------------------------------------------------------"
 
 "${SCRIPT_DIR}/setup.sh" --uninstall
 "${SCRIPT_DIR}/mcp.sh"   --uninstall
+if [ -e "${HOME}/.claude/.script-toolbox-statusline.json" ]; then
+  "${SCRIPT_DIR}/statusline-setup.sh" uninstall --yes
+fi
 
 echo
 printf '%s%s%s\n' "${C_BOLD}" "Done. You may also want to manually:" "${C_RESET}"

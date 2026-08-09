@@ -1,5 +1,20 @@
 # Changelog — agent/
 
+## 2026-08-10 — managed Claude Code status line
+
+- Added `agentctl statusline install/status/uninstall` with preview-first
+  mutation, redacted JSON status, external-setting preservation, drift checks,
+  and reversible owner-only state.
+- Claude provider setup now installs the preset only when no external
+  `statusLine` exists; `--no-statusline` keeps provider-only automation and
+  provider uninstall leaves the independent preset intact.
+- Added a Python renderer that consumes the current Claude payload, tails the
+  supplied transcript once for proxy aliases/legacy fallback, and obtains
+  branch, tracked-dirty, and divergence metadata with one bounded Git process.
+- Moved `+/-` to Claude's session line counters, added an explicit dirty marker,
+  forced `░` empty progress cells, removed obsolete output/regex handling and
+  hard-coded project paths, and added standalone plus performance tests.
+
 ## 2026-08-04 — standalone controller runtime and self-update
 
 - Replaced the default repository-backed PATH installation with a minimal

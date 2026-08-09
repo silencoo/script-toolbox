@@ -330,6 +330,8 @@ stage_runtime() {
   copy_runtime_file skillsctl/skillsctl.mjs
 
   copy_runtime_file claude-code/setup.sh
+  copy_runtime_file claude-code/statusline-setup.sh
+  copy_runtime_file claude-code/statusline.py
   copy_runtime_file codex/setup.sh
   copy_runtime_file opencode/setup.sh
   copy_runtime_file pi/setup.sh
