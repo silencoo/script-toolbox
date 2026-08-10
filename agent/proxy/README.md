@@ -22,9 +22,32 @@ The proxy is native pass-through only:
 | `openai_chat` | `/v1/chat/completions` |
 | `google_generative` | `/v1beta/models/:model:generateContent` and streaming variant |
 
-The selected target must already support that protocol/authentication pair.
-Protocol conversion and automatic target attachment are intentionally absent
-until their independent test suites exist.
+The selected target must already support that native protocol. Upstream
+authentication belongs to each resolved Provider backend and can differ among
+backends. Protocol conversion and automatic target attachment are absent.
+
+## Ordered failover
+
+Create portable ordered routes with the public controller and opt into one at
+proxy start:
+
+```bash
+agentctl failover init --yes
+agentctl failover create daily-route \
+  --profile primary --profile backup --yes
+agentctl proxy start primary --target codex --route daily-route --yes
+```
+
+All profiles in a route must resolve to the same native protocol for the
+selected target/platform. The default `next_request` policy does not replay a
+current POST: a configured failure is returned, its circuit state is updated,
+and a later request skips open backends. `--same-request-retry` is an explicit
+route-creation choice and may duplicate both execution and billing.
+
+Closed, Open, and HalfOpen state is stored in an owner-only device-local file,
+survives daemon restarts, and expires by policy. Portable route exports contain
+only profile names and policy. Health/status reports backend names and circuit
+state, never endpoints or Secrets.
 
 ## Security boundary
 
@@ -47,7 +70,7 @@ until their independent test suites exist.
   named models are never inferred or changed.
 - Provider endpoints cannot embed credentials in URL userinfo or common secret
   query parameters.
-- State, config, capability, metadata, lifecycle logs, and locks are exact
+- State, circuit counters, config, capability, metadata, lifecycle logs, and locks are exact
   device-local paths; none belong in the portable Provider Store.
 
 The client capability can be rotated only while the daemon is stopped:
@@ -74,6 +97,8 @@ agentctl proxy start work-gateway --target codex \
   --log-bytes 5242880 \
   --usage-log-bytes 5242880 \
   --usage-capture-bytes 2097152 \
+  --retention-files 5 \
+  --retention-days 30 \
   --yes
 ```
 
@@ -84,8 +109,9 @@ same limit while reading an unknown-length body. Native JSON requests are held
 only within that bound so the exact model field can be rewritten, then sent
 upstream; compressed request bodies are rejected.
 
-Request and usage metadata rotate independently to one owner-only `.1` file at
-their configured byte thresholds.
+Request and usage metadata rotate independently at their configured byte
+thresholds. Active plus rotated file count and rotated-file age are both
+bounded; every retained file remains owner-only.
 
 ## Usage and pricing
 

@@ -701,6 +701,13 @@ else
   fail=1
 fi
 
+if node --test "$SCRIPT_DIR/agentctl/failover-client.test.mjs"; then
+  :
+else
+  echo "FAIL: portable failover route and circuit tests" >&2
+  fail=1
+fi
+
 if node --test "$SCRIPT_DIR/agentctl/proxy-client.test.mjs"; then
   :
 else

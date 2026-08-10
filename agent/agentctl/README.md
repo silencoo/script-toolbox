@@ -269,6 +269,52 @@ recorded PID. A stale dead runtime can be cleaned with `stop --yes`, while a
 live but unverifiable process is preserved. See [`../proxy/`](../proxy/) for
 the route matrix and complete security boundary.
 
+### Ordered failover and circuit breaking
+
+Failover routes are portable policy layered over Provider profiles. They keep
+an ordered list of 2–8 profiles plus retry and circuit settings, but never
+contain Secret values, generated client files, runtime counters, or machine
+paths:
+
+```bash
+agentctl failover init --yes
+agentctl failover create daily-route \
+  --profile work-primary \
+  --profile work-backup \
+  --failure-threshold 3 \
+  --recovery-timeout-ms 30000 \
+  --yes
+
+agentctl proxy plan work-primary \
+  --target codex --route daily-route
+agentctl proxy start work-primary \
+  --target codex --route daily-route --yes
+```
+
+Every route must resolve to one native protocol for the selected target and
+platform. By default, a failed model POST is returned to its caller exactly as
+received; it is never silently replayed. The failure opens or advances the
+device-local circuit, so a later request can select the next healthy backend.
+This makes failover useful without introducing hidden duplicate billing.
+
+Same-request retry is available only as an explicit bounded policy:
+
+```bash
+agentctl failover create replay-route \
+  --profile work-primary \
+  --profile work-backup \
+  --same-request-retry \
+  --max-attempts 2 \
+  --yes
+```
+
+That mode can replay and bill one logical request more than once, which both
+the preview and stored route make visible. Circuit state is owner-only,
+device-local, retained across daemon restarts, and excluded from portable
+failover exports. Request metadata records backend names, outcomes, statuses,
+and timings only. Logs retain a configurable number and maximum age via
+`--retention-files` and `--retention-days`.
+
 ## Development presets
 
 A development preset binds one named MCP profile, Skills pack, and Prompt

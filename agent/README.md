@@ -27,8 +27,9 @@ mode `0600`.
 - [`skillsctl/`](./skillsctl/README.md) — canonical portable skill storage,
   inherited frontend/backend packs, safe target links, and encrypted recovery.
 - [`proxy/`](./proxy/README.md) — optional loopback-only native protocol
-  forwarder with explicit lifecycle, capability authentication, and metadata-
-  only logs.
+  forwarder with explicit lifecycle, capability authentication, portable
+  ordered failover policy, persistent device-local circuits, and metadata-only
+  logs.
 - [`pricing/`](./pricing/README.md) — independent exact-model, effective-dated
   price catalog with fixed-decimal calculation and source provenance.
 - [`recipes/`](./recipes/) — focused integration examples that complement the
@@ -49,6 +50,7 @@ The public controllers can be called directly:
 ./agentctl/agentctl statusline status
 ./agentctl/agentctl provider status
 ./agentctl/agentctl provider plan work-gateway --target codex
+./agentctl/agentctl failover status
 ./agentctl/agentctl pricing status
 ./agentctl/agentctl proxy status
 ```

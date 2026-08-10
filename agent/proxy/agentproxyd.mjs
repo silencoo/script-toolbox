@@ -40,6 +40,11 @@ import {
   resolveExactModel
 } from "./model-mapper.mjs";
 import { UsageCollector } from "./usage.mjs";
+import {
+  CircuitRegistry,
+  newCircuitState,
+  validateCircuitState
+} from "./circuit-breaker.mjs";
 
 const CONFIG_KIND = "agentctl-proxy-config";
 const CAPABILITY_KIND = "agentctl-proxy-capability";
@@ -122,10 +127,10 @@ function validatePath(value, label) {
 function validateConfig(value) {
   exactKeys(value, [
     "schema", "kind", "instance_id", "created_at", "profile", "target",
-    "platform", "protocol", "endpoint", "auth", "listen", "timeouts",
-    "limits", "models", "pricing", "paths"
+    "platform", "protocol", "route", "backends", "retry", "circuit",
+    "retention", "listen", "timeouts", "limits", "pricing", "paths"
   ], "proxy config");
-  if (value.schema !== 2 || value.kind !== CONFIG_KIND ||
+  if (value.schema !== 3 || value.kind !== CONFIG_KIND ||
       typeof value.instance_id !== "string" ||
       !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
       typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at))) {
@@ -135,14 +140,81 @@ function validateConfig(value) {
   validateTarget(value.target);
   validatePlatform(value.platform);
   validateProtocol(value.protocol);
-  value.endpoint = validateEndpoint(value.endpoint);
-  exactKeys(value.auth, ["mode", "secret"], "proxy config auth");
-  validateAuthMode(value.auth.mode);
-  if (value.auth.mode === "none") {
-    if (value.auth.secret !== null) throw new ProxyDaemonError("unauthenticated proxy config must not name a Secret");
-  } else {
-    validateReferenceName(value.auth.secret, "proxy Secret reference");
+  if (value.route !== null &&
+      (typeof value.route !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.route) ||
+       value.route.length > 64)) {
+    throw new ProxyDaemonError("proxy route must be null or a valid route name");
   }
+  if (!Array.isArray(value.backends) || value.backends.length < 1 ||
+      value.backends.length > 8) {
+    throw new ProxyDaemonError("proxy backends must contain 1-8 entries");
+  }
+  const backendNames = new Set();
+  for (const backend of value.backends) {
+    exactKeys(backend, ["profile", "endpoint", "auth", "models"], "proxy backend");
+    validateProfileName(backend.profile, "proxy backend profile");
+    if (backendNames.has(backend.profile)) throw new ProxyDaemonError("proxy backend profiles must be unique");
+    backendNames.add(backend.profile);
+    backend.endpoint = validateEndpoint(backend.endpoint, "proxy backend endpoint");
+    exactKeys(backend.auth, ["mode", "secret"], "proxy backend auth");
+    validateAuthMode(backend.auth.mode);
+    if (backend.auth.mode === "none") {
+      if (backend.auth.secret !== null) {
+        throw new ProxyDaemonError("unauthenticated proxy backend must not name a Secret");
+      }
+    } else {
+      validateReferenceName(backend.auth.secret, "proxy backend Secret reference");
+    }
+    exactKeys(backend.models, ["default", "aliases"], "proxy backend models");
+    validateModelId(backend.models.default, "proxy backend default model");
+    if (!plainObject(backend.models.aliases) || Object.keys(backend.models.aliases).length > 256) {
+      throw new ProxyDaemonError("proxy backend model aliases must have at most 256 entries");
+    }
+    for (const [requested, outbound] of Object.entries(backend.models.aliases)) {
+      validateModelId(requested, "proxy requested model alias");
+      validateModelId(outbound, `proxy outbound model alias '${requested}'`);
+      resolveExactModel(backend.models, requested);
+    }
+    resolveExactModel(backend.models);
+  }
+  if (value.profile !== value.backends[0].profile) {
+    throw new ProxyDaemonError("proxy primary profile must match the first backend");
+  }
+  if (value.route === null && value.backends.length !== 1) {
+    throw new ProxyDaemonError("a proxy without a route must have exactly one backend");
+  }
+  exactKeys(value.retry, ["mode", "max_attempts", "status_codes", "network_errors"], "proxy retry policy");
+  if (!["next_request", "same_request"].includes(value.retry.mode)) {
+    throw new ProxyDaemonError("proxy retry mode must be next_request or same_request");
+  }
+  boundedInteger(value.retry.max_attempts, "proxy max attempts", 1, value.backends.length);
+  if (!Array.isArray(value.retry.status_codes) || value.retry.status_codes.length > 32 ||
+      new Set(value.retry.status_codes).size !== value.retry.status_codes.length) {
+    throw new ProxyDaemonError("proxy retry status codes must be a unique array");
+  }
+  for (const status of value.retry.status_codes) {
+    boundedInteger(status, "proxy retry status", 400, 599);
+  }
+  if (typeof value.retry.network_errors !== "boolean") {
+    throw new ProxyDaemonError("proxy retry network_errors must be boolean");
+  }
+  exactKeys(value.circuit, [
+    "enabled", "failure_threshold", "recovery_timeout_ms",
+    "half_open_max_requests", "state_retention_days"
+  ], "proxy circuit policy");
+  if (typeof value.circuit.enabled !== "boolean") {
+    throw new ProxyDaemonError("proxy circuit enabled must be boolean");
+  }
+  boundedInteger(value.circuit.failure_threshold, "circuit failure threshold", 1, 20);
+  boundedInteger(value.circuit.recovery_timeout_ms, "circuit recovery timeout", 1000, 3600000);
+  boundedInteger(value.circuit.half_open_max_requests, "circuit half-open max", 1, 5);
+  boundedInteger(value.circuit.state_retention_days, "circuit state retention", 1, 365);
+  if (value.route === null && value.circuit.enabled) {
+    throw new ProxyDaemonError("single-backend proxy circuit must be disabled");
+  }
+  exactKeys(value.retention, ["files", "max_age_days"], "proxy log retention");
+  boundedInteger(value.retention.files, "proxy retention files", 1, 20);
+  boundedInteger(value.retention.max_age_days, "proxy retention days", 1, 365);
   exactKeys(value.listen, ["host", "port"], "proxy config listen");
   if (value.listen.host !== "127.0.0.1" && value.listen.host !== "::1") {
     throw new ProxyDaemonError("proxy listener must use an explicit loopback address");
@@ -159,24 +231,14 @@ function validateConfig(value) {
   boundedInteger(value.limits.log_bytes, "log byte limit", 65536, 100 * 1024 * 1024);
   boundedInteger(value.limits.usage_log_bytes, "usage log byte limit", 65536, 100 * 1024 * 1024);
   boundedInteger(value.limits.usage_capture_bytes, "usage capture byte limit", 1024, 16 * 1024 * 1024);
-  exactKeys(value.models, ["default", "aliases"], "proxy models");
-  validateModelId(value.models.default, "proxy default model");
-  if (!plainObject(value.models.aliases) || Object.keys(value.models.aliases).length > 256) {
-    throw new ProxyDaemonError("proxy model aliases must be an object with at most 256 entries");
-  }
-  for (const [requested, outbound] of Object.entries(value.models.aliases)) {
-    validateModelId(requested, "proxy requested model alias");
-    validateModelId(outbound, `proxy outbound model alias '${requested}'`);
-    resolveExactModel(value.models, requested);
-  }
-  resolveExactModel(value.models);
   exactKeys(value.pricing, ["catalog", "model_source"], "proxy pricing");
   value.pricing.catalog = validatePath(value.pricing.catalog, "proxy pricing catalog path");
   if (!["request", "response"].includes(value.pricing.model_source)) {
     throw new ProxyDaemonError("proxy pricing model_source must be request or response");
   }
   exactKeys(value.paths, [
-    "state", "lock", "capability", "secrets", "log", "usage_log", "runtime_log"
+    "state", "lock", "capability", "secrets", "log", "usage_log",
+    "circuit_state", "runtime_log"
   ], "proxy paths");
   for (const [name, path] of Object.entries(value.paths)) {
     value.paths[name] = validatePath(path, `proxy ${name} path`);
@@ -227,6 +289,39 @@ async function readPricingCatalog(path) {
     throw error;
   }
   return validatePricingCatalog(value);
+}
+
+async function readCircuitState(path) {
+  let details;
+  try {
+    details = await lstat(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return newCircuitState();
+    throw error;
+  }
+  if (details.isSymbolicLink() || !details.isFile() || details.size > MAX_CONFIG_BYTES) {
+    throw new ProxyDaemonError("circuit state must be a small regular non-symlink file");
+  }
+  if (process.platform !== "win32" && (details.mode & 0o077) !== 0) {
+    throw new ProxyDaemonError("circuit state must be owner-only");
+  }
+  let value;
+  try {
+    value = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ProxyDaemonError("circuit state is not valid JSON");
+    throw error;
+  }
+  return validateCircuitState(value);
+}
+
+function circuitPersister(path, registry) {
+  let queue = Promise.resolve();
+  return () => {
+    const snapshot = registry.snapshot();
+    queue = queue.catch(() => {}).then(() => writeJsonAtomic(path, snapshot));
+    return queue;
+  };
 }
 
 function validateCapability(value) {
@@ -314,7 +409,7 @@ function joinUpstream(endpoint, localUrl) {
   return upstream;
 }
 
-function upstreamHeaders(request, config, secret, bodyLength = undefined) {
+function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefined) {
   const headers = {};
   for (const [name, value] of Object.entries(request.headers)) {
     const lower = name.toLowerCase();
@@ -326,12 +421,12 @@ function upstreamHeaders(request, config, secret, bodyLength = undefined) {
     if (value !== undefined) headers[lower] = value;
   }
   headers["accept-encoding"] = "identity";
-  headers["user-agent"] = "agentproxyd/2";
+  headers["user-agent"] = "agentproxyd/3";
   if (Number.isSafeInteger(bodyLength)) headers["content-length"] = String(bodyLength);
-  if (config.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
-  if (config.auth.mode === "x-api-key") headers["x-api-key"] = secret;
-  if (config.auth.mode === "x-goog-api-key") headers["x-goog-api-key"] = secret;
-  if (config.protocol === "anthropic_messages" && !headers["anthropic-version"]) {
+  if (backend.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
+  if (backend.auth.mode === "x-api-key") headers["x-api-key"] = secret;
+  if (backend.auth.mode === "x-goog-api-key") headers["x-goog-api-key"] = secret;
+  if (protocol === "anthropic_messages" && !headers["anthropic-version"]) {
     headers["anthropic-version"] = "2023-06-01";
   }
   return headers;
@@ -361,13 +456,18 @@ function sendJson(response, status, body) {
 function validateState(value, instanceId = "") {
   exactKeys(value, [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config"
+    "profile", "target", "protocol", "config", "route", "backend_profiles"
   ], "proxy state");
   if (value.schema !== 1 || value.kind !== STATE_KIND ||
       (instanceId && value.instance_id !== instanceId) ||
-      !Number.isInteger(value.pid) || value.pid < 1) {
+      !Number.isInteger(value.pid) || value.pid < 1 ||
+      (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
+      (value.backend_profiles !== undefined &&
+       (!Array.isArray(value.backend_profiles) ||
+        value.backend_profiles.some((profile) => typeof profile !== "string")))) {
     throw new ProxyDaemonError("proxy state is invalid");
   }
+  for (const profile of value.backend_profiles || []) validateProfileName(profile);
   return value;
 }
 
@@ -381,30 +481,67 @@ async function removeOwnedState(config) {
   }
 }
 
-function jsonlLogger(path, maxBytes, label) {
+async function logDetails(path, label) {
+  try {
+    const details = await lstat(path);
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new ProxyDaemonError(`${label} is not a regular file`);
+    }
+    return details;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function rotateLog(path, retention, label) {
+  if (retention.files === 1) {
+    await rm(path, { force: true });
+    return;
+  }
+  for (let index = retention.files - 1; index >= 1; index -= 1) {
+    const source = index === 1 ? path : `${path}.${index - 1}`;
+    const destination = `${path}.${index}`;
+    const details = await logDetails(source, label);
+    await rm(destination, { force: true });
+    if (details) {
+      await rename(source, destination);
+      await chmod(destination, 0o600);
+    }
+  }
+}
+
+async function pruneLogs(path, retention, label) {
+  const cutoff = Date.now() - retention.max_age_days * 86400000;
+  for (let index = 1; index < retention.files; index += 1) {
+    const rotated = `${path}.${index}`;
+    const details = await logDetails(rotated, label);
+    if (details && details.mtimeMs < cutoff) await unlink(rotated);
+  }
+  for (let index = retention.files; index <= 20; index += 1) {
+    const stale = `${path}.${index}`;
+    const details = await logDetails(stale, label);
+    if (details) await unlink(stale);
+  }
+}
+
+function jsonlLogger(path, maxBytes, retention, label) {
   let queue = Promise.resolve();
   const append = (record) => {
     queue = queue.then(async () => {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      let details;
-      try {
-        details = await lstat(path);
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
-      if (details?.isSymbolicLink() || (details && !details.isFile())) {
-        throw new ProxyDaemonError(`${label} is not a regular file`);
-      }
-      if (details && details.size >= maxBytes) {
-        const rotated = `${path}.1`;
-        await rm(rotated, { force: true });
-        await rename(path, rotated);
-        await chmod(rotated, 0o600);
+      await pruneLogs(path, retention, label);
+      const details = await logDetails(path, label);
+      const expired = details &&
+        details.mtimeMs < Date.now() - retention.max_age_days * 86400000;
+      if (details && (details.size >= maxBytes || expired)) {
+        await rotateLog(path, retention, label);
       }
       await appendFile(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
       await chmod(path, 0o600);
     }).catch(() => {});
   };
+  append.flush = () => queue;
   return append;
 }
 
@@ -416,6 +553,7 @@ function collectRequestBody(request, maxBytes) {
     const fail = (code) => {
       if (settled) return;
       settled = true;
+      for (const chunk of chunks) chunk.fill(0);
       chunks.length = 0;
       const error = new Error(code);
       error.code = code;
@@ -440,7 +578,7 @@ function collectRequestBody(request, maxBytes) {
   });
 }
 
-function priceUsage(pricing, config, mapping, extracted, at) {
+function priceUsage(pricing, config, backend, mapping, extracted, at) {
   const responseModel = extracted?.response_model || null;
   const candidates = [];
   if (config.pricing.model_source === "response" && responseModel) {
@@ -479,7 +617,7 @@ function priceUsage(pricing, config, mapping, extracted, at) {
     let quote;
     try {
       quote = pricing.quote({
-        profile: config.profile,
+        profile: backend.profile,
         model: candidate.model,
         at
       }, extracted.usage);
@@ -510,6 +648,7 @@ function priceUsage(pricing, config, mapping, extracted, at) {
 
 function usageRecord({
   config,
+  backend,
   pricing,
   mapping,
   extracted,
@@ -518,12 +657,13 @@ function usageRecord({
   started,
   status
 }) {
-  const priced = priceUsage(pricing, config, mapping, extracted, requestStartedAt);
+  const priced = priceUsage(pricing, config, backend, mapping, extracted, requestStartedAt);
   return {
     schema: 1,
     timestamp: new Date().toISOString(),
     request_id: requestId,
-    profile: config.profile,
+    profile: backend.profile,
+    route: config.route,
     target: config.target,
     protocol: config.protocol,
     status,
@@ -541,11 +681,223 @@ function usageRecord({
   };
 }
 
+function runUpstreamAttempt({
+  request,
+  response,
+  config,
+  backend,
+  secret,
+  localUrl,
+  rawBody,
+  allowRetry
+}) {
+  const attemptStarted = Date.now();
+  const mapping = mapNativeModelRequest({
+    protocol: config.protocol,
+    method: request.method || "",
+    pathname: localUrl.pathname,
+    body: rawBody,
+    models: backend.models
+  });
+  const mappedUrl = new URL(localUrl);
+  mappedUrl.pathname = mapping.pathname;
+  const destination = joinUpstream(backend.endpoint, mappedUrl);
+  const transport = destination.protocol === "https:" ? httpsRequest : httpRequest;
+  const requestBody = mapping.body ?? rawBody;
+
+  return new Promise((resolveAttempt) => {
+    let complete = false;
+    let upstream;
+    let upstreamResponse = null;
+    let firstByteTimer;
+    let totalTimer;
+    let idleTimer;
+    let failureCode = "";
+    let bytesOut = 0;
+    let cleared = false;
+
+    const clearMappedBody = () => {
+      if (cleared) return;
+      cleared = true;
+      if (requestBody !== rawBody) requestBody.fill(0);
+    };
+    const clearTimers = () => {
+      clearTimeout(firstByteTimer);
+      clearTimeout(totalTimer);
+      clearTimeout(idleTimer);
+    };
+    const cleanup = () => {
+      clearTimers();
+      request.off("aborted", onClientAborted);
+      response.off("close", onClientClosed);
+      response.off("drain", onDrain);
+    };
+    const finish = (result) => {
+      if (complete) return;
+      complete = true;
+      cleanup();
+      resolveAttempt({
+        ...result,
+        profile: backend.profile,
+        mapping,
+        bytes_out: bytesOut,
+        duration_ms: Date.now() - attemptStarted
+      });
+    };
+    const fail = (code) => {
+      if (complete) return;
+      failureCode = code;
+      upstream?.destroy(new Error(code));
+    };
+    const resetIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => fail("stream_idle_timeout"), config.timeouts.stream_idle_ms);
+      idleTimer.unref?.();
+    };
+    const onDrain = () => upstreamResponse?.resume();
+    const onClientAborted = () => fail("client_aborted");
+    const onClientClosed = () => {
+      if (!response.writableEnded) {
+        upstreamResponse?.destroy();
+        fail("client_disconnected");
+      }
+    };
+
+    request.on("aborted", onClientAborted);
+    response.on("close", onClientClosed);
+    response.on("drain", onDrain);
+
+    try {
+      upstream = transport({
+        protocol: destination.protocol,
+        hostname: destination.hostname,
+        port: destination.port || undefined,
+        method: request.method,
+        path: `${destination.pathname}${destination.search}`,
+        headers: upstreamHeaders(
+          request,
+          config.protocol,
+          backend,
+          secret,
+          request.method === "GET" ? undefined : requestBody.length
+        )
+      }, (incoming) => {
+        upstreamResponse = incoming;
+        clearTimeout(firstByteTimer);
+        const status = incoming.statusCode || 502;
+        const retryStatus = config.retry.status_codes.includes(status);
+        if (allowRetry && retryStatus) {
+          incoming.destroy();
+          finish({
+            kind: "retry",
+            status,
+            outcome: "retry_status",
+            failure: true,
+            network_error: false,
+            extracted: null
+          });
+          return;
+        }
+        const streaming = String(incoming.headers["content-type"] || "")
+          .toLowerCase().includes("text/event-stream");
+        const collector = new UsageCollector(config.protocol, {
+          contentType: incoming.headers["content-type"] || "",
+          maxJsonBytes: config.limits.usage_capture_bytes,
+          maxSseEventBytes: config.limits.usage_capture_bytes
+        });
+        if (streaming) clearTimeout(totalTimer);
+        response.writeHead(status, responseHeaders(incoming.headers));
+        resetIdle();
+        incoming.on("data", (chunk) => {
+          bytesOut += chunk.length;
+          collector.feed(chunk);
+          resetIdle();
+          if (!response.write(chunk)) incoming.pause();
+        });
+        incoming.on("end", () => {
+          clearTimeout(idleTimer);
+          let extracted = null;
+          try { extracted = collector.finish(); } catch {}
+          response.end();
+          finish({
+            kind: "response",
+            status,
+            outcome: "upstream_response",
+            failure: retryStatus,
+            network_error: false,
+            extracted
+          });
+        });
+        incoming.on("error", () => fail("upstream_response_error"));
+      });
+    } catch {
+      clearMappedBody();
+      finish({
+        kind: "failure",
+        status: 502,
+        outcome: "upstream_request_error",
+        failure: config.retry.network_errors,
+        network_error: true,
+        extracted: null
+      });
+      return;
+    }
+
+    firstByteTimer = setTimeout(() => fail("first_byte_timeout"), config.timeouts.first_byte_ms);
+    totalTimer = setTimeout(() => fail("request_timeout"), config.timeouts.request_ms);
+    firstByteTimer.unref?.();
+    totalTimer.unref?.();
+
+    upstream.on("error", () => {
+      clearMappedBody();
+      if (complete) return;
+      const code = failureCode || "upstream_error";
+      const status = code.includes("timeout") ? 504 :
+        code.startsWith("client_") ? 499 : 502;
+      const retry = allowRetry && config.retry.network_errors &&
+        !code.startsWith("client_") && !response.headersSent;
+      if (retry) {
+        finish({
+          kind: "retry",
+          status,
+          outcome: code,
+          failure: true,
+          network_error: true,
+          extracted: null
+        });
+        return;
+      }
+      if (!response.headersSent && status !== 499) sendJson(response, status, { error: code });
+      else if (response.headersSent && status !== 499) response.destroy();
+      finish({
+        kind: "failure",
+        status,
+        outcome: code,
+        failure: config.retry.network_errors && !code.startsWith("client_"),
+        network_error: !code.startsWith("client_"),
+        extracted: null
+      });
+    });
+    upstream.once("finish", clearMappedBody);
+    upstream.end(requestBody);
+  });
+}
+
 async function proxyRequest(request, response, context) {
-  const { config, capability, secret, pricing, log, usageLog } = context;
+  const {
+    config,
+    capability,
+    backendSecrets,
+    pricing,
+    circuits,
+    persistCircuits,
+    log,
+    usageLog
+  } = context;
   const started = Date.now();
   const requestStartedAt = new Date().toISOString();
   const requestId = randomUUID();
+  const attempts = [];
   let localUrl;
   try {
     localUrl = new URL(request.url, `http://${config.listen.host}:${config.listen.port}`);
@@ -559,11 +911,18 @@ async function proxyRequest(request, response, context) {
       sendJson(response, 401, { error: "proxy_authentication_required" });
       return;
     }
+    const circuitStates = config.circuit.enabled
+      ? config.backends.map((backend) => circuits.inspect(backend.profile, config.target))
+      : [];
+    if (config.circuit.enabled) await persistCircuits().catch(() => {});
     sendJson(response, 200, {
       schema: 1,
       kind: "agentctl-proxy-health",
       instance_id: config.instance_id,
       profile: config.profile,
+      route: config.route,
+      backends: config.backends.map((backend) => backend.profile),
+      circuits: circuitStates,
       target: config.target,
       protocol: config.protocol,
       pricing_catalog_version: pricing?.version || null,
@@ -578,6 +937,7 @@ async function proxyRequest(request, response, context) {
       timestamp: new Date().toISOString(),
       request_id: requestId,
       profile: config.profile,
+      failover_route: config.route,
       target: config.target,
       protocol: config.protocol,
       method: request.method || "",
@@ -586,7 +946,8 @@ async function proxyRequest(request, response, context) {
       outcome,
       duration_ms: Date.now() - started,
       bytes_in: bytesIn,
-      bytes_out: bytesOut
+      bytes_out: bytesOut,
+      attempts
     });
   };
 
@@ -610,7 +971,6 @@ async function proxyRequest(request, response, context) {
     request.resume();
     return;
   }
-
   const contentEncoding = String(request.headers["content-encoding"] || "")
     .trim().toLowerCase();
   if (contentEncoding && contentEncoding !== "identity") {
@@ -631,157 +991,87 @@ async function proxyRequest(request, response, context) {
     return;
   }
 
-  let mapping;
+  const sameRequest = config.retry.mode === "same_request";
+  const maxAttempts = sameRequest ? config.retry.max_attempts : 1;
+  let attempted = 0;
   try {
-    mapping = mapNativeModelRequest({
-      protocol: config.protocol,
-      method: request.method || "",
-      pathname: localUrl.pathname,
-      body: collected.body,
-      models: config.models
-    });
-  } catch {
-    collected.body.fill(0);
-    sendJson(response, 400, { error: "invalid_model_request" });
-    finishMetadata(400, "model_request_invalid", collected.bytes);
-    return;
-  }
-
-  const mappedUrl = new URL(localUrl);
-  mappedUrl.pathname = mapping.pathname;
-  const destination = joinUpstream(config.endpoint, mappedUrl);
-  const transport = destination.protocol === "https:" ? httpsRequest : httpRequest;
-  const requestBody = mapping.body ?? collected.body;
-  let requestBuffersCleared = false;
-  const clearRequestBuffers = () => {
-    if (requestBuffersCleared) return;
-    requestBuffersCleared = true;
-    requestBody.fill(0);
-    if (collected.body !== requestBody) collected.body.fill(0);
-  };
-  let bytesIn = collected.bytes;
-  let bytesOut = 0;
-  let complete = false;
-  let upstreamResponse = null;
-  let firstByteTimer;
-  let totalTimer;
-  let idleTimer;
-  let failureCode = "";
-
-  const clearTimers = () => {
-    clearTimeout(firstByteTimer);
-    clearTimeout(totalTimer);
-    clearTimeout(idleTimer);
-  };
-  const completeOnce = (status, outcome) => {
-    if (complete) return;
-    complete = true;
-    clearTimers();
-    finishMetadata(status, outcome, bytesIn, bytesOut);
-  };
-  const fail = (code) => {
-    if (complete) return;
-    failureCode = code;
-    upstream.destroy(new Error(code));
-  };
-  const resetIdle = () => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => fail("stream_idle_timeout"), config.timeouts.stream_idle_ms);
-    idleTimer.unref?.();
-  };
-
-  const upstream = transport({
-    protocol: destination.protocol,
-    hostname: destination.hostname,
-    port: destination.port || undefined,
-    method: request.method,
-    path: `${destination.pathname}${destination.search}`,
-    headers: upstreamHeaders(
-      request,
-      config,
-      secret,
-      request.method === "GET" ? undefined : requestBody.length
-    )
-  }, (incoming) => {
-    upstreamResponse = incoming;
-    clearTimeout(firstByteTimer);
-    const streaming = String(incoming.headers["content-type"] || "")
-      .toLowerCase().includes("text/event-stream");
-    const collector = new UsageCollector(config.protocol, {
-      contentType: incoming.headers["content-type"] || "",
-      maxJsonBytes: config.limits.usage_capture_bytes,
-      maxSseEventBytes: config.limits.usage_capture_bytes
-    });
-    if (streaming) clearTimeout(totalTimer);
-    response.writeHead(incoming.statusCode || 502, responseHeaders(incoming.headers));
-    resetIdle();
-    incoming.on("data", (chunk) => {
-      bytesOut += chunk.length;
-      collector.feed(chunk);
-      resetIdle();
-      if (!response.write(chunk)) incoming.pause();
-    });
-    response.on("drain", () => incoming.resume());
-    incoming.on("end", () => {
-      clearTimeout(idleTimer);
-      let extracted = null;
-      try { extracted = collector.finish(); } catch {}
-      if (mapping.requested_model || extracted) {
+    for (let index = 0; index < config.backends.length && attempted < maxAttempts; index += 1) {
+      const backend = config.backends[index];
+      const reservation = config.circuit.enabled
+        ? circuits.reserve(backend.profile, config.target)
+        : { allowed: true, state: { state: "disabled" } };
+      if (!reservation.allowed) {
+        attempts.push({
+          profile: backend.profile,
+          outcome: reservation.state.state === "open"
+            ? "circuit_open"
+            : "half_open_busy",
+          circuit: reservation.state.state,
+          status: null,
+          duration_ms: 0
+        });
+        continue;
+      }
+      if (config.circuit.enabled) await persistCircuits().catch(() => {});
+      attempted += 1;
+      const laterAvailable = config.backends.slice(index + 1).some((candidate) =>
+        !config.circuit.enabled || circuits.inspect(candidate.profile, config.target).state !== "open"
+      );
+      const allowRetry = sameRequest && attempted < maxAttempts && laterAvailable;
+      let result;
+      try {
+        result = await runUpstreamAttempt({
+          request,
+          response,
+          config,
+          backend,
+          secret: backendSecrets.get(backend.profile) || "",
+          localUrl,
+          rawBody: collected.body,
+          allowRetry
+        });
+      } catch {
+        collected.body.fill(0);
+        sendJson(response, 400, { error: "invalid_model_request" });
+        finishMetadata(400, "model_request_invalid", collected.bytes);
+        return;
+      }
+      attempts.push({
+        profile: backend.profile,
+        outcome: result.outcome,
+        circuit: reservation.state.state,
+        status: result.status,
+        duration_ms: result.duration_ms
+      });
+      if (config.circuit.enabled) {
+        if (result.failure) circuits.failure(backend.profile, config.target);
+        else if (result.kind === "response") circuits.success(backend.profile, config.target);
+        else circuits.release(backend.profile, config.target);
+        await persistCircuits().catch(() => {});
+      }
+      if (result.kind === "retry") continue;
+      if (result.kind === "response" && (result.mapping.requested_model || result.extracted)) {
         usageLog(usageRecord({
           config,
+          backend,
           pricing,
-          mapping,
-          extracted,
+          mapping: result.mapping,
+          extracted: result.extracted,
           requestId,
           requestStartedAt,
           started,
-          status: incoming.statusCode || 502
+          status: result.status
         }));
       }
-      response.end();
-      completeOnce(incoming.statusCode || 502, "upstream_response");
-    });
-    incoming.on("error", () => fail("upstream_response_error"));
-  });
-
-  firstByteTimer = setTimeout(
-    () => fail("first_byte_timeout"),
-    config.timeouts.first_byte_ms
-  );
-  totalTimer = setTimeout(
-    () => fail("request_timeout"),
-    config.timeouts.request_ms
-  );
-  firstByteTimer.unref?.();
-  totalTimer.unref?.();
-
-  upstream.on("error", () => {
-    clearRequestBuffers();
-    if (complete) return;
-    const code = failureCode || "upstream_error";
-    const status = code.includes("timeout") ? 504 :
-      code === "request_too_large" ? 413 : 502;
-    if (!response.headersSent) sendJson(response, status, { error: code });
-    else response.destroy();
-    completeOnce(status, code);
-  });
-  upstream.once("finish", clearRequestBuffers);
-  request.on("aborted", () => {
-    if (!complete) {
-      failureCode = "client_aborted";
-      upstream.destroy(new Error("client_aborted"));
-      completeOnce(499, "client_aborted");
+      finishMetadata(result.status, result.outcome, collected.bytes, result.bytes_out);
+      return;
     }
-  });
-  response.on("close", () => {
-    if (!response.writableEnded && !complete) {
-      failureCode = "client_disconnected";
-      upstreamResponse?.destroy();
-      upstream.destroy(new Error("client_disconnected"));
-      completeOnce(499, "client_disconnected");
-    }
-  });
-  upstream.end(requestBody);
+    const outcome = attempted === 0 ? "all_backends_unavailable" : "failover_exhausted";
+    sendJson(response, 503, { error: outcome });
+    finishMetadata(503, outcome, collected.bytes);
+  } finally {
+    collected.body.fill(0);
+  }
 }
 
 async function acquireLock(config) {
@@ -816,24 +1106,37 @@ async function run(configPath) {
     "provider Secret Store",
     validateProviderSecrets
   );
-  const secret = config.auth.mode === "none"
-    ? ""
-    : secrets.secrets[config.auth.secret]?.value;
-  if (config.auth.mode !== "none" && !secret) {
-    throw new ProxyDaemonError(`provider Secret '${config.auth.secret}' is unavailable`);
+  const backendSecrets = new Map();
+  for (const backend of config.backends) {
+    const secret = backend.auth.mode === "none"
+      ? ""
+      : secrets.secrets[backend.auth.secret]?.value;
+    if (backend.auth.mode !== "none" && !secret) {
+      throw new ProxyDaemonError(`provider Secret '${backend.auth.secret}' is unavailable`);
+    }
+    backendSecrets.set(backend.profile, secret);
   }
   const catalog = await readPricingCatalog(config.pricing.catalog);
   const pricing = catalog ? createPricingEngine(catalog) : null;
+  const circuitState = config.circuit.enabled
+    ? await readCircuitState(config.paths.circuit_state)
+    : newCircuitState();
+  const circuits = new CircuitRegistry(config.circuit, circuitState);
+  const persistCircuits = config.circuit.enabled
+    ? circuitPersister(config.paths.circuit_state, circuits)
+    : async () => {};
 
   await acquireLock(config);
   const log = jsonlLogger(
     config.paths.log,
     config.limits.log_bytes,
+    config.retention,
     "proxy metadata log"
   );
   const usageLog = jsonlLogger(
     config.paths.usage_log,
     config.limits.usage_log_bytes,
+    config.retention,
     "proxy usage log"
   );
   const sockets = new Set();
@@ -842,8 +1145,10 @@ async function run(configPath) {
     void proxyRequest(request, response, {
       config,
       capability,
-      secret,
+      backendSecrets,
       pricing,
+      circuits,
+      persistCircuits,
       log,
       usageLog
     }).catch(() => {
@@ -876,6 +1181,7 @@ async function run(configPath) {
     forceTimer.unref?.();
     server.close(async () => {
       clearTimeout(forceTimer);
+      await Promise.all([log.flush(), usageLog.flush()]);
       await cleanup();
       process.exit(exitCode);
     });
@@ -909,6 +1215,8 @@ async function run(configPath) {
     profile: config.profile,
     target: config.target,
     protocol: config.protocol,
+    route: config.route,
+    backend_profiles: config.backends.map((backend) => backend.profile),
     config: configPath
   };
   try {
@@ -924,6 +1232,8 @@ async function run(configPath) {
     event: "proxy_started",
     instance_id: config.instance_id,
     profile: config.profile,
+    route: config.route,
+    backends: config.backends.map((backend) => backend.profile),
     target: config.target,
     protocol: config.protocol,
     host: config.listen.host,
@@ -949,7 +1259,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 export {
   allowedRoute,
+  jsonlLogger,
   joinUpstream,
+  pruneLogs,
+  rotateLog,
   upstreamHeaders,
   validateConfig
 };

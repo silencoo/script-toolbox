@@ -30,8 +30,7 @@ import {
   providerDefaults
 } from "./provider-client.mjs";
 import {
-  ProviderRendererError,
-  renderProviderPlan
+  proxyCompatibilityIssue
 } from "./provider-renderer.mjs";
 import {
   PricingClientError,
@@ -39,6 +38,15 @@ import {
   pricingDefaults
 } from "./pricing-client.mjs";
 import { PricingError } from "../pricing/pricing.mjs";
+import {
+  FailoverClientError,
+  failoverDefaults,
+  loadFailoverStore
+} from "./failover-client.mjs";
+import {
+  FailoverSchemaError,
+  resolveFailoverRoute
+} from "./failover-schema.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DAEMON = resolve(HERE, "..", "proxy", "agentproxyd.mjs");
@@ -77,6 +85,11 @@ Options:
   --pricing <file>                  Optional versioned pricing catalog.
   --pricing-source <request|response>
                                       Model identity used for pricing.
+  --route <name>                     Optional ordered failover route.
+  --failover-store <file>            Portable failover route Store.
+  --circuit-state <file>             Device-local circuit counters/state.
+  --retention-files <1-20>           Active + rotated files per JSONL log.
+  --retention-days <1-365>           Maximum rotated-log age.
   --store <file>                    Portable Provider Store.
   --secrets <file>                  Local provider Secret Store.
   --proxy-config <file>             Generated device-local daemon config.
@@ -102,6 +115,7 @@ export function proxyDefaults({
 } = {}) {
   const providers = providerDefaults({ platform, environment, home });
   const pricing = pricingDefaults({ platform, environment, home });
+  const failover = failoverDefaults({ platform, environment, home });
   const stateRoot = join(dirname(providers.statePath), "proxy");
   const configRoot = dirname(providers.storePath);
   const envPort = Number(environment.AGENTCTL_PROXY_PORT || 17321);
@@ -118,6 +132,8 @@ export function proxyDefaults({
       join(stateRoot, "usage.jsonl"),
     proxyRuntimeLog: environment.AGENTCTL_PROXY_RUNTIME_LOG ||
       join(stateRoot, "daemon.log"),
+    proxyCircuitState: environment.AGENTCTL_PROXY_CIRCUIT_STATE ||
+      join(stateRoot, "circuits.json"),
     port: Number.isInteger(envPort) ? envPort : 17321,
     firstByteMs: 30000,
     streamIdleMs: 120000,
@@ -127,7 +143,10 @@ export function proxyDefaults({
     usageLogBytes: 5 * 1024 * 1024,
     usageCaptureBytes: 2 * 1024 * 1024,
     pricingPath: pricing.pricingPath,
-    pricingSource: "response"
+    pricingSource: "response",
+    failoverPath: failover.failoverPath,
+    retentionFiles: 5,
+    retentionDays: 30
   };
 }
 
@@ -165,6 +184,9 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
       case "--proxy-runtime-log": options.proxyRuntimeLog = takeValue(argv, argument); break;
       case "--pricing": options.pricingPath = takeValue(argv, argument); break;
       case "--pricing-source": options.pricingSource = takeValue(argv, argument); break;
+      case "--route": options.route = takeValue(argv, argument); break;
+      case "--failover-store": options.failoverPath = takeValue(argv, argument); break;
+      case "--circuit-state": options.proxyCircuitState = takeValue(argv, argument); break;
       case "--platform": options.platform = takeValue(argv, argument); break;
       case "--target": options.target = takeValue(argv, argument); break;
       case "--port": options.port = integerOption(argv, argument, 1024, 65535); break;
@@ -182,6 +204,10 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
         options.usageLogBytes = integerOption(argv, argument, 65536, 100 * 1024 * 1024); break;
       case "--usage-capture-bytes":
         options.usageCaptureBytes = integerOption(argv, argument, 1024, 16 * 1024 * 1024); break;
+      case "--retention-files":
+        options.retentionFiles = integerOption(argv, argument, 1, 20); break;
+      case "--retention-days":
+        options.retentionDays = integerOption(argv, argument, 1, 365); break;
       case "--yes":
       case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
@@ -195,7 +221,7 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
   for (const key of [
     "storePath", "secretsPath", "daemonPath", "proxyConfig", "proxyState",
     "proxyLock", "proxyCapability", "proxyLog", "proxyUsageLog",
-    "proxyRuntimeLog", "pricingPath"
+    "proxyRuntimeLog", "proxyCircuitState", "pricingPath", "failoverPath"
   ]) options[key] = resolve(options[key]);
   if (!["request", "response"].includes(options.pricingSource)) {
     throw new ProxyClientError("--pricing-source must be request or response");
@@ -263,7 +289,7 @@ function validateCapability(value) {
 function validateState(value) {
   const keys = [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config"
+    "profile", "target", "protocol", "config", "route", "backend_profiles"
   ];
   if (!value || value.schema !== 1 || value.kind !== STATE_KIND ||
       typeof value.instance_id !== "string" || !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
@@ -272,10 +298,15 @@ function validateState(value) {
       !["127.0.0.1", "::1"].includes(value.host) ||
       !Number.isInteger(value.port) || value.port < 1024 || value.port > 65535 ||
       typeof value.config !== "string" || !isAbsolute(value.config) || value.config.length > 4096 ||
+      (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
+      (value.backend_profiles !== undefined &&
+       (!Array.isArray(value.backend_profiles) ||
+        value.backend_profiles.some((profile) => typeof profile !== "string"))) ||
       Object.keys(value).some((key) => !keys.includes(key))) {
     throw new ProxyClientError("proxy runtime state is invalid");
   }
   validateProfileName(value.profile);
+  for (const profile of value.backend_profiles || []) validateProfileName(profile);
   validateTarget(value.target);
   if (!["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(value.protocol)) {
     throw new ProxyClientError("proxy runtime state protocol is invalid");
@@ -356,6 +387,7 @@ async function inspectStatus(options) {
         state_file: options.proxyState,
         metadata_log: options.proxyLog,
         usage_log: options.proxyUsageLog,
+        circuit_state: options.proxyCircuitState,
         runtime_log: options.proxyRuntimeLog,
         instance_id: lock.instance_id,
         pid: lock.pid
@@ -370,6 +402,7 @@ async function inspectStatus(options) {
       state_file: options.proxyState,
       metadata_log: options.proxyLog,
       usage_log: options.proxyUsageLog,
+      circuit_state: options.proxyCircuitState,
       runtime_log: options.proxyRuntimeLog
     };
   }
@@ -389,6 +422,7 @@ async function inspectStatus(options) {
     state_file: options.proxyState,
     metadata_log: options.proxyLog,
     usage_log: options.proxyUsageLog,
+    circuit_state: options.proxyCircuitState,
     runtime_log: options.proxyRuntimeLog,
     instance_id: state.instance_id,
     pid: state.pid,
@@ -398,6 +432,9 @@ async function inspectStatus(options) {
     profile: state.profile,
     target: state.target,
     protocol: state.protocol,
+    route: health.body?.route ?? state.route ?? null,
+    backends: health.body?.backends ?? state.backend_profiles ?? [state.profile],
+    circuits: health.body?.circuits ?? [],
     pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
     pricing_model_source: health.body?.pricing_model_source ?? null,
     local_base_url: localBaseUrl(state.host, state.port, state.protocol)
@@ -408,6 +445,11 @@ function emitStatus(status, options) {
   if (options.json) return process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
   process.stdout.write(`Proxy:      ${status.status}\n`);
   if (status.profile) process.stdout.write(`Profile:    ${status.profile} (${status.target})\n`);
+  if (status.route) process.stdout.write(`Route:      ${status.route}\n`);
+  if (status.backends?.length) process.stdout.write(`Backends:   ${status.backends.join(" -> ")}\n`);
+  for (const circuit of status.circuits || []) {
+    process.stdout.write(`Circuit:    ${circuit.profile} · ${circuit.state}\n`);
+  }
   if (status.local_base_url) process.stdout.write(`Local URL:  ${status.local_base_url}\n`);
   if (status.pid) process.stdout.write(`PID:        ${status.pid}\n`);
   if (status.pricing_model_source) {
@@ -416,6 +458,7 @@ function emitStatus(status, options) {
   process.stdout.write(`Capability: ${status.capability_present ? "present" : "missing"} (${status.capability_file})\n`);
   process.stdout.write(`Metadata:   ${status.metadata_log}\n`);
   process.stdout.write(`Usage:      ${status.usage_log}\n`);
+  if (status.circuit_state) process.stdout.write(`Circuits:   ${status.circuit_state}\n`);
 }
 
 async function status(options) {
@@ -439,40 +482,100 @@ async function buildPlan(profileName, options) {
   validateTarget(options.target);
   const platform = options.platform || normalizeRuntimePlatform();
   validatePlatform(platform);
-  const [store, secrets, pricing] = await Promise.all([
+  const [store, secrets, pricing, failover] = await Promise.all([
     loadProviderStore(options.storePath),
     loadProviderSecrets(options.secretsPath, { allowMissing: true }),
-    loadPricingCatalog(options.pricingPath, { allowMissing: true })
+    loadPricingCatalog(options.pricingPath, { allowMissing: true }),
+    options.route
+      ? loadFailoverStore(options.failoverPath)
+      : Promise.resolve(null)
   ]);
-  const profile = store.profiles[profileName];
-  if (!profile) throw new ProxyClientError(`provider profile not found: ${profileName}`);
-  const resolved = resolveProviderProfile(profile, { target: options.target, platform });
-  const secretPresent = resolved.auth.mode === "none" ||
-    Boolean(secrets.secrets[resolved.auth.secret]);
-  const direct = renderProviderPlan(resolved, { secretPresent });
+  let route = null;
+  let resolvedBackends;
+  if (options.route) {
+    route = Object.hasOwn(failover.routes, options.route)
+      ? failover.routes[options.route]
+      : null;
+    if (!route) throw new ProxyClientError(`failover route not found: ${options.route}`);
+    if (route.profiles[0] !== profileName) {
+      throw new ProxyClientError(
+        `proxy profile '${profileName}' must match route '${route.name}' primary '${route.profiles[0]}'`
+      );
+    }
+    resolvedBackends = resolveFailoverRoute(route, store, {
+      target: options.target,
+      platform
+    }).backends;
+  } else {
+    const profile = store.profiles[profileName];
+    if (!profile) throw new ProxyClientError(`provider profile not found: ${profileName}`);
+    const resolved = resolveProviderProfile(profile, { target: options.target, platform });
+    if (!resolved.enabled) {
+      throw new ProxyClientError(`${options.target} is disabled by provider profile '${profileName}'`);
+    }
+    resolvedBackends = [resolved];
+  }
+  const protocol = resolvedBackends[0].protocol;
+  const compatibility = proxyCompatibilityIssue(options.target, protocol);
+  const backends = resolvedBackends.map((resolved) => {
+    const secretPresent = resolved.auth.mode === "none" ||
+      Boolean(secrets.secrets[resolved.auth.secret]);
+    return {
+      profile: resolved.profile,
+      endpoint: resolved.endpoint,
+      auth: {
+        mode: resolved.auth.mode,
+        secret: resolved.auth.secret || null,
+        present: secretPresent
+      },
+      models: {
+        default: resolved.model,
+        aliases: structuredClone(resolved.models.aliases),
+        requested_default: resolved.requested_model,
+        outbound_default: resolved.outbound_model
+      }
+    };
+  });
+  const missing = backends.filter((backend) => !backend.auth.present)
+    .map((backend) => `${backend.profile}:${backend.auth.secret}`);
+  const issue = compatibility || (missing.length
+    ? `local Secrets are missing for ${missing.join(", ")}`
+    : "");
+  const primary = backends[0];
+  const retry = route ? structuredClone(route.retry) : {
+    mode: "next_request",
+    max_attempts: 1,
+    status_codes: [],
+    network_errors: false
+  };
+  const circuit = route ? {
+    enabled: true,
+    ...structuredClone(route.circuit)
+  } : {
+    enabled: false,
+    failure_threshold: 3,
+    recovery_timeout_ms: 30000,
+    half_open_max_requests: 1,
+    state_retention_days: 30
+  };
   return {
     schema: 1,
     action: "start",
-    ready: direct.enabled && direct.ready,
-    issue: !direct.enabled ? `${options.target} is disabled by the profile` : direct.issue,
+    ready: !issue,
+    issue,
     profile: profileName,
+    route: route?.name || null,
     target: options.target,
     platform,
-    protocol: resolved.protocol,
-    endpoint: resolved.endpoint,
-    models: {
-      default: resolved.model,
-      aliases: structuredClone(resolved.models.aliases),
-      requested_default: resolved.requested_model,
-      outbound_default: resolved.outbound_model
-    },
-    auth: {
-      mode: resolved.auth.mode,
-      secret: resolved.auth.secret || null,
-      present: secretPresent
-    },
+    protocol,
+    endpoint: primary.endpoint,
+    models: primary.models,
+    auth: primary.auth,
+    backends,
+    retry,
+    circuit,
     listen: { host: "127.0.0.1", port: options.port },
-    local_base_url: localBaseUrl("127.0.0.1", options.port, resolved.protocol),
+    local_base_url: localBaseUrl("127.0.0.1", options.port, protocol),
     timeouts: {
       first_byte_ms: options.firstByteMs,
       stream_idle_ms: options.streamIdleMs,
@@ -491,10 +594,15 @@ async function buildPlan(profileName, options) {
       currency: pricing?.currency || null,
       model_source: options.pricingSource
     },
+    retention: {
+      files: options.retentionFiles,
+      max_age_days: options.retentionDays
+    },
     auto_attach: false,
     capability_file: options.proxyCapability,
     metadata_log: options.proxyLog,
-    usage_log: options.proxyUsageLog
+    usage_log: options.proxyUsageLog,
+    circuit_state: options.proxyCircuitState
   };
 }
 
@@ -505,6 +613,7 @@ function emitPlan(plan, options, apply) {
   }
   process.stdout.write(`${apply ? "[apply]" : "[preview]"} loopback provider proxy\n`);
   process.stdout.write(`  Profile      : ${plan.profile} (${plan.target}; ${plan.platform})\n`);
+  if (plan.route) process.stdout.write(`  Route        : ${plan.route} · ${plan.backends.length} backends\n`);
   process.stdout.write(`  Protocol     : ${plan.protocol}\n`);
   process.stdout.write(`  Model        : ${plan.models.requested_default} -> ${plan.models.outbound_default}\n`);
   process.stdout.write(`  Upstream     : ${plan.endpoint}\n`);
@@ -513,6 +622,12 @@ function emitPlan(plan, options, apply) {
   process.stdout.write(`  Request log  : metadata only; ${plan.metadata_log}\n`);
   process.stdout.write(`  Usage log    : model/token/cost only; ${plan.usage_log}\n`);
   process.stdout.write(`  Pricing      : ${plan.pricing.present ? `${plan.pricing.version} (${plan.pricing.model_source} model)` : "catalog unavailable; requests still work"}\n`);
+  if (plan.route) {
+    process.stdout.write(`  Replay       : ${plan.retry.mode === "same_request" ? `enabled; at most ${plan.retry.max_attempts} attempts (duplicate billing possible)` : "disabled; failover affects later requests"}\n`);
+    for (const [index, backend] of plan.backends.entries()) {
+      process.stdout.write(`  Backend ${index + 1}    : ${backend.profile} · ${backend.models.requested_default} -> ${backend.models.outbound_default}\n`);
+    }
+  }
   process.stdout.write("  Client config: unchanged (explicit attach comes later)\n");
   if (plan.issue) process.stdout.write(`  Blocked by   : ${plan.issue}\n`);
   if (!apply && plan.ready) process.stdout.write("Re-run with --yes to start.\n");
@@ -555,7 +670,7 @@ async function clearDeadRuntime(options) {
 
 function daemonConfig(plan, options) {
   return {
-    schema: 2,
+    schema: 3,
     kind: CONFIG_KIND,
     instance_id: randomUUID(),
     created_at: new Date().toISOString(),
@@ -563,12 +678,19 @@ function daemonConfig(plan, options) {
     target: plan.target,
     platform: plan.platform,
     protocol: plan.protocol,
-    endpoint: plan.endpoint,
-    auth: { mode: plan.auth.mode, secret: plan.auth.secret },
-    models: {
-      default: plan.models.default,
-      aliases: plan.models.aliases
-    },
+    route: plan.route,
+    backends: plan.backends.map((backend) => ({
+      profile: backend.profile,
+      endpoint: backend.endpoint,
+      auth: { mode: backend.auth.mode, secret: backend.auth.secret },
+      models: {
+        default: backend.models.default,
+        aliases: backend.models.aliases
+      }
+    })),
+    retry: plan.retry,
+    circuit: plan.circuit,
+    retention: plan.retention,
     pricing: {
       catalog: plan.pricing.catalog,
       model_source: plan.pricing.model_source
@@ -583,6 +705,7 @@ function daemonConfig(plan, options) {
       secrets: options.secretsPath,
       log: options.proxyLog,
       usage_log: options.proxyUsageLog,
+      circuit_state: options.proxyCircuitState,
       runtime_log: options.proxyRuntimeLog
     }
   };
@@ -657,6 +780,8 @@ async function start(profileName, options) {
     ok: true,
     status: "running",
     profile: plan.profile,
+    route: plan.route,
+    backends: plan.backends.map((backend) => backend.profile),
     target: plan.target,
     protocol: plan.protocol,
     local_base_url: plan.local_base_url,
@@ -783,8 +908,8 @@ export async function main(argv = process.argv.slice(2)) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
     const safe = error instanceof ProxyClientError || error instanceof ProviderSchemaError ||
-      error instanceof ProviderRendererError || error instanceof PricingClientError ||
-      error instanceof PricingError
+      error instanceof PricingClientError || error instanceof PricingError ||
+      error instanceof FailoverClientError || error instanceof FailoverSchemaError
       ? error.message
       : "unexpected proxy controller failure";
     process.stderr.write(`[error] ${safe}\n`);

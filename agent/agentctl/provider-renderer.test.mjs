@@ -16,6 +16,7 @@ import test from "node:test";
 import {
   backendArguments,
   renderProviderPlan,
+  proxyCompatibilityIssue,
   targetPaths
 } from "./provider-renderer.mjs";
 
@@ -149,6 +150,9 @@ test("direct compatibility is explicit instead of inferred from endpoint names",
   }, { secretPresent: true });
   assert.equal(claudeResponses.ready, false);
   assert.match(claudeResponses.issue, /requires anthropic_messages/);
+  assert.equal(proxyCompatibilityIssue("codex", "openai_responses"), "");
+  assert.match(proxyCompatibilityIssue("codex", "openai_chat"), /Responses proxy/);
+  assert.equal(proxyCompatibilityIssue("pi", "google_generative"), "");
 
   const piLocal = renderProviderPlan({
     ...base,

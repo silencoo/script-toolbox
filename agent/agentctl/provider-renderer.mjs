@@ -7,6 +7,7 @@ import {
   PROVIDER_TARGETS,
   normalizeRuntimePlatform,
   validatePlatform,
+  validateProtocol,
   validateTarget
 } from "./provider-schema.mjs";
 
@@ -92,6 +93,22 @@ function compatibilityIssue(resolved) {
     if (!["bearer", "x-api-key", "x-goog-api-key", "none"].includes(auth.mode)) {
       return "Pi authentication mode is unsupported";
     }
+  }
+  return "";
+}
+
+export function proxyCompatibilityIssue(target, protocol) {
+  validateTarget(target);
+  validateProtocol(protocol);
+  if (target === "claude" && protocol !== "anthropic_messages") {
+    return "Claude Code can connect to an Anthropic Messages proxy only";
+  }
+  if (target === "codex" && protocol !== "openai_responses") {
+    return "Codex can connect to an OpenAI Responses proxy only";
+  }
+  if (target === "opencode" &&
+      !["anthropic_messages", "openai_responses", "openai_chat"].includes(protocol)) {
+    return "OpenCode can connect to Anthropic Messages, OpenAI Responses, or OpenAI Chat proxies";
   }
   return "";
 }

@@ -314,6 +314,8 @@ stage_runtime() {
   copy_runtime_file agentctl/provider-client.mjs
   copy_runtime_file agentctl/provider-renderer.mjs
   copy_runtime_file agentctl/provider-schema.mjs
+  copy_runtime_file agentctl/failover-client.mjs
+  copy_runtime_file agentctl/failover-schema.mjs
   copy_runtime_file agentctl/pricing-client.mjs
   copy_runtime_file agentctl/proxy-client.mjs
   copy_runtime_file agentctl/workspace-client.mjs
@@ -342,6 +344,7 @@ stage_runtime() {
   copy_runtime_file pi/setup.sh
   copy_runtime_file pricing/pricing.mjs
   copy_runtime_file proxy/agentproxyd.mjs
+  copy_runtime_file proxy/circuit-breaker.mjs
   copy_runtime_file proxy/model-mapper.mjs
   copy_runtime_file proxy/usage.mjs
 

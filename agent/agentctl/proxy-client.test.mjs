@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  utimes,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,12 +19,15 @@ import test from "node:test";
 import {
   allowedRoute,
   joinUpstream,
+  pruneLogs,
+  rotateLog,
   upstreamHeaders,
   validateConfig
 } from "../proxy/agentproxyd.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROVIDER_CLIENT = join(HERE, "provider-client.mjs");
+const FAILOVER_CLIENT = join(HERE, "failover-client.mjs");
 const PRICING_CLIENT = join(HERE, "pricing-client.mjs");
 const PROXY_CLIENT = join(HERE, "proxy-client.mjs");
 const DAEMON = resolve(HERE, "..", "proxy", "agentproxyd.mjs");
@@ -45,7 +49,9 @@ function proxyArgs(root, port) {
     "--proxy-capability", join(root, "config", "proxy-capability.json"),
     "--proxy-log", join(root, "proxy", "requests.jsonl"),
     "--proxy-usage-log", join(root, "proxy", "usage.jsonl"),
+    "--circuit-state", join(root, "proxy", "circuits.json"),
     "--proxy-runtime-log", join(root, "proxy", "daemon.log"),
+    "--failover-store", join(root, "config", "failover.json"),
     "--pricing", join(root, "config", "pricing.json"),
     "--port", String(port)
   ];
@@ -144,8 +150,7 @@ test("proxy header projection removes every local credential before upstream aut
       digest: "sha-256=STALE-BODY-DIGEST",
       connection: "keep-alive"
     }
-  }, {
-    protocol: "openai_responses",
+  }, "openai_responses", {
     auth: { mode: "bearer" }
   }, "REAL-UPSTREAM-SECRET", 17);
   assert.equal(headers.authorization, "Bearer REAL-UPSTREAM-SECRET");
@@ -160,7 +165,7 @@ test("proxy header projection removes every local credential before upstream aut
 test("daemon config rejects a non-loopback listener", () => {
   const root = "/tmp/agentctl-proxy-test";
   const config = {
-    schema: 2,
+    schema: 3,
     kind: "agentctl-proxy-config",
     instance_id: "11111111-1111-4111-8111-111111111111",
     created_at: new Date().toISOString(),
@@ -168,9 +173,27 @@ test("daemon config rejects a non-loopback listener", () => {
     target: "codex",
     platform: "linux",
     protocol: "openai_responses",
-    endpoint: "https://api.example.com/v1",
-    auth: { mode: "bearer", secret: "test_key" },
-    models: { default: "test-model", aliases: {} },
+    route: null,
+    backends: [{
+      profile: "test",
+      endpoint: "https://api.example.com/v1",
+      auth: { mode: "bearer", secret: "test_key" },
+      models: { default: "test-model", aliases: {} }
+    }],
+    retry: {
+      mode: "next_request",
+      max_attempts: 1,
+      status_codes: [],
+      network_errors: false
+    },
+    circuit: {
+      enabled: false,
+      failure_threshold: 3,
+      recovery_timeout_ms: 30000,
+      half_open_max_requests: 1,
+      state_retention_days: 30
+    },
+    retention: { files: 5, max_age_days: 30 },
     pricing: { catalog: join(root, "pricing"), model_source: "response" },
     listen: { host: "0.0.0.0", port: 17321 },
     timeouts: { first_byte_ms: 1000, stream_idle_ms: 1000, request_ms: 1000 },
@@ -187,10 +210,35 @@ test("daemon config rejects a non-loopback listener", () => {
       secrets: join(root, "secrets"),
       log: join(root, "log"),
       usage_log: join(root, "usage-log"),
+      circuit_state: join(root, "circuit-state"),
       runtime_log: join(root, "runtime-log")
     }
   };
   assert.throws(() => validateConfig(config), /loopback/);
+});
+
+test("metadata and usage log retention is count- and age-bounded", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-retention-"));
+  const path = join(root, "requests.jsonl");
+  const retention = { files: 3, max_age_days: 2 };
+  try {
+    await writeFile(path, "active\n", { mode: 0o600 });
+    await writeFile(`${path}.1`, "previous\n", { mode: 0o600 });
+    await writeFile(`${path}.2`, "oldest\n", { mode: 0o600 });
+    await writeFile(`${path}.3`, "stale-extra\n", { mode: 0o600 });
+    await rotateLog(path, retention, "test log");
+    assert.equal(await readFile(`${path}.1`, "utf8"), "active\n");
+    assert.equal(await readFile(`${path}.2`, "utf8"), "previous\n");
+    await writeFile(path, "new-active\n", { mode: 0o600 });
+    const old = new Date(Date.now() - 3 * 86400000);
+    await utimes(`${path}.2`, old, old);
+    await pruneLogs(path, retention, "test log");
+    await assert.rejects(() => lstat(`${path}.2`), { code: "ENOENT" });
+    await assert.rejects(() => lstat(`${path}.3`), { code: "ENOENT" });
+    assert.equal(await readFile(path, "utf8"), "new-active\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Anthropic, OpenAI Chat, and Google native protocols preserve route and auth semantics", async () => {
@@ -570,6 +618,173 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       await new Promise((resolveWait) => setTimeout(resolveWait, 150));
     }
     await closeServer(upstream);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failover never replays by default, persists circuits, and replays only when explicit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-failover-"));
+  const primaryBodies = [];
+  const backupBodies = [];
+  const primary = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      primaryBodies.push(Buffer.concat(chunks).toString("utf8"));
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end('{"error":"primary unavailable"}');
+    });
+  });
+  const backup = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      backupBodies.push(Buffer.concat(chunks).toString("utf8"));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true,"model":"backup-vendor"}');
+    });
+  });
+  const primaryPort = await listen(primary);
+  const backupPort = await listen(backup);
+  const proxyPort = await freePort();
+  const commonProxy = proxyArgs(root, proxyPort);
+  const failoverPath = join(root, "config", "failover.json");
+  const failoverArgs = [
+    "--failover", failoverPath,
+    "--store", join(root, "config", "providers.json")
+  ];
+  let proxyPid = 0;
+  const post = async () => {
+    const capability = JSON.parse(await readFile(
+      join(root, "config", "proxy-capability.json"), "utf8"
+    ));
+    return fetch(`http://127.0.0.1:${proxyPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "x-agentctl-proxy-token": capability.token,
+        "content-type": "application/json"
+      },
+      body: '{"model":"friendly","input":"FAILOVER-CONTENT-MARKER"}'
+    });
+  };
+  try {
+    run(PROVIDER_CLIENT, ["init", ...providerArgs(root), "--yes"]);
+    for (const [name, port, outbound] of [
+      ["primary", primaryPort, "primary-vendor"],
+      ["backup", backupPort, "backup-vendor"]
+    ]) {
+      run(PROVIDER_CLIENT, [
+        "create", name,
+        "--protocol", "openai_responses",
+        "--base-url", `http://127.0.0.1:${port}/v1`,
+        "--model", "friendly",
+        "--alias", `friendly=${outbound}`,
+        "--auth-mode", "none",
+        ...providerArgs(root), "--yes"
+      ]);
+    }
+    run(FAILOVER_CLIENT, ["init", ...failoverArgs, "--yes", "--json"]);
+    const createRoute = [
+      "create", "resilient",
+      "--profile", "primary",
+      "--profile", "backup",
+      "--failure-threshold", "1",
+      "--recovery-timeout-ms", "3600000",
+      ...failoverArgs,
+      "--yes", "--json"
+    ];
+    const route = JSON.parse(run(FAILOVER_CLIENT, createRoute).stdout).route;
+    assert.equal(route.retry.mode, "next_request");
+
+    const started = JSON.parse(run(PROXY_CLIENT, [
+      "start", "primary", "--target", "codex", "--route", "resilient",
+      ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    proxyPid = started.pid;
+    assert.deepEqual(started.backends, ["primary", "backup"]);
+
+    const first = await post();
+    assert.equal(first.status, 503);
+    assert.deepEqual(await first.json(), { error: "primary unavailable" });
+    assert.equal(primaryBodies.length, 1);
+    assert.equal(backupBodies.length, 0, "default policy must not replay the current POST");
+    const circuitPath = join(root, "proxy", "circuits.json");
+    await waitFor(async () => {
+      try {
+        const state = JSON.parse(await readFile(circuitPath, "utf8"));
+        return state.entries.find((entry) => entry.profile === "primary")?.state === "open";
+      } catch {
+        return false;
+      }
+    });
+
+    const second = await post();
+    assert.equal(second.status, 200);
+    assert.deepEqual(await second.json(), { ok: true, model: "backup-vendor" });
+    assert.equal(primaryBodies.length, 1);
+    assert.equal(backupBodies.length, 1);
+    assert.equal(JSON.parse(backupBodies[0]).model, "backup-vendor");
+
+    const running = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(running.route, "resilient");
+    assert.deepEqual(running.backends, ["primary", "backup"]);
+    assert.equal(running.circuits.find((entry) => entry.profile === "primary").state, "open");
+    run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"]);
+    proxyPid = 0;
+
+    const restarted = JSON.parse(run(PROXY_CLIENT, [
+      "start", "primary", "--target", "codex", "--route", "resilient",
+      ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    proxyPid = restarted.pid;
+    const afterRestart = await post();
+    assert.equal(afterRestart.status, 200);
+    await afterRestart.arrayBuffer();
+    assert.equal(primaryBodies.length, 1, "persisted open circuit must survive restart");
+    assert.equal(backupBodies.length, 2);
+    run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"]);
+    proxyPid = 0;
+
+    run(FAILOVER_CLIENT, [
+      ...createRoute,
+      "--replace",
+      "--same-request-retry"
+    ]);
+    const replayCircuit = join(root, "proxy", "replay-circuits.json");
+    const replayProxy = [...commonProxy, "--circuit-state", replayCircuit];
+    const replayed = JSON.parse(run(PROXY_CLIENT, [
+      "start", "primary", "--target", "codex", "--route", "resilient",
+      ...replayProxy, "--yes", "--json"
+    ]).stdout);
+    proxyPid = replayed.pid;
+    const replayResponse = await post();
+    assert.equal(replayResponse.status, 200);
+    await replayResponse.arrayBuffer();
+    assert.equal(primaryBodies.length, 2);
+    assert.equal(backupBodies.length, 3);
+    run(PROXY_CLIENT, ["stop", ...replayProxy, "--yes", "--json"]);
+    proxyPid = 0;
+
+    const metadata = (await readFile(join(root, "proxy", "requests.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const requests = metadata.filter((record) => record.request_id);
+    assert.equal(requests.some((record) => record.attempts.length === 2 &&
+      record.attempts[0].outcome === "retry_status"), true);
+    assert.equal(requests.some((record) => record.attempts[0]?.outcome === "circuit_open"), true);
+    const metadataText = JSON.stringify(metadata);
+    assert.equal(metadataText.includes("FAILOVER-CONTENT-MARKER"), false);
+    assert.equal(metadataText.includes(`127.0.0.1:${primaryPort}`), false);
+    assert.equal((await lstat(circuitPath)).mode & 0o077, 0);
+    assert.equal((await lstat(replayCircuit)).mode & 0o077, 0);
+  } finally {
+    if (proxyPid) {
+      try { process.kill(proxyPid, "SIGTERM"); } catch {}
+      await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    }
+    await closeServer(primary);
+    await closeServer(backup);
     await rm(root, { recursive: true, force: true });
   }
 });

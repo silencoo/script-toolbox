@@ -1,5 +1,23 @@
 # Changelog — agent/
 
+## 2026-08-11 — guarded provider failover and persistent circuits
+
+- Added strict preview-first `agentctl failover` Stores for ordered 2–8
+  Provider routes, bounded retry statuses, and Closed/Open/HalfOpen circuit
+  policy. Routes are portable; counters and timers are device-local.
+- Integrated multi-backend routes into the native loopback proxy while
+  requiring one resolved protocol per target/platform and independent local
+  Secret references per backend.
+- Made `next_request` the safe default: a failed model POST is not replayed,
+  while its persisted circuit influences later requests. Same-request replay
+  requires an explicit policy and carries a duplicate-execution/billing warning.
+- Persisted owner-only circuit state across daemon restarts, added bounded
+  half-open probes and state expiry, and kept client disconnects neutral rather
+  than treating them as upstream successes or failures.
+- Added count- and age-bounded metadata/usage log retention plus integration
+  tests for no-replay defaults, explicit replay, restart persistence, native
+  model mapping on backup providers, and content/Secret-free observability.
+
 ## 2026-08-11 — exact model usage and versioned pricing
 
 - Added the independent preview-first `agentctl pricing` catalog with exact
