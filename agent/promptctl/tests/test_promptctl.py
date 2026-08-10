@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,111 @@ def test_all_clients_preflight_before_any_write(tmp_path):
     assert not (codex_dir / "instructions").exists()
 
 
+def test_migrate_existing_prompts_without_printing_contents(tmp_path, capsys):
+    claude_dir = tmp_path / ".claude"
+    codex_dir = tmp_path / ".codex"
+    claude_dir.mkdir()
+    codex_dir.mkdir()
+    claude_legacy = claude_dir / "CLAUDE.md"
+    codex_legacy = codex_dir / "AGENTS.md"
+    codex_config = codex_dir / "config.toml"
+    claude_prompt = "PRIVATE_CLAUDE_SENTINEL\r\nKeep this exact.\r\n"
+    codex_prompt = "PRIVATE_CODEX_SENTINEL\nKeep this exact.\n"
+    codex_before = 'model = "gpt-5.6"\n'
+    claude_legacy.write_text(claude_prompt, encoding="utf-8", newline="")
+    codex_legacy.write_text(codex_prompt, encoding="utf-8", newline="")
+    codex_config.write_text(codex_before, encoding="utf-8")
+
+    assert run_cli(
+        tmp_path, "migrate", "--target", "all", "--profile", "personal"
+    ) == 0
+    preview = capsys.readouterr()
+    assert "PRIVATE_CLAUDE_SENTINEL" not in preview.out + preview.err
+    assert "PRIVATE_CODEX_SENTINEL" not in preview.out + preview.err
+    with claude_legacy.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == claude_prompt
+    assert codex_legacy.is_file()
+    assert not (claude_dir / "instructions").exists()
+    assert not (codex_dir / "instructions").exists()
+
+    assert run_cli(
+        tmp_path,
+        "migrate",
+        "--target",
+        "all",
+        "--profile",
+        "personal",
+        "--yes",
+    ) == 0
+    applied = capsys.readouterr()
+    assert "PRIVATE_CLAUDE_SENTINEL" not in applied.out + applied.err
+    assert "PRIVATE_CODEX_SENTINEL" not in applied.out + applied.err
+
+    claude_profile = claude_dir / "instructions" / "personal.md"
+    codex_profile = codex_dir / "instructions" / "personal.md"
+    with claude_profile.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == claude_prompt
+    with codex_profile.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == codex_prompt
+
+    claude_binding = claude_legacy.read_text(encoding="utf-8")
+    assert "@instructions/personal.md" in claude_binding
+    assert "PRIVATE_CLAUDE_SENTINEL" not in claude_binding
+    assert not codex_legacy.exists()
+    codex_after = codex_config.read_text(encoding="utf-8")
+    assert 'model_instructions_file = "./instructions/personal.md"' in codex_after
+    assert codex_after.endswith(codex_before)
+
+    claude_backups = list(claude_dir.glob("CLAUDE.md.bak_*"))
+    codex_backups = list(codex_dir.glob("AGENTS.md.bak_*"))
+    assert len(claude_backups) == 1
+    assert len(codex_backups) == 1
+    with claude_backups[0].open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == claude_prompt
+    with codex_backups[0].open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == codex_prompt
+
+    assert run_cli(tmp_path, "current", "--target", "all", "--json") == 0
+    current = json.loads(capsys.readouterr().out)
+    assert [item["profile"] for item in current] == ["personal", "personal"]
+    assert all(item["managed"] is True for item in current)
+    assert all(item["healthy"] is True for item in current)
+
+
+def test_migrate_all_preflights_conflicts_before_any_write(tmp_path, capsys):
+    claude_dir = tmp_path / ".claude"
+    codex_dir = tmp_path / ".codex"
+    claude_dir.mkdir()
+    codex_dir.mkdir()
+    claude_legacy = claude_dir / "CLAUDE.md"
+    codex_legacy = codex_dir / "AGENTS.md"
+    claude_legacy.write_text("PRIVATE_CLAUDE_SENTINEL\n", encoding="utf-8")
+    codex_legacy.write_text("PRIVATE_CODEX_SENTINEL\n", encoding="utf-8")
+    (codex_dir / "config.toml").write_text(
+        'model_instructions_file = "./owned-elsewhere.md"\n',
+        encoding="utf-8",
+    )
+
+    assert run_cli(
+        tmp_path,
+        "migrate",
+        "--target",
+        "all",
+        "--profile",
+        "personal",
+        "--yes",
+    ) == 1
+    output = capsys.readouterr()
+    assert "PRIVATE_CLAUDE_SENTINEL" not in output.out + output.err
+    assert "PRIVATE_CODEX_SENTINEL" not in output.out + output.err
+    assert claude_legacy.read_text(encoding="utf-8") == "PRIVATE_CLAUDE_SENTINEL\n"
+    assert codex_legacy.read_text(encoding="utf-8") == "PRIVATE_CODEX_SENTINEL\n"
+    assert not (claude_dir / "instructions").exists()
+    assert not (codex_dir / "instructions").exists()
+    assert not list(claude_dir.glob("CLAUDE.md.bak_*"))
+    assert not list(codex_dir.glob("AGENTS.md.bak_*"))
+
+
 def test_custom_template_is_used_once_then_user_content_is_preserved(tmp_path):
     template = tmp_path / "template.md"
     template.write_text("# First template\n", encoding="utf-8")
@@ -229,6 +335,105 @@ def test_path_prints_stable_edit_locations(tmp_path, capsys):
         f"claude\t{tmp_path / '.claude' / 'instructions' / 'personal.md'}",
         f"codex\t{tmp_path / '.codex' / 'instructions' / 'personal.md'}",
     ]
+
+
+def test_snippet_lifecycle_keeps_content_out_of_metadata_and_logs(
+    tmp_path, capsys, monkeypatch
+):
+    source = tmp_path / "source.md"
+    sentinel = "PRIVATE_SNIPPET_SENTINEL\r\nReview only the selected files.\r\n"
+    source.write_text(sentinel, encoding="utf-8", newline="")
+    snippet = (
+        tmp_path
+        / ".local"
+        / "share"
+        / "script-toolbox"
+        / "snippets"
+        / "review-code.md"
+    )
+
+    assert run_cli(
+        tmp_path,
+        "snippet",
+        "create",
+        "review-code",
+        "--from",
+        source,
+    ) == 0
+    preview = capsys.readouterr()
+    assert sentinel not in preview.out + preview.err
+    assert not snippet.exists()
+
+    assert run_cli(
+        tmp_path,
+        "snippet",
+        "create",
+        "review-code",
+        "--from",
+        source,
+        "--yes",
+    ) == 0
+    created = capsys.readouterr()
+    assert sentinel not in created.out + created.err
+    with snippet.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == sentinel
+
+    assert run_cli(tmp_path, "snippet", "list", "--json") == 0
+    listed_output = capsys.readouterr().out
+    assert sentinel not in listed_output
+    listed = json.loads(listed_output)
+    assert listed == [
+        {"name": "review-code", "path": str(snippet), "state": "regular"}
+    ]
+
+    assert run_cli(tmp_path, "snippet", "path", "review-code") == 0
+    assert capsys.readouterr().out.strip() == str(snippet)
+
+    clipboard = {}
+    monkeypatch.setattr(promptctl, "_clipboard_command", lambda: ["fake-clipboard"])
+
+    def fake_run(command, **options):
+        clipboard["command"] = command
+        clipboard["content"] = options["input"]
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(promptctl.subprocess, "run", fake_run)
+    assert run_cli(tmp_path, "snippet", "copy", "review-code") == 0
+    copied = capsys.readouterr()
+    assert sentinel not in copied.out + copied.err
+    assert clipboard == {"command": ["fake-clipboard"], "content": sentinel}
+
+    assert run_cli(tmp_path, "snippet", "delete", "review-code") == 0
+    assert snippet.exists()
+    assert run_cli(tmp_path, "snippet", "delete", "review-code", "--yes") == 0
+    deleted = capsys.readouterr()
+    assert sentinel not in deleted.out + deleted.err
+    assert not snippet.exists()
+    backups = list(snippet.parent.glob("review-code.md.bak_*"))
+    assert len(backups) == 1
+    with backups[0].open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == sentinel
+
+
+def test_snippet_list_rejects_symlink_without_reading_target(tmp_path, capsys):
+    if not hasattr(os, "symlink"):
+        pytest.skip("symlinks unavailable")
+    directory = (
+        tmp_path / ".local" / "share" / "script-toolbox" / "snippets"
+    )
+    directory.mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("PRIVATE_OUTSIDE_SENTINEL\n", encoding="utf-8")
+    link = directory / "unsafe.md"
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    assert run_cli(tmp_path, "snippet", "list", "--json") == 1
+    output = capsys.readouterr()
+    assert "PRIVATE_OUTSIDE_SENTINEL" not in output.out + output.err
+    assert "not a regular file" in output.err
 
 
 def test_malformed_owned_markers_fail_closed(tmp_path, capsys):

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRemoteWorkspace } from "./remote-workspace.mjs";
 
@@ -8,7 +9,9 @@ export const defaultAgentRoot = resolve(
   process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join(moduleDirectory, "..", "..")
 );
 const MAX_OUTPUT = 512 * 1024;
+const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
+const PROMPT_CLIENTS = new Set(["claude", "codex"]);
 
 export function sanitizeOutput(value) {
   return String(value || "")
@@ -30,6 +33,44 @@ export function parseJsonOutput(result, label) {
   }
   const detail = sanitizeOutput(result.stderr || result.stdout) || `${label} exited with code ${result.code}`;
   return { ok: false, data: null, error: detail.split("\n").slice(0, 8).join("\n") };
+}
+
+export function normalizeSnippetMetadata(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => entry && typeof entry.name === "string").map((entry) => ({
+    name: entry.name,
+    path: typeof entry.path === "string" ? entry.path : "",
+    state: typeof entry.state === "string" ? entry.state : ""
+  }));
+}
+
+export async function readPromptPreviewFile(path) {
+  if (typeof path !== "string" || !isAbsolute(path)) {
+    throw new Error("Prompt preview path is invalid.");
+  }
+  let details;
+  try {
+    details = await lstat(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new Error(`Prompt file does not exist: ${path}`);
+    throw error;
+  }
+  if (details.isSymbolicLink() || !details.isFile()) {
+    throw new Error(`Prompt preview requires a regular file: ${path}`);
+  }
+  if (details.size > MAX_PROMPT_BYTES) {
+    throw new Error("Prompt file exceeds the 2 MB preview limit.");
+  }
+  const bytes = await readFile(path);
+  if (bytes.length > MAX_PROMPT_BYTES) {
+    throw new Error("Prompt file exceeds the 2 MB preview limit.");
+  }
+  if (bytes.includes(0)) throw new Error("Prompt file contains unsupported NUL bytes.");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Prompt file is not valid UTF-8.");
+  }
 }
 
 export function createProcessRunner({ cwd = defaultAgentRoot, environment = process.env } = {}) {
@@ -108,10 +149,11 @@ export function createController({
         }
         return { data: null, connection, error: sanitizeOutput(error?.message || error) };
       });
-    let [doctorResult, agentsResult, presetsResult, remote] = await Promise.all([
+    let [doctorResult, agentsResult, presetsResult, snippetsResult, remote] = await Promise.all([
       runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
       runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
+      runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
       remoteResult
     ]);
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
@@ -150,6 +192,8 @@ export function createController({
       presets: cloudPresets || presetsResult.data || {},
       presetsError: cloudPresets ? "" : presetsResult.error,
       presetSource: cloudPresets ? "cloud" : "local",
+      snippets: normalizeSnippetMetadata(snippetsResult.data),
+      snippetsError: snippetsResult.error,
       workspace: remote.data,
       workspaceConnection: remote.connection,
       workspaceError: remote.error
@@ -162,6 +206,39 @@ export function createController({
     } catch (error) {
       return { ok: false, items: [], error: sanitizeOutput(error?.message || error) };
     }
+  }
+
+  async function promptPreview({ source = "local", selection = "", target = "codex" } = {}) {
+    if (!PROMPT_CLIENTS.has(target)) throw new Error(`unsupported Prompt target: ${target}`);
+    if (!selection) throw new Error("No Prompt profile is selected.");
+    if (source === "cloud") {
+      if (typeof remoteWorkspace.promptDocument !== "function") {
+        throw new Error("Workspace Prompt preview is unavailable.");
+      }
+      const document = await remoteWorkspace.promptDocument(selection, target);
+      return {
+        source,
+        name: document.name,
+        target: document.target,
+        path: "",
+        content: document.content
+      };
+    }
+    if (source !== "local") throw new Error(`unsupported Prompt preview source: ${source}`);
+    const result = await runExecutableJson(
+      tools.prompts,
+      ["path", target, "--name", selection, "--json"],
+      "Prompt path"
+    );
+    if (!result.ok) throw new Error(result.error || "Prompt path could not be resolved.");
+    const path = result.data?.[target];
+    return {
+      source,
+      name: selection,
+      target,
+      path,
+      content: await readPromptPreviewFile(path)
+    };
   }
 
   function planDetail(plan) {
@@ -177,6 +254,9 @@ export function createController({
     if (plan.type === "prompts") {
       return `${plan.name} for ${plan.target}: ${plan.action} ${plan.path}\nNo file was changed.`;
     }
+    if (plan.type === "snippets") {
+      return `${plan.name}: ${plan.action} ${plan.path}\nSnippet content remains hidden; no file was changed.`;
+    }
     return `${plan.name} for ${plan.target}: ${plan.items.length} ${plan.unit}\n${plan.items.join(", ") || "none"}\nNo remote catalog was written locally.`;
   }
 
@@ -186,6 +266,14 @@ export function createController({
       return { ok: true, data: plan, detail: planDetail(plan) };
     }
     const selection = await remoteWorkspace.materializeComponent(type, name, target);
+    if (type === "snippets") {
+      await remoteWorkspace.writeSnippet(selection);
+      return {
+        ok: true,
+        data: { type, name },
+        detail: `${name} copied from Workspace to the local Snippets library; content remains hidden`
+      };
+    }
     const env = await remoteWorkspace.runtimeEnvironment();
     let promptWritten = false;
     try {
@@ -262,7 +350,17 @@ export function createController({
           (result.code === 0 ? "Done" : `Action failed with code ${result.code}`)
       };
     }
-    const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(actionName);
+    if (actionName === "snippet-copy") {
+      const result = await run(tools.prompts, ["snippet", "copy", selection]);
+      return {
+        ok: result.code === 0,
+        data: { name: selection },
+        detail: result.code === 0
+          ? `${selection} copied to the clipboard; content remains hidden`
+          : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+      };
+    }
+    const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
     if (component) return remoteComponentAction(actionName, component[1], selection, target);
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);
@@ -303,5 +401,5 @@ export function createController({
     return agentctlCommand(["setup", agent]);
   }
 
-  return { snapshot, action, interactiveCommand, remoteCatalog };
+  return { snapshot, action, interactiveCommand, promptPreview, remoteCatalog };
 }

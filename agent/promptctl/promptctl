@@ -37,9 +37,11 @@ Usage:
   promptctl interactive [--home <directory>]
   promptctl update [--check|--yes]
   promptctl install <claude|codex|all> [options]
+  promptctl migrate --target <claude|codex|all> --profile <name> [--yes]
   promptctl status <claude|codex|all> [options]
   promptctl path <claude|codex|all> [options]
   promptctl uninstall <claude|codex|all> [options]
+  promptctl snippet list|create|path|copy|delete ...
   promptctl profile list|create|delete ...
   promptctl plan --target <claude|codex|all> --profile <name>
   promptctl apply --target <claude|codex|all> --profile <name> --yes

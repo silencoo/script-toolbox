@@ -9,6 +9,7 @@ import {
   findMcpVariantConflicts,
   resolveMcpProfile,
 } from "@/lib/mcp-model.js"
+import { ensurePromptSnippets } from "@/lib/prompt-model.js"
 
 export const SECTION_ORDER = ["mcp", "skills", "prompts"]
 export const WORKSPACE_VIEW_ORDER = [...SECTION_ORDER, "presets"]
@@ -134,6 +135,7 @@ export function validateSnapshot(protocol, snapshot) {
   }
   if (protocol === PROTOCOLS.prompts) {
     validatePromptSnapshot(snapshot)
+    ensurePromptSnippets(snapshot)
     return snapshot
   }
   validateMcpSnapshot(snapshot)
@@ -188,6 +190,17 @@ function validatePromptSnapshot(snapshot) {
           !/^[a-f0-9]{64}$/.test(document.sha256 || "")) {
         throw new Error("Prompt document '" + name + "/" + client + "' is invalid.")
       }
+    }
+  }
+  const snippets = snapshot.snippets === undefined ? {} : snapshot.snippets
+  if (!isObject(snippets)) throw new Error("Prompt snippets are invalid.")
+  for (const [name, snippet] of Object.entries(snippets)) {
+    if (!safeProfileName(name) || snippet?.schema !== 1 ||
+        snippet.name !== name || typeof snippet.content !== "string" ||
+        snippet.content.includes("\0") ||
+        new TextEncoder().encode(snippet.content).byteLength > 1024 * 1024 ||
+        !/^[a-f0-9]{64}$/.test(snippet.sha256 || "")) {
+      throw new Error("Snippet '" + name + "' is invalid.")
     }
   }
 }
@@ -261,6 +274,9 @@ export async function prepareSnapshot(protocol, snapshot) {
     for (const document of Object.values(profile.documents)) {
       document.sha256 = await sha256Hex(document.content)
     }
+  }
+  for (const snippet of Object.values(snapshot.snippets || {})) {
+    snippet.sha256 = await sha256Hex(snippet.content)
   }
 }
 

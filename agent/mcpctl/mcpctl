@@ -947,6 +947,7 @@ if [ "${1:-}" = "update" ]; then
 fi
 
 ENABLED=()
+SUPPRESSED=()
 
 enable_server() {
   local server="$1"
@@ -1884,6 +1885,33 @@ resolved_effective_server() {
   '
 }
 
+resolve_suppressed_servers() {
+  local server
+  SUPPRESSED=()
+  [ "$TARGET" = "codex" ] || return 0
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    array_has "$server" ${ENABLED[@]+"${ENABLED[@]}"} || SUPPRESSED+=("$server")
+  done < <(
+    jq -r --arg target "$TARGET" '
+      [
+        .servers
+        | to_entries[]
+        | . as $entry
+        | ($entry.value * (($entry.value.target_overrides // {})[$target] // {}))
+          as $definition
+        | select(
+            (((($definition.supported_targets // []) | length) == 0)
+              or (($definition.supported_targets // []) | index($target)) != null)
+            and (($definition.suppress_when_disabled // false) == true)
+          )
+        | $entry.key
+      ]
+      | sort[]
+    ' "$CATALOG_FILE"
+  )
+}
+
 validate_effective_server() {
   local server="$1" definition="$2"
   if ! printf '%s' "$definition" | jq -e --arg target "$TARGET" '
@@ -1966,6 +1994,7 @@ validate_effective_server() {
     and all((.enabled_tools // [])[]; type == "string")
     and ((.disabled_tools // []) | type == "array")
     and all((.disabled_tools // [])[]; type == "string")
+    and ((.suppress_when_disabled // false) | type == "boolean")
     and ((.provider // "") | type == "string")
     and ((.auth_mode // "") | type == "string")
     and ((.variant_group // "") | type == "string")
@@ -2158,8 +2187,15 @@ if [ "$COMMAND" = "profile-show" ]; then
   else
     TARGET="$(canonical_target "$TARGET")"
     resolve_profile
+    resolve_suppressed_servers
     printf 'Profile: %s\nTarget: %s\nServers:\n' "$PROFILE" "$TARGET"
     for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '  %s\n' "$server"; done
+    if [ ${#SUPPRESSED[@]} -gt 0 ]; then
+      log "Suppressed when disabled:"
+      for server in ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
+        printf '  %s\n' "$server"
+      done
+    fi
   fi
   exit 0
 fi
@@ -2239,10 +2275,7 @@ strip_selected_codex_blocks() {
       name = section
       sub(/^mcp_servers\./, "", name)
       sub(/[.].*$/, "", name)
-      skip = (
-        section ~ /^mcp_servers\.[A-Za-z0-9_-]+([.]|$)/
-        && index(selected, " " name " ") > 0
-      )
+      skip = (section ~ /^mcp_servers\.[A-Za-z0-9_-]+([.]|$)/ && index(selected, " " name " ") > 0)
     }
     skip { next }
     { print }
@@ -2250,10 +2283,12 @@ strip_selected_codex_blocks() {
 }
 
 CURRENT=()
+CURRENT_SUPPRESSED=()
 
 load_current_servers() {
-  local server marker_check
+  local status server marker_check
   CURRENT=()
+  CURRENT_SUPPRESSED=()
   [ -f "$CONFIG_FILE" ] || return 0
 
   if [ "$TARGET" = "codex" ]; then
@@ -2261,20 +2296,44 @@ load_current_servers() {
     marker_check="$TEMP_RESULT"
     strip_owned_codex_block "$CONFIG_FILE" "$marker_check" ||
       die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
-    while IFS= read -r server; do
+    while IFS=$'\t' read -r status server; do
       [ -n "$server" ] || continue
-      array_has "$server" ${CURRENT[@]+"${CURRENT[@]}"} || CURRENT+=("$server")
+      if [ "$status" = "suppressed" ]; then
+        array_has "$server" ${CURRENT_SUPPRESSED[@]+"${CURRENT_SUPPRESSED[@]}"} ||
+          CURRENT_SUPPRESSED+=("$server")
+      else
+        array_has "$server" ${CURRENT[@]+"${CURRENT[@]}"} || CURRENT+=("$server")
+      fi
     done < <(
       awk -v begin="$CODEX_BEGIN" -v end="$CODEX_END" '
+        function flush_server() {
+          if (server == "") return
+          if (disabled) print "suppressed\t" server
+          else print "enabled\t" server
+          server = ""
+          disabled = 0
+        }
         $0 == begin { in_owned = 1; next }
-        $0 == end { in_owned = 0; next }
-        in_owned &&
-          /^\[mcp_servers\.[A-Za-z0-9_-]+\][[:space:]]*$/ {
+        $0 == end {
+          if (in_owned) flush_server()
+          in_owned = 0
+          next
+        }
+        !in_owned { next }
+        /^\[mcp_servers\.[A-Za-z0-9_-]+\][[:space:]]*$/ {
+          flush_server()
           section = $0
           sub(/^[[]mcp_servers\./, "", section)
           sub(/[]][[:space:]]*$/, "", section)
-          print section
+          server = section
+          next
         }
+        /^\[/ { flush_server(); next }
+        server != "" &&
+          /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*false([[:space:]]*(#.*)?)?$/ {
+          disabled = 1
+        }
+        END { if (in_owned) flush_server() }
       ' "$CONFIG_FILE" | awk '!seen[$0]++'
     )
     return 0
@@ -2316,7 +2375,9 @@ detect_conflicts() {
     stripped="$TEMP_RESULT"
     strip_owned_codex_block "$CONFIG_FILE" "$stripped" ||
       die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
-    for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+    for server in \
+      ${ENABLED[@]+"${ENABLED[@]}"} \
+      ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
       if codex_has_server "$stripped" "$server"; then
         CONFLICTS+=("$server")
       fi
@@ -2380,7 +2441,9 @@ print_plan() {
   print_named_group "Add:" "+" ${additions[@]+"${additions[@]}"}
   print_named_group "Remove:" "-" ${removals[@]+"${removals[@]}"}
   print_named_group "Keep:" "=" ${unchanged[@]+"${unchanged[@]}"}
-  if [ ${#ENABLED[@]} -eq 0 ] && [ ${#CURRENT[@]} -eq 0 ]; then
+  print_named_group "Suppress:" "x" ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}
+  if [ ${#ENABLED[@]} -eq 0 ] && [ ${#CURRENT[@]} -eq 0 ] &&
+     [ ${#SUPPRESSED[@]} -eq 0 ]; then
     log "No managed MCP servers."
   fi
   if [ ${#CONFLICTS[@]} -gt 0 ]; then
@@ -2853,12 +2916,19 @@ write_codex_common_options() {
 
 build_codex_block() {
   local output="$1" server definition transport url command args value
+  local disabled_entry
   local resolved_command resolved_environment resolved_headers
   : > "$output"
-  [ ${#ENABLED[@]} -gt 0 ] || return 0
+  if [ ${#ENABLED[@]} -eq 0 ] && [ ${#SUPPRESSED[@]} -eq 0 ]; then
+    return 0
+  fi
 
   printf '\n%s\n' "$CODEX_BEGIN" >> "$output"
-  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+  for server in \
+    ${ENABLED[@]+"${ENABLED[@]}"} \
+    ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
+    disabled_entry=0
+    array_has "$server" ${SUPPRESSED[@]+"${SUPPRESSED[@]}"} && disabled_entry=1
     definition="$(resolved_effective_server "$server")"
     transport="$(printf '%s' "$definition" | jq -r '.transport')"
     printf '\n[mcp_servers.%s]\n' "$server" >> "$output"
@@ -2889,6 +2959,7 @@ build_codex_block() {
         ')"
         printf 'env_vars = %s\n' "$value" >> "$output"
       fi
+      [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
       write_codex_common_options "$definition" "$output"
       make_temp
       resolved_environment="$TEMP_RESULT"
@@ -2901,6 +2972,7 @@ build_codex_block() {
 
     url="$(printf '%s' "$definition" | jq -r '.url')"
     printf 'url = %s\n' "$(toml_quote "$url")" >> "$output"
+    [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
     write_codex_common_options "$definition" "$output"
     make_temp
     resolved_headers="$TEMP_RESULT"
@@ -3097,6 +3169,8 @@ if [ "$COMMAND" = "server-enable" ] ||
     disable_server "$ENTITY_NAME"
   fi
 
+  resolve_suppressed_servers
+
   STATE_BASE_PROFILE=""
   if [ -f "$STATE_FILE" ]; then
     STATE_BASE_PROFILE="$(jq -r --arg target "$TARGET" '
@@ -3146,6 +3220,11 @@ if [ "$COMMAND" = "current" ]; then
       for server in ${CURRENT[@]+"${CURRENT[@]}"}; do printf '%s\n' "$server"; done |
         jq -Rsc 'split("\n") | map(select(length > 0))'
     )"
+    current_suppressed_json="$(
+      for server in ${CURRENT_SUPPRESSED[@]+"${CURRENT_SUPPRESSED[@]}"}; do
+        printf '%s\n' "$server"
+      done | jq -Rsc 'split("\n") | map(select(length > 0))'
+    )"
     if [ -f "$STATE_FILE" ] &&
        jq -e --arg target "$TARGET" '.targets[$target] != null' \
          "$STATE_FILE" >/dev/null 2>&1; then
@@ -3154,19 +3233,32 @@ if [ "$COMMAND" = "current" ]; then
       if [ "$current_selection_mode" = "manual" ]; then
         expected_servers_json="$(jq -c --arg target "$TARGET" \
           '.targets[$target].servers // []' "$STATE_FILE")"
+        ENABLED=()
+        while IFS= read -r server; do
+          [ -n "$server" ] && enable_server "$server"
+        done < <(printf '%s' "$expected_servers_json" | jq -r '.[]')
+        resolve_suppressed_servers
       else
         PROFILE="$(jq -r --arg target "$TARGET" \
           '.targets[$target].profile // empty' "$STATE_FILE")"
         resolve_profile
+        resolve_suppressed_servers
         expected_servers_json="$(
           for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '%s\n' "$server"; done |
             jq -Rsc 'split("\n") | map(select(length > 0))'
         )"
       fi
+      expected_suppressed_json="$(
+        for server in ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
+          printf '%s\n' "$server"
+        done | jq -Rsc 'split("\n") | map(select(length > 0))'
+      )"
       jq --arg target "$TARGET" \
          --arg config "$CONFIG_FILE" \
          --argjson servers "$current_servers_json" \
-         --argjson expected "$expected_servers_json" '
+         --argjson expected "$expected_servers_json" \
+         --argjson suppressed "$current_suppressed_json" \
+         --argjson expected_suppressed "$expected_suppressed_json" '
         .targets[$target] as $state
         | {
             schema: 1,
@@ -3177,14 +3269,23 @@ if [ "$COMMAND" = "current" ]; then
             base_profile: ($state.base_profile // null),
             servers: $servers,
             expected_servers: $expected,
-            drift: (($expected | sort) != ($servers | sort)),
-            healthy: (($expected | sort) == ($servers | sort))
+            suppressed_servers: $suppressed,
+            expected_suppressed_servers: $expected_suppressed,
+            drift: (
+              (($expected | sort) != ($servers | sort))
+              or (($expected_suppressed | sort) != ($suppressed | sort))
+            ),
+            healthy: (
+              (($expected | sort) == ($servers | sort))
+              and (($expected_suppressed | sort) == ($suppressed | sort))
+            )
           }
       ' "$STATE_FILE"
     else
       jq -n --arg target "$TARGET" \
         --arg config "$CONFIG_FILE" \
-        --argjson servers "$current_servers_json" '{
+        --argjson servers "$current_servers_json" \
+        --argjson suppressed "$current_suppressed_json" '{
           schema: 1,
           target: $target,
           config: $config,
@@ -3193,8 +3294,10 @@ if [ "$COMMAND" = "current" ]; then
           base_profile: null,
           servers: $servers,
           expected_servers: [],
-          drift: (($servers | length) > 0),
-          healthy: (($servers | length) == 0)
+          suppressed_servers: $suppressed,
+          expected_suppressed_servers: [],
+          drift: ((($servers | length) > 0) or (($suppressed | length) > 0)),
+          healthy: ((($servers | length) == 0) and (($suppressed | length) == 0))
         }'
     fi
     exit 0
@@ -3223,10 +3326,17 @@ if [ "$COMMAND" = "current" ]; then
   else
     for server in ${CURRENT[@]+"${CURRENT[@]}"}; do printf '  %s\n' "$server"; done
   fi
+  if [ ${#CURRENT_SUPPRESSED[@]} -gt 0 ]; then
+    log "Suppressed servers:"
+    for server in ${CURRENT_SUPPRESSED[@]+"${CURRENT_SUPPRESSED[@]}"}; do
+      printf '  %s\n' "$server"
+    done
+  fi
   exit 0
 fi
 
 resolve_profile
+resolve_suppressed_servers
 load_current_servers
 detect_conflicts
 print_plan

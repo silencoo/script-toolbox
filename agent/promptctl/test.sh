@@ -33,7 +33,7 @@ printf '%s' "$help_output" | grep -q '^  promptctl$' ||
 command_help="$("$PROMPTCTL" install --help)"
 printf '%s' "$command_help" | grep -q '^usage: promptctl install' ||
   fail "explicit help exposed the internal engine name"
-[ "$("$PROMPTCTL" --version)" = "promptctl 0.3.0" ] ||
+[ "$("$PROMPTCTL" --version)" = "promptctl 0.5.0" ] ||
   fail "version output exposed the internal engine name"
 
 # No arguments enter the Shell guide. The path action is read-only.

@@ -100,11 +100,19 @@ export interface PromptProfile {
   documents: Partial<Record<PromptClient, PromptDocument>>
 }
 
+export interface PromptSnippet {
+  schema: number
+  name: string
+  content: string
+  sha256: string
+}
+
 export interface PromptsSnapshot {
   schema: number
   kind: "promptctl-store"
   created_at: string
   profiles: Record<string, PromptProfile>
+  snippets: Record<string, PromptSnippet>
 }
 
 export type StoreSnapshot = McpSnapshot | SkillsSnapshot | PromptsSnapshot

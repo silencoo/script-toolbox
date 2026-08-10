@@ -139,6 +139,7 @@ test("Codex import preserves structured transport options and disabled selection
     { name: "REMOTE_TOKEN", source: "remote" }
   ]);
   assert.equal(remote.enabled, false);
+  assert.equal(remote.definition.suppress_when_disabled, true);
   assert.equal(remote.definition.headers.Authorization.env, "REMOTE_BEARER");
   assert.equal(remote.definition.headers.Authorization.prefix, "Bearer ");
   assert.equal(remote.definition.headers["X-Dynamic"].env, "DYNAMIC_HEADER");

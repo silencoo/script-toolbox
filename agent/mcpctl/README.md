@@ -129,10 +129,10 @@ mcpctl apply --target claude --profile frontend
 mcpctl current --target claude --json
 ```
 
-`current --json` returns the named or custom selection, base profile, exact
-managed server set, config path, and drift health without resolving or printing
-Secret values. This is the stable orchestration interface used by
-`agentctl preset` and `agentctl doctor`.
+`current --json` returns the named or custom selection, base profile, active
+managed server set, any explicitly suppressed Codex servers, config path, and
+drift health without resolving or printing Secret values. This is the stable
+orchestration interface used by `agentctl preset` and `agentctl doctor`.
 
 ### Keenable and Tavily search
 
@@ -166,8 +166,10 @@ request headers, never in the MCP URL. See the official
 and [Tavily MCP documentation](https://docs.tavily.com/documentation/mcp) for
 the current tools and service limits.
 
-Use the `off` profile to remove all entries currently owned by `mcpctl` for a
-target:
+Use the `off` profile to remove all active entries currently owned by `mcpctl`
+for a target. A Codex server marked `suppress_when_disabled` keeps a managed
+`enabled = false` override so a plugin-provided default cannot turn itself back
+on:
 
 ```bash
 mcpctl --target claude --profile off
@@ -195,6 +197,11 @@ previously saved Codex JSON export.
 The redacted plan reports new, matching, and conflicting catalog entries; the
 enabled set that will become the target-specific part of the `imported`
 profile; and encrypted Secret reference names. It never prints Secret values.
+An imported Codex entry reported by the client with `enabled: false` receives
+`suppress_when_disabled: true` in its target definition. It remains unselected
+in the profile, while apply writes a managed `enabled = false` TOML override.
+Toggling that server through `mcpctl server enable|disable` therefore works even
+when the same MCP is supplied and enabled by a Codex plugin.
 
 To adopt different same-name definitions, first inspect the force-enabled
 plan, then write it locally:

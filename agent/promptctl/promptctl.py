@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-VERSION = "0.3.0"
+VERSION = "0.5.0"
 CLIENTS = ("claude", "codex")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MODEL_KEY_RE = re.compile(
@@ -70,6 +71,7 @@ class ClientPlan:
     link_after: Optional[str]
     instruction_action: str
     template_content: Optional[str] = None
+    migration_source: Optional[Path] = None
 
     @property
     def link_changed(self) -> bool:
@@ -116,6 +118,14 @@ def resolve_layout(client: str, home: Path, name: str) -> Layout:
             link_target=f"./instructions/{filename}",
         )
     raise PromptctlError(f"unsupported client: {client}")
+
+
+def snippets_directory(home: Path) -> Path:
+    return home / ".local" / "share" / "script-toolbox" / "snippets"
+
+
+def resolve_snippet_path(home: Path, name: str) -> Path:
+    return snippets_directory(home) / f"{normalize_name(name)}.md"
 
 
 def _node_kind(path: Path) -> str:
@@ -382,6 +392,66 @@ def plan_install(
     )
 
 
+def _legacy_prompt_path(layout: Layout) -> Path:
+    if layout.client == "claude":
+        return layout.link_file
+    return layout.home / ".codex" / "AGENTS.md"
+
+
+def plan_migrate(layout: Layout, name: str) -> ClientPlan:
+    """Move one unmanaged legacy prompt into Promptctl without rendering it."""
+    source_path = _legacy_prompt_path(layout)
+    _validate_parent(source_path)
+    _validate_parent(layout.link_file)
+    _validate_parent(layout.instruction_file)
+
+    source_content = _read_optional_regular(
+        source_path,
+        f"{layout.client} legacy prompt",
+    )
+    if source_content is None:
+        raise PromptctlError(
+            f"legacy prompt does not exist for {layout.client}: {source_path}"
+        )
+
+    destination_kind = _node_kind(layout.instruction_file)
+    if destination_kind != "missing":
+        raise PromptctlError(
+            f"migration destination is {destination_kind}; refusing to overwrite: "
+            f"{layout.instruction_file}"
+        )
+
+    if layout.client == "claude":
+        link_before = source_content
+    else:
+        link_before = _read_optional_regular(
+            layout.link_file,
+            f"{layout.client} link file",
+        )
+
+    existing_block = _active_block(link_before or "", layout)
+    if existing_block is not None:
+        raise PromptctlError(
+            f"{layout.client} is already managed by Promptctl for profile "
+            f"{existing_block.profile!r}"
+        )
+
+    # Claude's legacy prompt is also its binding file, so migration replaces it
+    # with only the owned import block. Codex keeps the rest of config.toml and
+    # adds the owned top-level key.
+    render_source = "" if layout.client == "claude" else (link_before or "")
+    link_after, _changed = _render_install(render_source, layout, name)
+    return ClientPlan(
+        operation="migrate",
+        layout=layout,
+        link_before=link_before,
+        link_after=link_after,
+        instruction_action="create",
+        template_content=source_content,
+        migration_source=source_path,
+    )
+
+
 def plan_uninstall(
     layout: Layout,
     name: str,
@@ -483,10 +553,15 @@ def _backup(path: Path, timestamp: str) -> Path:
 def _apply_plan(plan: ClientPlan, timestamp: str) -> list[tuple[str, Path]]:
     events: list[tuple[str, Path]] = []
     layout = plan.layout
-    if plan.operation == "install" and plan.instruction_action == "create":
+    if plan.operation in {"install", "migrate"} and plan.instruction_action == "create":
         assert plan.template_content is not None
         _atomic_write(layout.instruction_file, plan.template_content)
-        events.append(("created editable instructions", layout.instruction_file))
+        event = (
+            "migrated legacy prompt into editable instructions"
+            if plan.operation == "migrate"
+            else "created editable instructions"
+        )
+        events.append((event, layout.instruction_file))
 
     if plan.link_changed:
         if plan.link_before is not None:
@@ -495,6 +570,16 @@ def _apply_plan(plan: ClientPlan, timestamp: str) -> list[tuple[str, Path]]:
         if plan.link_after is not None:
             _atomic_write(layout.link_file, plan.link_after)
             events.append(("updated link file", layout.link_file))
+
+    if (
+        plan.operation == "migrate"
+        and plan.migration_source is not None
+        and plan.migration_source != layout.link_file
+    ):
+        backup = _backup(plan.migration_source, timestamp)
+        plan.migration_source.unlink()
+        events.append(("backed up legacy prompt", backup))
+        events.append(("removed legacy prompt after migration", plan.migration_source))
 
     if plan.operation == "uninstall" and plan.instruction_action == "remove":
         backup = _backup(layout.instruction_file, timestamp)
@@ -510,7 +595,10 @@ def _apply_plans_transactionally(
     """Apply a multi-client plan and restore pre-apply bytes after any failure."""
     snapshots: dict[Path, tuple[str, Optional[str], Optional[int]]] = {}
     for plan in plans:
-        for path in (plan.layout.link_file, plan.layout.instruction_file):
+        plan_paths = [plan.layout.link_file, plan.layout.instruction_file]
+        if plan.migration_source is not None:
+            plan_paths.append(plan.migration_source)
+        for path in plan_paths:
             if path in snapshots:
                 continue
             kind = _node_kind(path)
@@ -548,20 +636,32 @@ def _action_summary(plan: ClientPlan) -> dict[str, str]:
     else:
         link_action = "unchanged"
     if plan.instruction_action == "create":
-        instruction_action = "create editable template"
+        instruction_action = (
+            "copy legacy prompt verbatim (content hidden)"
+            if plan.operation == "migrate"
+            else "create editable template"
+        )
     elif plan.instruction_action == "remove":
         instruction_action = "back up and remove"
     elif plan.instruction_action == "preserve":
         instruction_action = "preserve user content"
     else:
         instruction_action = "missing"
-    return {
+    summary = {
         "client": plan.layout.client,
         "link_file": str(plan.layout.link_file),
         "instruction_file": str(plan.layout.instruction_file),
         "link_action": link_action,
         "instruction_action": instruction_action,
     }
+    if plan.migration_source is not None:
+        summary["migration_source"] = str(plan.migration_source)
+        summary["legacy_action"] = (
+            "back up and replace with managed binding"
+            if plan.migration_source == plan.layout.link_file
+            else "back up and remove after successful migration"
+        )
+    return summary
 
 
 def _print_plans(plans: Iterable[ClientPlan], preview: bool) -> None:
@@ -572,6 +672,9 @@ def _print_plans(plans: Iterable[ClientPlan], preview: bool) -> None:
         print(f"\n[{summary['client']}]")
         print(f"link file: {summary['link_file']}")
         print(f"editable instructions: {summary['instruction_file']}")
+        if "migration_source" in summary:
+            print(f"legacy prompt: {summary['migration_source']}")
+            print(f"legacy action: {summary['legacy_action']}")
         print(f"link action: {summary['link_action']}")
         print(f"instructions action: {summary['instruction_action']}")
 
@@ -640,6 +743,38 @@ def command_install(args: argparse.Namespace) -> int:
     for plan in plans:
         print(f"editable {plan.layout.client} instructions: {plan.layout.instruction_file}")
     print("Edit these files directly, then start a new agent session.")
+    return 0
+
+
+def command_migrate(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.profile)
+        home = _home_from_args(args.home)
+        plans = [
+            plan_migrate(resolve_layout(client, home, name), name)
+            for client in selected_clients(args.target)
+        ]
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+
+    preview = args.dry_run or not args.yes
+    _print_plans(plans, preview)
+    if preview:
+        print("\n[preview] prompt contents were not displayed; re-run with --yes to migrate")
+        return 0
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        for client, event, path in _apply_plans_transactionally(plans, timestamp):
+            print(f"[{client}] {event}: {path}")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] migration failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n[done] legacy prompts migrated to profile: {name}")
+    print("Prompt contents were copied verbatim and were not displayed.")
+    print("Start new Claude Code and Codex sessions to load the managed profile.")
     return 0
 
 
@@ -727,6 +862,164 @@ def command_path(args: argparse.Namespace) -> int:
     else:
         for client, path in paths.items():
             print(f"{client}\t{path}")
+    return 0
+
+
+def _snippet_entries(home: Path) -> list[dict[str, str]]:
+    directory = snippets_directory(home)
+    kind = _node_kind(directory)
+    if kind == "missing":
+        return []
+    if kind != "directory":
+        raise PromptctlError(f"snippet library is {kind}, not a directory: {directory}")
+    entries: list[dict[str, str]] = []
+    for path in sorted(directory.iterdir(), key=lambda item: item.name):
+        if path.suffix != ".md":
+            continue
+        name = normalize_name(path.name)
+        file_kind = _node_kind(path)
+        if file_kind != "regular":
+            raise PromptctlError(f"snippet is {file_kind}, not a regular file: {path}")
+        entries.append({"name": name, "path": str(path), "state": "regular"})
+    return entries
+
+
+def command_snippet_list(args: argparse.Namespace) -> int:
+    try:
+        home = _home_from_args(args.home)
+        entries = _snippet_entries(home)
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(entries, ensure_ascii=False, indent=2, sort_keys=True))
+    elif not entries:
+        print("(no snippets)")
+    else:
+        for entry in entries:
+            print(f"{entry['name']}\t{entry['path']}")
+    return 0
+
+
+def command_snippet_path(args: argparse.Namespace) -> int:
+    try:
+        home = _home_from_args(args.home)
+        path = resolve_snippet_path(home, args.name)
+    except PromptctlError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    print(path)
+    return 0
+
+
+def command_snippet_create(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.name)
+        home = _home_from_args(args.home)
+        path = resolve_snippet_path(home, name)
+        _validate_parent(path)
+        kind = _node_kind(path)
+        if kind != "missing":
+            raise PromptctlError(f"snippet already exists as {kind}: {path}")
+        source = Path(args.source).expanduser().resolve() if args.source else None
+        content = ""
+        if source is not None:
+            content = _read_optional_regular(source, "snippet source")
+            if content is None:
+                raise PromptctlError(f"snippet source does not exist: {source}")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+
+    print(f"create snippet: {path}")
+    if source is not None:
+        print(f"source: {source} (content hidden)")
+    else:
+        print("initial content: empty")
+    if not args.yes:
+        print("\n[preview] re-run with --yes to create the snippet")
+        return 0
+    try:
+        _atomic_write(path, content)
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] create failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"[done] created snippet '{name}': {path}")
+    print("Edit the Markdown file directly; its content is never shown by list commands.")
+    return 0
+
+
+def command_snippet_delete(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.name)
+        home = _home_from_args(args.home)
+        path = resolve_snippet_path(home, name)
+        kind = _node_kind(path)
+        if kind == "missing":
+            print(f"[done] snippet '{name}' is already absent")
+            return 0
+        if kind != "regular":
+            raise PromptctlError(f"snippet is {kind}, not a regular file: {path}")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+
+    print(f"back up and remove snippet: {path}")
+    if not args.yes:
+        print("\n[preview] re-run with --yes to delete the snippet")
+        return 0
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        backup = _backup(path, timestamp)
+        path.unlink()
+    except OSError as exc:
+        print(f"[error] delete failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"[done] backed up snippet: {backup}")
+    print(f"[done] removed snippet: {path}")
+    return 0
+
+
+def _clipboard_command() -> list[str]:
+    candidates: list[list[str]]
+    if sys.platform == "darwin":
+        candidates = [["pbcopy"]]
+    elif os.name == "nt":
+        candidates = [["clip"]]
+    else:
+        candidates = [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]
+    for command in candidates:
+        if shutil.which(command[0]):
+            return command
+    raise PromptctlError("no supported clipboard command is available")
+
+
+def command_snippet_copy(args: argparse.Namespace) -> int:
+    try:
+        name = normalize_name(args.name)
+        home = _home_from_args(args.home)
+        path = resolve_snippet_path(home, name)
+        content = _read_optional_regular(path, "snippet")
+        if content is None:
+            raise PromptctlError(f"snippet does not exist: {path}")
+        result = subprocess.run(
+            _clipboard_command(),
+            input=content,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PromptctlError("clipboard command failed")
+    except (PromptctlError, OSError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    print(f"[done] copied snippet '{name}' to the clipboard (content hidden)")
     return 0
 
 
@@ -961,6 +1254,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   %(prog)s install codex
+  %(prog)s migrate --target all --profile personal
   %(prog)s profile create work --from personal --yes
   %(prog)s plan --target codex --profile work
   %(prog)s apply --target codex --profile work --yes
@@ -985,6 +1279,17 @@ Examples:
     install.add_argument("--yes", action="store_true", help="apply the previewed changes")
     install.set_defaults(func=command_install)
 
+    migrate = subparsers.add_parser(
+        "migrate",
+        help="blind-copy existing CLAUDE.md/AGENTS.md prompts into a managed profile",
+    )
+    migrate.add_argument("--target", required=True, choices=(*CLIENTS, "all"))
+    migrate.add_argument("--profile", default="personal")
+    migrate.add_argument("--home")
+    migrate.add_argument("--dry-run", action="store_true", help="force preview")
+    migrate.add_argument("--yes", action="store_true", help="apply the previewed changes")
+    migrate.set_defaults(func=command_migrate)
+
     status = subparsers.add_parser("status", help="inspect links and editable files")
     _add_common_arguments(status)
     status.add_argument("--json", action="store_true")
@@ -994,6 +1299,46 @@ Examples:
     _add_common_arguments(path)
     path.add_argument("--json", action="store_true")
     path.set_defaults(func=command_path)
+
+    snippet = subparsers.add_parser(
+        "snippet",
+        help="manage reusable prompts that are never injected automatically",
+    )
+    snippet_subparsers = snippet.add_subparsers(dest="snippet_command", required=True)
+
+    snippet_list = snippet_subparsers.add_parser("list", help="list snippet metadata")
+    snippet_list.add_argument("--home")
+    snippet_list.add_argument("--json", action="store_true")
+    snippet_list.set_defaults(func=command_snippet_list)
+
+    snippet_path = snippet_subparsers.add_parser("path", help="print one snippet path")
+    snippet_path.add_argument("name")
+    snippet_path.add_argument("--home")
+    snippet_path.set_defaults(func=command_snippet_path)
+
+    snippet_create = snippet_subparsers.add_parser(
+        "create", help="create an empty snippet or blind-copy a source file"
+    )
+    snippet_create.add_argument("name")
+    snippet_create.add_argument("--from", dest="source")
+    snippet_create.add_argument("--home")
+    snippet_create.add_argument("--yes", action="store_true")
+    snippet_create.set_defaults(func=command_snippet_create)
+
+    snippet_copy = snippet_subparsers.add_parser(
+        "copy", help="copy one snippet to the clipboard without displaying it"
+    )
+    snippet_copy.add_argument("name")
+    snippet_copy.add_argument("--home")
+    snippet_copy.set_defaults(func=command_snippet_copy)
+
+    snippet_delete = snippet_subparsers.add_parser(
+        "delete", help="back up and delete one snippet"
+    )
+    snippet_delete.add_argument("name")
+    snippet_delete.add_argument("--home")
+    snippet_delete.add_argument("--yes", action="store_true")
+    snippet_delete.set_defaults(func=command_snippet_delete)
 
     uninstall = subparsers.add_parser(
         "uninstall",

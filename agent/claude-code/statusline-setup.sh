@@ -278,7 +278,13 @@ run_install() {
   elif state_is_valid; then
     [ "$force" = 1 ] ||
       die "managed status-line state has drifted; inspect status, then use --force to adopt the current setting"
-    state_source="settings"
+    if ! settings_has_statusline && script_is_owned; then
+      # A settings manager may rewrite the JSON object and drop statusLine.
+      # Keep the original private restore point while repairing our setting.
+      state_source="state"
+    else
+      state_source="settings"
+    fi
   fi
 
   command -v python3 >/dev/null 2>&1 ||

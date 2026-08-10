@@ -22488,7 +22488,8 @@ import { spawnSync } from "node:child_process";
 
 // src/controller.mjs
 import { spawn } from "node:child_process";
-import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
+import { lstat as lstat3, readFile as readFile3 } from "node:fs/promises";
+import { dirname as dirname3, isAbsolute, join as join3, resolve as resolve3 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/remote-workspace.mjs
@@ -22964,6 +22965,9 @@ var PROTOCOLS = Object.freeze({
   skills: SKILLS_REMOTE_PROTOCOL,
   prompts: PROMPT_REMOTE_PROTOCOL
 });
+function snippetsDirectory(home) {
+  return join2(home, ".local", "share", "script-toolbox", "snippets");
+}
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
@@ -23167,6 +23171,14 @@ function validatePromptSnapshot(snapshot) {
       if (!["claude", "codex"].includes(client) || document2?.schema !== 1 || document2.client !== client || typeof document2.content !== "string" || document2.content.includes("\0") || Buffer.byteLength(document2.content, "utf8") > 2 * 1024 * 1024 || typeof document2.sha256 !== "string" || createHash("sha256").update(document2.content, "utf8").digest("hex") !== document2.sha256) {
         throw new RemoteWorkspaceError(`Prompt profile '${name}' has an invalid ${client} document`);
       }
+    }
+  }
+  const snippets = snapshot.snippets ?? {};
+  assertObject(snippets, "Prompt snippets");
+  for (const [name, snippet] of Object.entries(snippets)) {
+    assertName(name, MCP_NAME, "Snippet name");
+    if (snippet?.schema !== 1 || snippet.name !== name || typeof snippet.content !== "string" || snippet.content.includes("\0") || Buffer.byteLength(snippet.content, "utf8") > 1024 * 1024 || typeof snippet.sha256 !== "string" || createHash("sha256").update(snippet.content, "utf8").digest("hex") !== snippet.sha256) {
+      throw new RemoteWorkspaceError(`Snippet '${name}' is invalid`);
     }
   }
   return snapshot;
@@ -23420,7 +23432,8 @@ function createRemoteWorkspace({
     return value;
   }
   async function catalog(type, target = "codex", options2 = {}) {
-    const { snapshot } = await child(type, options2);
+    const storeType = type === "snippets" ? "prompts" : type;
+    const { snapshot } = await child(storeType, options2);
     if (type === "mcp") {
       return Object.entries(snapshot.profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, profile]) => {
         const selected = mcpSelection(snapshot, name, target);
@@ -23432,6 +23445,15 @@ function createRemoteWorkspace({
         const selected = skillSelection(snapshot, name, target);
         return { name, description: String(pack.description || ""), count: selected.skills.length, unit: "skills", source: "cloud" };
       });
+    }
+    if (type === "snippets") {
+      return Object.keys(snapshot.snippets || {}).sort((a, b) => a.localeCompare(b)).map((name) => ({
+        name,
+        description: "Reusable prompt \xB7 content hidden",
+        count: 1,
+        unit: "snippet",
+        source: "cloud"
+      }));
     }
     return Object.entries(snapshot.profiles).filter(([, profile]) => Boolean(profile.documents[target])).sort(([a], [b]) => a.localeCompare(b)).map(([name, profile]) => ({
       name,
@@ -23452,7 +23474,8 @@ function createRemoteWorkspace({
       skills: join2(root, "skills"),
       presets: join2(root, "presets.json"),
       presetState: join2(root, "preset-state.json"),
-      promptBackups: join2(root, "prompt-backups")
+      promptBackups: join2(root, "prompt-backups"),
+      snippetBackups: join2(root, "snippet-backups")
     };
   }
   async function runtimeEnvironment() {
@@ -23530,13 +23553,20 @@ function createRemoteWorkspace({
     }
     return { name, ...selection, store: paths.skills };
   }
-  async function promptSelection(name, target) {
+  async function promptDocument(name, target) {
     const { snapshot } = await child("prompts");
     assertName(name, MCP_NAME, "Prompt profile name");
+    if (!["claude", "codex"].includes(target)) {
+      throw new RemoteWorkspaceError(`unsupported Prompt target '${target}'`);
+    }
     const profile = snapshot.profiles[name];
     if (!profile) throw new RemoteWorkspaceError(`unknown remote Prompt profile '${name}'`);
     const document2 = profile.documents[target];
     if (!document2) throw new RemoteWorkspaceError(`Prompt profile '${name}' has no ${target} document`);
+    return { name, target, content: document2.content };
+  }
+  async function promptSelection(name, target) {
+    const document2 = await promptDocument(name, target);
     const directory = join2(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
     const path = join2(directory, `${name}.md`);
     let current = null;
@@ -23594,6 +23624,66 @@ function createRemoteWorkspace({
       await rename2(temporary, selection.path);
     }
   }
+  async function snippetSelection(name) {
+    const { snapshot } = await child("prompts");
+    assertName(name, MCP_NAME, "Snippet name");
+    const snippet = snapshot.snippets?.[name];
+    if (!snippet) throw new RemoteWorkspaceError(`unknown remote Snippet '${name}'`);
+    const path = join2(snippetsDirectory(localHome), `${name}.md`);
+    let current = null;
+    if (await pathExists2(path)) {
+      const details = await lstat2(path);
+      if (details.isSymbolicLink() || !details.isFile()) {
+        throw new RemoteWorkspaceError(`refusing to replace non-regular Snippet file: ${path}`);
+      }
+      current = await readFile2(path, "utf8");
+    }
+    return {
+      name,
+      path,
+      content: snippet.content,
+      action: current === null ? "create" : current === snippet.content ? "keep" : "replace",
+      previous: current
+    };
+  }
+  async function writeSnippet(selection) {
+    if (selection.action === "keep") return { backup: "" };
+    await ensureDirectory(dirname2(selection.path));
+    let backup = "";
+    if (selection.previous !== null) {
+      const paths = await runtimePaths();
+      const backupDirectory = join2(paths.snippetBackups, `${Date.now()}`);
+      await ensureDirectory(backupDirectory);
+      backup = join2(backupDirectory, `${selection.name}.md`);
+      await rename2(selection.path, backup);
+    }
+    const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
+    try {
+      await writeFile(temporary, selection.content, { flag: "wx", mode: 384 });
+      if (process.platform !== "win32") await chmod2(temporary, 384);
+      await rename2(temporary, selection.path);
+    } catch (error) {
+      await rm2(temporary, { force: true }).catch(() => {
+      });
+      if (backup && !await pathExists2(selection.path)) {
+        await rename2(backup, selection.path).catch(() => {
+        });
+      }
+      throw error;
+    }
+    return { backup };
+  }
+  async function restoreSnippet(selection) {
+    if (selection.action === "keep") return;
+    if (selection.previous === null) {
+      await rm2(selection.path, { force: true });
+    } else {
+      const temporary = `${selection.path}.restore-${process.pid}-${randomBytes2(6).toString("hex")}`;
+      await writeFile(temporary, selection.previous, { flag: "wx", mode: 384 });
+      if (await pathExists2(selection.path)) await rm2(selection.path, { force: true });
+      await rename2(temporary, selection.path);
+    }
+  }
   async function selectionPlan(name, target) {
     const workspace = await rawWorkspace();
     const preset = workspace.presets[name];
@@ -23629,6 +23719,10 @@ function createRemoteWorkspace({
       const selection = await promptSelection(name, target);
       return { type, name, target, action: selection.action, path: selection.path, items: [], unit: "documents" };
     }
+    if (type === "snippets") {
+      const selection = await snippetSelection(name);
+      return { type, name, action: selection.action, path: selection.path, items: [], unit: "snippets" };
+    }
     throw new RemoteWorkspaceError(`unsupported remote component '${type}'`);
   }
   async function materializePreset(name, target) {
@@ -23653,6 +23747,7 @@ function createRemoteWorkspace({
     if (type === "mcp") return materializeMcp(name, target);
     if (type === "skills") return materializeSkills(name, target);
     if (type === "prompts") return promptSelection(name, target);
+    if (type === "snippets") return snippetSelection(name);
     throw new RemoteWorkspaceError(`unsupported remote component '${type}'`);
   }
   return {
@@ -23663,12 +23758,16 @@ function createRemoteWorkspace({
     index,
     materializeComponent,
     materializePreset,
+    promptDocument,
     promptSelection,
+    restoreSnippet,
     restorePrompt,
     runtimeAvailability,
     runtimeEnvironment,
     runtimePaths,
     selectionPlan,
+    snippetSelection,
+    writeSnippet,
     writePrompt
   };
 }
@@ -23679,7 +23778,9 @@ var defaultAgentRoot = resolve3(
   process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join3(moduleDirectory, "..", "..")
 );
 var MAX_OUTPUT = 512 * 1024;
+var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
+var PROMPT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex"]);
 function sanitizeOutput(value) {
   return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
 }
@@ -23693,6 +23794,42 @@ function parseJsonOutput(result, label) {
   }
   const detail = sanitizeOutput(result.stderr || result.stdout) || `${label} exited with code ${result.code}`;
   return { ok: false, data: null, error: detail.split("\n").slice(0, 8).join("\n") };
+}
+function normalizeSnippetMetadata(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => entry && typeof entry.name === "string").map((entry) => ({
+    name: entry.name,
+    path: typeof entry.path === "string" ? entry.path : "",
+    state: typeof entry.state === "string" ? entry.state : ""
+  }));
+}
+async function readPromptPreviewFile(path) {
+  if (typeof path !== "string" || !isAbsolute(path)) {
+    throw new Error("Prompt preview path is invalid.");
+  }
+  let details;
+  try {
+    details = await lstat3(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new Error(`Prompt file does not exist: ${path}`);
+    throw error;
+  }
+  if (details.isSymbolicLink() || !details.isFile()) {
+    throw new Error(`Prompt preview requires a regular file: ${path}`);
+  }
+  if (details.size > MAX_PROMPT_BYTES) {
+    throw new Error("Prompt file exceeds the 2 MB preview limit.");
+  }
+  const bytes = await readFile3(path);
+  if (bytes.length > MAX_PROMPT_BYTES) {
+    throw new Error("Prompt file exceeds the 2 MB preview limit.");
+  }
+  if (bytes.includes(0)) throw new Error("Prompt file contains unsupported NUL bytes.");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Prompt file is not valid UTF-8.");
+  }
 }
 function createProcessRunner({ cwd: cwd2 = defaultAgentRoot, environment = process.env } = {}) {
   return function run(executable, args, { env: env3 = {} } = {}) {
@@ -23765,10 +23902,11 @@ function createController({
       }
       return { data: null, connection, error: sanitizeOutput(error?.message || error) };
     });
-    let [doctorResult, agentsResult, presetsResult, remote] = await Promise.all([
+    let [doctorResult, agentsResult, presetsResult, snippetsResult, remote] = await Promise.all([
       runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
       runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
+      runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
       remoteResult
     ]);
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
@@ -23818,6 +23956,8 @@ function createController({
       presets: cloudPresets || presetsResult.data || {},
       presetsError: cloudPresets ? "" : presetsResult.error,
       presetSource: cloudPresets ? "cloud" : "local",
+      snippets: normalizeSnippetMetadata(snippetsResult.data),
+      snippetsError: snippetsResult.error,
       workspace: remote.data,
       workspaceConnection: remote.connection,
       workspaceError: remote.error
@@ -23829,6 +23969,38 @@ function createController({
     } catch (error) {
       return { ok: false, items: [], error: sanitizeOutput(error?.message || error) };
     }
+  }
+  async function promptPreview({ source = "local", selection = "", target = "codex" } = {}) {
+    if (!PROMPT_CLIENTS.has(target)) throw new Error(`unsupported Prompt target: ${target}`);
+    if (!selection) throw new Error("No Prompt profile is selected.");
+    if (source === "cloud") {
+      if (typeof remoteWorkspace.promptDocument !== "function") {
+        throw new Error("Workspace Prompt preview is unavailable.");
+      }
+      const document2 = await remoteWorkspace.promptDocument(selection, target);
+      return {
+        source,
+        name: document2.name,
+        target: document2.target,
+        path: "",
+        content: document2.content
+      };
+    }
+    if (source !== "local") throw new Error(`unsupported Prompt preview source: ${source}`);
+    const result = await runExecutableJson(
+      tools.prompts,
+      ["path", target, "--name", selection, "--json"],
+      "Prompt path"
+    );
+    if (!result.ok) throw new Error(result.error || "Prompt path could not be resolved.");
+    const path = result.data?.[target];
+    return {
+      source,
+      name: selection,
+      target,
+      path,
+      content: await readPromptPreviewFile(path)
+    };
   }
   function planDetail(plan) {
     if (plan.preset) {
@@ -23844,6 +24016,10 @@ function createController({
       return `${plan.name} for ${plan.target}: ${plan.action} ${plan.path}
 No file was changed.`;
     }
+    if (plan.type === "snippets") {
+      return `${plan.name}: ${plan.action} ${plan.path}
+Snippet content remains hidden; no file was changed.`;
+    }
     return `${plan.name} for ${plan.target}: ${plan.items.length} ${plan.unit}
 ${plan.items.join(", ") || "none"}
 No remote catalog was written locally.`;
@@ -23854,6 +24030,14 @@ No remote catalog was written locally.`;
       return { ok: true, data: plan, detail: planDetail(plan) };
     }
     const selection = await remoteWorkspace.materializeComponent(type, name, target);
+    if (type === "snippets") {
+      await remoteWorkspace.writeSnippet(selection);
+      return {
+        ok: true,
+        data: { type, name },
+        detail: `${name} copied from Workspace to the local Snippets library; content remains hidden`
+      };
+    }
     const env3 = await remoteWorkspace.runtimeEnvironment();
     let promptWritten = false;
     try {
@@ -23927,7 +24111,15 @@ No remote catalog was written locally.`;
         detail: sanitizeOutput(result2.stdout || result2.stderr) || (result2.code === 0 ? "Done" : `Action failed with code ${result2.code}`)
       };
     }
-    const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(actionName);
+    if (actionName === "snippet-copy") {
+      const result2 = await run(tools.prompts, ["snippet", "copy", selection]);
+      return {
+        ok: result2.code === 0,
+        data: { name: selection },
+        detail: result2.code === 0 ? `${selection} copied to the clipboard; content remains hidden` : sanitizeOutput(result2.stderr || result2.stdout) || `Action failed with code ${result2.code}`
+      };
+    }
+    const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
     if (component) return remoteComponentAction(actionName, component[1], selection, target);
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);
@@ -23965,7 +24157,7 @@ No remote catalog was written locally.`;
     if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
     return agentctlCommand(["setup", agent]);
   }
-  return { snapshot, action, interactiveCommand, remoteCatalog };
+  return { snapshot, action, interactiveCommand, promptPreview, remoteCatalog };
 }
 
 // src/model.mjs
@@ -23975,10 +24167,16 @@ var SECTIONS = Object.freeze([
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
+  { id: "snippets", label: "Snippets" },
   { id: "presets", label: "Presets" },
   { id: "cloud", label: "Cloud" }
 ]);
 var TARGETS = Object.freeze(["codex", "claude"]);
+function targetLabel(target) {
+  if (target === "claude") return "Claude Code";
+  if (target === "codex") return "Codex";
+  return String(target || "Unknown");
+}
 function normalizeSection(value) {
   return SECTIONS.some((section) => section.id === value) ? value : "overview";
 }
@@ -23992,12 +24190,113 @@ function otherTarget(target) {
 function targetReport(snapshot, target) {
   return snapshot?.doctor?.targets?.find((report) => report.target === target) || null;
 }
+function componentData(check2) {
+  return Array.isArray(check2?.data) ? check2.data[0] || {} : check2?.data || {};
+}
+function componentTargetState(snapshot, component, target) {
+  const reportKey = component === "prompts" ? "prompt" : component;
+  const check2 = targetReport(snapshot, target)?.[reportKey] || null;
+  const data = componentData(check2);
+  const selection = component === "mcp" ? data.selection_mode === "manual" ? "custom" : data.profile || "none" : component === "skills" ? data.selection_mode === "manual" ? "custom" : data.pack || "none" : data.profile || "none";
+  const items = component === "mcp" ? data.servers || [] : component === "skills" ? data.skills || [] : [];
+  return {
+    target,
+    label: targetLabel(target),
+    check: check2,
+    data,
+    selection,
+    items: [...items],
+    suppressed: component === "mcp" ? [...data.suppressed_servers || []] : [],
+    drift: Array.isArray(data.drift) ? [...data.drift] : data.drift === true ? ["configuration"] : [],
+    summary: componentSummary(component, check2)
+  };
+}
+function promptTargetState(snapshot, target) {
+  const state = componentTargetState(snapshot, "prompts", target);
+  const data = state.data;
+  return {
+    target: state.target,
+    label: state.label,
+    selection: state.selection,
+    summary: state.summary,
+    managed: data.managed === true,
+    linkFile: typeof data.link_file === "string" ? data.link_file : "",
+    instructionFile: typeof data.instruction_file === "string" ? data.instruction_file : "",
+    fileState: typeof data.instructions === "string" ? data.instructions : "",
+    healthy: data.healthy !== false,
+    ok: state.check?.ok === true,
+    error: state.check?.ok ? "" : state.check?.summary || state.check?.error || "status unavailable"
+  };
+}
+function snippetEntries(localEntries, remoteEntries) {
+  const merged = /* @__PURE__ */ new Map();
+  for (const value of Array.isArray(localEntries) ? localEntries : []) {
+    if (!value || typeof value.name !== "string") continue;
+    merged.set(value.name, {
+      name: value.name,
+      local: {
+        path: typeof value.path === "string" ? value.path : "",
+        state: typeof value.state === "string" ? value.state : ""
+      },
+      remote: null
+    });
+  }
+  for (const value of Array.isArray(remoteEntries) ? remoteEntries : []) {
+    if (!value || typeof value.name !== "string") continue;
+    const current = merged.get(value.name) || { name: value.name, local: null, remote: null };
+    current.remote = {
+      count: Number.isFinite(value.count) ? value.count : 1,
+      unit: typeof value.unit === "string" ? value.unit : "snippet",
+      source: value.source === "cloud" ? "cloud" : ""
+    };
+    merged.set(value.name, current);
+  }
+  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+function mcpTargetComparison(snapshot) {
+  const targets = Object.fromEntries(TARGETS.map((target) => [
+    target,
+    componentTargetState(snapshot, "mcp", target)
+  ]));
+  const codex = new Set(targets.codex.items);
+  const claude = new Set(targets.claude.items);
+  return {
+    targets,
+    shared: [...codex].filter((item) => claude.has(item)).sort(),
+    only: {
+      codex: [...codex].filter((item) => !claude.has(item)).sort(),
+      claude: [...claude].filter((item) => !codex.has(item)).sort()
+    }
+  };
+}
 function presetEntries(snapshot) {
   return Object.entries(snapshot?.presets || {}).sort(([left], [right]) => left.localeCompare(right));
 }
 function clampSelection(index, length) {
   if (length <= 0) return 0;
   return Math.min(Math.max(index, 0), length - 1);
+}
+function selectionDelta(input, key = {}) {
+  if (input === "]" || key.downArrow) return 1;
+  if (input === "[" || key.upArrow) return -1;
+  return 0;
+}
+function selectionWindow(items, selected, size = 9) {
+  const entries = Array.isArray(items) ? items : [];
+  const safeIndex = clampSelection(selected, entries.length);
+  const windowSize = Math.max(1, Math.floor(size));
+  const maximumStart = Math.max(0, entries.length - windowSize);
+  const start = Math.min(Math.max(0, safeIndex - Math.floor(windowSize / 2)), maximumStart);
+  const end = Math.min(entries.length, start + windowSize);
+  return {
+    start,
+    end,
+    total: entries.length,
+    items: entries.slice(start, end).map((item, offset) => ({
+      item,
+      index: start + offset
+    }))
+  };
 }
 function componentSummary(component, check2) {
   if (!check2?.ok) return { label: "Unavailable", kind: "bad", detail: check2?.summary || check2?.error || "No status" };
@@ -24035,9 +24334,16 @@ function componentSummary(component, check2) {
     };
   }
   const promptData = Array.isArray(data) ? data[0] || {} : data;
+  if (!promptData.managed) {
+    return {
+      label: "Not managed",
+      kind: "warn",
+      detail: promptData.profile || "none"
+    };
+  }
   return {
-    label: promptData.healthy === false || !promptData.managed ? "Needs setup" : "Healthy",
-    kind: promptData.healthy === false || !promptData.managed ? "bad" : "good",
+    label: promptData.healthy === false ? "Drift" : "Healthy",
+    kind: promptData.healthy === false ? "bad" : "good",
     detail: promptData.profile || "none"
   };
 }
@@ -24047,10 +24353,13 @@ function actionForKey(section, input) {
     if (input === "c" || input === "\r") return "agent-configure";
     if (input === "x") return "agent-uninstall";
   }
-  if (["mcp", "skills", "prompts"].includes(section)) {
+  if (["mcp", "skills", "prompts", "snippets"].includes(section)) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
   }
+  if (section === "prompts" && input === "v") return "prompt-view-local";
+  if (section === "prompts" && input === "V") return "prompt-view-cloud";
+  if (section === "snippets" && input === "c") return "snippet-copy";
   if (section === "presets") {
     if (input === "p") return "plan";
     if (input === "a") return "apply";
@@ -24065,15 +24374,22 @@ function actionLabel(action, selection, target) {
   if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
   if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
-  const component = /^(mcp|skills|prompts)-(plan|apply)$/.exec(action);
+  if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
+  if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
+  if (action === "prompt-view-cloud") return `View Workspace Prompt ${selection || "selection"} for ${target}`;
+  const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(action);
   if (component) {
-    const label = component[1] === "prompts" ? "Prompt" : component[1][0].toUpperCase() + component[1].slice(1);
-    return `${component[2] === "plan" ? "Plan" : "Apply"} ${label} ${selection || "selection"} for ${target}`;
+    const label = component[1] === "prompts" ? "Prompt" : component[1] === "snippets" ? "Snippet" : component[1][0].toUpperCase() + component[1].slice(1);
+    const targetSuffix = component[1] === "snippets" ? "" : ` for ${target}`;
+    return `${component[2] === "plan" ? "Plan" : "Apply"} ${label} ${selection || "selection"}${targetSuffix}`;
   }
   if (action === "plan") return `Plan ${selection || "preset"} for ${target}`;
   if (action === "apply") return `Apply ${selection || "preset"} to ${target}`;
   if (action === "rollback") return `Roll back ${target}`;
   return action;
+}
+function safePromptPreviewText(value) {
+  return String(value ?? "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
 }
 function workspacePresentation(workspace, error = "") {
   if (workspace) {
@@ -24095,7 +24411,7 @@ function workspacePresentation(workspace, error = "") {
       kind: "muted",
       heading: "Cloud sync is not set up",
       status: "Local only",
-      description: "MCP, Skills, Prompts, and Presets continue to work locally.",
+      description: "MCP, Skills, Prompts, Snippets, and Presets continue to work locally.",
       safety: "No cloud data exists until you initialize or restore a Workspace.",
       commands: [
         "agentctl workspace init --endpoint <url>",
@@ -24168,20 +24484,32 @@ function workspacePresentation(workspace, error = "") {
 }
 
 // src/toolbox-tui.jsx
-var COLORS = Object.freeze({ good: "green", warn: "yellow", bad: "red", muted: "gray" });
+var COLORS = Object.freeze({
+  good: "green",
+  warn: "yellow",
+  bad: "red",
+  muted: "gray",
+  value: "white",
+  accent: "cyan",
+  selected: "magenta",
+  codex: "cyan",
+  claude: "yellow"
+});
+var COMPONENT_LABELS = Object.freeze({ mcp: "MCP", skills: "Skills", prompts: "Prompts" });
 function usage() {
   process.stdout.write(`script-toolbox agent TUI
 
 Usage:
-  toolbox-tui [--section <overview|agents|mcp|skills|prompts|presets|cloud>]
+  toolbox-tui [--section <overview|agents|mcp|skills|prompts|snippets|presets|cloud>]
   toolbox-tui --help
 
 Keys:
   Tab / Shift+Tab / Left / Right  Switch section
   t                                 Switch Codex / Claude target
   r                                 Refresh live status
-  j / k / Up / Down                 Select the current list item
+  [ / ] / Up / Down                 Select previous / next list item
   p / a                             Plan / apply selected cloud configuration
+  Prompts: v local \xB7 V Workspace    View Prompt content on demand
   u                                 Roll back a preset
   Agents: c configure \xB7 p providers \xB7 x uninstall owned config
   ?                                 Toggle help
@@ -24206,18 +24534,49 @@ function parseArgs(argv) {
 function Badge({ kind = "muted", children }) {
   return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.muted, bold: true }, children);
 }
+function TargetBadge({ target, selected = false }) {
+  const label = targetLabel(target).toUpperCase().padEnd(11);
+  return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[target] || COLORS.accent, bold: true, inverse: selected }, ` ${label} `);
+}
 function Panel({ title, children, grow = 1 }) {
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "round", borderColor: "gray", paddingX: 1, flexGrow: grow, flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, title), children);
 }
-function Row({ label, value, kind = "muted" }) {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, null, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, String(label).padEnd(12)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || void 0 }, value));
+function Row({ label, value, kind = "value" }) {
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, String(label).padEnd(18)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.value }, value));
 }
 function SummaryRow({ name, summary }) {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, null, name.padEnd(10)), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label.padEnd(12)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, summary.detail));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "white" }, name.padEnd(10)), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label.padEnd(12)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, summary.detail));
+}
+function TargetStatusRow({ state, selected }) {
+  const count = state.items.length;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: state.target, selected }), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: state.summary.kind }, state.summary.label.padEnd(11)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, state.selection), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\xB7 ", count, " ", count === 1 ? "server" : "servers"));
+}
+function ItemGroup({ label, items, kind = "value" }) {
+  return /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: `${label} (${items.length})`,
+      value: items.length > 0 ? items.join(", ") : "none",
+      kind: items.length > 0 ? kind : "muted"
+    }
+  );
+}
+function displayPath(value) {
+  const path = String(value || "");
+  const home = process.env.HOME || "";
+  if (home && path === home) return "~";
+  if (home && path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
+  return path || "not available";
+}
+function PromptStatusRow({ state, selected }) {
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: state.target, selected }), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: state.summary.kind }, state.summary.label.padEnd(11)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, state.selection), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.managed ? "green" : "yellow" }, "\xB7 ", state.managed ? "managed" : "not managed"));
 }
 function ErrorText({ value }) {
   if (!value) return null;
   return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", wrap: "truncate-end" }, String(value).split("\n")[0]);
+}
+function LoadingView() {
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Connecting\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, "Loading local controller state and encrypted Workspace metadata."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local or remote configuration is being changed."));
 }
 function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
@@ -24227,7 +24586,7 @@ function Overview({ snapshot, target }) {
   if (!report) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? "connected" : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
 }
 function Agents({ snapshot, selected }) {
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
@@ -24236,22 +24595,89 @@ function Agents({ snapshot, selected }) {
   const current = agents[safeIndex];
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
 }
-function CloudCatalog({ catalog, selected }) {
+function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
   if (catalog.error) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error });
   if (!catalog.items.length) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No cloud selections in this Store.");
   const safeIndex = clampSelection(selected, catalog.items.length);
   const item = catalog.items[safeIndex];
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace catalog"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, catalog.items.map((entry, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Clients", value: item.clients.join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "p inspect plan \xB7 a apply selected only"))));
+  const visible = selectionWindow(catalog.items, safeIndex);
+  const catalogLabel = component === "mcp" ? "MCP profiles" : component === "skills" ? "Skill packs" : "Prompt profiles";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
+}
+function McpView({ snapshot, target, catalog, selected }) {
+  const comparison = mcpTargetComparison(snapshot);
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local assignments by client; the highlighted client receives Workspace actions."), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
+    TargetStatusRow,
+    {
+      key: entry,
+      state: comparison.targets[entry],
+      selected: entry === target
+    }
+  )), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Shared", items: comparison.shared }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Codex only", items: comparison.only.codex, kind: "codex" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Claude only", items: comparison.only.claude, kind: "claude" }), TARGETS.map((entry) => comparison.targets[entry].suppressed.length > 0 && /* @__PURE__ */ import_react34.default.createElement(
+    ItemGroup,
+    {
+      key: `${entry}-disabled`,
+      label: `${targetLabel(entry)} disabled`,
+      items: comparison.targets[entry].suppressed,
+      kind: "warn"
+    }
+  )), TARGETS.map((entry) => comparison.targets[entry].drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(
+    ItemGroup,
+    {
+      key: `${entry}-drift`,
+      label: `${targetLabel(entry)} drift`,
+      items: comparison.targets[entry].drift,
+      kind: "bad"
+    }
+  ))), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
+    ErrorText,
+    {
+      key: `${entry}-error`,
+      value: !comparison.targets[entry].check?.ok ? `${targetLabel(entry)}: ${comparison.targets[entry].check?.summary || comparison.targets[entry].check?.error || snapshot.doctorError || "status unavailable"}` : ""
+    }
+  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."));
+}
+function PromptView({ snapshot, target, catalog, selected }) {
+  const states = Object.fromEntries(TARGETS.map((entry) => [
+    entry,
+    promptTargetState(snapshot, entry)
+  ]));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local bindings by client. Prompt text loads only when you explicitly request a preview."), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(PromptStatusRow, { key: entry, state: states[entry], selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, TARGETS.map((entry) => {
+    const state = states[entry];
+    const kind = !state.managed ? "warn" : state.healthy ? "good" : "bad";
+    const promptValue = state.managed ? `${displayPath(state.instructionFile)}${state.fileState ? ` \xB7 ${state.fileState}` : ""}` : "not managed by promptctl";
+    return /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, { key: `${entry}-local-prompt` }, /* @__PURE__ */ import_react34.default.createElement(Row, { label: `${state.label} binding`, value: displayPath(state.linkFile), kind: entry }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: `${state.label} prompt`, value: promptValue, kind }));
+  })), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
+    ErrorText,
+    {
+      key: `${entry}-prompt-error`,
+      value: !states[entry].ok ? `${states[entry].label}: ${states[entry].error}` : ""
+    }
+  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "prompts" }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "v"), " view active local Prompt \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "V"), " view selected Workspace Prompt"));
+}
+function PromptPreview({ preview, offset, pageSize }) {
+  const content = safePromptPreviewText(preview.content).replace(/\r\n?/g, "\n");
+  const lines = content.split("\n");
+  const totalLines = content.length === 0 ? 0 : lines.length;
+  const safeOffset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)));
+  const visible = lines.slice(safeOffset, safeOffset + pageSize);
+  const source = preview.source === "cloud" ? "Workspace" : "Local";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: preview.source === "cloud" ? "cyan" : "green" }, source, " Prompt preview"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: preview.target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Profile", value: preview.name }), preview.path && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "File", value: displayPath(preview.path) }), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, content.length === 0 ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(empty Prompt)") : visible.map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: safeOffset + index, wrap: "truncate-end" }, line || " "))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Lines ", totalLines === 0 ? 0 : safeOffset + 1, "\u2013", totalLines === 0 ? 0 : Math.min(safeOffset + pageSize, totalLines), " of ", totalLines, totalLines > pageSize ? " \xB7 [/] or arrows scroll" : "", " \xB7 v/V/Esc close"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Content exists only in this TUI process and is cleared when the preview closes."));
+}
+function SnippetView({ snapshot, catalog, selected }) {
+  const entries = snippetEntries(snapshot.snippets, catalog.items);
+  const safeIndex = clampSelection(selected, entries.length);
+  const visible = selectionWindow(entries, safeIndex);
+  const current = entries[safeIndex] || null;
+  const localCount = entries.filter((entry) => entry.local).length;
+  const remoteCount = entries.filter((entry) => entry.remote).length;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
 }
 function ComponentView({ snapshot, target, component, catalog, selected }) {
-  const report = targetReport(snapshot, target);
-  const check2 = report?.[component];
-  const summary = componentSummary(component, check2);
-  const data = Array.isArray(check2?.data) ? check2.data[0] || {} : check2?.data || {};
-  const selection = component === "mcp" ? data.selection_mode === "manual" ? "custom" : data.profile || "none" : component === "skills" ? data.selection_mode === "manual" ? "custom" : data.pack || "none" : data.profile || "none";
-  const items = component === "mcp" ? data.servers : component === "skills" ? data.skills : [];
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: component[0].toUpperCase() + component.slice(1), summary }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Selection", value: selection }), component === "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Managed", value: data.managed ? "yes" : "no", kind: data.managed ? "good" : "bad" }), component !== "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Items", value: items?.length ? items.join(", ") : "none" }), Array.isArray(data.drift) && data.drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Drift", value: data.drift.join(", "), kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: !check2?.ok ? check2?.summary || check2?.error || snapshot.doctorError : "" }), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."));
+  const state = componentTargetState(snapshot, component, target);
+  const { check: check2, data, selection, items, summary } = state;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Active client"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: COMPONENT_LABELS[component], summary }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Selection", value: selection }), component === "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Managed", value: data.managed ? "yes" : "no", kind: data.managed ? "good" : "bad" }), component !== "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Items", value: items?.length ? items.join(", ") : "none" }), Array.isArray(data.drift) && data.drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Drift", value: data.drift.join(", "), kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: !check2?.ok ? check2?.summary || check2?.error || snapshot.doctorError : "" }), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."));
 }
 function Presets({ snapshot, selected, target }) {
   const entries = presetEntries(snapshot);
@@ -24273,10 +24699,10 @@ function Cloud({ snapshot }) {
   if (!workspace) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }), connection?.store_id && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store ID", value: connection.store_id }), /* @__PURE__ */ import_react34.default.createElement(Text, null, presentation.description), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, presentation.safety), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "Next step"), presentation.commands.map((command, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${command}-${index}`, color: command.startsWith("agentctl ") ? "cyan" : "gray" }, command))), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "bad" }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 2}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Profile, Pack, Prompt, or Preset is materialized locally."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 2}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  switch target     r  refresh     q  quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "j/k or Up/Down  select the current list item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  switch target     r  refresh     q  quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -24287,16 +24713,19 @@ function App2({ initialSection, controller, onLaunch }) {
   const [busy, setBusy] = (0, import_react34.useState)(false);
   const [selected, setSelected] = (0, import_react34.useState)(0);
   const [selectedAgent, setSelectedAgent] = (0, import_react34.useState)(0);
-  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ mcp: 0, skills: 0, prompts: 0 });
+  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ mcp: 0, skills: 0, prompts: 0, snippets: 0 });
   const [catalogs, setCatalogs] = (0, import_react34.useState)({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
-    prompts: { items: [], loading: false, error: "", key: "" }
+    prompts: { items: [], loading: false, error: "", key: "" },
+    snippets: { items: [], loading: false, error: "", key: "" }
   });
   const [message, setMessage] = (0, import_react34.useState)("Loading diagnostics\u2026");
   const [lastDetail, setLastDetail] = (0, import_react34.useState)("");
   const [confirm, setConfirm] = (0, import_react34.useState)(null);
   const [showHelp, setShowHelp] = (0, import_react34.useState)(false);
+  const [promptPreview, setPromptPreview] = (0, import_react34.useState)(null);
+  const [promptPreviewOffset, setPromptPreviewOffset] = (0, import_react34.useState)(0);
   const refresh = (0, import_react34.useCallback)(async (quiet = false) => {
     setLoading(true);
     if (!quiet) setMessage("Refreshing diagnostics\u2026");
@@ -24319,10 +24748,15 @@ function App2({ initialSection, controller, onLaunch }) {
     }, 3e4);
     return () => clearInterval(timer);
   }, [refresh]);
-  const workspaceStoreId = snapshot?.workspace?.store_id || "";
-  const workspaceCatalogVersion = ["mcp", "skills", "prompts"].includes(section) ? snapshot?.workspace?.stores?.[section]?.latest?.version || snapshot?.workspace?.latest?.version || "empty" : "";
   (0, import_react34.useEffect)(() => {
-    if (!["mcp", "skills", "prompts"].includes(section) || !workspaceStoreId) return;
+    setPromptPreview(null);
+    setPromptPreviewOffset(0);
+  }, [section, target]);
+  const workspaceStoreId = snapshot?.workspace?.store_id || "";
+  const catalogStore = section === "snippets" ? "prompts" : section;
+  const workspaceCatalogVersion = ["mcp", "skills", "prompts", "snippets"].includes(section) ? snapshot?.workspace?.stores?.[catalogStore]?.latest?.version || snapshot?.workspace?.latest?.version || "empty" : "";
+  (0, import_react34.useEffect)(() => {
+    if (!["mcp", "skills", "prompts", "snippets"].includes(section) || !workspaceStoreId) return;
     const key = `${workspaceStoreId}:${workspaceCatalogVersion}:${target}`;
     let cancelled = false;
     setCatalogs((value) => ({
@@ -24346,7 +24780,36 @@ function App2({ initialSection, controller, onLaunch }) {
   }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
   const selectedPreset = (0, import_react34.useMemo)(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents) ? snapshot.agents[selectedAgent]?.client || "" : "";
-  const selectedRemote = ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
+  const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
+  const selectedSnippet = mergedSnippets[clampSelection(componentSelected.snippets, mergedSnippets.length)] || null;
+  const selectedRemote = section === "snippets" ? selectedSnippet?.remote ? selectedSnippet.name : "" : ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
+  const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local ? selectedSnippet.name : "";
+  const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
+  const openPromptPreview = (0, import_react34.useCallback)(async (source) => {
+    const local = promptTargetState(snapshot, target);
+    const selection = source === "cloud" ? selectedRemote : local.selection;
+    if (source === "local" && (!local.managed || !selection)) {
+      setMessage(`No managed local Prompt is available for ${targetLabel(target)}.`);
+      return;
+    }
+    if (source === "cloud" && !selection) {
+      setMessage("No Workspace Prompt profile is selected.");
+      return;
+    }
+    setBusy(true);
+    setLastDetail("");
+    setMessage(`Loading ${source === "cloud" ? "Workspace" : "local"} Prompt preview\u2026`);
+    try {
+      const preview = await controller.promptPreview({ source, selection, target });
+      setPromptPreview(preview);
+      setPromptPreviewOffset(0);
+      setMessage(`Viewing ${source === "cloud" ? "Workspace" : "local"} Prompt ${selection}.`);
+    } catch (error) {
+      setMessage(`Failed: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [controller, selectedRemote, snapshot, target]);
   const executeAction = (0, import_react34.useCallback)(async (action) => {
     setConfirm(null);
     if (action === "agent-configure") {
@@ -24359,14 +24822,14 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     setBusy(true);
-    const selection = action.startsWith("agent-") ? selectedAgentId : action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = action.startsWith("agent-") ? selectedAgentId : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, target)}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: selectedRemote,
+        selection: action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: snapshot?.presetSource || "local",
         target
       });
@@ -24378,7 +24841,7 @@ function App2({ initialSection, controller, onLaunch }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
+  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedLocalSnippet, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
   use_input_default((input, key) => {
     if (busy) return;
     if (confirm) {
@@ -24390,44 +24853,51 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     if (input === "q" || key.ctrl && input === "c") return exit();
+    if (promptPreview) {
+      if (key.escape || input === "v" || input === "V") {
+        setPromptPreview(null);
+        setPromptPreviewOffset(0);
+        setMessage("Prompt preview closed; content cleared from the view.");
+        return;
+      }
+      const delta2 = selectionDelta(input, key);
+      if (delta2 !== 0) {
+        const lastOffset = Math.max(
+          0,
+          safePromptPreviewText(promptPreview.content).replace(/\r\n?/g, "\n").split("\n").length - promptPreviewPageSize
+        );
+        return setPromptPreviewOffset((value) => Math.max(0, Math.min(value + delta2, lastOffset)));
+      }
+      return;
+    }
     if (input === "?") return setShowHelp((value) => !value);
     if (showHelp && key.escape) return setShowHelp(false);
     if (key.tab || key.rightArrow) return setSection((value) => moveSection(value, key.shift ? -1 : 1));
     if (key.leftArrow) return setSection((value) => moveSection(value, -1));
     if (input === "t") return setTarget((value) => otherTarget(value));
     if (input === "r") return void refresh();
-    if (section === "agents" && (input === "j" || key.downArrow)) {
+    const delta = selectionDelta(input, key);
+    if (section === "agents" && delta !== 0) {
       return setSelectedAgent((value) => clampSelection(
-        value + 1,
+        value + delta,
         Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
       ));
     }
-    if (section === "agents" && (input === "k" || key.upArrow)) {
-      return setSelectedAgent((value) => clampSelection(
-        value - 1,
-        Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
-      ));
+    if (section === "presets" && delta !== 0) {
+      return setSelected((value) => clampSelection(value + delta, presetEntries(snapshot).length));
     }
-    if (section === "presets" && (input === "j" || key.downArrow)) {
-      return setSelected((value) => clampSelection(value + 1, presetEntries(snapshot).length));
-    }
-    if (section === "presets" && (input === "k" || key.upArrow)) {
-      return setSelected((value) => clampSelection(value - 1, presetEntries(snapshot).length));
-    }
-    if (["mcp", "skills", "prompts"].includes(section) && (input === "j" || key.downArrow)) {
+    if (["mcp", "skills", "prompts", "snippets"].includes(section) && delta !== 0) {
+      const length = section === "snippets" ? mergedSnippets.length : catalogs[section].items.length;
       return setComponentSelected((value) => ({
         ...value,
-        [section]: clampSelection(value[section] + 1, catalogs[section].items.length)
-      }));
-    }
-    if (["mcp", "skills", "prompts"].includes(section) && (input === "k" || key.upArrow)) {
-      return setComponentSelected((value) => ({
-        ...value,
-        [section]: clampSelection(value[section] - 1, catalogs[section].items.length)
+        [section]: clampSelection(value[section] + delta, length)
       }));
     }
     const action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action === "prompt-view-local" || action === "prompt-view-cloud") {
+      return void openPromptPreview(action.endsWith("cloud") ? "cloud" : "local");
+    }
     if (action.startsWith("agent-") && !selectedAgentId) {
       setMessage("No agent is selected.");
       return;
@@ -24436,25 +24906,44 @@ function App2({ initialSection, controller, onLaunch }) {
       setMessage("No preset is selected.");
       return;
     }
-    if (action.includes("-") && !selectedRemote) {
+    if (action === "snippet-copy" && !selectedLocalSnippet) {
+      setMessage("The selected Snippet is not installed locally.");
+      return;
+    }
+    if (/^(mcp|skills|prompts|snippets)-(plan|apply)$/.test(action) && !selectedRemote) {
       setMessage("No Workspace selection is available.");
       return;
     }
     if (actionNeedsConfirmation(action)) {
-      const selection = action.startsWith("agent-") ? selectedAgentId : action.includes("-") ? selectedRemote : selectedPreset;
+      const selection = action.startsWith("agent-") ? selectedAgentId : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({ action, label: actionLabel(action, selection, target) });
     } else {
       void executeAction(action);
     }
   });
-  let content = /* @__PURE__ */ import_react34.default.createElement(Overview, { snapshot: snapshot || {}, target });
-  if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot: snapshot || {}, selected: selectedAgent });
-  if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "mcp", catalog: catalogs.mcp, selected: componentSelected.mcp });
-  if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "skills", catalog: catalogs.skills, selected: componentSelected.skills });
-  if (section === "prompts") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot: snapshot || {}, target, component: "prompts", catalog: catalogs.prompts, selected: componentSelected.prompts });
-  if (section === "presets") content = /* @__PURE__ */ import_react34.default.createElement(Presets, { snapshot: snapshot || {}, selected, target });
-  if (section === "cloud") content = /* @__PURE__ */ import_react34.default.createElement(Cloud, { snapshot: snapshot || {} });
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "target: ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, target))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.id, inverse: section === item.id, bold: section === item.id }, ` ${item.label} `))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: SECTIONS.find((item) => item.id === section)?.label || "Overview" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 t target \xB7 r refresh \xB7 q quit")));
+  let content = /* @__PURE__ */ import_react34.default.createElement(LoadingView, null);
+  if (snapshot) {
+    content = /* @__PURE__ */ import_react34.default.createElement(Overview, { snapshot, target });
+    if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot, selected: selectedAgent });
+    if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(McpView, { snapshot, target, catalog: catalogs.mcp, selected: componentSelected.mcp });
+    if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot, target, component: "skills", catalog: catalogs.skills, selected: componentSelected.skills });
+    if (section === "prompts") content = promptPreview ? /* @__PURE__ */ import_react34.default.createElement(PromptPreview, { preview: promptPreview, offset: promptPreviewOffset, pageSize: promptPreviewPageSize }) : /* @__PURE__ */ import_react34.default.createElement(PromptView, { snapshot, target, catalog: catalogs.prompts, selected: componentSelected.prompts });
+    if (section === "snippets") content = /* @__PURE__ */ import_react34.default.createElement(SnippetView, { snapshot, catalog: catalogs.snippets, selected: componentSelected.snippets });
+    if (section === "presets") content = /* @__PURE__ */ import_react34.default.createElement(Presets, { snapshot, selected, target });
+    if (section === "cloud") content = /* @__PURE__ */ import_react34.default.createElement(Cloud, { snapshot });
+  }
+  const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
+  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true }), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
+    Text,
+    {
+      key: item.id,
+      color: section === item.id ? "black" : "gray",
+      backgroundColor: section === item.id ? "cyan" : void 0,
+      bold: section === item.id
+    },
+    ` ${item.label} `
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", section === "snippets" ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {

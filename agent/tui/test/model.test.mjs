@@ -5,9 +5,17 @@ import {
   actionNeedsConfirmation,
   clampSelection,
   componentSummary,
+  componentTargetState,
+  mcpTargetComparison,
   moveSection,
   normalizeSection,
   otherTarget,
+  promptTargetState,
+  safePromptPreviewText,
+  selectionDelta,
+  selectionWindow,
+  snippetEntries,
+  targetLabel,
   workspacePresentation
 } from "../src/model.mjs";
 
@@ -21,9 +29,125 @@ test("section navigation wraps and invalid sections fall back", () => {
 test("target and preset selection are deterministic", () => {
   assert.equal(otherTarget("codex"), "claude");
   assert.equal(otherTarget("claude"), "codex");
+  assert.equal(targetLabel("codex"), "Codex");
+  assert.equal(targetLabel("claude"), "Claude Code");
   assert.equal(clampSelection(4, 2), 1);
   assert.equal(clampSelection(-1, 2), 0);
   assert.equal(clampSelection(3, 0), 0);
+  assert.equal(selectionDelta("]"), 1);
+  assert.equal(selectionDelta("["), -1);
+  assert.equal(selectionDelta("", { downArrow: true }), 1);
+  assert.equal(selectionDelta("", { upArrow: true }), -1);
+  assert.equal(selectionDelta("j"), 0);
+  assert.equal(selectionDelta("k"), 0);
+});
+
+test("MCP comparison makes shared and per-client assignments explicit", () => {
+  const snapshot = {
+    doctor: {
+      targets: [
+        {
+          target: "codex",
+          mcp: {
+            ok: true,
+            data: {
+              healthy: true,
+              selection_mode: "profile",
+              profile: "work",
+              servers: ["shared", "codex-only"],
+              suppressed_servers: ["computer-use"]
+            }
+          }
+        },
+        {
+          target: "claude",
+          mcp: {
+            ok: true,
+            data: {
+              healthy: true,
+              selection_mode: "profile",
+              profile: "work",
+              servers: ["claude-only", "shared"]
+            }
+          }
+        }
+      ]
+    }
+  };
+  const comparison = mcpTargetComparison(snapshot);
+  assert.deepEqual(comparison.shared, ["shared"]);
+  assert.deepEqual(comparison.only.codex, ["codex-only"]);
+  assert.deepEqual(comparison.only.claude, ["claude-only"]);
+  assert.deepEqual(comparison.targets.codex.suppressed, ["computer-use"]);
+  assert.equal(componentTargetState(snapshot, "mcp", "claude").selection, "work");
+});
+
+test("catalog windows keep the selected item visible without rendering the full store", () => {
+  const entries = Array.from({ length: 14 }, (_, index) => `profile-${index}`);
+  const visible = selectionWindow(entries, 12, 5);
+  assert.equal(visible.start, 9);
+  assert.equal(visible.end, 14);
+  assert.equal(visible.total, 14);
+  assert.deepEqual(visible.items.map(({ item }) => item), entries.slice(9));
+});
+
+test("Prompt presentation exposes local binding metadata but drops content fields", () => {
+  const snapshot = {
+    doctor: {
+      targets: [{
+        target: "codex",
+        prompt: {
+          ok: true,
+          data: {
+            client: "codex",
+            profile: "personal",
+            managed: true,
+            healthy: true,
+            link_file: "/home/user/.codex/config.toml",
+            instruction_file: "/home/user/.codex/instructions/personal.md",
+            instructions: "regular",
+            content: "do-not-render",
+            prompt_text: "also-do-not-render"
+          }
+        }
+      }]
+    }
+  };
+  const state = promptTargetState(snapshot, "codex");
+  assert.equal(state.selection, "personal");
+  assert.equal(state.managed, true);
+  assert.equal(state.fileState, "regular");
+  assert.equal(JSON.stringify(state).includes("do-not-render"), false);
+  assert.equal(Object.hasOwn(state, "content"), false);
+  assert.equal(Object.hasOwn(state, "prompt_text"), false);
+});
+
+test("Snippet presentation merges local and cloud metadata without content", () => {
+  const entries = snippetEntries(
+    [{
+      name: "review-code",
+      path: "/home/user/.local/share/script-toolbox/snippets/review-code.md",
+      state: "regular",
+      content: "do-not-render"
+    }],
+    [{
+      name: "review-code",
+      count: 1,
+      unit: "snippet",
+      source: "cloud",
+      content: "also-do-not-render"
+    }, {
+      name: "plan-first",
+      source: "cloud",
+      prompt_text: "never-render"
+    }]
+  );
+  assert.deepEqual(entries.map(({ name }) => name), ["plan-first", "review-code"]);
+  assert.equal(entries[0].local, null);
+  assert.equal(entries[0].remote.source, "cloud");
+  assert.equal(entries[1].local.state, "regular");
+  assert.equal(JSON.stringify(entries).includes("do-not-render"), false);
+  assert.equal(JSON.stringify(entries).includes("never-render"), false);
 });
 
 test("actions are scoped and writes require confirmation", () => {
@@ -31,6 +155,11 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("presets", "P"), null);
   assert.equal(actionForKey("mcp", "p"), "mcp-plan");
   assert.equal(actionForKey("skills", "a"), "skills-apply");
+  assert.equal(actionForKey("prompts", "v"), "prompt-view-local");
+  assert.equal(actionForKey("prompts", "V"), "prompt-view-cloud");
+  assert.equal(actionForKey("snippets", "p"), "snippets-plan");
+  assert.equal(actionForKey("snippets", "a"), "snippets-apply");
+  assert.equal(actionForKey("snippets", "c"), "snippet-copy");
   assert.equal(actionForKey("agents", "c"), "agent-configure");
   assert.equal(actionForKey("agents", "p"), "agent-providers");
   assert.equal(actionForKey("agents", "x"), "agent-uninstall");
@@ -38,7 +167,14 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("plan"), false);
   assert.equal(actionNeedsConfirmation("apply"), true);
   assert.equal(actionNeedsConfirmation("prompts-apply"), true);
+  assert.equal(actionNeedsConfirmation("snippets-apply"), true);
+  assert.equal(actionNeedsConfirmation("snippet-copy"), false);
   assert.equal(actionNeedsConfirmation("agent-uninstall"), true);
+});
+
+test("Prompt previews strip terminal controls without redacting user text", () => {
+  const content = safePromptPreviewText("api_key=visible-to-owner\n\u001b[31mHeading\u001b[0m\u0007");
+  assert.equal(content, "api_key=visible-to-owner\nHeading");
 });
 
 test("component summaries preserve useful state without raw secrets", () => {
@@ -67,6 +203,10 @@ test("component summaries preserve useful state without raw secrets", () => {
       credential_private: false
     }
   }).kind, "warn");
+  assert.deepEqual(componentSummary("prompts", {
+    ok: true,
+    data: { managed: false, profile: null }
+  }), { label: "Not managed", kind: "warn", detail: "none" });
 });
 
 test("Workspace empty states distinguish setup, connectivity, and incompatible data", () => {

@@ -5,7 +5,7 @@ no-migration upgrade, but the product-neutral service now backs:
 
 - `mcpctl` catalogs, inherited profiles, and encrypted secret state; and
 - `skillsctl` skill directories, inherited packs, and target overrides;
-- `promptctl` persistent Claude/Codex Markdown; and
+- `promptctl` persistent Claude/Codex Markdown and reusable snippets; and
 - `agentctl workspace` encrypted manifests that bind those three Store types
   and shared development presets behind one master recovery code.
 
@@ -25,7 +25,7 @@ is kept in current-tab `sessionStorage`: it survives a refresh, but clicking
 Lock or closing the tab clears it. It is never written to persistent
 `localStorage` or sent to the Worker. Unsaved decrypted edits trigger the
 browser's leave-page confirmation before a refresh or tab close.
-The UI supports search, sorting, profile/pack membership, prompt editing,
+The UI supports search, sorting, profile/pack membership, prompt and snippet editing,
 MCP provider inspection, masked MCP Secret editing, version restore, and JSON
 import/export. MCP exports are redacted by default and preserve the current
 tab's encrypted Secret values when re-imported. Skills and Prompt exports are

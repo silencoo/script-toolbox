@@ -1038,6 +1038,15 @@ jq -e '
   fail "Claude --force changed unrelated configuration"
 
 # Codex uses a bounded TOML block and preserves other tables while switching.
+jq '.servers["plugin-default"] = {
+  category: "test",
+  description: "Plugin-provided MCP that must stay explicitly disabled",
+  supported_targets: ["codex"],
+  transport: "stdio",
+  command: ["plugin-default-mcp"],
+  suppress_when_disabled: true
+}' "$STORE/catalog.json" > "$TEST_ROOT/catalog-with-suppression.json"
+mv "$TEST_ROOT/catalog-with-suppression.json" "$STORE/catalog.json"
 mkdir -p "$TEST_HOME/.codex"
 printf '%s\n' \
   '[model]' \
@@ -1061,6 +1070,68 @@ grep -qF '"Authorization" = "Bearer test-exa"' \
   fail "Codex Exa secret was not rendered"
 ! grep -qF '[mcp_servers.brave]' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex target override unexpectedly enabled Brave"
+awk '
+  $0 == "[mcp_servers.plugin-default]" { in_server = 1; next }
+  in_server && /^\[/ { exit(found ? 0 : 1) }
+  in_server && $0 == "enabled = false" { found = 1 }
+  END { exit(found ? 0 : 1) }
+' "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex did not render an explicit disabled override"
+HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
+  jq -e '
+    .healthy == true
+    and (.servers | index("plugin-default") == null)
+    and .suppressed_servers == ["plugin-default"]
+    and .expected_suppressed_servers == ["plugin-default"]
+  ' >/dev/null ||
+  fail "Codex current state did not distinguish a suppressed server"
+
+HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+  "$MCPCTL" server enable plugin-default \
+  --target codex --store "$STORE" >/dev/null
+HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
+  jq -e '
+    .healthy == true
+    and (.servers | index("plugin-default") != null)
+    and .suppressed_servers == []
+  ' >/dev/null ||
+  fail "Codex server enable did not lift the explicit suppression"
+HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+  "$MCPCTL" server disable plugin-default \
+  --target codex --store "$STORE" >/dev/null
+HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
+  jq -e '
+    .healthy == true
+    and (.servers | index("plugin-default") == null)
+    and .suppressed_servers == ["plugin-default"]
+  ' >/dev/null ||
+  fail "Codex server disable did not restore the explicit suppression"
+
+# --force adopts a same-name Codex table without touching unrelated TOML.
+printf '%s\n' \
+  '[model]' \
+  'name = "keep"' \
+  '' \
+  '[mcp_servers.exa]' \
+  'url = "https://user.example/mcp"' \
+  '' \
+  '[mcp_servers.user-owned]' \
+  'command = "keep"' \
+  > "$TEST_HOME/.codex/config.toml"
+if HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target codex --profile frontend \
+    --store "$STORE" >/dev/null 2>&1; then
+  fail "unmanaged same-name Codex entry was replaced without --force"
+fi
+HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target codex --profile frontend \
+    --store "$STORE" --force >/dev/null
+[ "$(grep -cF '[mcp_servers.exa]' "$TEST_HOME/.codex/config.toml")" = 1 ] ||
+  fail "Codex --force did not leave exactly one managed same-name table"
+grep -qF '[mcp_servers.user-owned]' "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex --force removed an unrelated MCP table"
+! grep -qF 'https://user.example/mcp' "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex --force left the unmanaged same-name table"
 
 HOME="$TEST_HOME" \
   "$MCPCTL" apply --target codex --profile reverse \

@@ -28,6 +28,7 @@ import { toast } from "sonner"
 
 import { StoreInspector, type MutateSession } from "@/components/store-inspector"
 import { PresetWorkspace } from "@/components/preset-workspace"
+import { SnippetWorkspace } from "@/components/snippet-workspace"
 import { VersionsDialog } from "@/components/versions-dialog"
 import { WorkspaceTabs } from "@/components/workspace-tabs"
 import {
@@ -68,6 +69,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
   mergeRedactedMcpImport,
@@ -113,6 +115,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [promptSurface, setPromptSurface] = useState<"profiles" | "snippets">("profiles")
   const fileInput = useRef<HTMLInputElement>(null)
   const session = state.activeView === "presets"
     ? undefined
@@ -359,102 +362,132 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
         </Alert>
       )}
 
-      <Card className="mt-4">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_180px_220px_auto]">
-          <div className="space-y-2">
-            <Label htmlFor="catalog-search" className="text-xs">Search</Label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-              <Input
-                id="catalog-search"
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Name or description"
-                className="pl-9"
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-xs">Sort</Label>
-            <Select value={sort} onValueChange={setSort}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="name">Name</SelectItem>
-                <SelectItem value="description">Description</SelectItem>
-                <SelectItem value="enabled">Enabled first</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-xs">{skills ? "Pack" : "Profile"}</Label>
-            <Select value={selectedCollection || undefined} onValueChange={selectCollection} disabled={!names.length}>
-              <SelectTrigger className="w-full"><SelectValue placeholder={`No ${skills ? "pack" : "profile"}`} /></SelectTrigger>
-              <SelectContent>
-                {names.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-end gap-2 md:justify-end">
-            <Button type="button" variant="outline" onClick={() => setCreateOpen(true)}>
-              <FolderPlus />
-              New
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setDeleteOpen(true)}
-              disabled={!selectedCollection}
-              aria-label={`Delete ${skills ? "pack" : "profile"}`}
-            >
-              <Trash2 />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      {prompts && (
+        <Tabs
+          value={promptSurface}
+          onValueChange={(value) => {
+            setPromptSurface(value === "snippets" ? "snippets" : "profiles")
+            setQuery("")
+          }}
+          className="mt-4"
+        >
+          <TabsList variant="line" aria-label="Prompt Store content">
+            <TabsTrigger value="profiles">
+              Profiles
+              <Badge variant="outline" className="font-normal">{names.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="snippets">
+              Snippets
+              <Badge variant="outline" className="font-normal">
+                {Object.keys(session.snapshot.snippets || {}).length}
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
-      <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(340px,.75fr)]">
-        <Card className="overflow-hidden">
-          <CardHeader className="flex flex-row items-center justify-between border-b">
-            <div>
-              <CardTitle>{skills ? "Skills catalog" : prompts ? "Client documents" : "MCP catalog"}</CardTitle>
-              <CardDescription>{entries.length} of {allItems.length} items</CardDescription>
-            </div>
-            <Button type="button" variant="outline" size="sm" onClick={addItem}>
-              <Plus />
-              {prompts ? "Add document" : skills ? "Import skill" : "Add server"}
-            </Button>
-          </CardHeader>
-          <CardContent className="max-h-[640px] overflow-y-auto p-0">
-            {entries.length === 0 ? (
-              <div className="grid min-h-52 place-items-center p-8 text-center">
-                <div>
-                  <PackageOpen className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
-                  <p className="mt-3 text-sm font-medium">No matching items</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Change the search or choose another collection.</p>
+      {prompts && promptSurface === "snippets" ? (
+        <SnippetWorkspace session={session} mutateSession={mutateSession} />
+      ) : (
+        <>
+          <Card className="mt-4">
+            <CardContent className="grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_180px_220px_auto]">
+              <div className="space-y-2">
+                <Label htmlFor="catalog-search" className="text-xs">Search</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                  <Input
+                    id="catalog-search"
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Name or description"
+                    className="pl-9"
+                  />
                 </div>
               </div>
-            ) : entries.map(([name, item]) => (
-              <CatalogRow
-                key={name}
-                name={name}
-                item={item}
-                type={session.type}
-                enabled={enabled.has(name)}
-                selected={session.selectedItem === name}
-                onSelect={() => selectItem(name)}
-                onToggle={() => toggleItem(name, enabled.has(name))}
-                toggleDisabled={!selectedCollection}
-              />
-            ))}
-          </CardContent>
-        </Card>
+              <div className="space-y-2">
+                <Label className="text-xs">Sort</Label>
+                <Select value={sort} onValueChange={setSort}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="name">Name</SelectItem>
+                    <SelectItem value="description">Description</SelectItem>
+                    <SelectItem value="enabled">Enabled first</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">{skills ? "Pack" : "Profile"}</Label>
+                <Select value={selectedCollection || undefined} onValueChange={selectCollection} disabled={!names.length}>
+                  <SelectTrigger className="w-full"><SelectValue placeholder={`No ${skills ? "pack" : "profile"}`} /></SelectTrigger>
+                  <SelectContent>
+                    {names.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end gap-2 md:justify-end">
+                <Button type="button" variant="outline" onClick={() => setCreateOpen(true)}>
+                  <FolderPlus />
+                  New
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setDeleteOpen(true)}
+                  disabled={!selectedCollection}
+                  aria-label={`Delete ${skills ? "pack" : "profile"}`}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card className="overflow-hidden lg:sticky lg:top-4">
-          <StoreInspector session={session} enabled={enabled} mutateSession={mutateSession} />
-        </Card>
-      </div>
+          <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(340px,.75fr)]">
+            <Card className="overflow-hidden">
+              <CardHeader className="flex flex-row items-center justify-between border-b">
+                <div>
+                  <CardTitle>{skills ? "Skills catalog" : prompts ? "Client documents" : "MCP catalog"}</CardTitle>
+                  <CardDescription>{entries.length} of {allItems.length} items</CardDescription>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={addItem}>
+                  <Plus />
+                  {prompts ? "Add document" : skills ? "Import skill" : "Add server"}
+                </Button>
+              </CardHeader>
+              <CardContent className="max-h-[640px] overflow-y-auto p-0">
+                {entries.length === 0 ? (
+                  <div className="grid min-h-52 place-items-center p-8 text-center">
+                    <div>
+                      <PackageOpen className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
+                      <p className="mt-3 text-sm font-medium">No matching items</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Change the search or choose another collection.</p>
+                    </div>
+                  </div>
+                ) : entries.map(([name, item]) => (
+                  <CatalogRow
+                    key={name}
+                    name={name}
+                    item={item}
+                    type={session.type}
+                    enabled={enabled.has(name)}
+                    selected={session.selectedItem === name}
+                    onSelect={() => selectItem(name)}
+                    onToggle={() => toggleItem(name, enabled.has(name))}
+                    toggleDisabled={!selectedCollection}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="overflow-hidden lg:sticky lg:top-4">
+              <StoreInspector session={session} enabled={enabled} mutateSession={mutateSession} />
+            </Card>
+          </div>
+        </>
+      )}
 
       <Card className="mt-4">
         <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -467,7 +500,9 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
               <p className="mt-0.5 max-w-2xl text-xs leading-5 text-muted-foreground">
                 {session.type === "mcp"
                   ? "Export catalog and profiles with Secret values removed. Encrypted versions remain complete."
-                  : "Export a decrypted JSON copy or import one into this tab before backing it up."}
+                  : session.type === "prompts"
+                    ? "Export a decrypted copy of profiles and snippets, or import one before backing it up."
+                    : "Export a decrypted JSON copy or import one into this tab before backing it up."}
               </p>
             </div>
           </div>

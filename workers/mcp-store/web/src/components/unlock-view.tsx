@@ -48,13 +48,13 @@ export function UnlockView({ onUnlock }: UnlockViewProps) {
           One private home for your agent setup.
         </h1>
         <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-          Manage MCP profiles, focused skill packs, and persistent prompts without exposing recovery material to the Worker.
+          Manage MCP profiles, focused skill packs, persistent prompts, and reusable snippets without exposing recovery material to the Worker.
         </p>
         <dl className="mt-10 grid max-w-xl gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-3">
           {[
             ["MCP", "Profiles & credentials"],
             ["Skills", "Focused capability packs"],
-            ["Prompts", "Durable instructions"],
+            ["Prompts", "Instructions & snippets"],
           ].map(([term, detail]) => (
             <div key={term} className="bg-background p-4">
               <dt className="text-sm font-medium">{term}</dt>

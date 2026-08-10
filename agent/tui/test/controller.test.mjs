@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { createController, parseJsonOutput, sanitizeOutput } from "../src/controller.mjs";
+import {
+  createController,
+  normalizeSnippetMetadata,
+  parseJsonOutput,
+  readPromptPreviewFile,
+  sanitizeOutput
+} from "../src/controller.mjs";
 
 test("JSON remains usable when doctor reports unhealthy exit status", () => {
   const result = parseJsonOutput({ code: 1, stdout: '{"healthy":false}', stderr: "" }, "doctor");
@@ -16,10 +25,61 @@ test("diagnostics remove control codes and common credential forms", () => {
   assert.match(value, /\[redacted\]/);
 });
 
+test("Snippet controller metadata drops content before entering the TUI snapshot", () => {
+  const metadata = normalizeSnippetMetadata([{
+    name: "review-code",
+    path: "/snippets/review-code.md",
+    state: "regular",
+    content: "do-not-render",
+    prompt_text: "also-do-not-render"
+  }]);
+  assert.deepEqual(metadata, [{
+    name: "review-code",
+    path: "/snippets/review-code.md",
+    state: "regular"
+  }]);
+  assert.equal(JSON.stringify(metadata).includes("do-not-render"), false);
+});
+
+test("Prompt content is loaded only through an explicit local or Workspace preview", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-prompt-preview-"));
+  const path = join(root, "personal.md");
+  await writeFile(path, "Local preview body.\n", { mode: 0o600 });
+  const runner = async (executable, args) => {
+    if (executable.endsWith("/promptctl") && args[0] === "path") {
+      return { code: 0, stdout: JSON.stringify({ codex: path }), stderr: "" };
+    }
+    return { code: 0, stdout: "{}", stderr: "" };
+  };
+  const remoteWorkspace = {
+    promptDocument: async (name, target) => ({
+      name,
+      target,
+      content: "Workspace preview body.\n"
+    })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+
+  const local = await controller.promptPreview({ source: "local", selection: "personal", target: "codex" });
+  assert.equal(local.content, "Local preview body.\n");
+  assert.equal(local.path, path);
+  const cloud = await controller.promptPreview({ source: "cloud", selection: "work", target: "codex" });
+  assert.equal(cloud.content, "Workspace preview body.\n");
+  assert.equal(cloud.path, "");
+  await assert.rejects(readPromptPreviewFile("relative.md"), /path is invalid/);
+});
+
 test("controller composes snapshot and confirmed preset action commands", async () => {
   const calls = [];
   const runner = async (executable, args) => {
     calls.push(args.slice(1));
+    if (executable.endsWith("/promptctl") && args[0] === "snippet") {
+      return {
+        code: 0,
+        stdout: '[{"name":"review-code","path":"/snippets/review-code.md","state":"regular"}]',
+        stderr: ""
+      };
+    }
     if (executable.endsWith("/agentctl") && args.includes("status")) {
       return { code: 0, stdout: '[{"client":"codex","provider_status":"configured"}]', stderr: "" };
     }
@@ -41,6 +101,7 @@ test("controller composes snapshot and confirmed preset action commands", async 
   assert.equal(snapshot.doctor.healthy, false);
   assert.equal(snapshot.agents[0].client, "codex");
   assert.equal(snapshot.presets.cloud.mcp, "remote");
+  assert.deepEqual(snapshot.snippets.map(({ name }) => name), ["review-code"]);
   assert.equal(snapshot.presetSource, "cloud");
   const result = await controller.action("apply", { preset: "work", source: "local", target: "codex" });
   assert.equal(result.ok, true);
@@ -56,14 +117,15 @@ test("remote actions plan without writes and apply through the selected runtime"
     return { code: 0, stdout: '{"ok":true}', stderr: "" };
   };
   const remoteWorkspace = {
-    componentPlan: async (type, name, target) => ({
-      type, name, target, items: ["one"], unit: type === "mcp" ? "servers" : "skills"
-    }),
+    componentPlan: async (type, name, target) => type === "snippets"
+      ? { type, name, action: "create", path: `/snippets/${name}.md`, items: [], unit: "snippets" }
+      : { type, name, target, items: ["one"], unit: type === "mcp" ? "servers" : "skills" },
     materializeComponent: async (type, name, target) => {
       writes.push(`materialize:${type}:${name}:${target}`);
       return { type, name, target };
     },
     runtimeEnvironment: async () => ({ MCPCTL_STORE: "/runtime/mcp" }),
+    writeSnippet: async () => { writes.push("snippet"); },
     writePrompt: async () => { writes.push("prompt"); },
     restorePrompt: async () => { writes.push("restore"); },
     selectionPlan: async (name, target) => ({
@@ -92,6 +154,12 @@ test("remote actions plan without writes and apply through the selected runtime"
   assert.deepEqual(writes, ["materialize:skills:frontend:claude"]);
   assert.deepEqual(calls.at(-1).args, ["apply", "--target", "claude", "--pack", "frontend", "--yes"]);
   assert.equal(calls.at(-1).env.MCPCTL_STORE, "/runtime/mcp");
+
+  const snippetPlan = await controller.action("snippets-plan", { selection: "review-code" });
+  assert.match(snippetPlan.detail, /content remains hidden/);
+  const snippetApply = await controller.action("snippets-apply", { selection: "review-code" });
+  assert.equal(snippetApply.ok, true);
+  assert.equal(writes.includes("snippet"), true);
 
   const presetPlan = await controller.action("plan", { preset: "web", source: "cloud", target: "codex" });
   assert.match(presetPlan.detail, /Prompt personal: create/);
@@ -138,6 +206,9 @@ test("Agents actions expose providers, owned uninstall, and interactive setup", 
   const removed = await controller.action("agent-uninstall", { agent: "claude" });
   assert.equal(removed.ok, true);
   assert.deepEqual(calls.at(-1).args, ["uninstall", "claude", "--yes"]);
+  const copied = await controller.action("snippet-copy", { selection: "review-code" });
+  assert.equal(copied.ok, true);
+  assert.deepEqual(calls.at(-1).args, ["snippet", "copy", "review-code"]);
   assert.deepEqual(controller.interactiveCommand("pi"), {
     executable: "/agent/agentctl/agentctl",
     args: ["setup", "pi"]

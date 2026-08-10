@@ -187,6 +187,23 @@ forced_status="$(HOME="$TEST_HOME" "$MANAGER" status --json)"
 case "$forced_status" in
   *external-secret-status-command*) fail "status JSON emitted the saved command" ;;
 esac
+
+# Repair a managed statusLine key removed by an external settings rewrite
+# without losing the private pre-install restore point.
+jq 'del(.statusLine)' "$SETTINGS" > "$TEST_ROOT/removed-statusline.json"
+mv "$TEST_ROOT/removed-statusline.json" "$SETTINGS"
+chmod 600 "$SETTINGS"
+HOME="$TEST_HOME" "$MANAGER" install --force --yes > "$TEST_ROOT/repair.out"
+! grep -q 'external-secret-status-command' "$TEST_ROOT/repair.out" ||
+  fail "drift repair emitted the saved external command"
+jq -e --arg command '~/.claude/scripts/script-toolbox-statusline.py' '
+  .statusLine == {"type": "command", "command": $command}
+' "$SETTINGS" >/dev/null || fail "drift repair did not restore the managed setting"
+jq -e '
+  .previous_status_line_present == true
+  and .previous_status_line.command == "external-secret-status-command"
+' "$STATE" >/dev/null || fail "drift repair lost the private external restore point"
+
 HOME="$TEST_HOME" "$MANAGER" uninstall --yes > "$TEST_ROOT/restore.out"
 jq -e '
   .theme == "dark"

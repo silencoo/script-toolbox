@@ -31,6 +31,7 @@ const masterConfig = {
 };
 
 const skillContent = "---\nname: cloud-skill\ndescription: Cloud skill\n---\n# Cloud Skill\n";
+const snippetContent = "Review the selected files and list concrete risks.\n";
 const skillFiles = {
   "references/api/api.md": { encoding: "base64", content: Buffer.from("API\n").toString("base64"), mode: 0o600 },
   "references/api-shield/api.md": { encoding: "base64", content: Buffer.from("Shield\n").toString("base64"), mode: 0o600 },
@@ -101,6 +102,14 @@ const snapshots = {
             sha256: createHash("sha256").update("Use concise answers.\n").digest("hex")
           }
         }
+      }
+    },
+    snippets: {
+      "review-code": {
+        schema: 1,
+        name: "review-code",
+        content: snippetContent,
+        sha256: createHash("sha256").update(snippetContent).digest("hex")
       }
     }
   }
@@ -175,6 +184,9 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
   ]);
   assert.equal(JSON.stringify(catalog).includes(secretValue), false);
   assert.deepEqual(await remote.catalog("prompts", "claude"), []);
+  const snippets = await remote.catalog("snippets");
+  assert.deepEqual(snippets.map(({ name }) => name), ["review-code"]);
+  assert.equal(JSON.stringify(snippets).includes(snippetContent), false);
 });
 
 test("profile and pack resolution honors inheritance and target overrides", () => {
@@ -182,6 +194,20 @@ test("profile and pack resolution honors inheritance and target overrides", () =
   assert.deepEqual(mcpSelection(snapshots.mcp, "frontend", "claude").servers, ["browser"]);
   assert.deepEqual(skillSelection(snapshots.skills, "frontend", "codex").skills, ["cloud-skill"]);
   assert.deepEqual(skillSelection(snapshots.skills, "frontend", "claude").skills, []);
+});
+
+test("Prompt catalogs hide bodies until an explicit document preview", async () => {
+  const { remote } = await fixture();
+  await remote.index();
+  const catalog = await remote.catalog("prompts", "codex");
+  assert.equal(JSON.stringify(catalog).includes("Use concise answers."), false);
+  const document = await remote.promptDocument("personal", "codex");
+  assert.deepEqual(document, {
+    name: "personal",
+    target: "codex",
+    content: "Use concise answers.\n"
+  });
+  await assert.rejects(remote.promptDocument("personal", "opencode"), /unsupported Prompt target/);
 });
 
 test("plans stay read-only and apply materializes only selected dependencies", async () => {
@@ -206,4 +232,11 @@ test("plans stay read-only and apply materializes only selected dependencies", a
   assert.deepEqual(secrets.secrets, { "github-token": secretValue });
   assert.equal(await readFile(join(selected.paths.skills, "skills", "cloud-skill", "SKILL.md"), "utf8"), skillContent);
   await assert.rejects(readFile(selected.prompt.path));
+
+  const snippetPlan = await remote.componentPlan("snippets", "review-code", "codex");
+  assert.equal(snippetPlan.action, "create");
+  assert.equal(JSON.stringify(snippetPlan).includes(snippetContent), false);
+  const snippet = await remote.materializeComponent("snippets", "review-code", "codex");
+  await remote.writeSnippet(snippet);
+  assert.equal(await readFile(snippet.path, "utf8"), snippetContent);
 });

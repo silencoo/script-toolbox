@@ -9,6 +9,7 @@ const [
   builtHtml,
   app,
   workspace,
+  snippetWorkspace,
   presetWorkspace,
   workspaceTabs,
   inspector,
@@ -28,6 +29,7 @@ const [
   read("./ui/index.html"),
   read("./web/src/App.tsx"),
   read("./web/src/components/store-workspace.tsx"),
+  read("./web/src/components/snippet-workspace.tsx"),
   read("./web/src/components/preset-workspace.tsx"),
   read("./web/src/components/workspace-tabs.tsx"),
   read("./web/src/components/store-inspector.tsx"),
@@ -114,6 +116,34 @@ test("Workspace presets compose all three controllers and save only encrypted ve
   assert.match(storeClient, /snapshot\.schema !== 2/);
   assert.match(storeClient, /isObject\(snapshot\.presets\)/);
   assert.match(storeClient, /newer Workspace version exists/);
+});
+
+test("Prompt Store exposes an accessible reusable snippet library", () => {
+  assert.match(workspace, /@\/components\/snippet-workspace/);
+  assert.match(workspace, /aria-label="Prompt Store content"/);
+  assert.match(workspace, /TabsTrigger value="profiles">[\s\S]*?Profiles/);
+  assert.match(workspace, /TabsTrigger value="snippets">[\s\S]*?Snippets/);
+  assert.match(workspace, /profiles and snippets/);
+
+  for (const component of [
+    "@/components/ui/alert-dialog",
+    "@/components/ui/card",
+    "@/components/ui/dialog",
+    "@/components/ui/input",
+    "@/components/ui/textarea",
+  ]) {
+    assert.match(snippetWorkspace, new RegExp(component.replaceAll("/", "\\/")));
+  }
+  assert.match(snippetWorkspace, /navigator\.clipboard\?\.writeText/);
+  assert.match(snippetWorkspace, /Search snippets/);
+  assert.match(snippetWorkspace, /No snippets yet/);
+  assert.match(snippetWorkspace, /No matching snippets/);
+  assert.match(snippetWorkspace, /That snippet already exists/);
+  assert.match(snippetWorkspace, /aria-invalid=/);
+  assert.match(snippetWorkspace, /1 MB/);
+  assert.match(snippetWorkspace, /promptctl restore/);
+  assert.match(storeClient, /snapshot\.snippets/);
+  assert.match(storeClient, /snippet\.sha256 = await sha256Hex\(snippet\.content\)/);
 });
 
 test("Vite emits a CSP-compatible static shell without inline code", () => {

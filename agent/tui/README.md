@@ -25,13 +25,36 @@ previous behavior. The older line-oriented guides remain available with the
 explicit `interactive` command.
 
 The dashboard combines redacted provider diagnostics, live MCP/Skills/Prompt
-selections, development presets, and encrypted Workspace status. It refreshes
+selections, a shared Snippets library, development presets, and encrypted Workspace status. It refreshes
 every 30 seconds or immediately with `r`. The Cloud-backed views are
-remote-first: opening MCP, Skills, or Prompts lazily downloads and decrypts
+remote-first: opening MCP, Skills, Prompts, or Snippets lazily downloads and decrypts
 only that child Store in process memory. The React view receives a secret-free
 catalog, never a child capability or MCP Secret value.
 
-Planning a remote Profile, Pack, Prompt, or Preset is read-only. Applying it
+The MCP view keeps Claude Code and Codex visible at the same time. It separates
+shared servers, client-only servers, and explicitly disabled servers instead of
+requiring the operator to switch targets and remember two lists. The active
+target remains highlighted because Workspace plan/apply actions are scoped to
+that client. Long Workspace catalogs use a bounded list pane beside a separate
+detail pane so profile names cannot be mistaken for the selected profile's
+metadata.
+
+The Prompts view likewise shows both clients' local Promptctl bindings before
+the Workspace catalog: active profile, managed state, binding path,
+instruction-file path, and file health. Prompt bodies stay outside the periodic
+snapshot and catalog data. Press lowercase `v` to load the active local Prompt,
+or uppercase `V` to decrypt the selected Workspace Prompt, into a bounded,
+scrollable preview. Closing the preview, changing sections, or changing targets
+clears its content from the React view. A field whitelist still drops any
+unrecognized content-like data from background snapshots.
+
+The Snippets view merges the shared local library with the encrypted Prompt
+Store catalog. `L/C` markers distinguish local and cloud availability without
+showing snippet bodies. `c` copies a local snippet directly to the clipboard;
+`p` previews a cloud pull and `a` confirms it. Snippets are never injected into
+an agent session automatically.
+
+Planning a remote Profile, Pack, Prompt, Snippet, or Preset is read-only. Applying it
 requires an in-TUI `y` confirmation and materializes only the selected item and
 its inherited dependencies under the per-Workspace runtime directory. Prompt
 Markdown is written only for the selected target because promptctl needs that
@@ -59,8 +82,10 @@ the remote snapshot itself cannot be opened.
 | Tab / Shift+Tab, Left / Right | Change section |
 | `t` | Switch between Codex and Claude |
 | `r` | Refresh now |
-| `j` / `k`, Up / Down | Select a cloud Profile, Pack, Prompt, or Preset |
+| `[` / `]`, Up / Down | Select the previous / next Profile, Pack, Prompt, Snippet, or Preset |
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
+| Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
+| Snippets: `c` | Copy the selected local snippet without rendering it |
 | `u` | Roll back a preset transaction |
 | Agents: `c` / Enter | Configure the selected agent, installing its CLI if needed |
 | Agents: `p` | Show provider/model choices |
@@ -69,7 +94,9 @@ the remote snapshot itself cannot be opened.
 | `q` | Quit |
 
 The interface uses standard terminal colors and symbols; it does not require a
-Nerd Font.
+Nerd Font. Green/yellow/red are reserved for health, warnings, and errors;
+Codex uses cyan, Claude Code uses yellow, selected catalog entries use magenta,
+and ordinary values remain white rather than being rendered as muted metadata.
 
 ## Development
 

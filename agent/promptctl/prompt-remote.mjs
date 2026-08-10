@@ -128,6 +128,10 @@ function instructionsDirectory(home, client) {
   return join(home, client === "claude" ? ".claude" : ".codex", "instructions");
 }
 
+function snippetsDirectory(home) {
+  return join(home, ".local", "share", "script-toolbox", "snippets");
+}
+
 async function pathExists(path) {
   try {
     await lstat(path);
@@ -187,6 +191,25 @@ function validateSnapshot(snapshot) {
       }
     }
   }
+  const snippets = snapshot.snippets ?? {};
+  if (!snippets || typeof snippets !== "object" || Array.isArray(snippets)) {
+    throw new PromptRemoteError("prompt snippets are invalid");
+  }
+  for (const [name, snippet] of Object.entries(snippets)) {
+    validateName(name, "snippet name");
+    if (!snippet || snippet.schema !== SCHEMA || snippet.name !== name ||
+        typeof snippet.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(snippet.sha256)) {
+      throw new PromptRemoteError(`snippet '${name}' is invalid`);
+    }
+    const content = validateContent(snippet.content, `snippet/${name}`);
+    if (sha256(content) !== snippet.sha256) {
+      throw new PromptRemoteError(`snippet '${name}' digest does not match`);
+    }
+    total += Buffer.byteLength(content, "utf8");
+    if (total > MAX_TOTAL_BYTES) {
+      throw new PromptRemoteError(`prompt snapshot exceeds ${MAX_TOTAL_BYTES} bytes`);
+    }
+  }
   return snapshot;
 }
 
@@ -196,6 +219,7 @@ function sha256(value) {
 
 async function collectSnapshot(home) {
   const profiles = {};
+  const snippets = {};
   let total = 0;
   for (const client of CLIENTS) {
     const directory = instructionsDirectory(home, client);
@@ -237,11 +261,46 @@ async function collectSnapshot(home) {
       };
     }
   }
+
+  const snippetDirectory = snippetsDirectory(home);
+  if (await pathExists(snippetDirectory)) {
+    const directoryInfo = await lstat(snippetDirectory);
+    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+      throw new PromptRemoteError(
+        `snippet library must be a real directory: ${snippetDirectory}`
+      );
+    }
+    const entries = await readdir(snippetDirectory, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.name.endsWith(".md")) continue;
+      const name = validateName(entry.name.slice(0, -3), "snippet name");
+      const file = join(snippetDirectory, entry.name);
+      const details = await lstat(file);
+      if (details.isSymbolicLink() || !details.isFile()) {
+        throw new PromptRemoteError(`snippet must be a regular file: ${file}`);
+      }
+      if (details.size > MAX_DOCUMENT_BYTES) {
+        throw new PromptRemoteError(`snippet is too large: ${file}`);
+      }
+      const content = validateContent(await readFile(file, "utf8"), file);
+      total += Buffer.byteLength(content, "utf8");
+      if (total > MAX_TOTAL_BYTES) {
+        throw new PromptRemoteError(`prompt snapshot exceeds ${MAX_TOTAL_BYTES} bytes`);
+      }
+      snippets[name] = {
+        schema: SCHEMA,
+        name,
+        content,
+        sha256: sha256(content)
+      };
+    }
+  }
   return validateSnapshot({
     schema: SCHEMA,
     kind: SNAPSHOT_KIND,
     created_at: new Date().toISOString(),
-    profiles
+    profiles,
+    snippets
   });
 }
 
@@ -273,17 +332,24 @@ async function atomicWriteText(path, content) {
 async function writeSnapshot(home, snapshot, force) {
   validateSnapshot(snapshot);
   const writes = [];
+  async function queueWrite(path, content) {
+    if (await pathExists(path)) {
+      const current = await readFile(path, "utf8");
+      if (current !== content && !force) {
+        throw new PromptRemoteError(`local document differs: ${path} (use --force)`);
+      }
+    }
+    writes.push([path, content]);
+  }
   for (const [name, profile] of Object.entries(snapshot.profiles)) {
     for (const [client, document] of Object.entries(profile.documents)) {
       const path = join(instructionsDirectory(home, client), `${name}.md`);
-      if (await pathExists(path)) {
-        const current = await readFile(path, "utf8");
-        if (current !== document.content && !force) {
-          throw new PromptRemoteError(`local document differs: ${path} (use --force)`);
-        }
-      }
-      writes.push([path, document.content]);
+      await queueWrite(path, document.content);
     }
+  }
+  for (const [name, snippet] of Object.entries(snapshot.snippets || {})) {
+    const path = join(snippetsDirectory(home), `${name}.md`);
+    await queueWrite(path, snippet.content);
   }
   for (const [path, content] of writes) await atomicWriteText(path, content);
 }
@@ -327,7 +393,8 @@ async function backup(options) {
     snapshot
   );
   process.stdout.write(
-    `Backed up ${Object.keys(snapshot.profiles).length} prompt profiles as ${result.version}.\n`
+    `Backed up ${Object.keys(snapshot.profiles).length} prompt profiles and ` +
+    `${Object.keys(snapshot.snippets).length} snippets as ${result.version}.\n`
   );
 }
 
@@ -394,7 +461,8 @@ async function restore(options) {
   await writeSnapshot(options.home, snapshot, options.force);
   if (writeRecoveredConfig) await writeJsonAtomic(options.remoteConfig, recovered);
   process.stdout.write(
-    `Restored ${Object.keys(snapshot.profiles).length} prompt profiles into ${options.home}.\n`
+    `Restored ${Object.keys(snapshot.profiles).length} prompt profiles and ` +
+    `${Object.keys(snapshot.snippets || {}).length} snippets into ${options.home}.\n`
   );
 }
 

@@ -34,6 +34,10 @@ const PROTOCOLS = Object.freeze({
   prompts: PROMPT_REMOTE_PROTOCOL
 });
 
+function snippetsDirectory(home) {
+  return join(home, ".local", "share", "script-toolbox", "snippets");
+}
+
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
@@ -268,6 +272,18 @@ function validatePromptSnapshot(snapshot) {
           createHash("sha256").update(document.content, "utf8").digest("hex") !== document.sha256) {
         throw new RemoteWorkspaceError(`Prompt profile '${name}' has an invalid ${client} document`);
       }
+    }
+  }
+  const snippets = snapshot.snippets ?? {};
+  assertObject(snippets, "Prompt snippets");
+  for (const [name, snippet] of Object.entries(snippets)) {
+    assertName(name, MCP_NAME, "Snippet name");
+    if (snippet?.schema !== 1 || snippet.name !== name ||
+        typeof snippet.content !== "string" || snippet.content.includes("\0") ||
+        Buffer.byteLength(snippet.content, "utf8") > 1024 * 1024 ||
+        typeof snippet.sha256 !== "string" ||
+        createHash("sha256").update(snippet.content, "utf8").digest("hex") !== snippet.sha256) {
+      throw new RemoteWorkspaceError(`Snippet '${name}' is invalid`);
     }
   }
   return snapshot;
@@ -536,7 +552,8 @@ export function createRemoteWorkspace({
   }
 
   async function catalog(type, target = "codex", options = {}) {
-    const { snapshot } = await child(type, options);
+    const storeType = type === "snippets" ? "prompts" : type;
+    const { snapshot } = await child(storeType, options);
     if (type === "mcp") {
       return Object.entries(snapshot.profiles).sort(([a], [b]) => a.localeCompare(b))
         .map(([name, profile]) => {
@@ -550,6 +567,16 @@ export function createRemoteWorkspace({
           const selected = skillSelection(snapshot, name, target);
           return { name, description: String(pack.description || ""), count: selected.skills.length, unit: "skills", source: "cloud" };
         });
+    }
+    if (type === "snippets") {
+      return Object.keys(snapshot.snippets || {}).sort((a, b) => a.localeCompare(b))
+        .map((name) => ({
+          name,
+          description: "Reusable prompt · content hidden",
+          count: 1,
+          unit: "snippet",
+          source: "cloud"
+        }));
     }
     return Object.entries(snapshot.profiles).filter(([, profile]) => Boolean(profile.documents[target]))
       .sort(([a], [b]) => a.localeCompare(b))
@@ -573,7 +600,8 @@ export function createRemoteWorkspace({
       skills: join(root, "skills"),
       presets: join(root, "presets.json"),
       presetState: join(root, "preset-state.json"),
-      promptBackups: join(root, "prompt-backups")
+      promptBackups: join(root, "prompt-backups"),
+      snippetBackups: join(root, "snippet-backups")
     };
   }
 
@@ -656,13 +684,21 @@ export function createRemoteWorkspace({
     return { name, ...selection, store: paths.skills };
   }
 
-  async function promptSelection(name, target) {
+  async function promptDocument(name, target) {
     const { snapshot } = await child("prompts");
     assertName(name, MCP_NAME, "Prompt profile name");
+    if (!["claude", "codex"].includes(target)) {
+      throw new RemoteWorkspaceError(`unsupported Prompt target '${target}'`);
+    }
     const profile = snapshot.profiles[name];
     if (!profile) throw new RemoteWorkspaceError(`unknown remote Prompt profile '${name}'`);
     const document = profile.documents[target];
     if (!document) throw new RemoteWorkspaceError(`Prompt profile '${name}' has no ${target} document`);
+    return { name, target, content: document.content };
+  }
+
+  async function promptSelection(name, target) {
+    const document = await promptDocument(name, target);
     const directory = join(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
     const path = join(directory, `${name}.md`);
     let current = null;
@@ -721,6 +757,67 @@ export function createRemoteWorkspace({
     }
   }
 
+  async function snippetSelection(name) {
+    const { snapshot } = await child("prompts");
+    assertName(name, MCP_NAME, "Snippet name");
+    const snippet = snapshot.snippets?.[name];
+    if (!snippet) throw new RemoteWorkspaceError(`unknown remote Snippet '${name}'`);
+    const path = join(snippetsDirectory(localHome), `${name}.md`);
+    let current = null;
+    if (await pathExists(path)) {
+      const details = await lstat(path);
+      if (details.isSymbolicLink() || !details.isFile()) {
+        throw new RemoteWorkspaceError(`refusing to replace non-regular Snippet file: ${path}`);
+      }
+      current = await readFile(path, "utf8");
+    }
+    return {
+      name,
+      path,
+      content: snippet.content,
+      action: current === null ? "create" : current === snippet.content ? "keep" : "replace",
+      previous: current
+    };
+  }
+
+  async function writeSnippet(selection) {
+    if (selection.action === "keep") return { backup: "" };
+    await ensureDirectory(dirname(selection.path));
+    let backup = "";
+    if (selection.previous !== null) {
+      const paths = await runtimePaths();
+      const backupDirectory = join(paths.snippetBackups, `${Date.now()}`);
+      await ensureDirectory(backupDirectory);
+      backup = join(backupDirectory, `${selection.name}.md`);
+      await rename(selection.path, backup);
+    }
+    const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+    try {
+      await writeFile(temporary, selection.content, { flag: "wx", mode: 0o600 });
+      if (process.platform !== "win32") await chmod(temporary, 0o600);
+      await rename(temporary, selection.path);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      if (backup && !await pathExists(selection.path)) {
+        await rename(backup, selection.path).catch(() => {});
+      }
+      throw error;
+    }
+    return { backup };
+  }
+
+  async function restoreSnippet(selection) {
+    if (selection.action === "keep") return;
+    if (selection.previous === null) {
+      await rm(selection.path, { force: true });
+    } else {
+      const temporary = `${selection.path}.restore-${process.pid}-${randomBytes(6).toString("hex")}`;
+      await writeFile(temporary, selection.previous, { flag: "wx", mode: 0o600 });
+      if (await pathExists(selection.path)) await rm(selection.path, { force: true });
+      await rename(temporary, selection.path);
+    }
+  }
+
   async function selectionPlan(name, target) {
     const workspace = await rawWorkspace();
     const preset = workspace.presets[name];
@@ -757,6 +854,10 @@ export function createRemoteWorkspace({
       const selection = await promptSelection(name, target);
       return { type, name, target, action: selection.action, path: selection.path, items: [], unit: "documents" };
     }
+    if (type === "snippets") {
+      const selection = await snippetSelection(name);
+      return { type, name, action: selection.action, path: selection.path, items: [], unit: "snippets" };
+    }
     throw new RemoteWorkspaceError(`unsupported remote component '${type}'`);
   }
 
@@ -783,6 +884,7 @@ export function createRemoteWorkspace({
     if (type === "mcp") return materializeMcp(name, target);
     if (type === "skills") return materializeSkills(name, target);
     if (type === "prompts") return promptSelection(name, target);
+    if (type === "snippets") return snippetSelection(name);
     throw new RemoteWorkspaceError(`unsupported remote component '${type}'`);
   }
 
@@ -794,12 +896,16 @@ export function createRemoteWorkspace({
     index,
     materializeComponent,
     materializePreset,
+    promptDocument,
     promptSelection,
+    restoreSnippet,
     restorePrompt,
     runtimeAvailability,
     runtimeEnvironment,
     runtimePaths,
     selectionPlan,
+    snippetSelection,
+    writeSnippet,
     writePrompt
   };
 }

@@ -45,7 +45,8 @@ const RUNTIME_FIELDS = [
   "required",
   "enabled_tools",
   "disabled_tools",
-  "default_tools_approval_mode"
+  "default_tools_approval_mode",
+  "suppress_when_disabled"
 ];
 
 class ImportError extends Error {
@@ -703,6 +704,7 @@ function parseCodexList(document) {
       "default_tools_approval_mode",
       (value) => ["auto", "prompt", "writes", "approve"].includes(value)
     );
+    if (item.enabled === false) definition.suppress_when_disabled = true;
 
     const known = new Set([
       "name",

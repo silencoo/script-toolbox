@@ -34,6 +34,21 @@ For automation or an Agent-guided workflow, use explicit commands:
 ./agent/promptctl/promptctl install all --yes
 ```
 
+To adopt existing local prompts without printing or replacing their content,
+preview and then apply the dedicated blind migration:
+
+```bash
+./agent/promptctl/promptctl migrate --target all --profile personal
+./agent/promptctl/promptctl migrate --target all --profile personal --yes
+```
+
+Migration copies Claude Code's `~/.claude/CLAUDE.md` and Codex's
+`~/.codex/AGENTS.md` verbatim into their client-specific editable profile
+files. It prints paths and actions only. The legacy files are backed up before
+Claude's binding is replaced and Codex's legacy file is removed, preventing
+the same instructions from loading twice. All targets are preflighted before
+any write, and a failed multi-client apply restores the original files.
+
 It configures Claude Code and/or Codex, prints the resulting Markdown paths,
 and leaves those files user-editable:
 
@@ -92,6 +107,33 @@ run independently:
 ./agent/promptctl/promptctl uninstall all --remove-instructions
 ./agent/promptctl/promptctl uninstall all --remove-instructions --yes
 ```
+
+## Reusable snippets
+
+Snippets are short prompts you insert on demand. They are shared across agent
+clients and are never loaded as persistent instructions. Local snippet files
+live under `~/.local/share/script-toolbox/snippets`.
+
+```bash
+# Create an empty Markdown file, then edit the printed path.
+promptctl snippet create review-code --yes
+promptctl snippet path review-code
+
+# Blind-copy an existing text/Markdown file without printing its content.
+promptctl snippet create plan-first --from /path/to/phrase.md --yes
+
+# Metadata-only listing and clipboard use.
+promptctl snippet list
+promptctl snippet copy plan-first
+
+# Deletion is previewed and creates an adjacent backup.
+promptctl snippet delete plan-first
+promptctl snippet delete plan-first --yes
+```
+
+`promptctl backup` and `promptctl restore` include this shared library in the
+same end-to-end encrypted Prompt Store as persistent profiles. Listing commands
+and the Agentctl dashboard expose names, paths, and file state only.
 
 The default profile name is `personal`. Profiles are independent Markdown
 documents rather than inherited fragments: `profile create --from` makes a
