@@ -29,6 +29,8 @@ mode `0600`.
 - [`proxy/`](./proxy/README.md) — optional loopback-only native protocol
   forwarder with explicit lifecycle, capability authentication, and metadata-
   only logs.
+- [`pricing/`](./pricing/README.md) — independent exact-model, effective-dated
+  price catalog with fixed-decimal calculation and source provenance.
 - [`recipes/`](./recipes/) — focused integration examples that complement the
   controllers without becoming part of their install or credential lifecycle.
 
@@ -47,6 +49,7 @@ The public controllers can be called directly:
 ./agentctl/agentctl statusline status
 ./agentctl/agentctl provider status
 ./agentctl/agentctl provider plan work-gateway --target codex
+./agentctl/agentctl pricing status
 ./agentctl/agentctl proxy status
 ```
 
@@ -112,7 +115,7 @@ backward-compatible setup option for MiniMax where MiniMax is supported.
 
 | Controller | Owns | Does not own |
 | --- | --- | --- |
-| `agentctl` | Client installation, portable provider profiles, local provider Secrets, provider/model configuration, the optional local proxy lifecycle, Claude's status-line preset, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
+| `agentctl` | Client installation, portable provider profiles, local provider Secrets, exact-model pricing, provider/model configuration, the optional local proxy lifecycle, Claude's status-line preset, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
 | `mcpctl` | Task-oriented MCP profiles and their encrypted backup state | Providers, models, persistent instructions |
 | `promptctl` | Persistent instruction links and initial editable Markdown | Clients, providers, credentials, MCP state |
 | `skillsctl` | Portable skill directories, inherited packs, managed target links, encrypted backups | Providers, MCP state, project-scoped skills |

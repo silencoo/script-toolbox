@@ -13,7 +13,7 @@ agentctl proxy status
 agentctl proxy stop --yes
 ```
 
-The current phase is native pass-through only:
+The proxy is native pass-through only:
 
 | Store protocol | Local API route |
 | --- | --- |
@@ -39,7 +39,12 @@ until their independent test suites exist.
 - Incoming routes are allowlisted per selected protocol. The proxy is not a
   general URL forwarder.
 - Request and response bodies and headers are never written to logs. JSONL
-  metadata contains route, protocol, status, timing, and byte counts only.
+  request metadata contains route, protocol, status, timing, and byte counts
+  only. A separate usage JSONL contains exact model identities, normalized
+  token counts, and estimated cost only.
+- Request model aliases are exact. Anthropic/OpenAI JSON model fields and the
+  Google route model component are rewritten in bounded memory; similarly
+  named models are never inferred or changed.
 - Provider endpoints cannot embed credentials in URL userinfo or common secret
   query parameters.
 - State, config, capability, metadata, lifecycle logs, and locks are exact
@@ -67,14 +72,39 @@ agentctl proxy start work-gateway --target codex \
   --request-timeout-ms 300000 \
   --request-bytes 16777216 \
   --log-bytes 5242880 \
+  --usage-log-bytes 5242880 \
+  --usage-capture-bytes 2097152 \
   --yes
 ```
 
 The first-byte timer covers upstream response headers. SSE responses clear the
 non-streaming total timer after headers and then use a separately reset idle
 timer. Request-size checks use `Content-Length` when available and enforce the
-same limit while streaming an unknown-length body.
+same limit while reading an unknown-length body. Native JSON requests are held
+only within that bound so the exact model field can be rewritten, then sent
+upstream; compressed request bodies are rejected.
 
-Metadata rotates to one owner-only `.1` file at the configured byte threshold.
-The later analytics phase may add bounded structured retention, but it will not
-add content logging.
+Request and usage metadata rotate independently to one owner-only `.1` file at
+their configured byte thresholds.
+
+## Usage and pricing
+
+The bounded response collector recognizes Anthropic Messages, OpenAI
+Responses, OpenAI Chat Completions, and Google Generative JSON/SSE usage. Cache
+semantics remain separate: OpenAI and Google cached tokens are subtracted from
+their reported total input before pricing, while Anthropic's non-cached input,
+cache-read, and cache-creation counts remain distinct.
+
+```bash
+agentctl pricing status
+agentctl proxy plan work-gateway --target codex \
+  --pricing-source response
+```
+
+`response` pricing uses the returned model ID when an exact active rate exists,
+then falls back to the outbound request model with an explicit reason. `request`
+always anchors pricing to the outbound model. Every usage row preserves
+requested, outbound, response, and priced model identities plus catalog/rate
+provenance. A missing catalog or rate never blocks forwarding; the row records
+why pricing is unavailable. Prompt and response content are not retained by
+the collector or either log.

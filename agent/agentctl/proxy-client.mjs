@@ -33,6 +33,12 @@ import {
   ProviderRendererError,
   renderProviderPlan
 } from "./provider-renderer.mjs";
+import {
+  PricingClientError,
+  loadPricingCatalog,
+  pricingDefaults
+} from "./pricing-client.mjs";
+import { PricingError } from "../pricing/pricing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DAEMON = resolve(HERE, "..", "proxy", "agentproxyd.mjs");
@@ -66,12 +72,18 @@ Options:
   --request-timeout-ms <ms>         Total non-streaming request timeout.
   --request-bytes <bytes>           Maximum request body (default: 16 MiB).
   --log-bytes <bytes>               Metadata log rotation threshold.
+  --usage-log-bytes <bytes>         Usage log rotation threshold.
+  --usage-capture-bytes <bytes>     Bounded response metadata collector size.
+  --pricing <file>                  Optional versioned pricing catalog.
+  --pricing-source <request|response>
+                                      Model identity used for pricing.
   --store <file>                    Portable Provider Store.
   --secrets <file>                  Local provider Secret Store.
   --proxy-config <file>             Generated device-local daemon config.
   --proxy-state <file>              Device-local runtime state.
   --proxy-capability <file>         Owner-only local client capability.
   --proxy-log <file>                Request metadata JSONL (never bodies/headers).
+  --proxy-usage-log <file>          Model/token/cost JSONL (never content).
   --proxy-runtime-log <file>        Daemon lifecycle diagnostics.
   --yes, -y                         Apply start/stop/token mutation.
 
@@ -89,6 +101,7 @@ export function proxyDefaults({
   home = homedir()
 } = {}) {
   const providers = providerDefaults({ platform, environment, home });
+  const pricing = pricingDefaults({ platform, environment, home });
   const stateRoot = join(dirname(providers.statePath), "proxy");
   const configRoot = dirname(providers.storePath);
   const envPort = Number(environment.AGENTCTL_PROXY_PORT || 17321);
@@ -101,6 +114,8 @@ export function proxyDefaults({
     proxyCapability: environment.AGENTCTL_PROXY_CAPABILITY ||
       join(configRoot, "proxy-capability.json"),
     proxyLog: environment.AGENTCTL_PROXY_LOG || join(stateRoot, "requests.jsonl"),
+    proxyUsageLog: environment.AGENTCTL_PROXY_USAGE_LOG ||
+      join(stateRoot, "usage.jsonl"),
     proxyRuntimeLog: environment.AGENTCTL_PROXY_RUNTIME_LOG ||
       join(stateRoot, "daemon.log"),
     port: Number.isInteger(envPort) ? envPort : 17321,
@@ -108,7 +123,11 @@ export function proxyDefaults({
     streamIdleMs: 120000,
     requestMs: 300000,
     requestBytes: 16 * 1024 * 1024,
-    logBytes: 5 * 1024 * 1024
+    logBytes: 5 * 1024 * 1024,
+    usageLogBytes: 5 * 1024 * 1024,
+    usageCaptureBytes: 2 * 1024 * 1024,
+    pricingPath: pricing.pricingPath,
+    pricingSource: "response"
   };
 }
 
@@ -142,7 +161,10 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
       case "--proxy-state": options.proxyState = takeValue(argv, argument); break;
       case "--proxy-capability": options.proxyCapability = takeValue(argv, argument); break;
       case "--proxy-log": options.proxyLog = takeValue(argv, argument); break;
+      case "--proxy-usage-log": options.proxyUsageLog = takeValue(argv, argument); break;
       case "--proxy-runtime-log": options.proxyRuntimeLog = takeValue(argv, argument); break;
+      case "--pricing": options.pricingPath = takeValue(argv, argument); break;
+      case "--pricing-source": options.pricingSource = takeValue(argv, argument); break;
       case "--platform": options.platform = takeValue(argv, argument); break;
       case "--target": options.target = takeValue(argv, argument); break;
       case "--port": options.port = integerOption(argv, argument, 1024, 65535); break;
@@ -156,6 +178,10 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
         options.requestBytes = integerOption(argv, argument, 1024, 64 * 1024 * 1024); break;
       case "--log-bytes":
         options.logBytes = integerOption(argv, argument, 65536, 100 * 1024 * 1024); break;
+      case "--usage-log-bytes":
+        options.usageLogBytes = integerOption(argv, argument, 65536, 100 * 1024 * 1024); break;
+      case "--usage-capture-bytes":
+        options.usageCaptureBytes = integerOption(argv, argument, 1024, 16 * 1024 * 1024); break;
       case "--yes":
       case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
@@ -168,8 +194,12 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
   }
   for (const key of [
     "storePath", "secretsPath", "daemonPath", "proxyConfig", "proxyState",
-    "proxyLock", "proxyCapability", "proxyLog", "proxyRuntimeLog"
+    "proxyLock", "proxyCapability", "proxyLog", "proxyUsageLog",
+    "proxyRuntimeLog", "pricingPath"
   ]) options[key] = resolve(options[key]);
+  if (!["request", "response"].includes(options.pricingSource)) {
+    throw new ProxyClientError("--pricing-source must be request or response");
+  }
   return { positional, options };
 }
 
@@ -325,6 +355,7 @@ async function inspectStatus(options) {
         capability_file: options.proxyCapability,
         state_file: options.proxyState,
         metadata_log: options.proxyLog,
+        usage_log: options.proxyUsageLog,
         runtime_log: options.proxyRuntimeLog,
         instance_id: lock.instance_id,
         pid: lock.pid
@@ -338,6 +369,7 @@ async function inspectStatus(options) {
       capability_file: options.proxyCapability,
       state_file: options.proxyState,
       metadata_log: options.proxyLog,
+      usage_log: options.proxyUsageLog,
       runtime_log: options.proxyRuntimeLog
     };
   }
@@ -356,6 +388,7 @@ async function inspectStatus(options) {
     capability_file: options.proxyCapability,
     state_file: options.proxyState,
     metadata_log: options.proxyLog,
+    usage_log: options.proxyUsageLog,
     runtime_log: options.proxyRuntimeLog,
     instance_id: state.instance_id,
     pid: state.pid,
@@ -365,6 +398,8 @@ async function inspectStatus(options) {
     profile: state.profile,
     target: state.target,
     protocol: state.protocol,
+    pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
+    pricing_model_source: health.body?.pricing_model_source ?? null,
     local_base_url: localBaseUrl(state.host, state.port, state.protocol)
   };
 }
@@ -375,8 +410,12 @@ function emitStatus(status, options) {
   if (status.profile) process.stdout.write(`Profile:    ${status.profile} (${status.target})\n`);
   if (status.local_base_url) process.stdout.write(`Local URL:  ${status.local_base_url}\n`);
   if (status.pid) process.stdout.write(`PID:        ${status.pid}\n`);
+  if (status.pricing_model_source) {
+    process.stdout.write(`Pricing:    ${status.pricing_catalog_version || "catalog unavailable"} (${status.pricing_model_source} model)\n`);
+  }
   process.stdout.write(`Capability: ${status.capability_present ? "present" : "missing"} (${status.capability_file})\n`);
   process.stdout.write(`Metadata:   ${status.metadata_log}\n`);
+  process.stdout.write(`Usage:      ${status.usage_log}\n`);
 }
 
 async function status(options) {
@@ -400,9 +439,10 @@ async function buildPlan(profileName, options) {
   validateTarget(options.target);
   const platform = options.platform || normalizeRuntimePlatform();
   validatePlatform(platform);
-  const [store, secrets] = await Promise.all([
+  const [store, secrets, pricing] = await Promise.all([
     loadProviderStore(options.storePath),
-    loadProviderSecrets(options.secretsPath, { allowMissing: true })
+    loadProviderSecrets(options.secretsPath, { allowMissing: true }),
+    loadPricingCatalog(options.pricingPath, { allowMissing: true })
   ]);
   const profile = store.profiles[profileName];
   if (!profile) throw new ProxyClientError(`provider profile not found: ${profileName}`);
@@ -420,6 +460,12 @@ async function buildPlan(profileName, options) {
     platform,
     protocol: resolved.protocol,
     endpoint: resolved.endpoint,
+    models: {
+      default: resolved.model,
+      aliases: structuredClone(resolved.models.aliases),
+      requested_default: resolved.requested_model,
+      outbound_default: resolved.outbound_model
+    },
     auth: {
       mode: resolved.auth.mode,
       secret: resolved.auth.secret || null,
@@ -434,11 +480,21 @@ async function buildPlan(profileName, options) {
     },
     limits: {
       request_bytes: options.requestBytes,
-      log_bytes: options.logBytes
+      log_bytes: options.logBytes,
+      usage_log_bytes: options.usageLogBytes,
+      usage_capture_bytes: options.usageCaptureBytes
+    },
+    pricing: {
+      catalog: options.pricingPath,
+      present: Boolean(pricing),
+      version: pricing?.version || null,
+      currency: pricing?.currency || null,
+      model_source: options.pricingSource
     },
     auto_attach: false,
     capability_file: options.proxyCapability,
-    metadata_log: options.proxyLog
+    metadata_log: options.proxyLog,
+    usage_log: options.proxyUsageLog
   };
 }
 
@@ -450,10 +506,13 @@ function emitPlan(plan, options, apply) {
   process.stdout.write(`${apply ? "[apply]" : "[preview]"} loopback provider proxy\n`);
   process.stdout.write(`  Profile      : ${plan.profile} (${plan.target}; ${plan.platform})\n`);
   process.stdout.write(`  Protocol     : ${plan.protocol}\n`);
+  process.stdout.write(`  Model        : ${plan.models.requested_default} -> ${plan.models.outbound_default}\n`);
   process.stdout.write(`  Upstream     : ${plan.endpoint}\n`);
   process.stdout.write(`  Local URL    : ${plan.local_base_url}\n`);
   process.stdout.write(`  Capability   : ${plan.capability_file} (value hidden)\n`);
   process.stdout.write(`  Request log  : metadata only; ${plan.metadata_log}\n`);
+  process.stdout.write(`  Usage log    : model/token/cost only; ${plan.usage_log}\n`);
+  process.stdout.write(`  Pricing      : ${plan.pricing.present ? `${plan.pricing.version} (${plan.pricing.model_source} model)` : "catalog unavailable; requests still work"}\n`);
   process.stdout.write("  Client config: unchanged (explicit attach comes later)\n");
   if (plan.issue) process.stdout.write(`  Blocked by   : ${plan.issue}\n`);
   if (!apply && plan.ready) process.stdout.write("Re-run with --yes to start.\n");
@@ -496,7 +555,7 @@ async function clearDeadRuntime(options) {
 
 function daemonConfig(plan, options) {
   return {
-    schema: 1,
+    schema: 2,
     kind: CONFIG_KIND,
     instance_id: randomUUID(),
     created_at: new Date().toISOString(),
@@ -506,6 +565,14 @@ function daemonConfig(plan, options) {
     protocol: plan.protocol,
     endpoint: plan.endpoint,
     auth: { mode: plan.auth.mode, secret: plan.auth.secret },
+    models: {
+      default: plan.models.default,
+      aliases: plan.models.aliases
+    },
+    pricing: {
+      catalog: plan.pricing.catalog,
+      model_source: plan.pricing.model_source
+    },
     listen: plan.listen,
     timeouts: plan.timeouts,
     limits: plan.limits,
@@ -515,6 +582,7 @@ function daemonConfig(plan, options) {
       capability: options.proxyCapability,
       secrets: options.secretsPath,
       log: options.proxyLog,
+      usage_log: options.proxyUsageLog,
       runtime_log: options.proxyRuntimeLog
     }
   };
@@ -594,6 +662,8 @@ async function start(profileName, options) {
     local_base_url: plan.local_base_url,
     pid: state.pid,
     capability_file: options.proxyCapability,
+    pricing_catalog_version: plan.pricing.version,
+    usage_log: options.proxyUsageLog,
     auto_attach: false
   };
   if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -713,7 +783,8 @@ export async function main(argv = process.argv.slice(2)) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
     const safe = error instanceof ProxyClientError || error instanceof ProviderSchemaError ||
-      error instanceof ProviderRendererError
+      error instanceof ProviderRendererError || error instanceof PricingClientError ||
+      error instanceof PricingError
       ? error.message
       : "unexpected proxy controller failure";
     process.stderr.write(`[error] ${safe}\n`);

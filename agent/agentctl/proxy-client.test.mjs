@@ -24,6 +24,7 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROVIDER_CLIENT = join(HERE, "provider-client.mjs");
+const PRICING_CLIENT = join(HERE, "pricing-client.mjs");
 const PROXY_CLIENT = join(HERE, "proxy-client.mjs");
 const DAEMON = resolve(HERE, "..", "proxy", "agentproxyd.mjs");
 
@@ -43,7 +44,9 @@ function proxyArgs(root, port) {
     "--proxy-state", join(root, "proxy", "state.json"),
     "--proxy-capability", join(root, "config", "proxy-capability.json"),
     "--proxy-log", join(root, "proxy", "requests.jsonl"),
+    "--proxy-usage-log", join(root, "proxy", "usage.jsonl"),
     "--proxy-runtime-log", join(root, "proxy", "daemon.log"),
+    "--pricing", join(root, "config", "pricing.json"),
     "--port", String(port)
   ];
 }
@@ -137,23 +140,27 @@ test("proxy header projection removes every local credential before upstream aut
       "x-agentctl-proxy-token": "LOCAL-CAPABILITY",
       "x-api-key": "LOCAL-CAPABILITY",
       "content-type": "application/json",
+      "content-length": "999",
+      digest: "sha-256=STALE-BODY-DIGEST",
       connection: "keep-alive"
     }
   }, {
     protocol: "openai_responses",
     auth: { mode: "bearer" }
-  }, "REAL-UPSTREAM-SECRET");
+  }, "REAL-UPSTREAM-SECRET", 17);
   assert.equal(headers.authorization, "Bearer REAL-UPSTREAM-SECRET");
   assert.equal(headers["x-agentctl-proxy-token"], undefined);
   assert.equal(headers["x-api-key"], undefined);
   assert.equal(headers.connection, undefined);
+  assert.equal(headers.digest, undefined);
+  assert.equal(headers["content-length"], "17");
   assert.equal(headers["accept-encoding"], "identity");
 });
 
 test("daemon config rejects a non-loopback listener", () => {
   const root = "/tmp/agentctl-proxy-test";
   const config = {
-    schema: 1,
+    schema: 2,
     kind: "agentctl-proxy-config",
     instance_id: "11111111-1111-4111-8111-111111111111",
     created_at: new Date().toISOString(),
@@ -163,15 +170,23 @@ test("daemon config rejects a non-loopback listener", () => {
     protocol: "openai_responses",
     endpoint: "https://api.example.com/v1",
     auth: { mode: "bearer", secret: "test_key" },
+    models: { default: "test-model", aliases: {} },
+    pricing: { catalog: join(root, "pricing"), model_source: "response" },
     listen: { host: "0.0.0.0", port: 17321 },
     timeouts: { first_byte_ms: 1000, stream_idle_ms: 1000, request_ms: 1000 },
-    limits: { request_bytes: 1024, log_bytes: 65536 },
+    limits: {
+      request_bytes: 1024,
+      log_bytes: 65536,
+      usage_log_bytes: 65536,
+      usage_capture_bytes: 1024
+    },
     paths: {
       state: join(root, "state"),
       lock: join(root, "lock"),
       capability: join(root, "capability"),
       secrets: join(root, "secrets"),
       log: join(root, "log"),
+      usage_log: join(root, "usage-log"),
       runtime_log: join(root, "runtime-log")
     }
   };
@@ -307,7 +322,15 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
-      response.end('{"ok":true,"model":"upstream-model"}');
+      response.end(JSON.stringify({
+        ok: true,
+        model: "response-priced",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          input_tokens_details: { cached_tokens: 40 }
+        }
+      }));
     });
   });
   const upstreamPort = await listen(upstream);
@@ -328,6 +351,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       "--protocol", "openai_responses",
       "--base-url", `http://127.0.0.1:${upstreamPort}/v1`,
       "--model", "model-a",
+      "--alias", "model-a=vendor-model-a",
       "--auth-mode", "bearer",
       "--secret", "upstream_key",
       ...providerArgs(root), "--yes"
@@ -339,6 +363,23 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       "secret", "set", "upstream_key", "--secret-file", keyFile,
       ...providerArgs(root), "--yes"
     ]);
+    const pricingPath = join(root, "config", "pricing.json");
+    run(PRICING_CLIENT, [
+      "init", "--version", "2026.08-test",
+      "--pricing", pricingPath, "--yes", "--json"
+    ]);
+    run(PRICING_CLIENT, [
+      "set", "response-priced",
+      "--profile", "local-responses",
+      "--model", "response-priced",
+      "--input", "2",
+      "--output", "10",
+      "--cache-read", "0.2",
+      "--cache-write", "0",
+      "--effective-at", "2020-01-01T00:00:00.000Z",
+      "--source", "isolated integration fixture",
+      "--pricing", pricingPath, "--yes", "--json"
+    ]);
 
     const preview = JSON.parse(run(PROXY_CLIENT, [
       "plan", "local-responses", "--target", "codex", ...commonProxy, "--json"
@@ -347,6 +388,9 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(preview.auto_attach, false);
     assert.equal(preview.local_base_url, `http://127.0.0.1:${proxyPort}/v1`);
     assert.equal(preview.auth.secret, "upstream_key");
+    assert.equal(preview.models.requested_default, "model-a");
+    assert.equal(preview.models.outbound_default, "vendor-model-a");
+    assert.equal(preview.pricing.version, "2026.08-test");
     assert.equal(JSON.stringify(preview).includes("REAL-UPSTREAM-SECRET"), false);
 
     run(PROXY_CLIENT, [
@@ -367,6 +411,8 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     ]).stdout);
     assert.equal(running.status, "running");
     assert.equal(running.pid, proxyPid);
+    assert.equal(running.pricing_catalog_version, "2026.08-test");
+    assert.equal(running.pricing_model_source, "response");
     assert.equal(Object.hasOwn(running, "token"), false);
 
     const capabilityPath = join(root, "config", "proxy-capability.json");
@@ -390,13 +436,22 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       body: JSON.stringify({ model: "model-a", input: bodyMarker })
     });
     assert.equal(forwarded.status, 200);
-    assert.deepEqual(await forwarded.json(), { ok: true, model: "upstream-model" });
+    assert.deepEqual(await forwarded.json(), {
+      ok: true,
+      model: "response-priced",
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        input_tokens_details: { cached_tokens: 40 }
+      }
+    });
     assert.equal(requests.length, 1);
     assert.equal(requests[0].path, "/v1/responses");
     assert.equal(requests[0].authorization, "Bearer REAL-UPSTREAM-SECRET");
     assert.equal(requests[0].localToken, undefined);
     assert.equal(requests[0].xApiKey, undefined);
     assert.match(requests[0].body, /BODY-MUST-NOT-ENTER-METADATA/);
+    assert.equal(JSON.parse(requests[0].body).model, "vendor-model-a");
 
     const wrongRoute = await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
       method: "POST",
@@ -442,6 +497,35 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       assert.equal(Object.hasOwn(record, "body"), false);
     }
 
+    const usagePath = join(root, "proxy", "usage.jsonl");
+    const usageText = await waitFor(async () => {
+      try {
+        const text = await readFile(usagePath, "utf8");
+        return text.includes('"response_model":"response-priced"') ? text : "";
+      } catch {
+        return "";
+      }
+    });
+    assert.equal(usageText.includes(bodyMarker), false);
+    assert.equal(usageText.includes("REAL-UPSTREAM-SECRET"), false);
+    assert.equal(usageText.includes(capability.token), false);
+    const usageRecord = usageText.split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find((record) => record.response_model === "response-priced");
+    assert.equal(usageRecord.requested_model, "model-a");
+    assert.equal(usageRecord.outbound_model, "vendor-model-a");
+    assert.equal(usageRecord.pricing_model, "response-priced");
+    assert.equal(usageRecord.pricing_model_source, "response");
+    assert.deepEqual(usageRecord.usage, {
+      input_tokens: 60,
+      output_tokens: 20,
+      cache_read_tokens: 40,
+      cache_write_tokens: 0
+    });
+    assert.equal(usageRecord.cost.total, "0.000328");
+    assert.equal(usageRecord.cost.catalog_version, "2026.08-test");
+    assert.equal(Object.hasOwn(usageRecord, "body"), false);
+
     const stopPreview = JSON.parse(run(PROXY_CLIENT, [
       "stop", ...commonProxy, "--json"
     ]).stdout);
@@ -472,6 +556,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       capabilityPath,
       join(root, "proxy", "config.json"),
       join(root, "proxy", "requests.jsonl"),
+      join(root, "proxy", "usage.jsonl"),
       join(root, "proxy", "daemon.log")
     ]) {
       assert.equal((await lstat(path)).mode & 0o077, 0);

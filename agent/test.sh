@@ -708,6 +708,15 @@ else
   fail=1
 fi
 
+if node --test "$SCRIPT_DIR/agentctl/pricing-client.test.mjs" \
+    "$SCRIPT_DIR/agentctl/proxy-observability.test.mjs"; then
+  printf '%s\n' "ok  : pricing/model/usage tests"
+  checked=$((checked + 1))
+else
+  printf '%s\n' "FAIL: pricing/model/usage tests" >&2
+  fail=1
+fi
+
 if node "$SCRIPT_DIR/agentctl/orchestrator-client.test.mjs"; then
   :
 else

@@ -1,5 +1,23 @@
 # Changelog — agent/
 
+## 2026-08-11 — exact model usage and versioned pricing
+
+- Added the independent preview-first `agentctl pricing` catalog with exact
+  model/profile/effective-time selection, mandatory source provenance, and
+  scaled-BigInt decimal cost calculation. No stale vendor prices are bundled.
+- Added exact native request model projection for Anthropic, OpenAI Responses,
+  OpenAI Chat, and Google model routes. Requested, outbound, response, and
+  priced model IDs remain distinct; substring guessing and all alias cycles
+  fail closed.
+- Added bounded JSON/SSE usage extraction with protocol-correct cache handling:
+  OpenAI/Google cached input is separated from total input, while Anthropic
+  input/cache-read/cache-creation classes remain independent.
+- Added a separate owner-only usage/cost JSONL with catalog/rate provenance and
+  response-model fallback reasons. Neither request/response content nor
+  credentials enter request metadata, usage metadata, plans, or status output.
+- Kept pricing optional: an absent catalog or exact active rate is recorded as
+  unavailable and never blocks native proxy forwarding.
+
 ## 2026-08-11 — explicit loopback provider proxy
 
 - Added the independent `agentproxyd` process and preview-first `agentctl proxy`

@@ -52,7 +52,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.9.0" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.10.0" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"
@@ -62,6 +62,13 @@ done
   fail "standalone runtime omitted the proxy controller"
 [ -f "$RUNTIME/proxy/agentproxyd.mjs" ] ||
   fail "standalone runtime omitted the proxy daemon"
+[ -f "$RUNTIME/agentctl/pricing-client.mjs" ] &&
+[ -f "$RUNTIME/pricing/pricing.mjs" ] &&
+[ -f "$RUNTIME/proxy/model-mapper.mjs" ] &&
+[ -f "$RUNTIME/proxy/usage.mjs" ] ||
+  fail "standalone runtime omitted pricing/model/usage modules"
+"$PREFIX/agentctl" pricing --help >/dev/null ||
+  fail "standalone pricing command failed"
 "$PREFIX/mcpctl" --help >/dev/null || fail "mcpctl standalone command failed"
 "$PREFIX/promptctl" --help >/dev/null || fail "promptctl standalone command failed"
 "$PREFIX/skillsctl" --help >/dev/null || fail "skillsctl standalone command failed"

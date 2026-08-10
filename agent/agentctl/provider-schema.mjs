@@ -193,6 +193,17 @@ function validateModels(value, label) {
     validateModelId(requested, `${label}.aliases key`);
     validateModelId(outbound, `${label}.aliases.${requested}`);
   }
+  for (const start of [value.default, ...Object.keys(value.aliases)]) {
+    const seen = new Set();
+    let current = start;
+    while (Object.hasOwn(value.aliases, current)) {
+      if (seen.has(current)) {
+        throw new ProviderSchemaError(`${label} model alias cycle detected at '${current}'`);
+      }
+      seen.add(current);
+      current = value.aliases[current];
+    }
+  }
   return value;
 }
 
@@ -361,7 +372,7 @@ export function resolveProviderProfile(profile, {
   validateModelId(resolved.model, "resolved model");
   const seen = new Set();
   let outbound = resolved.model;
-  while (resolved.models.aliases[outbound] !== undefined) {
+  while (Object.hasOwn(resolved.models.aliases, outbound)) {
     if (seen.has(outbound)) {
       throw new ProviderSchemaError(
         `model alias cycle detected in provider profile '${profile.name}'`

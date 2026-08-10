@@ -198,11 +198,35 @@ path into Windows is therefore impossible through this schema. On the Windows
 machine the same command automatically selects its Windows overlay and native
 user-home paths.
 
+## Versioned model pricing
+
+Pricing is an independent catalog, not a field in Provider profiles. It uses
+exact model IDs, effective intervals, optional profile-specific overrides, and
+mandatory source provenance. No vendor price snapshot is hard-coded into this
+repository.
+
+```bash
+agentctl pricing init --version 2026.08 --currency USD --yes
+agentctl pricing set work-model \
+  --profile work-gateway \
+  --model vendor-model-2026 \
+  --input 3 --output 15 \
+  --cache-read 0.3 --cache-write 3.75 \
+  --effective-at 2026-08-01T00:00:00Z \
+  --source "vendor price page captured 2026-08-01" \
+  --yes
+agentctl pricing calculate work-gateway vendor-model-2026 \
+  --input-tokens 1000000 --output-tokens 250000 --json
+```
+
+Decimal strings are calculated with scaled `BigInt`, so neither catalog input
+nor output cost passes through JavaScript floating point. See
+[`../pricing/`](../pricing/) for selection and precision rules.
+
 ## Optional native protocol proxy
 
 The proxy is a separate Node process with an explicit lifecycle. It does not
-run inside agentctl, start with the TUI, or modify an agent configuration in
-this phase:
+run inside agentctl, start with the TUI, or modify an agent configuration:
 
 ```bash
 agentctl proxy plan work-gateway --target codex
@@ -222,7 +246,13 @@ Secret in memory.
 
 Plans, runtime state, daemon arguments, and metadata logs never contain the
 capability or upstream Secret value. Request/response bodies and headers are
-not logged. The three independent timeout dimensions can be set with
+not logged. Exact Provider aliases rewrite only the native JSON model field or
+Google route component. A separate bounded collector normalizes Anthropic,
+OpenAI Responses, OpenAI Chat, and Google usage without retaining content; its
+JSONL preserves requested/outbound/response/pricing model identities, token
+classes, and fixed-decimal estimate provenance. A missing pricing catalog or
+rate does not block forwarding. The three independent timeout dimensions can
+be set with
 `--first-byte-timeout-ms`, `--stream-idle-timeout-ms`, and
 `--request-timeout-ms`; request bodies and metadata logs also have explicit
 byte limits.
