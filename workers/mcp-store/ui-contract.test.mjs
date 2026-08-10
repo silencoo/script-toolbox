@@ -9,6 +9,7 @@ const [
   builtHtml,
   app,
   workspace,
+  agentWorkspace,
   snippetWorkspace,
   presetWorkspace,
   workspaceTabs,
@@ -29,6 +30,7 @@ const [
   read("./ui/index.html"),
   read("./web/src/App.tsx"),
   read("./web/src/components/store-workspace.tsx"),
+  read("./web/src/components/agent-workspace.tsx"),
   read("./web/src/components/snippet-workspace.tsx"),
   read("./web/src/components/preset-workspace.tsx"),
   read("./web/src/components/workspace-tabs.tsx"),
@@ -63,9 +65,11 @@ test("Workspace UI is built from real shadcn/ui source with neutral theming", ()
   assert.match(workspace, /@\/components\/ui\/select/);
   assert.match(workspace, /@\/components\/ui\/dialog/);
   assert.match(workspaceTabs, /grid w-full items-stretch gap-1/);
-  assert.match(workspaceTabs, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-2 sm:grid-cols-4"/);
+  assert.match(workspaceTabs, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-2 sm:grid-cols-5"/);
   assert.match(workspaceTabs, /className="h-10 min-w-0 justify-center/);
+  assert.match(workspaceTabs, /providers: "Providers"/);
   assert.match(workspaceTabs, /presets: "Presets"/);
+  assert.match(workspace, /<AgentWorkspace/);
   assert.match(workspace, /aria-label={`\$\{SECTION_META\[session\.type\]\.label\} configuration`}/);
   assert.doesNotMatch(workspace, /Unified Workspace ·/);
   assert.doesNotMatch(workspace, /meta\.(title|summary)/);
@@ -113,9 +117,24 @@ test("Workspace presets compose all three controllers and save only encrypted ve
   assert.match(presetWorkspace, /Names are immutable/);
   assert.match(app, /workspaceDirty/);
   assert.match(app, /activeView/);
-  assert.match(storeClient, /snapshot\.schema !== 2/);
+  assert.match(storeClient, /snapshot\.schema !== 3/);
   assert.match(storeClient, /isObject\(snapshot\.presets\)/);
   assert.match(storeClient, /newer Workspace version exists/);
+});
+
+test("Provider Workspace keeps portable catalogs encrypted and Secret values masked", () => {
+  assert.match(storeClient, /WORKSPACE_VIEW_ORDER = \["providers", \.\.\.SECTION_ORDER, "presets"\]/);
+  assert.match(storeClient, /validateAgentBundle\(snapshot\.agent\)/);
+  assert.match(storeClient, /\[1, 2\]\.includes\(snapshot\.schema\)/);
+  assert.match(storeClient, /upgraded\.schema = 3/);
+  assert.match(storeClient, /newer Workspace version exists/);
+  assert.match(agentWorkspace, /saveEncryptedWorkspace/);
+  assert.match(agentWorkspace, /state\.workspaceVersion/);
+  assert.match(agentWorkspace, /type="password"/);
+  assert.match(agentWorkspace, /Provider Secrets/);
+  assert.match(agentWorkspace, /Generated client files and proxy runtime state are never part/);
+  assert.match(agentWorkspace, /agentctl workspace agent pull --replace --yes/);
+  assert.doesNotMatch(agentWorkspace, /formatted\(bundle\?\.secrets/);
 });
 
 test("Prompt Store exposes an accessible reusable snippet library", () => {

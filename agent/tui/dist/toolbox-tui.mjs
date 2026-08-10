@@ -22940,19 +22940,640 @@ async function writeJsonAtomic(filePath, value) {
   }
 }
 
+// ../agentctl/provider-schema.mjs
+var CURRENT_PROVIDER_SCHEMA = 1;
+var PROVIDER_STORE_KIND = "agentctl-provider-store";
+var PROVIDER_SECRETS_KIND = "agentctl-provider-secrets";
+var PROVIDER_PROTOCOLS = Object.freeze([
+  "anthropic_messages",
+  "openai_responses",
+  "openai_chat",
+  "google_generative"
+]);
+var PROVIDER_AUTH_MODES = Object.freeze([
+  "bearer",
+  "x-api-key",
+  "x-goog-api-key",
+  "none"
+]);
+var PROVIDER_TARGETS = Object.freeze([
+  "claude",
+  "codex",
+  "opencode",
+  "pi"
+]);
+var PROVIDER_PLATFORMS = Object.freeze([
+  "darwin",
+  "linux",
+  "windows"
+]);
+var PROFILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var REFERENCE_NAME = /^[A-Za-z][A-Za-z0-9._-]*$/;
+var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+var ProviderSchemaError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ProviderSchemaError";
+  }
+};
+function plainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+function requireObject(value, label) {
+  if (!plainObject(value)) throw new ProviderSchemaError(`${label} must be an object`);
+  return value;
+}
+function rejectUnknown(value, allowed, label) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      throw new ProviderSchemaError(`${label} contains unsupported field '${key}'`);
+    }
+  }
+}
+function requireString(value, label, { min = 1, max = 500 } = {}) {
+  if (typeof value !== "string" || value.length < min || value.length > max || CONTROL_CHARACTERS.test(value)) {
+    throw new ProviderSchemaError(`${label} must be a ${min}-${max} character string without control characters`);
+  }
+  return value;
+}
+function requireTimestamp(value, label) {
+  requireString(value, label, { min: 20, max: 40 });
+  if (Number.isNaN(Date.parse(value))) {
+    throw new ProviderSchemaError(`${label} is not a valid timestamp`);
+  }
+  return value;
+}
+function validateProfileName(value, label = "profile name") {
+  if (typeof value !== "string" || value.length > 64 || !PROFILE_NAME.test(value)) {
+    throw new ProviderSchemaError(
+      `${label} must use lowercase letters, numbers, and single hyphens`
+    );
+  }
+  return value;
+}
+function validateReferenceName(value, label = "reference name") {
+  if (typeof value !== "string" || value.length > 96 || !REFERENCE_NAME.test(value) || value.includes("..")) {
+    throw new ProviderSchemaError(
+      `${label} must start with a letter and use only letters, numbers, '.', '_' or '-'`
+    );
+  }
+  return value;
+}
+function validateProtocol2(value, label = "protocol") {
+  if (!PROVIDER_PROTOCOLS.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_PROTOCOLS.join(", ")}`
+    );
+  }
+  return value;
+}
+function validateAuthMode(value, label = "authentication mode") {
+  if (!PROVIDER_AUTH_MODES.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_AUTH_MODES.join(", ")}`
+    );
+  }
+  return value;
+}
+function validateTarget(value, label = "target") {
+  if (!PROVIDER_TARGETS.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_TARGETS.join(", ")}`
+    );
+  }
+  return value;
+}
+function validatePlatform(value, label = "platform") {
+  if (!PROVIDER_PLATFORMS.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_PLATFORMS.join(", ")}`
+    );
+  }
+  return value;
+}
+function validateEndpoint(value, label = "endpoint") {
+  requireString(value, label, { min: 8, max: 2048 });
+  let endpoint;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new ProviderSchemaError(`${label} must be an absolute HTTP(S) URL`);
+  }
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.hash) {
+    throw new ProviderSchemaError(
+      `${label} must be an HTTP(S) URL without embedded credentials or a fragment`
+    );
+  }
+  for (const name of endpoint.searchParams.keys()) {
+    if (/^(?:api[-_]?key|access[-_]?token|token|secret|auth|authorization|signature|sig|credential)$/i.test(name)) {
+      throw new ProviderSchemaError(
+        `${label} must reference credentials through auth.secret, not a URL query parameter`
+      );
+    }
+  }
+  const loopback = endpoint.hostname === "localhost" || endpoint.hostname === "127.0.0.1" || endpoint.hostname === "[::1]";
+  if (endpoint.protocol !== "https:" && !loopback) {
+    throw new ProviderSchemaError(`${label} must use HTTPS unless it is loopback-only`);
+  }
+  return endpoint.toString().replace(/\/$/, "");
+}
+function validateModelId(value, label = "model ID") {
+  return requireString(value, label, { min: 1, max: 240 });
+}
+function validateAuth(value, label, { partial = false } = {}) {
+  requireObject(value, label);
+  rejectUnknown(value, ["mode", "secret"], label);
+  if (!partial || value.mode !== void 0) validateAuthMode(value.mode, `${label}.mode`);
+  if (value.secret !== void 0) validateReferenceName(value.secret, `${label}.secret`);
+  if (!partial && value.mode !== "none" && value.secret === void 0) {
+    throw new ProviderSchemaError(`${label}.secret is required unless mode is none`);
+  }
+  if (value.mode === "none" && value.secret !== void 0) {
+    throw new ProviderSchemaError(`${label}.secret is not allowed when mode is none`);
+  }
+  if (partial && Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  return value;
+}
+function validateModels(value, label) {
+  requireObject(value, label);
+  rejectUnknown(value, ["default", "aliases"], label);
+  validateModelId(value.default, `${label}.default`);
+  requireObject(value.aliases, `${label}.aliases`);
+  if (Object.keys(value.aliases).length > 256) {
+    throw new ProviderSchemaError(`${label}.aliases has too many entries`);
+  }
+  for (const [requested, outbound] of Object.entries(value.aliases)) {
+    validateModelId(requested, `${label}.aliases key`);
+    validateModelId(outbound, `${label}.aliases.${requested}`);
+  }
+  for (const start of [value.default, ...Object.keys(value.aliases)]) {
+    const seen = /* @__PURE__ */ new Set();
+    let current = start;
+    while (Object.hasOwn(value.aliases, current)) {
+      if (seen.has(current)) {
+        throw new ProviderSchemaError(`${label} model alias cycle detected at '${current}'`);
+      }
+      seen.add(current);
+      current = value.aliases[current];
+    }
+  }
+  return value;
+}
+function validateTargetOverride(value, label) {
+  requireObject(value, label);
+  rejectUnknown(value, ["enabled", "endpoint", "protocol", "auth", "model"], label);
+  if (Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  if (value.enabled !== void 0 && typeof value.enabled !== "boolean") {
+    throw new ProviderSchemaError(`${label}.enabled must be boolean`);
+  }
+  if (value.endpoint !== void 0) validateEndpoint(value.endpoint, `${label}.endpoint`);
+  if (value.protocol !== void 0) validateProtocol2(value.protocol, `${label}.protocol`);
+  if (value.auth !== void 0) validateAuth(value.auth, `${label}.auth`, { partial: true });
+  if (value.model !== void 0) validateModelId(value.model, `${label}.model`);
+  return value;
+}
+function validateTargets(value, label) {
+  requireObject(value, label);
+  for (const [target, override] of Object.entries(value)) {
+    validateTarget(target, `${label} key`);
+    validateTargetOverride(override, `${label}.${target}`);
+  }
+  return value;
+}
+function validatePlatforms(value, label) {
+  requireObject(value, label);
+  for (const [platform2, overlay] of Object.entries(value)) {
+    validatePlatform(platform2, `${label} key`);
+    requireObject(overlay, `${label}.${platform2}`);
+    rejectUnknown(overlay, ["targets"], `${label}.${platform2}`);
+    if (!overlay.targets || Object.keys(overlay.targets).length === 0) {
+      throw new ProviderSchemaError(`${label}.${platform2}.targets cannot be empty`);
+    }
+    validateTargets(overlay.targets, `${label}.${platform2}.targets`);
+  }
+  return value;
+}
+function validateProviderProfile(value, expectedName = "") {
+  requireObject(value, "provider profile");
+  rejectUnknown(value, [
+    "schema",
+    "name",
+    "description",
+    "protocol",
+    "endpoint",
+    "auth",
+    "models",
+    "targets",
+    "platforms"
+  ], "provider profile");
+  if (value.schema !== CURRENT_PROVIDER_SCHEMA) {
+    throw new ProviderSchemaError(
+      `provider profile schema must be ${CURRENT_PROVIDER_SCHEMA}`
+    );
+  }
+  validateProfileName(value.name);
+  if (expectedName && value.name !== expectedName) {
+    throw new ProviderSchemaError(`provider profile '${expectedName}' has a mismatched name`);
+  }
+  requireString(value.description, "provider profile description", { min: 0, max: 500 });
+  validateProtocol2(value.protocol);
+  value.endpoint = validateEndpoint(value.endpoint);
+  validateAuth(value.auth, "provider profile auth");
+  validateModels(value.models, "provider profile models");
+  validateTargets(value.targets, "provider profile targets");
+  validatePlatforms(value.platforms, "provider profile platforms");
+  return value;
+}
+function validateProviderStore(value) {
+  requireObject(value, "provider Store");
+  rejectUnknown(value, [
+    "schema",
+    "kind",
+    "created_at",
+    "updated_at",
+    "profiles"
+  ], "provider Store");
+  if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_STORE_KIND) {
+    throw new ProviderSchemaError(
+      `provider Store must use ${PROVIDER_STORE_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
+    );
+  }
+  requireTimestamp(value.created_at, "provider Store created_at");
+  requireTimestamp(value.updated_at, "provider Store updated_at");
+  requireObject(value.profiles, "provider Store profiles");
+  if (Object.keys(value.profiles).length > 128) {
+    throw new ProviderSchemaError("provider Store has too many profiles");
+  }
+  for (const [name, profile] of Object.entries(value.profiles)) {
+    validateProfileName(name);
+    validateProviderProfile(profile, name);
+  }
+  return value;
+}
+function validateProviderSecrets(value) {
+  requireObject(value, "provider Secret Store");
+  rejectUnknown(value, ["schema", "kind", "updated_at", "secrets"], "provider Secret Store");
+  if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_SECRETS_KIND) {
+    throw new ProviderSchemaError(
+      `provider Secret Store must use ${PROVIDER_SECRETS_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
+    );
+  }
+  requireTimestamp(value.updated_at, "provider Secret Store updated_at");
+  requireObject(value.secrets, "provider Secret Store secrets");
+  for (const [name, secret] of Object.entries(value.secrets)) {
+    validateReferenceName(name, "secret name");
+    requireObject(secret, `secret '${name}'`);
+    rejectUnknown(secret, ["value", "updated_at"], `secret '${name}'`);
+    requireString(secret.value, `secret '${name}' value`, { min: 1, max: 16384 });
+    requireTimestamp(secret.updated_at, `secret '${name}' updated_at`);
+  }
+  return value;
+}
+
+// ../agentctl/failover-schema.mjs
+var FAILOVER_SCHEMA = 1;
+var FAILOVER_KIND = "agentctl-failover-store";
+var RETRY_MODES = Object.freeze(["next_request", "same_request"]);
+var ROUTE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var FailoverSchemaError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "FailoverSchemaError";
+  }
+};
+function plainObject2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function exactKeys(value, allowed, label) {
+  if (!plainObject2(value)) throw new FailoverSchemaError(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      throw new FailoverSchemaError(`${label} contains unsupported field '${key}'`);
+    }
+  }
+}
+function timestamp(value, label) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw new FailoverSchemaError(`${label} must be an ISO timestamp`);
+  }
+  return value;
+}
+function boundedInteger(value, label, minimum, maximum) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new FailoverSchemaError(`${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+function validateRouteName(value, label = "failover route name") {
+  if (typeof value !== "string" || value.length > 64 || !ROUTE_NAME.test(value)) {
+    throw new FailoverSchemaError(`${label} must use lowercase letters, numbers, and single hyphens`);
+  }
+  return value;
+}
+function validateFailoverRoute(value, expectedName = "") {
+  exactKeys(value, [
+    "schema",
+    "name",
+    "description",
+    "profiles",
+    "retry",
+    "circuit"
+  ], "failover route");
+  if (value.schema !== FAILOVER_SCHEMA) {
+    throw new FailoverSchemaError(`failover route schema must be ${FAILOVER_SCHEMA}`);
+  }
+  validateRouteName(value.name);
+  if (expectedName && value.name !== expectedName) {
+    throw new FailoverSchemaError(`failover route '${expectedName}' has a mismatched name`);
+  }
+  if (typeof value.description !== "string" || value.description.length > 500 || /[\u0000-\u001f\u007f]/.test(value.description)) {
+    throw new FailoverSchemaError("failover route description is invalid");
+  }
+  if (!Array.isArray(value.profiles) || value.profiles.length < 2 || value.profiles.length > 8 || new Set(value.profiles).size !== value.profiles.length) {
+    throw new FailoverSchemaError("failover route requires 2-8 unique provider profiles");
+  }
+  for (const profile of value.profiles) validateProfileName(profile, "failover profile");
+  exactKeys(value.retry, [
+    "mode",
+    "max_attempts",
+    "status_codes",
+    "network_errors"
+  ], "failover retry policy");
+  if (!RETRY_MODES.includes(value.retry.mode)) {
+    throw new FailoverSchemaError(`retry mode must be one of: ${RETRY_MODES.join(", ")}`);
+  }
+  boundedInteger(value.retry.max_attempts, "retry max_attempts", 1, value.profiles.length);
+  if (!Array.isArray(value.retry.status_codes) || value.retry.status_codes.length > 32 || new Set(value.retry.status_codes).size !== value.retry.status_codes.length) {
+    throw new FailoverSchemaError("retry status_codes must be a unique array of at most 32 entries");
+  }
+  for (const status of value.retry.status_codes) {
+    boundedInteger(status, "retry status code", 400, 599);
+  }
+  value.retry.status_codes.sort((left, right) => left - right);
+  if (typeof value.retry.network_errors !== "boolean") {
+    throw new FailoverSchemaError("retry network_errors must be boolean");
+  }
+  exactKeys(value.circuit, [
+    "failure_threshold",
+    "recovery_timeout_ms",
+    "half_open_max_requests",
+    "state_retention_days"
+  ], "failover circuit policy");
+  boundedInteger(value.circuit.failure_threshold, "circuit failure_threshold", 1, 20);
+  boundedInteger(value.circuit.recovery_timeout_ms, "circuit recovery_timeout_ms", 1e3, 36e5);
+  boundedInteger(value.circuit.half_open_max_requests, "circuit half_open_max_requests", 1, 5);
+  boundedInteger(value.circuit.state_retention_days, "circuit state_retention_days", 1, 365);
+  return value;
+}
+function validateFailoverStore(value) {
+  exactKeys(value, [
+    "schema",
+    "kind",
+    "created_at",
+    "updated_at",
+    "routes"
+  ], "failover Store");
+  if (value.schema !== FAILOVER_SCHEMA || value.kind !== FAILOVER_KIND) {
+    throw new FailoverSchemaError(
+      `failover Store must use ${FAILOVER_KIND} schema ${FAILOVER_SCHEMA}`
+    );
+  }
+  timestamp(value.created_at, "failover Store created_at");
+  timestamp(value.updated_at, "failover Store updated_at");
+  if (!plainObject2(value.routes) || Object.keys(value.routes).length > 128) {
+    throw new FailoverSchemaError("failover Store routes must be an object with at most 128 entries");
+  }
+  for (const [name, route] of Object.entries(value.routes)) {
+    validateRouteName(name);
+    validateFailoverRoute(route, name);
+  }
+  return value;
+}
+function validateFailoverProviders(route, providerStore) {
+  validateFailoverRoute(structuredClone(route), route.name);
+  validateProviderStore(structuredClone(providerStore));
+  for (const profile of route.profiles) {
+    if (!Object.hasOwn(providerStore.profiles, profile)) {
+      throw new FailoverSchemaError(
+        `failover route '${route.name}' references missing provider profile '${profile}'`
+      );
+    }
+  }
+  return route;
+}
+
+// ../pricing/pricing.mjs
+var PRICING_SCHEMA = 1;
+var PRICING_KIND = "agentctl-pricing-catalog";
+var SCALE_DIGITS = 12;
+var SCALE = 10n ** BigInt(SCALE_DIGITS);
+var DECIMAL_PATTERN = /^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,12})?$/;
+var RATE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var PricingError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PricingError";
+  }
+};
+function plainObject3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function exactKeys2(value, allowed, label) {
+  if (!plainObject3(value)) throw new PricingError(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new PricingError(`${label} contains unsupported field '${key}'`);
+  }
+}
+function timestamp2(value, label) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw new PricingError(`${label} must be an ISO timestamp`);
+  }
+  return value;
+}
+function normalizeDecimal(value, label = "decimal") {
+  if (typeof value !== "string" || !DECIMAL_PATTERN.test(value)) {
+    throw new PricingError(
+      `${label} must be a non-negative decimal string with at most 12 integer and 12 fractional digits`
+    );
+  }
+  const [whole, fraction = ""] = value.split(".");
+  const normalizedFraction = fraction.replace(/0+$/, "");
+  return normalizedFraction ? `${whole}.${normalizedFraction}` : whole;
+}
+function decimalToScaled(value, label = "decimal") {
+  const normalized = normalizeDecimal(value, label);
+  const [whole, fraction = ""] = normalized.split(".");
+  return BigInt(whole) * SCALE + BigInt(fraction.padEnd(SCALE_DIGITS, "0") || "0");
+}
+function validateRateId(value) {
+  if (typeof value !== "string" || value.length > 64 || !RATE_ID_PATTERN.test(value)) {
+    throw new PricingError("rate ID must use lowercase letters, numbers, and single hyphens");
+  }
+  return value;
+}
+function validatePricingRate(value, expectedId = "") {
+  exactKeys2(value, [
+    "schema",
+    "id",
+    "profile",
+    "model",
+    "input_per_million",
+    "output_per_million",
+    "cache_read_per_million",
+    "cache_write_per_million",
+    "multiplier",
+    "effective_at",
+    "expires_at",
+    "source"
+  ], "pricing rate");
+  if (value.schema !== PRICING_SCHEMA) throw new PricingError("pricing rate schema must be 1");
+  validateRateId(value.id);
+  if (expectedId && value.id !== expectedId) throw new PricingError(`pricing rate '${expectedId}' has a mismatched ID`);
+  if (value.profile !== "*") validateProfileName(value.profile, "pricing rate profile");
+  validateModelId(value.model, "pricing rate model");
+  for (const field of [
+    "input_per_million",
+    "output_per_million",
+    "cache_read_per_million",
+    "cache_write_per_million",
+    "multiplier"
+  ]) value[field] = normalizeDecimal(value[field], `pricing rate ${field}`);
+  if (decimalToScaled(value.multiplier) === 0n) {
+    throw new PricingError("pricing rate multiplier must be greater than zero");
+  }
+  timestamp2(value.effective_at, "pricing rate effective_at");
+  if (value.expires_at !== null) {
+    timestamp2(value.expires_at, "pricing rate expires_at");
+    if (Date.parse(value.expires_at) <= Date.parse(value.effective_at)) {
+      throw new PricingError("pricing rate expires_at must be after effective_at");
+    }
+  }
+  if (typeof value.source !== "string" || value.source.length < 1 || value.source.length > 500 || /[\u0000-\u001f\u007f]/.test(value.source)) {
+    throw new PricingError("pricing rate source must be a 1-500 character string");
+  }
+  return value;
+}
+function validatePricingCatalog(value) {
+  exactKeys2(value, [
+    "schema",
+    "kind",
+    "version",
+    "currency",
+    "effective_at",
+    "updated_at",
+    "rates"
+  ], "pricing catalog");
+  if (value.schema !== PRICING_SCHEMA || value.kind !== PRICING_KIND || typeof value.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.version) || typeof value.currency !== "string" || !/^[A-Z]{3}$/.test(value.currency)) {
+    throw new PricingError("pricing catalog identity is invalid");
+  }
+  timestamp2(value.effective_at, "pricing catalog effective_at");
+  timestamp2(value.updated_at, "pricing catalog updated_at");
+  if (!plainObject3(value.rates)) throw new PricingError("pricing catalog rates must be an object");
+  if (Object.keys(value.rates).length > 4096) {
+    throw new PricingError("pricing catalog has more than 4096 rates");
+  }
+  const unique = /* @__PURE__ */ new Set();
+  for (const [id, rate] of Object.entries(value.rates)) {
+    validateRateId(id);
+    validatePricingRate(rate, id);
+    const composite = `${rate.profile}\0${rate.model}\0${rate.effective_at}`;
+    if (unique.has(composite)) {
+      throw new PricingError(
+        `duplicate profile/model/effective_at pricing rate at '${id}'`
+      );
+    }
+    unique.add(composite);
+  }
+  return value;
+}
+
 // ../agentctl/workspace-schema.mjs
-var CURRENT_WORKSPACE_SCHEMA = 2;
+var CURRENT_WORKSPACE_SCHEMA = 3;
 var WORKSPACE_KIND = "agentctl-workspace";
+var WORKSPACE_ATTACHMENT_SCHEMA = 2;
+var WORKSPACE_AGENT_SCHEMA = 1;
+var WorkspaceSchemaError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WorkspaceSchemaError";
+  }
+};
+function plainObject4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function exactKeys3(value, allowed, label) {
+  if (!plainObject4(value)) throw new WorkspaceSchemaError(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      throw new WorkspaceSchemaError(`${label} contains unsupported field '${key}'`);
+    }
+  }
+}
+function newWorkspaceAgentBundle() {
+  return {
+    schema: WORKSPACE_AGENT_SCHEMA,
+    synced_at: null,
+    providers: null,
+    secrets: null,
+    failover: null,
+    pricing: null
+  };
+}
+function validateWorkspaceAgentBundle(bundle) {
+  exactKeys3(bundle, [
+    "schema",
+    "synced_at",
+    "providers",
+    "secrets",
+    "failover",
+    "pricing"
+  ], "Workspace agent bundle");
+  if (bundle.schema !== WORKSPACE_AGENT_SCHEMA) {
+    throw new WorkspaceSchemaError(
+      `Workspace agent bundle schema must be ${WORKSPACE_AGENT_SCHEMA}`
+    );
+  }
+  const empty = [bundle.providers, bundle.secrets, bundle.failover, bundle.pricing].every((value) => value === null);
+  if (empty) {
+    if (bundle.synced_at !== null) {
+      throw new WorkspaceSchemaError("empty Workspace agent bundle must not have synced_at");
+    }
+    return bundle;
+  }
+  if (typeof bundle.synced_at !== "string" || Number.isNaN(Date.parse(bundle.synced_at))) {
+    throw new WorkspaceSchemaError("Workspace agent synced_at is invalid");
+  }
+  if (bundle.providers === null || bundle.secrets === null) {
+    throw new WorkspaceSchemaError(
+      "Workspace agent bundle requires Provider and Secret Stores together"
+    );
+  }
+  validateProviderStore(bundle.providers);
+  validateProviderSecrets(bundle.secrets);
+  if (bundle.failover !== null) {
+    validateFailoverStore(bundle.failover);
+    for (const route of Object.values(bundle.failover.routes)) {
+      validateFailoverProviders(route, bundle.providers);
+    }
+  }
+  if (bundle.pricing !== null) validatePricingCatalog(bundle.pricing);
+  return bundle;
+}
 function normalizeWorkspaceSchema(snapshot) {
-  if (!snapshot || snapshot.schema !== 1 || snapshot.kind !== WORKSPACE_KIND || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || snapshot.presets !== void 0 && (!snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets))) {
+  if (!snapshot || ![1, 2].includes(snapshot.schema) || snapshot.kind !== WORKSPACE_KIND || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || snapshot.presets !== void 0 && (!snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets))) {
     return snapshot;
   }
   const upgraded = structuredClone(snapshot);
   upgraded.schema = CURRENT_WORKSPACE_SCHEMA;
   upgraded.presets ||= {};
   for (const attachment of Object.values(upgraded.stores)) {
-    if (attachment?.schema === 1) attachment.schema = CURRENT_WORKSPACE_SCHEMA;
+    if (attachment?.schema === 1) attachment.schema = WORKSPACE_ATTACHMENT_SCHEMA;
   }
+  upgraded.agent = newWorkspaceAgentBundle();
   return upgraded;
 }
 
@@ -22971,7 +23592,7 @@ function snippetsDirectory(home) {
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
-  if (snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" || typeof snapshot.name !== "string" || !snapshot.name || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || !snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets)) {
+  if (snapshot.schema !== CURRENT_WORKSPACE_SCHEMA || snapshot.kind !== "agentctl-workspace" || typeof snapshot.name !== "string" || !snapshot.name || !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) || !snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets) || !snapshot.agent || typeof snapshot.agent !== "object" || Array.isArray(snapshot.agent)) {
     throw new RemoteWorkspaceError("remote snapshot is not a valid agentctl Workspace");
   }
   for (const field of ["created_at", "updated_at"]) {
@@ -22990,6 +23611,11 @@ function validateWorkspaceSnapshot(snapshot) {
     if (name.length > 64 || preset?.schema !== 2 || preset.name !== name || typeof preset.description !== "string" || preset.description.length > 500 || typeof preset.mcp !== "string" || preset.mcp.length > 64 || preset.mcp.includes("..") || !MCP_NAME.test(preset.mcp) || typeof preset.skills !== "string" || !SKILL_NAME.test(preset.skills) || preset.skills.length > 64 || typeof preset.prompt !== "string" || preset.prompt.length > 64 || preset.prompt.includes("..") || !MCP_NAME.test(preset.prompt)) {
       throw new RemoteWorkspaceError(`Workspace development preset '${name}' is invalid`);
     }
+  }
+  try {
+    validateWorkspaceAgentBundle(snapshot.agent);
+  } catch (error) {
+    throw new RemoteWorkspaceError(`Workspace agent bundle is invalid: ${error.message}`);
   }
   return snapshot;
 }
@@ -23386,8 +24012,8 @@ function createRemoteWorkspace({
       schema: 2,
       mode: "workspace",
       source: "cloud",
-      remote_schema: workspace.source_schema || 2,
-      migration_pending: workspace.source_schema === 1,
+      remote_schema: workspace.source_schema || CURRENT_WORKSPACE_SCHEMA,
+      migration_pending: workspace.source_schema !== CURRENT_WORKSPACE_SCHEMA,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -23409,7 +24035,17 @@ function createRemoteWorkspace({
         childStoreIds.set(type, attachment.config.store_id);
         return [type, store];
       })),
-      presets: Object.fromEntries(Object.entries(workspace.presets).map(([name, preset]) => [name, publicPreset(name, preset)]))
+      presets: Object.fromEntries(Object.entries(workspace.presets).map(([name, preset]) => [name, publicPreset(name, preset)])),
+      agent: {
+        synced: workspace.agent.providers !== null,
+        synced_at: workspace.agent.synced_at,
+        profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
+        secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
+        failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
+        pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
+        pricing_version: workspace.agent.pricing?.version || null,
+        secret_values: "hidden"
+      }
     };
     return structuredClone(publicIndex);
   }

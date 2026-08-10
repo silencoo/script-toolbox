@@ -6,8 +6,9 @@ no-migration upgrade, but the product-neutral service now backs:
 - `mcpctl` catalogs, inherited profiles, and encrypted secret state; and
 - `skillsctl` skill directories, inherited packs, and target overrides;
 - `promptctl` persistent Claude/Codex Markdown and reusable snippets; and
-- `agentctl workspace` encrypted manifests that bind those three Store types
-  and shared development presets behind one master recovery code.
+- `agentctl workspace` encrypted manifests that bind those three Store types,
+  shared development presets, and the portable Provider/Secret/failover/pricing
+  bundle behind one master recovery code.
 
 Each logical store has a separate random ID, write capability, encryption
 root, and recovery code. The Worker is product-neutral: it stores immutable,
@@ -17,16 +18,17 @@ snapshot decryption key.
 The bundled Web UI serves from the same Worker. It is a Vite/React application
 built from the actual shadcn/ui component source under `web/src/components/ui`,
 with Tailwind CSS design tokens and persisted Light, Dark, and System themes. A
-`toolbox1_…` code unlocks one Workspace with MCP, Skills, Prompts, and Presets
-tabs;
+`toolbox1_…` code unlocks one Workspace with Providers, MCP, Skills, Prompts,
+and Presets tabs;
 the three isolated recovery-code formats still open a single Store directly.
 Decryption and encryption use Web Crypto in the browser, and recovery material
 is kept in current-tab `sessionStorage`: it survives a refresh, but clicking
 Lock or closing the tab clears it. It is never written to persistent
 `localStorage` or sent to the Worker. Unsaved decrypted edits trigger the
 browser's leave-page confirmation before a refresh or tab close.
-The UI supports search, sorting, profile/pack membership, prompt and snippet editing,
-MCP provider inspection, masked MCP Secret editing, version restore, and JSON
+The UI supports search, sorting, profile/pack membership, prompt and snippet
+editing, MCP provider inspection, masked MCP and Provider Secret editing,
+strict Provider/failover/pricing catalog editing, version restore, and JSON
 import/export. MCP exports are redacted by default and preserve the current
 tab's encrypted Secret values when re-imported. Skills and Prompt exports are
 still decrypted plaintext and must be handled as sensitive data.
@@ -84,8 +86,9 @@ The Worker:
 
 Anyone with an isolated recovery code can decrypt and update that child Store.
 Anyone with the master Workspace code can recover the capabilities for every
-attached child Store and edit shared preset definitions, so keep it offline
-with the same care as all three child codes combined. The `CREATE_TOKEN`
+attached child Store, decrypt Provider Secret values, and edit shared catalogs,
+so keep it offline with the same care as all child codes and Provider
+credentials combined. The `CREATE_TOKEN`
 cannot read or decrypt any Store. Remove it
 after creating all required Stores, and temporarily recreate it only while
 provisioning another one.
@@ -190,9 +193,12 @@ agentctl workspace attach prompts
 agentctl workspace status
 ```
 
-The current Workspace manifest is strict schema 2 and includes an encrypted
-`presets` object. This pre-adoption format intentionally does not migrate or
-accept schema 1 manifests.
+The current Workspace manifest is strict schema 3. It includes the encrypted
+`presets` object plus an optional agent bundle for portable Provider profiles,
+Provider Secret values, failover routes, and versioned pricing. The browser
+normalizes legacy schema 1 and 2 manifests in memory without mutating their
+immutable remote versions; the CLI exposes an explicit preview-first migration.
+Generated client files and proxy/runtime state are never stored in Workspace.
 
 The child Stores and their version histories are not migrated or duplicated.
 Confirm all backups before disabling new-Store creation:

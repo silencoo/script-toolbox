@@ -12,7 +12,7 @@ import {
 import { ensurePromptSnippets } from "@/lib/prompt-model.js"
 
 export const SECTION_ORDER = ["mcp", "skills", "prompts"]
-export const WORKSPACE_VIEW_ORDER = [...SECTION_ORDER, "presets"]
+export const WORKSPACE_VIEW_ORDER = ["providers", ...SECTION_ORDER, "presets"]
 
 export const SECTION_META = Object.freeze({
   mcp: {
@@ -94,11 +94,15 @@ export async function loadSection(type, config, protocol) {
 }
 
 export function validateWorkspaceSnapshot(snapshot, masterConfig) {
-  if (!snapshot || snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" ||
+  snapshot = normalizeWorkspaceSnapshot(snapshot)
+  exactKeys(snapshot, [
+    "schema", "kind", "name", "created_at", "updated_at", "stores", "presets", "agent",
+  ], "Workspace")
+  if (!snapshot || snapshot.schema !== 3 || snapshot.kind !== "agentctl-workspace" ||
       typeof snapshot.name !== "string" || snapshot.name.length < 1 ||
       snapshot.name.length > 200 || !isObject(snapshot.stores) ||
       !validTimestamp(snapshot.created_at) || !validTimestamp(snapshot.updated_at) ||
-      !isObject(snapshot.presets)) {
+      !isObject(snapshot.presets) || !isObject(snapshot.agent)) {
     throw new Error("Encrypted Workspace manifest is invalid.")
   }
   for (const [type, attachment] of Object.entries(snapshot.stores)) {
@@ -121,7 +125,259 @@ export function validateWorkspaceSnapshot(snapshot, masterConfig) {
       throw new Error("Workspace development preset '" + name + "' is invalid.")
     }
   }
+  validateAgentBundle(snapshot.agent)
   return snapshot
+}
+
+function emptyAgentBundle() {
+  return {
+    schema: 1,
+    synced_at: null,
+    providers: null,
+    secrets: null,
+    failover: null,
+    pricing: null,
+  }
+}
+
+export function normalizeWorkspaceSnapshot(snapshot) {
+  if (!snapshot || ![1, 2].includes(snapshot.schema) ||
+      snapshot.kind !== "agentctl-workspace" || !isObject(snapshot.stores) ||
+      (snapshot.presets !== undefined && !isObject(snapshot.presets))) {
+    return snapshot
+  }
+  const upgraded = structuredClone(snapshot)
+  upgraded.schema = 3
+  upgraded.presets ||= {}
+  for (const attachment of Object.values(upgraded.stores)) {
+    if (attachment?.schema === 1) attachment.schema = 2
+  }
+  upgraded.agent = emptyAgentBundle()
+  return upgraded
+}
+
+function validateAgentBundle(bundle) {
+  exactKeys(bundle, [
+    "schema", "synced_at", "providers", "secrets", "failover", "pricing",
+  ], "Workspace agent bundle")
+  if (bundle.schema !== 1) throw new Error("Workspace agent bundle schema is invalid.")
+  const empty = [bundle.providers, bundle.secrets, bundle.failover, bundle.pricing]
+    .every((value) => value === null)
+  if (empty) {
+    if (bundle.synced_at !== null) throw new Error("Empty agent bundle has an invalid timestamp.")
+    return bundle
+  }
+  if (!validTimestamp(bundle.synced_at) || !bundle.providers || !bundle.secrets) {
+    throw new Error("Workspace Provider and Secret Stores must be synchronized together.")
+  }
+  validateProviderStore(bundle.providers)
+  validateProviderSecrets(bundle.secrets)
+  if (bundle.failover !== null) validateFailoverStore(bundle.failover, bundle.providers)
+  if (bundle.pricing !== null) validatePricingCatalog(bundle.pricing)
+  return bundle
+}
+
+function validateProviderStore(store) {
+  exactKeys(store, ["schema", "kind", "created_at", "updated_at", "profiles"], "Provider Store")
+  if (store.schema !== 1 || store.kind !== "agentctl-provider-store" ||
+      !validTimestamp(store.created_at) || !validTimestamp(store.updated_at) ||
+      !isObject(store.profiles) || Object.keys(store.profiles).length > 128) {
+    throw new Error("Workspace Provider Store is invalid.")
+  }
+  for (const [name, profile] of Object.entries(store.profiles)) {
+    if (!validName(name)) throw new Error(`Provider profile '${name}' has an invalid name.`)
+    validateProviderProfile(profile, name)
+  }
+}
+
+function validateProviderProfile(profile, name) {
+  exactKeys(profile, [
+    "schema", "name", "description", "protocol", "endpoint", "auth", "models",
+    "targets", "platforms",
+  ], `Provider profile '${name}'`)
+  if (profile.schema !== 1 || profile.name !== name ||
+      !plainText(profile.description, 0, 500) || !validProviderProtocol(profile.protocol)) {
+    throw new Error(`Provider profile '${name}' is invalid.`)
+  }
+  validateProviderEndpoint(profile.endpoint, `Provider profile '${name}' endpoint`)
+  validateProviderAuth(profile.auth, false, `Provider profile '${name}' auth`)
+  validateProviderModels(profile.models, name)
+  if (!isObject(profile.targets) || !isObject(profile.platforms)) {
+    throw new Error(`Provider profile '${name}' overlays are invalid.`)
+  }
+  for (const [target, override] of Object.entries(profile.targets)) {
+    if (!validProviderTarget(target)) throw new Error(`Provider target '${target}' is invalid.`)
+    validateProviderOverride(override, `Provider target '${target}'`)
+  }
+  for (const [platform, overlay] of Object.entries(profile.platforms)) {
+    if (!["darwin", "linux", "windows"].includes(platform) || !isObject(overlay)) {
+      throw new Error(`Provider platform '${platform}' is invalid.`)
+    }
+    exactKeys(overlay, ["targets"], `Provider platform '${platform}'`)
+    if (!isObject(overlay.targets) || Object.keys(overlay.targets).length === 0) {
+      throw new Error(`Provider platform '${platform}' targets are invalid.`)
+    }
+    for (const [target, override] of Object.entries(overlay.targets)) {
+      if (!validProviderTarget(target)) throw new Error(`Provider target '${target}' is invalid.`)
+      validateProviderOverride(override, `Provider platform '${platform}/${target}'`)
+    }
+  }
+}
+
+function validateProviderOverride(override, label) {
+  exactKeys(override, ["enabled", "endpoint", "protocol", "auth", "model"], label)
+  if (Object.keys(override).length === 0 ||
+      (override.enabled !== undefined && typeof override.enabled !== "boolean") ||
+      (override.protocol !== undefined && !validProviderProtocol(override.protocol)) ||
+      (override.model !== undefined && !providerText(override.model, 240))) {
+    throw new Error(`${label} is invalid.`)
+  }
+  if (override.endpoint !== undefined) validateProviderEndpoint(override.endpoint, `${label} endpoint`)
+  if (override.auth !== undefined) validateProviderAuth(override.auth, true, `${label} auth`)
+}
+
+function validateProviderAuth(auth, partial, label) {
+  exactKeys(auth, ["mode", "secret"], label)
+  const modes = ["bearer", "x-api-key", "x-goog-api-key", "none"]
+  if ((!partial || auth.mode !== undefined) && !modes.includes(auth.mode)) {
+    throw new Error(`${label} mode is invalid.`)
+  }
+  if (auth.secret !== undefined && !validSecretReference(auth.secret)) {
+    throw new Error(`${label} Secret reference is invalid.`)
+  }
+  if (!partial && auth.mode !== "none" && auth.secret === undefined) {
+    throw new Error(`${label} requires a Secret reference.`)
+  }
+  if (auth.mode === "none" && auth.secret !== undefined) {
+    throw new Error(`${label} cannot reference a Secret in none mode.`)
+  }
+  if (partial && Object.keys(auth).length === 0) throw new Error(`${label} cannot be empty.`)
+}
+
+function validateProviderModels(models, profile) {
+  exactKeys(models, ["default", "aliases"], `Provider profile '${profile}' models`)
+  if (!providerText(models.default, 240) || !isObject(models.aliases) ||
+      Object.keys(models.aliases).length > 256) {
+    throw new Error(`Provider profile '${profile}' models are invalid.`)
+  }
+  for (const [requested, outbound] of Object.entries(models.aliases)) {
+    if (!providerText(requested, 240) || !providerText(outbound, 240)) {
+      throw new Error(`Provider profile '${profile}' model alias is invalid.`)
+    }
+  }
+  for (const start of [models.default, ...Object.keys(models.aliases)]) {
+    const seen = new Set()
+    let current = start
+    while (Object.hasOwn(models.aliases, current)) {
+      if (seen.has(current)) throw new Error(`Provider profile '${profile}' has a model alias cycle.`)
+      seen.add(current)
+      current = models.aliases[current]
+    }
+  }
+}
+
+function validateProviderEndpoint(value, label) {
+  if (typeof value !== "string" || value.length < 8 || value.length > 2048) {
+    throw new Error(`${label} is invalid.`)
+  }
+  let endpoint
+  try { endpoint = new URL(value) } catch { throw new Error(`${label} is invalid.`) }
+  const loopback = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(endpoint.hostname)
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username ||
+      endpoint.password || endpoint.hash || (endpoint.protocol !== "https:" && !loopback)) {
+    throw new Error(`${label} must use HTTPS unless it is loopback-only.`)
+  }
+  for (const key of endpoint.searchParams.keys()) {
+    if (/^(?:api[-_]?key|access[-_]?token|token|secret|auth|authorization|signature|sig|credential)$/i.test(key)) {
+      throw new Error(`${label} must not contain credentials.`)
+    }
+  }
+}
+
+function validateProviderSecrets(store) {
+  exactKeys(store, ["schema", "kind", "updated_at", "secrets"], "Provider Secret Store")
+  if (store.schema !== 1 || store.kind !== "agentctl-provider-secrets" ||
+      !validTimestamp(store.updated_at) || !isObject(store.secrets)) {
+    throw new Error("Workspace Provider Secret Store is invalid.")
+  }
+  for (const [name, secret] of Object.entries(store.secrets)) {
+    exactKeys(secret, ["value", "updated_at"], `Provider Secret '${name}'`)
+    if (!validSecretReference(name) || !plainText(secret.value, 1, 16384) ||
+        !validTimestamp(secret.updated_at)) {
+      throw new Error(`Provider Secret '${name}' is invalid.`)
+    }
+  }
+}
+
+function validateFailoverStore(store, providers) {
+  exactKeys(store, ["schema", "kind", "created_at", "updated_at", "routes"], "Failover Store")
+  if (store.schema !== 1 || store.kind !== "agentctl-failover-store" ||
+      !validTimestamp(store.created_at) || !validTimestamp(store.updated_at) ||
+      !isObject(store.routes) || Object.keys(store.routes).length > 128) {
+    throw new Error("Workspace failover Store is invalid.")
+  }
+  for (const [name, route] of Object.entries(store.routes)) {
+    exactKeys(route, ["schema", "name", "description", "profiles", "retry", "circuit"], `Failover route '${name}'`)
+    if (!validName(name) || route.schema !== 1 || route.name !== name ||
+        !plainText(route.description, 0, 500) || !Array.isArray(route.profiles) ||
+        route.profiles.length < 2 || route.profiles.length > 8 ||
+        new Set(route.profiles).size !== route.profiles.length ||
+        route.profiles.some((profile) => !validName(profile) || !providers.profiles[profile])) {
+      throw new Error(`Failover route '${name}' is invalid.`)
+    }
+    exactKeys(route.retry, ["mode", "max_attempts", "status_codes", "network_errors"], `Failover route '${name}' retry`)
+    if (!["next_request", "same_request"].includes(route.retry.mode) ||
+        !boundedInteger(route.retry.max_attempts, 1, route.profiles.length) ||
+        !Array.isArray(route.retry.status_codes) || route.retry.status_codes.length > 32 ||
+        new Set(route.retry.status_codes).size !== route.retry.status_codes.length ||
+        route.retry.status_codes.some((status) => !boundedInteger(status, 400, 599)) ||
+        typeof route.retry.network_errors !== "boolean") {
+      throw new Error(`Failover route '${name}' retry policy is invalid.`)
+    }
+    exactKeys(route.circuit, [
+      "failure_threshold", "recovery_timeout_ms", "half_open_max_requests", "state_retention_days",
+    ], `Failover route '${name}' circuit`)
+    if (!boundedInteger(route.circuit.failure_threshold, 1, 20) ||
+        !boundedInteger(route.circuit.recovery_timeout_ms, 1000, 3600000) ||
+        !boundedInteger(route.circuit.half_open_max_requests, 1, 5) ||
+        !boundedInteger(route.circuit.state_retention_days, 1, 365)) {
+      throw new Error(`Failover route '${name}' circuit policy is invalid.`)
+    }
+  }
+}
+
+function validatePricingCatalog(catalog) {
+  exactKeys(catalog, [
+    "schema", "kind", "version", "currency", "effective_at", "updated_at", "rates",
+  ], "Pricing catalog")
+  if (catalog.schema !== 1 || catalog.kind !== "agentctl-pricing-catalog" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(catalog.version || "") ||
+      !/^[A-Z]{3}$/.test(catalog.currency || "") || !validTimestamp(catalog.effective_at) ||
+      !validTimestamp(catalog.updated_at) || !isObject(catalog.rates) ||
+      Object.keys(catalog.rates).length > 4096) {
+    throw new Error("Workspace pricing catalog is invalid.")
+  }
+  const unique = new Set()
+  for (const [id, rate] of Object.entries(catalog.rates)) {
+    exactKeys(rate, [
+      "schema", "id", "profile", "model", "input_per_million", "output_per_million",
+      "cache_read_per_million", "cache_write_per_million", "multiplier", "effective_at",
+      "expires_at", "source",
+    ], `Pricing rate '${id}'`)
+    if (!validName(id) || rate.schema !== 1 || rate.id !== id ||
+        (rate.profile !== "*" && !validName(rate.profile)) || !providerText(rate.model, 240) ||
+        ![rate.input_per_million, rate.output_per_million, rate.cache_read_per_million,
+          rate.cache_write_per_million, rate.multiplier].every(validDecimal) ||
+        /^0(?:\.0+)?$/.test(rate.multiplier) || !validTimestamp(rate.effective_at) ||
+        (rate.expires_at !== null && (!validTimestamp(rate.expires_at) ||
+          Date.parse(rate.expires_at) <= Date.parse(rate.effective_at))) ||
+        !plainText(rate.source, 1, 500)) {
+      throw new Error(`Pricing rate '${id}' is invalid.`)
+    }
+    const key = `${rate.profile}\0${rate.model}\0${rate.effective_at}`
+    if (unique.has(key)) throw new Error(`Pricing rate '${id}' duplicates an effective interval.`)
+    unique.add(key)
+  }
 }
 
 export function validateSnapshot(protocol, snapshot) {
@@ -334,6 +590,46 @@ async function sha256Hex(value) {
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function exactKeys(value, allowed, label) {
+  if (!isObject(value)) throw new Error(`${label} must be an object.`)
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new Error(`${label} contains unsupported field '${key}'.`)
+  }
+}
+
+function plainText(value, minimum, maximum) {
+  return typeof value === "string" && value.length >= minimum && value.length <= maximum &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+}
+
+function providerText(value, maximum) {
+  return plainText(value, 1, maximum)
+}
+
+function validSecretReference(value) {
+  return typeof value === "string" && value.length <= 96 &&
+    /^[A-Za-z][A-Za-z0-9._-]*$/.test(value) && !value.includes("..")
+}
+
+function validProviderProtocol(value) {
+  return [
+    "anthropic_messages", "openai_responses", "openai_chat", "google_generative",
+  ].includes(value)
+}
+
+function validProviderTarget(value) {
+  return ["claude", "codex", "opencode", "pi"].includes(value)
+}
+
+function boundedInteger(value, minimum, maximum) {
+  return Number.isInteger(value) && value >= minimum && value <= maximum
+}
+
+function validDecimal(value) {
+  return typeof value === "string" &&
+    /^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,12})?$/.test(value)
 }
 
 function validName(value) {

@@ -33,6 +33,7 @@ import type {
   SectionType,
   StoreSession,
   WorkspaceSnapshot,
+  WorkspaceView,
 } from "@/lib/types"
 
 const initialState: AppState = {
@@ -183,9 +184,11 @@ export function App() {
       }
     }))
 
-    const activeView: SectionType = sectionOrder.find((type) => sections[type]?.snapshot) ||
-      sectionOrder.find((type) => workspaceSnapshot.stores[type]) ||
-      "mcp"
+    const activeView: WorkspaceView = workspaceSnapshot.agent.providers
+      ? "providers"
+      : sectionOrder.find((type) => sections[type]?.snapshot) ||
+        sectionOrder.find((type) => workspaceSnapshot.stores[type]) ||
+        "providers"
 
     return {
       mode: "workspace",

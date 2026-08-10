@@ -1,5 +1,5 @@
 export type SectionType = "mcp" | "skills" | "prompts"
-export type WorkspaceView = SectionType | "presets"
+export type WorkspaceView = SectionType | "providers" | "presets"
 export type WorkspaceMode = "workspace" | "isolated" | null
 
 export interface Protocol {
@@ -152,6 +152,73 @@ export interface WorkspaceAttachment {
   config: RemoteConfig
 }
 
+export type ProviderProtocol =
+  | "anthropic_messages"
+  | "openai_responses"
+  | "openai_chat"
+  | "google_generative"
+
+export type ProviderAuthMode = "bearer" | "x-api-key" | "x-goog-api-key" | "none"
+
+export interface ProviderProfile {
+  schema: 1
+  name: string
+  description: string
+  protocol: ProviderProtocol
+  endpoint: string
+  auth: { mode: ProviderAuthMode; secret?: string }
+  models: { default: string; aliases: Record<string, string> }
+  targets: Record<string, unknown>
+  platforms: Record<string, unknown>
+}
+
+export interface ProviderStore {
+  schema: 1
+  kind: "agentctl-provider-store"
+  created_at: string
+  updated_at: string
+  profiles: Record<string, ProviderProfile>
+}
+
+export interface ProviderSecret {
+  value: string
+  updated_at: string
+}
+
+export interface ProviderSecretsStore {
+  schema: 1
+  kind: "agentctl-provider-secrets"
+  updated_at: string
+  secrets: Record<string, ProviderSecret>
+}
+
+export interface FailoverStore {
+  schema: 1
+  kind: "agentctl-failover-store"
+  created_at: string
+  updated_at: string
+  routes: Record<string, unknown>
+}
+
+export interface PricingCatalog {
+  schema: 1
+  kind: "agentctl-pricing-catalog"
+  version: string
+  currency: string
+  effective_at: string
+  updated_at: string
+  rates: Record<string, unknown>
+}
+
+export interface AgentWorkspaceBundle {
+  schema: 1
+  synced_at: string | null
+  providers: ProviderStore | null
+  secrets: ProviderSecretsStore | null
+  failover: FailoverStore | null
+  pricing: PricingCatalog | null
+}
+
 export interface DevelopmentPreset {
   schema: 2
   name: string
@@ -162,13 +229,14 @@ export interface DevelopmentPreset {
 }
 
 export interface WorkspaceSnapshot {
-  schema: 2
+  schema: 3
   kind: "agentctl-workspace"
   name: string
   created_at: string
   updated_at: string
   stores: Partial<Record<SectionType, WorkspaceAttachment>>
   presets: Record<string, DevelopmentPreset>
+  agent: AgentWorkspaceBundle
 }
 
 export interface AppState {

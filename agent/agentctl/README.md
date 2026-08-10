@@ -385,15 +385,18 @@ fail.
 
 The default recovery experience uses one `toolbox1_…` Workspace code. Its
 encrypted manifest contains the capabilities for attached MCP, Skills, and
-Prompts Stores plus the shared development-preset catalog. Unlocking the
-Worker UI once opens MCP, Skills, Prompts, and Presets tabs. Child
-capabilities are never sent to the Worker in plaintext.
+Prompts Stores, the shared development-preset catalog, and an optional agent
+bundle: portable Provider profiles, Provider Secret values, failover routes,
+and the versioned pricing catalog. Unlocking the Worker UI once opens
+Providers, MCP, Skills, Prompts, and Presets tabs. Child capabilities and
+Provider Secret values are never sent to the Worker in plaintext.
 
-Workspace manifests and development-preset catalogs are written as strict
-schema 2. Legacy schema 1 Workspace manifests are normalized to schema 2 in
-memory so recovery and read-only browsing continue to work; the encrypted
-remote version remains untouched until an explicit attach, detach, or preset
-write creates a new schema 2 version.
+Workspace manifests are written as strict schema 3; child attachments and
+development presets retain their schema 2 formats. Legacy Workspace schemas 1
+and 2 are normalized to schema 3 in memory so recovery and read-only browsing
+continue to work. The encrypted remote version remains untouched until an
+explicit migration or another Workspace mutation creates a new schema 3
+version.
 
 Preview or explicitly persist that compatibility conversion as a new immutable
 remote version:
@@ -403,8 +406,37 @@ agentctl workspace migrate
 agentctl workspace migrate --yes
 ```
 
-The preview is read-only. `--yes` uploads schema 2 while retaining the previous
-schema 1 version in Workspace history.
+The preview is read-only. `--yes` uploads schema 3 while retaining the previous
+schema 1 or 2 version in Workspace history.
+
+Synchronize the portable agent catalogs independently of MCP, Skills, Prompts,
+and Presets:
+
+```bash
+# Inspect redacted local/remote counts.
+agentctl workspace agent status
+
+# Preview, then replace only the remote agent bundle from this machine.
+agentctl workspace agent push
+agentctl workspace agent push --yes
+
+# Preview, then merge remote catalogs into another machine.
+agentctl workspace agent pull
+agentctl workspace agent pull --yes
+
+# Restore the exact remote catalog set, including removal of optional local
+# failover/pricing files that are absent remotely.
+agentctl workspace agent pull --replace --yes
+```
+
+The default pull is merge-safe and rejects conflicting profiles or Secret
+references; `--replace` is the explicit exact-restore mode. Secret values are
+end-to-end encrypted, restored to an owner-only local file, and never included
+in status, previews, plans, or normal exports. Provider selections, rendered
+Claude/Codex/OpenCode/Pi configuration, proxy capability/configuration, ports,
+PIDs, logs, usage rows, and circuit counters stay device-local. After pulling,
+run `agentctl provider plan/apply` for the chosen profile, target, and current
+operating-system overlay.
 
 Existing isolated modes remain available for compartmentalization and
 break-glass recovery:
@@ -456,14 +488,17 @@ agentctl workspace restore --recovery-file /secure/toolbox-recovery-code
 ```
 
 `workspace restore` restores only the local `toolbox1_` capability. It does not
-copy MCP, Skills, Prompt, or Preset catalogs into their normal local Stores.
+copy MCP, Skills, Prompt, Preset, or Provider catalogs into their normal local
+Stores. Use `agentctl workspace agent pull` explicitly for the portable agent
+bundle.
 After recovery, the TUI queries version metadata from the endpoint and lazily
 decrypts a child Store only when its section is opened. Plans remain in memory;
 an apply writes only the chosen selection and its dependencies to
 `~/.local/share/agentctl/workspaces/<workspace-store-id>/` (or the platform data
-directory on Windows), then invokes the existing controller transaction. At
-this stage the Provider Store remains an independently exportable local Store;
-generated provider configuration always remains device-local.
+directory on Windows), then invokes the existing controller transaction.
+Provider catalogs remain independently exportable local Stores even when they
+are also backed up in Workspace; generated provider configuration always
+remains device-local.
 
 ## Standalone PATH commands
 

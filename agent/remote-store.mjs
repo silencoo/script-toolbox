@@ -205,11 +205,17 @@ async function listRemoteVersions(configOrPath, protocol, limit = 100) {
   return page;
 }
 
-async function uploadRemoteSnapshot(configOrPath, protocol, snapshot) {
+async function uploadRemoteSnapshot(configOrPath, protocol, snapshot, options = {}) {
   const config = await resolveConfig(configOrPath);
   validateProtocol(protocol);
-  const status = await getRemoteStatus(config, protocol);
-  const baseVersion = status.latest === null ? "none" : status.latest.version;
+  let baseVersion;
+  if (Object.hasOwn(options, "baseVersion")) {
+    baseVersion = options.baseVersion;
+    if (baseVersion !== "none") validateVersionId(baseVersion);
+  } else {
+    const status = await getRemoteStatus(config, protocol);
+    baseVersion = status.latest === null ? "none" : status.latest.version;
+  }
   const envelope = encryptSnapshot(config, protocol, snapshot);
   const response = await authenticatedRequest(
     config,

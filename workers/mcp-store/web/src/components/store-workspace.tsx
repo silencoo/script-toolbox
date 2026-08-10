@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner"
 
 import { StoreInspector, type MutateSession } from "@/components/store-inspector"
+import { AgentWorkspace } from "@/components/agent-workspace"
 import { PresetWorkspace } from "@/components/preset-workspace"
 import { SnippetWorkspace } from "@/components/snippet-workspace"
 import { VersionsDialog } from "@/components/versions-dialog"
@@ -79,6 +80,7 @@ import {
 } from "@/lib/mcp-model.js"
 import {
   SECTION_META,
+  SECTION_ORDER,
   WORKSPACE_VIEW_ORDER,
   collectionNamesFor,
   resolvePack,
@@ -117,9 +119,10 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   const [saving, setSaving] = useState(false)
   const [promptSurface, setPromptSurface] = useState<"profiles" | "snippets">("profiles")
   const fileInput = useRef<HTMLInputElement>(null)
-  const session = state.activeView === "presets"
-    ? undefined
-    : state.sections[state.activeView]
+  const sectionView = SECTION_ORDER.includes(state.activeView)
+    ? state.activeView as SectionType
+    : null
+  const session = sectionView ? state.sections[sectionView] : undefined
 
   function updateActiveSession(
     mutator: (next: StoreSession) => void,
@@ -127,8 +130,9 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   ) {
     setState((current) => {
       const active = current.activeView
-      if (active === "presets") return current
-      const existing = current.sections[active]
+      if (!SECTION_ORDER.includes(active)) return current
+      const section = active as SectionType
+      const existing = current.sections[section]
       if (!existing) return current
       const next = { ...existing } as StoreSession
       mutator(next)
@@ -138,7 +142,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
       }
       return {
         ...current,
-        sections: { ...current.sections, [active]: next },
+        sections: { ...current.sections, [section]: next },
       }
     })
   }
@@ -153,6 +157,17 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
     setState((current) => ({ ...current, activeView: value }))
   }
 
+  if (state.mode === "workspace" && state.activeView === "providers") {
+    return (
+      <AgentWorkspace
+        state={state}
+        setState={setState}
+        onLock={onLock}
+        onViewChange={changeSection}
+      />
+    )
+  }
+
   if (state.mode === "workspace" && state.activeView === "presets") {
     return (
       <PresetWorkspace
@@ -165,7 +180,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   }
 
   if (!session?.snapshot) {
-    const type = state.activeView as SectionType
+    const type = sectionView as SectionType
     return (
       <main id="main" className="mx-auto min-h-[calc(100svh-3.5rem)] w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
         <WorkspaceTabs state={state} value={state.activeView} onValueChange={changeSection} />

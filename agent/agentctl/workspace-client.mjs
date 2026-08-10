@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { lstat, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  unlink
+} from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
   MCP_REMOTE_PROTOCOL,
@@ -25,9 +35,42 @@ import {
 } from "../remote-store.mjs";
 import {
   CURRENT_WORKSPACE_SCHEMA,
+  WORKSPACE_AGENT_SCHEMA,
+  WORKSPACE_ATTACHMENT_SCHEMA,
   WORKSPACE_KIND,
-  normalizeWorkspaceSchema
+  WORKSPACE_PRESET_SCHEMA,
+  WorkspaceSchemaError,
+  newWorkspaceAgentBundle,
+  normalizeWorkspaceSchema,
+  validateWorkspaceAgentBundle
 } from "./workspace-schema.mjs";
+import {
+  ProviderClientError,
+  loadProviderSecrets,
+  loadProviderStore,
+  providerDefaults
+} from "./provider-client.mjs";
+import {
+  ProviderSchemaError,
+  validateProviderSecrets,
+  validateProviderStore
+} from "./provider-schema.mjs";
+import {
+  FailoverClientError,
+  failoverDefaults,
+  loadFailoverStore
+} from "./failover-client.mjs";
+import {
+  FailoverSchemaError,
+  validateFailoverProviders,
+  validateFailoverStore
+} from "./failover-schema.mjs";
+import {
+  PricingClientError,
+  loadPricingCatalog,
+  pricingDefaults
+} from "./pricing-client.mjs";
+import { PricingError, validatePricingCatalog } from "../pricing/pricing.mjs";
 
 const SCHEMA = CURRENT_WORKSPACE_SCHEMA;
 const STORE_TYPES = Object.freeze(["mcp", "skills", "prompts"]);
@@ -46,7 +89,7 @@ class WorkspaceError extends Error {
 }
 
 function usage() {
-  process.stdout.write(`agentctl workspace — one recovery code for MCP, Skills, Prompts, and Presets
+  process.stdout.write(`agentctl workspace — encrypted recovery for portable agent catalogs
 
 Usage:
   agentctl workspace init --endpoint <url> [--create-token-file <file>] [--force]
@@ -57,6 +100,7 @@ Usage:
   agentctl workspace restore [--force]
   agentctl workspace restore --recovery-file <file> [--force]
   agentctl workspace migrate [--yes] [--json]
+  agentctl workspace agent <status|push|pull> [--replace] [--yes] [--json]
   agentctl workspace versions [--limit <1-100>]
   agentctl workspace ui <status|enable|disable>
 
@@ -66,16 +110,28 @@ Options:
   --remote-config <file>     Isolated child Store capability to attach.
   --recovery-file <file>     Read the toolbox1 recovery code from a private
                              one-line file instead of prompting securely.
-  --yes, -y                  Confirm an explicit Workspace migration write.
+  --provider-store <file>    Local portable Provider Store.
+  --provider-secrets <file>  Local owner-only provider Secret Store.
+  --failover-store <file>    Local portable failover route Store.
+  --pricing <file>           Local versioned pricing catalog.
+  --replace                  Pull the remote agent bundle as the exact local
+                             catalog set instead of merging safely.
+  --yes, -y                  Apply a previewed Workspace migration or agent
+                             catalog synchronization.
 
-The Workspace snapshot stores child Store capabilities and development preset
-definitions only inside its own end-to-end encrypted payload. Existing
-isolated recovery codes remain valid.
+The Workspace snapshot stores child Store capabilities, development presets,
+and the agent provider bundle only inside its own end-to-end encrypted
+payload. Provider Secret values are restored locally but never printed.
+Generated client configs, runtime state, circuit counters, and logs are never
+included. Existing isolated recovery codes remain valid.
 `);
 }
 
 function defaults() {
   const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const providers = providerDefaults();
+  const failover = failoverDefaults();
+  const pricing = pricingDefaults();
   return {
     workspaceConfig: process.env.AGENTCTL_WORKSPACE_CONFIG ||
       join(configHome, "agentctl", "workspace-remote.json"),
@@ -83,7 +139,11 @@ function defaults() {
       mcp: process.env.MCPCTL_REMOTE_CONFIG || join(configHome, "mcpctl", "remote.json"),
       skills: process.env.SKILLSCTL_REMOTE_CONFIG || join(configHome, "skillsctl", "remote.json"),
       prompts: process.env.PROMPTCTL_REMOTE_CONFIG || join(configHome, "promptctl", "remote.json")
-    }
+    },
+    providerStore: providers.storePath,
+    providerSecrets: providers.secretsPath,
+    failoverStore: failover.failoverPath,
+    pricing: pricing.pricingPath
   };
 }
 
@@ -104,11 +164,16 @@ function parseArguments(argv) {
     createTokenFile: "",
     recoveryFile: "",
     force: false,
+    replace: false,
     yes: false,
     json: false,
     limit: 100,
     help: false,
-    childConfig: base.childConfig
+    childConfig: base.childConfig,
+    providerStore: base.providerStore,
+    providerSecrets: base.providerSecrets,
+    failoverStore: base.failoverStore,
+    pricing: base.pricing
   };
   const input = [...argv];
   while (input.length > 0) {
@@ -133,12 +198,22 @@ function parseArguments(argv) {
       options.recoveryFile = takeValue(input, argument);
     } else if (argument.startsWith("--recovery-file=")) {
       options.recoveryFile = argument.slice("--recovery-file=".length);
+    } else if (argument === "--provider-store") {
+      options.providerStore = takeValue(input, argument);
+    } else if (argument === "--provider-secrets") {
+      options.providerSecrets = takeValue(input, argument);
+    } else if (argument === "--failover-store") {
+      options.failoverStore = takeValue(input, argument);
+    } else if (argument === "--pricing") {
+      options.pricing = takeValue(input, argument);
     } else if (argument === "--limit") {
       options.limit = Number(takeValue(input, argument));
     } else if (argument.startsWith("--limit=")) {
       options.limit = Number(argument.slice("--limit=".length));
     } else if (argument === "--force") {
       options.force = true;
+    } else if (argument === "--replace") {
+      options.replace = true;
     } else if (argument === "--yes" || argument === "-y") {
       options.yes = true;
     } else if (argument === "--json") {
@@ -155,6 +230,9 @@ function parseArguments(argv) {
   if (options.remoteConfig) options.remoteConfig = resolve(options.remoteConfig);
   if (options.createTokenFile) options.createTokenFile = resolve(options.createTokenFile);
   if (options.recoveryFile) options.recoveryFile = resolve(options.recoveryFile);
+  for (const path of ["providerStore", "providerSecrets", "failoverStore", "pricing"]) {
+    options[path] = resolve(options[path]);
+  }
   return { positional, options };
 }
 
@@ -175,7 +253,8 @@ function newWorkspace() {
     created_at: now,
     updated_at: now,
     stores: {},
-    presets: {}
+    presets: {},
+    agent: newWorkspaceAgentBundle()
   };
 }
 
@@ -186,14 +265,39 @@ function validateTimestamp(value, label) {
   return value;
 }
 
+function plainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value, allowed, label) {
+  if (!plainObject(value)) throw new WorkspaceError(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      throw new WorkspaceError(`${label} contains unsupported field '${key}'`);
+    }
+  }
+}
+
+function validateAgentBundle(bundle) {
+  try {
+    return validateWorkspaceAgentBundle(bundle);
+  } catch (error) {
+    if (error instanceof WorkspaceSchemaError) throw new WorkspaceError(error.message);
+    throw error;
+  }
+}
+
 function validateWorkspace(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
+  exactKeys(snapshot, [
+    "schema", "kind", "name", "created_at", "updated_at", "stores", "presets", "agent"
+  ], "Workspace");
   if (!snapshot || snapshot.schema !== SCHEMA || snapshot.kind !== WORKSPACE_KIND ||
       typeof snapshot.name !== "string" || snapshot.name.length < 1 ||
       snapshot.name.length > 200 || !snapshot.stores ||
       typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) ||
       !snapshot.presets || typeof snapshot.presets !== "object" ||
-      Array.isArray(snapshot.presets)) {
+      Array.isArray(snapshot.presets) || !snapshot.agent) {
     throw new WorkspaceError("remote snapshot is not a valid agentctl Workspace");
   }
   validateTimestamp(snapshot.created_at, "Workspace created_at");
@@ -203,7 +307,7 @@ function validateWorkspace(snapshot) {
       throw new WorkspaceError(`Workspace contains unsupported Store type '${type}'`);
     }
     const child = snapshot.stores[type];
-    if (!child || child.schema !== SCHEMA || child.type !== type ||
+    if (!child || child.schema !== WORKSPACE_ATTACHMENT_SCHEMA || child.type !== type ||
         child.protocol !== PROTOCOLS[type].id) {
       throw new WorkspaceError(`Workspace ${type} attachment is invalid`);
     }
@@ -213,12 +317,13 @@ function validateWorkspace(snapshot) {
   for (const [name, preset] of Object.entries(snapshot.presets)) {
     validatePreset(name, preset);
   }
+  validateAgentBundle(snapshot.agent);
   return snapshot;
 }
 
 function validatePreset(name, preset) {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64 ||
-      !preset || preset.schema !== SCHEMA || preset.name !== name ||
+      !preset || preset.schema !== WORKSPACE_PRESET_SCHEMA || preset.name !== name ||
       typeof preset.description !== "string" || preset.description.length > 500 ||
       !validPresetReference(preset.mcp) ||
       !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(preset.skills || "") ||
@@ -232,6 +337,287 @@ function validPresetReference(value) {
   return typeof value === "string" && value.length <= 64 &&
     /^[A-Za-z0-9._-]+$/.test(value) && !value.includes("..") &&
     value !== "." && value !== "..";
+}
+
+function agentBundleSummary(bundle) {
+  return {
+    synced: bundle?.providers !== null,
+    synced_at: bundle?.synced_at || null,
+    profiles: Object.keys(bundle?.providers?.profiles || {}).length,
+    secrets: Object.keys(bundle?.secrets?.secrets || {}).length,
+    failover_routes: Object.keys(bundle?.failover?.routes || {}).length,
+    pricing_rates: Object.keys(bundle?.pricing?.rates || {}).length,
+    pricing_version: bundle?.pricing?.version || null,
+    secret_values: "hidden"
+  };
+}
+
+async function localPathState(path, label) {
+  try {
+    const details = await lstat(path);
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new WorkspaceError(`${label} must be a regular non-symlink file: ${path}`);
+    }
+    return details;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function loadLocalAgentState(options) {
+  const [providerFile, secretFile, failoverFile, pricingFile] = await Promise.all([
+    localPathState(options.providerStore, "Provider Store"),
+    localPathState(options.providerSecrets, "provider Secret Store"),
+    localPathState(options.failoverStore, "failover Store"),
+    localPathState(options.pricing, "pricing catalog")
+  ]);
+  const [providers, secrets, failover, pricing] = await Promise.all([
+    providerFile ? loadProviderStore(options.providerStore) : Promise.resolve(null),
+    secretFile ? loadProviderSecrets(options.providerSecrets) : Promise.resolve(null),
+    failoverFile ? loadFailoverStore(options.failoverStore) : Promise.resolve(null),
+    pricingFile ? loadPricingCatalog(options.pricing) : Promise.resolve(null)
+  ]);
+  return {
+    providers,
+    secrets,
+    failover,
+    pricing,
+    present: {
+      providers: Boolean(providerFile),
+      secrets: Boolean(secretFile),
+      failover: Boolean(failoverFile),
+      pricing: Boolean(pricingFile)
+    }
+  };
+}
+
+async function buildLocalAgentBundle(options) {
+  const local = await loadLocalAgentState(options);
+  if (!local.providers) {
+    throw new WorkspaceError(
+      `Provider Store not found: ${options.providerStore} (run agentctl provider init --yes first)`
+    );
+  }
+  const secrets = local.secrets || await loadProviderSecrets(
+    options.providerSecrets,
+    { allowMissing: true }
+  );
+  const bundle = {
+    schema: WORKSPACE_AGENT_SCHEMA,
+    synced_at: new Date().toISOString(),
+    providers: structuredClone(local.providers),
+    secrets: structuredClone(secrets),
+    failover: local.failover ? structuredClone(local.failover) : null,
+    pricing: local.pricing ? structuredClone(local.pricing) : null
+  };
+  return validateAgentBundle(bundle);
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeProviderStores(local, remote) {
+  if (!local) return structuredClone(remote);
+  const next = structuredClone(local);
+  let changed = false;
+  for (const [name, profile] of Object.entries(remote.profiles)) {
+    if (Object.hasOwn(next.profiles, name)) {
+      if (!sameJson(next.profiles[name], profile)) {
+        throw new WorkspaceError(
+          `Provider profile '${name}' conflicts; use --replace to use the Workspace catalog`
+        );
+      }
+      continue;
+    }
+    next.profiles[name] = structuredClone(profile);
+    changed = true;
+  }
+  if (changed) next.updated_at = new Date().toISOString();
+  return validateProviderStore(next);
+}
+
+function mergeProviderSecrets(local, remote) {
+  if (!local) return structuredClone(remote);
+  const next = structuredClone(local);
+  let changed = false;
+  for (const [name, secret] of Object.entries(remote.secrets)) {
+    if (Object.hasOwn(next.secrets, name)) {
+      if (next.secrets[name].value !== secret.value) {
+        throw new WorkspaceError(
+          `provider Secret '${name}' conflicts; use --replace to use the encrypted Workspace value`
+        );
+      }
+      if (Date.parse(secret.updated_at) > Date.parse(next.secrets[name].updated_at)) {
+        next.secrets[name] = structuredClone(secret);
+        changed = true;
+      }
+      continue;
+    }
+    next.secrets[name] = structuredClone(secret);
+    changed = true;
+  }
+  if (changed) next.updated_at = new Date().toISOString();
+  return validateProviderSecrets(next);
+}
+
+function mergeFailoverStores(local, remote) {
+  if (!remote) return local ? structuredClone(local) : null;
+  if (!local) return structuredClone(remote);
+  const next = structuredClone(local);
+  let changed = false;
+  for (const [name, route] of Object.entries(remote.routes)) {
+    if (Object.hasOwn(next.routes, name)) {
+      if (!sameJson(next.routes[name], route)) {
+        throw new WorkspaceError(
+          `failover route '${name}' conflicts; use --replace to use the Workspace catalog`
+        );
+      }
+      continue;
+    }
+    next.routes[name] = structuredClone(route);
+    changed = true;
+  }
+  if (changed) next.updated_at = new Date().toISOString();
+  return validateFailoverStore(next);
+}
+
+function equivalentPricing(left, right) {
+  if (!left || !right) return false;
+  const local = structuredClone(left);
+  const remote = structuredClone(right);
+  delete local.updated_at;
+  delete remote.updated_at;
+  return sameJson(local, remote);
+}
+
+function mergePricingCatalogs(local, remote) {
+  if (!remote) return local ? structuredClone(local) : null;
+  if (!local) return structuredClone(remote);
+  if (!equivalentPricing(local, remote)) {
+    throw new WorkspaceError(
+      "pricing catalog conflicts; use --replace to use the Workspace catalog"
+    );
+  }
+  return structuredClone(
+    Date.parse(remote.updated_at) > Date.parse(local.updated_at) ? remote : local
+  );
+}
+
+function localAgentPaths(options) {
+  return {
+    providers: options.providerStore,
+    secrets: options.providerSecrets,
+    failover: options.failoverStore,
+    pricing: options.pricing
+  };
+}
+
+async function snapshotLocalFiles(paths) {
+  const snapshots = new Map();
+  for (const path of paths) {
+    const details = await localPathState(path, "managed agent configuration");
+    snapshots.set(path, details ? {
+      exists: true,
+      bytes: await readFile(path),
+      mode: details.mode & 0o777
+    } : { exists: false, bytes: null, mode: 0o600 });
+  }
+  return snapshots;
+}
+
+async function writeBytesAtomic(path, bytes, mode = 0o600) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await localPathState(path, "managed agent configuration");
+  const temporary = join(dirname(path), `.${path.split(/[\\/]/).pop()}.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await open(temporary, "wx", mode);
+    await handle.writeFile(bytes);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, path);
+    await chmod(path, mode);
+  } finally {
+    await handle?.close().catch(() => {});
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function writeLocalJson(path, value) {
+  await writeBytesAtomic(path, Buffer.from(`${JSON.stringify(value, null, 2)}\n`), 0o600);
+}
+
+async function removeLocalFile(path) {
+  const details = await localPathState(path, "managed agent configuration");
+  if (details) await unlink(path);
+}
+
+async function restoreLocalFiles(snapshots) {
+  const failures = [];
+  for (const [path, snapshot] of snapshots) {
+    try {
+      if (snapshot.exists) await writeBytesAtomic(path, snapshot.bytes, snapshot.mode);
+      else await removeLocalFile(path);
+    } catch (error) {
+      failures.push(`${path}: ${error.message}`);
+    }
+  }
+  if (failures.length) {
+    throw new WorkspaceError(`local agent rollback failed (${failures.join("; ")})`);
+  }
+}
+
+function pullPlan(remote, local, options) {
+  const next = options.replace ? {
+    providers: structuredClone(remote.providers),
+    secrets: structuredClone(remote.secrets),
+    failover: remote.failover ? structuredClone(remote.failover) : null,
+    pricing: remote.pricing ? structuredClone(remote.pricing) : null
+  } : {
+    providers: mergeProviderStores(local.providers, remote.providers),
+    secrets: mergeProviderSecrets(local.secrets, remote.secrets),
+    failover: mergeFailoverStores(local.failover, remote.failover),
+    pricing: mergePricingCatalogs(local.pricing, remote.pricing)
+  };
+  validateAgentBundle({
+    schema: WORKSPACE_AGENT_SCHEMA,
+    synced_at: remote.synced_at,
+    ...structuredClone(next)
+  });
+  const paths = localAgentPaths(options);
+  const writes = [];
+  const deletes = [];
+  for (const name of Object.keys(paths)) {
+    const current = local[name];
+    if (next[name] === null) {
+      if (local.present[name] && options.replace) deletes.push(name);
+    } else if (!current || !sameJson(current, next[name])) {
+      writes.push(name);
+    }
+  }
+  return { next, paths, writes, deletes };
+}
+
+async function applyPullPlan(plan) {
+  const affected = [...new Set([
+    ...plan.writes.map((name) => plan.paths[name]),
+    ...plan.deletes.map((name) => plan.paths[name])
+  ])];
+  const snapshots = await snapshotLocalFiles(affected);
+  try {
+    for (const name of plan.writes) await writeLocalJson(plan.paths[name], plan.next[name]);
+    for (const name of plan.deletes) await removeLocalFile(plan.paths[name]);
+  } catch (error) {
+    try {
+      await restoreLocalFiles(snapshots);
+    } catch (rollback) {
+      throw new WorkspaceError(`${error.message}; ${rollback.message}`);
+    }
+    throw error;
+  }
 }
 
 async function readPrivateLine(filePath, label) {
@@ -330,14 +716,22 @@ function readHiddenRecoveryCode({ input = process.stdin, output = process.stderr
 }
 
 async function loadWorkspace(configPath) {
+  const status = await getRemoteStatus(configPath, WORKSPACE_REMOTE_PROTOCOL);
+  if (!status.latest) throw new WorkspaceError("Workspace has no encrypted snapshot");
   const snapshot = await downloadRemoteSnapshot(
     configPath,
-    WORKSPACE_REMOTE_PROTOCOL
+    WORKSPACE_REMOTE_PROTOCOL,
+    status.latest.version
   );
   const sourceSchema = snapshot?.schema;
   const workspace = validateWorkspace(snapshot);
   Object.defineProperty(workspace, "source_schema", {
     value: sourceSchema,
+    enumerable: false
+  });
+  Object.defineProperty(workspace, "source_version", {
+    value: status.latest.version,
+    writable: true,
     enumerable: false
   });
   return workspace;
@@ -346,7 +740,17 @@ async function loadWorkspace(configPath) {
 async function saveWorkspace(configPath, snapshot) {
   snapshot.updated_at = new Date().toISOString();
   validateWorkspace(snapshot);
-  return uploadRemoteSnapshot(configPath, WORKSPACE_REMOTE_PROTOCOL, snapshot);
+  const options = snapshot.source_version
+    ? { baseVersion: snapshot.source_version }
+    : {};
+  const result = await uploadRemoteSnapshot(
+    configPath,
+    WORKSPACE_REMOTE_PROTOCOL,
+    snapshot,
+    options
+  );
+  if (Object.hasOwn(snapshot, "source_version")) snapshot.source_version = result.version;
+  return result;
 }
 
 async function init(options) {
@@ -391,14 +795,15 @@ async function status(options) {
   const output = {
     schema: SCHEMA,
     remote_schema: workspace.source_schema || SCHEMA,
-    migration_pending: workspace.source_schema === 1,
+    migration_pending: workspace.source_schema !== SCHEMA,
     mode: "workspace",
     endpoint: config.endpoint,
     store_id: config.store_id,
     latest: remote.latest,
     web_ui_enabled: remote.web_ui_enabled,
     stores,
-    presets: Object.keys(workspace.presets).sort()
+    presets: Object.keys(workspace.presets).sort(),
+    agent: agentBundleSummary(workspace.agent)
   };
   if (options.json) {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -411,6 +816,138 @@ async function status(options) {
     process.stdout.write(`${type.padEnd(9)} ${stores[type].attached ? "attached" : "not attached"}\n`);
   }
   process.stdout.write(`presets   ${output.presets.length}\n`);
+  process.stdout.write(
+    `agent     ${output.agent.synced ? `${output.agent.profiles} profile(s), ${output.agent.secrets} Secret(s)` : "not backed up"}\n`
+  );
+}
+
+function localAgentSummary(local) {
+  return {
+    providers_present: local.present.providers,
+    secrets_present: local.present.secrets,
+    failover_present: local.present.failover,
+    pricing_present: local.present.pricing,
+    profiles: Object.keys(local.providers?.profiles || {}).length,
+    secrets: Object.keys(local.secrets?.secrets || {}).length,
+    failover_routes: Object.keys(local.failover?.routes || {}).length,
+    pricing_rates: Object.keys(local.pricing?.rates || {}).length,
+    pricing_version: local.pricing?.version || null,
+    secret_values: "hidden"
+  };
+}
+
+function agentSafety() {
+  return {
+    encryption: "end-to-end encrypted Workspace payload",
+    secret_values: "hidden",
+    excluded: [
+      "generated client configuration",
+      "provider selection state",
+      "proxy configuration and capability",
+      "PIDs, ports, locks, logs, usage rows, and circuit counters"
+    ]
+  };
+}
+
+function emitAgent(value, options, lines) {
+  if (options.quiet) return;
+  if (options.json) process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  else process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+async function agentStatus(options) {
+  const [workspace, local] = await Promise.all([
+    loadWorkspace(options.workspaceConfig),
+    loadLocalAgentState(options)
+  ]);
+  const output = {
+    schema: 1,
+    remote: agentBundleSummary(workspace.agent),
+    local: localAgentSummary(local),
+    paths: localAgentPaths(options),
+    safety: agentSafety()
+  };
+  emitAgent(output, options, [
+    `Workspace agent bundle: ${output.remote.synced ? `${output.remote.profiles} profile(s)` : "not backed up"}`,
+    `Local Provider Store:   ${output.local.providers_present ? `${output.local.profiles} profile(s)` : "not initialized"}`,
+    `Local Secrets:          ${output.local.secrets} reference value(s) (hidden)`,
+    `Failover / pricing:     ${output.local.failover_routes} route(s) / ${output.local.pricing_rates} rate(s)`,
+    "Generated configs, runtime state, logs, and circuit counters are excluded."
+  ]);
+  return output;
+}
+
+async function agentPush(options) {
+  const [workspace, bundle] = await Promise.all([
+    loadWorkspace(options.workspaceConfig),
+    buildLocalAgentBundle(options)
+  ]);
+  const summary = agentBundleSummary(bundle);
+  const preview = {
+    schema: 1,
+    ok: true,
+    action: "push",
+    changed: options.yes,
+    preview: !options.yes,
+    replace_remote_agent_bundle: true,
+    bundle: summary,
+    safety: agentSafety()
+  };
+  if (!options.yes) {
+    emitAgent(preview, options, [
+      `[preview] replace the encrypted Workspace agent bundle with ${summary.profiles} profile(s), ${summary.secrets} hidden Secret value(s), ${summary.failover_routes} route(s), and ${summary.pricing_rates} rate(s).`,
+      "Other Workspace Stores and Presets remain unchanged. Re-run with --yes to upload."
+    ]);
+    return preview;
+  }
+  workspace.agent = bundle;
+  const result = await saveWorkspace(options.workspaceConfig, workspace);
+  const output = { ...preview, preview: false, changed: true, version: result.version };
+  emitAgent(output, options, [
+    `Encrypted agent bundle saved as Workspace version ${result.version}.`,
+    `${summary.secrets} provider Secret value(s) were encrypted and were not printed.`
+  ]);
+  return output;
+}
+
+async function agentPull(options) {
+  const [workspace, local] = await Promise.all([
+    loadWorkspace(options.workspaceConfig),
+    loadLocalAgentState(options)
+  ]);
+  if (workspace.agent.providers === null) {
+    throw new WorkspaceError("Workspace does not contain an agent provider bundle; push one first");
+  }
+  const plan = pullPlan(workspace.agent, local, options);
+  const remote = agentBundleSummary(workspace.agent);
+  const preview = {
+    schema: 1,
+    ok: true,
+    action: "pull",
+    mode: options.replace ? "replace" : "merge",
+    changed: options.yes && (plan.writes.length > 0 || plan.deletes.length > 0),
+    preview: !options.yes,
+    writes: [...plan.writes],
+    deletes: [...plan.deletes],
+    bundle: remote,
+    secret_values: "hidden",
+    safety: agentSafety()
+  };
+  if (!options.yes) {
+    emitAgent(preview, options, [
+      `[preview] ${options.replace ? "replace" : "merge"} local agent catalogs from encrypted Workspace.`,
+      `Writes: ${plan.writes.join(", ") || "none"}; deletes: ${plan.deletes.join(", ") || "none"}.`,
+      `${remote.secrets} provider Secret value(s) will remain hidden. Re-run with --yes to apply.`
+    ]);
+    return preview;
+  }
+  await applyPullPlan(plan);
+  emitAgent(preview, options, [
+    `Local agent catalogs ${options.replace ? "replaced" : "merged"} transactionally.`,
+    `${remote.secrets} provider Secret value(s) restored without printing them.`,
+    "Run agentctl provider plan/apply for the selected machine; generated configs were not restored."
+  ]);
+  return preview;
 }
 
 async function attach(type, options) {
@@ -429,7 +966,7 @@ async function attach(type, options) {
   }
   await setRemoteWebUiEnabled(config, PROTOCOLS[type], true);
   workspace.stores[type] = {
-    schema: SCHEMA,
+    schema: WORKSPACE_ATTACHMENT_SCHEMA,
     type,
     protocol: PROTOCOLS[type].id,
     attached_at: new Date().toISOString(),
@@ -480,7 +1017,7 @@ async function restore(options, { readRecoveryCode = readHiddenRecoveryCode } = 
 
 async function migrate(options) {
   const workspace = await loadWorkspace(options.workspaceConfig);
-  if (workspace.source_schema !== 1) {
+  if (workspace.source_schema === SCHEMA) {
     const output = { ok: true, changed: false, schema: SCHEMA };
     if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     else process.stdout.write(`Workspace already uses schema ${SCHEMA}; no migration is needed.\n`);
@@ -491,13 +1028,13 @@ async function migrate(options) {
       ok: true,
       changed: false,
       preview: true,
-      from_schema: 1,
+      from_schema: workspace.source_schema,
       to_schema: SCHEMA
     };
     if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     else {
       process.stdout.write(
-        `[preview] Workspace schema 1 will be saved as a new schema ${SCHEMA} version.\n` +
+        `[preview] Workspace schema ${workspace.source_schema} will be saved as a new schema ${SCHEMA} version.\n` +
         "Existing remote versions remain recoverable. Re-run with --yes to migrate.\n"
       );
     }
@@ -507,7 +1044,7 @@ async function migrate(options) {
   const output = {
     ok: true,
     changed: true,
-    from_schema: 1,
+    from_schema: workspace.source_schema,
     to_schema: SCHEMA,
     version: result.version
   };
@@ -563,6 +1100,11 @@ async function main() {
   if (action === "recovery" && positional.length === 0) return recovery(options);
   if (action === "restore" && positional.length === 0) return restore(options);
   if (action === "migrate" && positional.length === 0) return migrate(options);
+  if (action === "agent" && positional.length === 1) {
+    if (positional[0] === "status") return agentStatus(options);
+    if (positional[0] === "push") return agentPush(options);
+    if (positional[0] === "pull") return agentPull(options);
+  }
   if (action === "versions" && positional.length === 0) return versions(options);
   if (action === "attach" && positional.length === 1) {
     return attach(normalizeType(positional[0]), options);
@@ -579,7 +1121,10 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
-    const safe = error instanceof WorkspaceError || error instanceof RemoteStoreError
+    const safe = error instanceof WorkspaceError || error instanceof RemoteStoreError ||
+      error instanceof ProviderClientError || error instanceof ProviderSchemaError ||
+      error instanceof FailoverClientError || error instanceof FailoverSchemaError ||
+      error instanceof PricingClientError || error instanceof PricingError
       ? error.message
       : "unexpected Workspace failure";
     process.stderr.write(`[error] ${safe}\n`);
@@ -590,6 +1135,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 export {
   SCHEMA,
   WORKSPACE_KIND,
+  agentPull,
+  agentPush,
+  agentStatus,
   attach,
   init,
   loadWorkspace,
@@ -600,6 +1148,7 @@ export {
   restore,
   saveWorkspace,
   ui,
+  validateAgentBundle,
   validatePreset,
   validateWorkspace
 };

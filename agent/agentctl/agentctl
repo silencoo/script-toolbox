@@ -20,7 +20,7 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.11.0"
+VERSION="0.12.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
@@ -76,9 +76,9 @@ Commands:
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   help        Show the selected client's setup options.
-  workspace   Manage one encrypted recovery key that opens attached MCP,
-              Skills, and Prompts stores. Existing isolated stores remain
-              independently usable.
+  workspace   Manage one encrypted recovery key for portable Provider,
+              Secret, failover, pricing, MCP, Skills, Prompts, and Preset
+              catalogs. Device-generated state remains local.
   preset      Bind one MCP profile, Skills pack, and Prompt profile into a
               transactional development preset with plan/apply/rollback.
   doctor      Inspect providers, local selections, preset drift, secrets,

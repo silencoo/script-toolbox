@@ -1,5 +1,23 @@
 # Changelog — agent/
 
+## 2026-08-11 — encrypted Provider Workspace and browser control plane
+
+- Upgraded the encrypted Workspace manifest to schema 3 with an optional agent
+  bundle for portable Provider/Secret Stores, failover routes, and versioned
+  pricing while retaining schema 2 child attachments and development presets.
+- Added preview-first `agentctl workspace agent status/push/pull`, merge-safe
+  restore by default, explicit exact replacement, transactional owner-only
+  local writes, and optimistic remote-version checks that reject stale writers.
+- Kept Secret values hidden from all status/plan output and excluded generated
+  client configuration, provider selection state, proxy capabilities, process
+  state, logs, usage rows, and circuit counters from encrypted synchronization.
+- Added a five-view Worker UI with a dedicated Providers surface, strict
+  catalog validation, masked Secret editing, local schema 1/2 compatibility,
+  encrypted saves, and concurrency protection. No deployment is automatic.
+- Updated the terminal Workspace reader to accept schema 3 and expose only
+  redacted Provider catalog counts, preserving compatibility before the richer
+  Providers TUI controls are enabled.
+
 ## 2026-08-11 — guarded provider failover and persistent circuits
 
 - Added strict preview-first `agentctl failover` Stores for ordered 2–8

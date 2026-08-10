@@ -23,7 +23,11 @@ import {
   validateRemoteConfig,
   writeJsonAtomic
 } from "../../remote-store.mjs";
-import { normalizeWorkspaceSchema } from "../../agentctl/workspace-schema.mjs";
+import {
+  CURRENT_WORKSPACE_SCHEMA,
+  normalizeWorkspaceSchema,
+  validateWorkspaceAgentBundle
+} from "../../agentctl/workspace-schema.mjs";
 
 const MCP_NAME = /^[A-Za-z0-9._-]+$/;
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -41,10 +45,11 @@ function snippetsDirectory(home) {
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
   assertObject(snapshot, "Workspace snapshot");
-  if (snapshot.schema !== 2 || snapshot.kind !== "agentctl-workspace" ||
+  if (snapshot.schema !== CURRENT_WORKSPACE_SCHEMA || snapshot.kind !== "agentctl-workspace" ||
       typeof snapshot.name !== "string" || !snapshot.name ||
       !snapshot.stores || typeof snapshot.stores !== "object" || Array.isArray(snapshot.stores) ||
-      !snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets)) {
+      !snapshot.presets || typeof snapshot.presets !== "object" || Array.isArray(snapshot.presets) ||
+      !snapshot.agent || typeof snapshot.agent !== "object" || Array.isArray(snapshot.agent)) {
     throw new RemoteWorkspaceError("remote snapshot is not a valid agentctl Workspace");
   }
   for (const field of ["created_at", "updated_at"]) {
@@ -71,6 +76,11 @@ function validateWorkspaceSnapshot(snapshot) {
         preset.prompt.length > 64 || preset.prompt.includes("..") || !MCP_NAME.test(preset.prompt)) {
       throw new RemoteWorkspaceError(`Workspace development preset '${name}' is invalid`);
     }
+  }
+  try {
+    validateWorkspaceAgentBundle(snapshot.agent);
+  } catch (error) {
+    throw new RemoteWorkspaceError(`Workspace agent bundle is invalid: ${error.message}`);
   }
   return snapshot;
 }
@@ -501,8 +511,8 @@ export function createRemoteWorkspace({
       schema: 2,
       mode: "workspace",
       source: "cloud",
-      remote_schema: workspace.source_schema || 2,
-      migration_pending: workspace.source_schema === 1,
+      remote_schema: workspace.source_schema || CURRENT_WORKSPACE_SCHEMA,
+      migration_pending: workspace.source_schema !== CURRENT_WORKSPACE_SCHEMA,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -526,7 +536,17 @@ export function createRemoteWorkspace({
         return [type, store];
       })),
       presets: Object.fromEntries(Object.entries(workspace.presets)
-        .map(([name, preset]) => [name, publicPreset(name, preset)]))
+        .map(([name, preset]) => [name, publicPreset(name, preset)])),
+      agent: {
+        synced: workspace.agent.providers !== null,
+        synced_at: workspace.agent.synced_at,
+        profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
+        secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
+        failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
+        pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
+        pricing_version: workspace.agent.pricing?.version || null,
+        secret_values: "hidden"
+      }
     };
     return structuredClone(publicIndex);
   }

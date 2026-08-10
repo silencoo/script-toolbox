@@ -118,7 +118,7 @@ const snapshots = {
 function workspaceSnapshot() {
   const now = new Date().toISOString();
   return {
-    schema: 2,
+    schema: 3,
     kind: "agentctl-workspace",
     name: "Test Workspace",
     created_at: now,
@@ -132,6 +132,14 @@ function workspaceSnapshot() {
     }])),
     presets: {
       web: { schema: 2, name: "web", description: "Web work", mcp: "frontend", skills: "frontend", prompt: "personal" }
+    },
+    agent: {
+      schema: 1,
+      synced_at: null,
+      providers: null,
+      secrets: null,
+      failover: null,
+      pricing: null
     }
   };
 }
@@ -157,12 +165,18 @@ async function fixture() {
 }
 
 test("remote Workspace index and catalogs never expose capabilities or Secret values", async () => {
-  assert.equal(validateWorkspaceSnapshot(workspaceSnapshot()).schema, 2);
+  assert.equal(validateWorkspaceSnapshot(workspaceSnapshot()).schema, 3);
+  const previous = workspaceSnapshot();
+  previous.schema = 2;
+  delete previous.agent;
+  assert.equal(validateWorkspaceSnapshot(previous).schema, 3);
+  assert.equal(previous.schema, 2);
   const legacy = workspaceSnapshot();
   legacy.schema = 1;
   delete legacy.presets;
+  delete legacy.agent;
   for (const attachment of Object.values(legacy.stores)) attachment.schema = 1;
-  assert.equal(validateWorkspaceSnapshot(legacy).schema, 2);
+  assert.equal(validateWorkspaceSnapshot(legacy).schema, 3);
   assert.equal(legacy.schema, 1);
   const { remote, downloads } = await fixture();
   const connection = await remote.connection();

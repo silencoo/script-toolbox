@@ -37,8 +37,10 @@ mode `0600`.
 
 Client/provider setup, MCP configuration, skills, and persistent instructions
 keep independent install and uninstall lifecycles. `agentctl workspace` can
-optionally bind their encrypted remote Stores behind one master recovery code
-without merging those lifecycles or deleting the isolated recovery paths.
+optionally bind their encrypted remote Stores and the portable Provider,
+Secret, failover, and pricing catalogs behind one master recovery code without
+merging those lifecycles or deleting the isolated recovery paths. Rendered
+client configuration and all proxy/runtime state remain machine-local.
 
 The public controllers can be called directly:
 
@@ -53,6 +55,7 @@ The public controllers can be called directly:
 ./agentctl/agentctl failover status
 ./agentctl/agentctl pricing status
 ./agentctl/agentctl proxy status
+./agentctl/agentctl workspace agent status
 ```
 
 Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and
