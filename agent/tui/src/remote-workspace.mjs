@@ -2,13 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
   lstat,
+  mkdtemp,
   mkdir,
   readFile,
   rename,
   rm,
   writeFile
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   MCP_REMOTE_PROTOCOL,
@@ -28,6 +29,11 @@ import {
   normalizeWorkspaceSchema,
   validateWorkspaceAgentBundle
 } from "../../agentctl/workspace-schema.mjs";
+import {
+  normalizeRuntimePlatform,
+  resolveProviderProfile
+} from "../../agentctl/provider-schema.mjs";
+import { renderProviderPlan } from "../../agentctl/provider-renderer.mjs";
 
 const MCP_NAME = /^[A-Za-z0-9._-]+$/;
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -462,6 +468,36 @@ function publicPreset(name, preset) {
   };
 }
 
+function publicProviderProfile(profile, bundle, target, {
+  platform = normalizeRuntimePlatform(),
+  home = homedir()
+} = {}) {
+  const resolved = resolveProviderProfile(profile, { target, platform });
+  const secretReference = resolved.auth.secret || "";
+  const secretPresent = resolved.auth.mode === "none" ||
+    Boolean(secretReference && bundle.secrets?.secrets?.[secretReference]);
+  const plan = renderProviderPlan(resolved, { secretPresent, home });
+  return {
+    name: profile.name,
+    description: profile.description,
+    target,
+    platform,
+    protocol: plan.protocol,
+    endpoint: plan.endpoint,
+    requested_model: plan.requested_model,
+    outbound_model: plan.outbound_model,
+    enabled: plan.enabled,
+    compatible: plan.compatible,
+    ready: plan.ready,
+    issue: plan.issue,
+    auth_mode: plan.auth.mode,
+    secret_reference: plan.auth.secret || "",
+    secret_present: plan.auth.present,
+    applied: false,
+    source: "cloud"
+  };
+}
+
 export function createRemoteWorkspace({
   workspaceConfig = defaultConfigPath(),
   runtimeRoot = defaultRuntimeRoot(),
@@ -505,14 +541,15 @@ export function createRemoteWorkspace({
       }
     }));
     const previousStores = publicIndex?.stores || {};
+    const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
     workspaceCache = workspace;
     masterConfig = config;
     publicIndex = {
       schema: 2,
       mode: "workspace",
       source: "cloud",
-      remote_schema: workspace.source_schema || CURRENT_WORKSPACE_SCHEMA,
-      migration_pending: workspace.source_schema !== CURRENT_WORKSPACE_SCHEMA,
+      remote_schema: sourceSchema,
+      migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -572,6 +609,15 @@ export function createRemoteWorkspace({
   }
 
   async function catalog(type, target = "codex", options = {}) {
+    if (type === "providers") {
+      const workspace = await rawWorkspace();
+      if (!workspace.agent.providers || !workspace.agent.secrets) return [];
+      return Object.values(workspace.agent.providers.profiles)
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((profile) => publicProviderProfile(profile, workspace.agent, target, {
+          home: localHome
+        }));
+    }
     const storeType = type === "snippets" ? "prompts" : type;
     const { snapshot } = await child(storeType, options);
     if (type === "mcp") {
@@ -608,6 +654,49 @@ export function createRemoteWorkspace({
         clients: Object.keys(profile.documents).sort(),
         source: "cloud"
       }));
+  }
+
+  async function withProviderFiles(name, target, callback) {
+    if (typeof callback !== "function") {
+      throw new RemoteWorkspaceError("Provider action callback is invalid");
+    }
+    const workspace = await rawWorkspace();
+    if (!workspace.agent.providers || !workspace.agent.secrets) {
+      throw new RemoteWorkspaceError("Workspace has no Provider bundle");
+    }
+    const profile = workspace.agent.providers.profiles[name];
+    if (!profile) throw new RemoteWorkspaceError(`unknown remote Provider profile '${name}'`);
+    const resolved = resolveProviderProfile(profile, {
+      target,
+      platform: normalizeRuntimePlatform()
+    });
+    const providerStore = {
+      ...structuredClone(workspace.agent.providers),
+      profiles: { [name]: structuredClone(profile) }
+    };
+    const providerSecrets = {
+      ...structuredClone(workspace.agent.secrets),
+      secrets: {}
+    };
+    if (resolved.auth.mode !== "none" && resolved.auth.secret &&
+        workspace.agent.secrets.secrets[resolved.auth.secret]) {
+      providerSecrets.secrets[resolved.auth.secret] = structuredClone(
+        workspace.agent.secrets.secrets[resolved.auth.secret]
+      );
+    }
+    const temporary = await mkdtemp(join(tmpdir(), "agentctl-tui-provider-"));
+    await chmod(temporary, 0o700);
+    const storePath = join(temporary, "providers.json");
+    const secretsPath = join(temporary, "provider-secrets.json");
+    try {
+      await Promise.all([
+        writeJsonAtomic(storePath, providerStore),
+        writeJsonAtomic(secretsPath, providerSecrets)
+      ]);
+      return await callback({ storePath, secretsPath });
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   }
 
   async function runtimePaths() {
@@ -925,6 +1014,7 @@ export function createRemoteWorkspace({
     runtimePaths,
     selectionPlan,
     snippetSelection,
+    withProviderFiles,
     writeSnippet,
     writePrompt
   };

@@ -3,6 +3,11 @@ import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRemoteWorkspace } from "./remote-workspace.mjs";
+import {
+  normalizeRuntimePlatform,
+  resolveProviderProfile
+} from "../../agentctl/provider-schema.mjs";
+import { renderProviderPlan } from "../../agentctl/provider-renderer.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 export const defaultAgentRoot = resolve(
@@ -139,6 +144,91 @@ export function createController({
     return runExecutableJson(command.executable, command.args, label);
   }
 
+  async function providerDashboard(target = "codex") {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
+    const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
+      runAgentctlJson(["provider", "status", "--json"], "provider status"),
+      runAgentctlJson(["provider", "list", "--json"], "provider list"),
+      runAgentctlJson(["failover", "status", "--json"], "failover status"),
+      runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
+      runAgentctlJson(["proxy", "status", "--json"], "proxy status")
+    ]);
+    const status = providerStatus.data || {};
+    const missing = new Set(Array.isArray(status.missing_secrets) ? status.missing_secrets : []);
+    const platform = status.platform || normalizeRuntimePlatform();
+    const profiles = (Array.isArray(providerList.data) ? providerList.data : []).map((profile) => {
+      try {
+        const resolved = resolveProviderProfile(profile, { target, platform });
+        const reference = resolved.auth.secret || "";
+        const secretPresent = resolved.auth.mode === "none" || Boolean(
+          providerStatus.ok && status.secrets_exists && reference && !missing.has(reference)
+        );
+        const plan = renderProviderPlan(resolved, { secretPresent, agentRoot });
+        const current = status.current?.[target];
+        const applied = current?.profile === profile.name &&
+          current.platform === plan.platform &&
+          current.protocol === plan.protocol &&
+          current.endpoint === plan.endpoint &&
+          current.requested_model === plan.requested_model &&
+          current.outbound_model === plan.outbound_model;
+        return {
+          name: profile.name,
+          description: profile.description,
+          target,
+          platform,
+          protocol: plan.protocol,
+          endpoint: plan.endpoint,
+          requested_model: plan.requested_model,
+          outbound_model: plan.outbound_model,
+          enabled: plan.enabled,
+          compatible: plan.compatible,
+          ready: plan.ready,
+          issue: plan.issue,
+          auth_mode: plan.auth.mode,
+          secret_reference: plan.auth.secret || "",
+          secret_present: plan.auth.present,
+          applied,
+          source: "local"
+        };
+      } catch (error) {
+        return {
+          name: String(profile?.name || "invalid"),
+          description: String(profile?.description || ""),
+          target,
+          platform,
+          enabled: true,
+          compatible: false,
+          ready: false,
+          issue: sanitizeOutput(error?.message || error),
+          source: "local"
+        };
+      }
+    });
+    const errors = [
+      ["Provider status", providerStatus],
+      ["Provider catalog", providerList],
+      ["Failover", failover],
+      ["Pricing", pricing],
+      ["Proxy", proxy]
+    ].filter(([, result]) => !result.ok && !result.data)
+      .map(([label, result]) => `${label}: ${result.error}`);
+    if (status.store_exists === false) {
+      const listError = errors.findIndex((value) => value.startsWith("Provider catalog:"));
+      if (listError >= 0) errors.splice(listError, 1);
+    }
+    return {
+      schema: 1,
+      target,
+      platform,
+      profiles,
+      status,
+      failover: failover.data || { status: "unavailable", routes: 0 },
+      pricing: pricing.data || { status: "unavailable", rates: 0 },
+      proxy: proxy.data || { status: "unavailable", running: false },
+      errors
+    };
+  }
+
   async function snapshot() {
     const remoteResult = remoteWorkspace.index({ refresh: true })
       .then((data) => ({ data, connection: data, error: "" }))
@@ -260,6 +350,63 @@ export function createController({
     return `${plan.name} for ${plan.target}: ${plan.items.length} ${plan.unit}\n${plan.items.join(", ") || "none"}\nNo remote catalog was written locally.`;
   }
 
+  function providerPlanDetail(plan, source) {
+    const entries = Array.isArray(plan?.plans) ? plan.plans : [];
+    const selected = entries[0] || {};
+    return [
+      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} · ${source === "cloud" ? "Workspace" : "Local"}`,
+      `State: ${selected.enabled === false ? "disabled" : selected.ready ? "ready" : "blocked"}`,
+      `Protocol: ${selected.protocol || "unknown"}`,
+      `Endpoint: ${selected.endpoint || "unknown"}`,
+      `Model: ${selected.requested_model || "unknown"} -> ${selected.outbound_model || "unknown"}`,
+      `Secret: ${selected.auth?.secret || "none"} (${selected.auth?.present ? "ready" : "missing"})`,
+      ...(selected.issue ? [`Blocked by: ${selected.issue}`] : []),
+      "No client file was changed."
+    ].join("\n");
+  }
+
+  async function providerAction(actionName, profile, target, source) {
+    if (!profile) throw new Error("No Provider profile is selected.");
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
+    if (!["local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
+    const operation = actionName === "provider-apply" ? "apply" : "plan";
+    const execute = async (paths = null) => {
+      const args = ["provider", operation, profile, "--target", target, "--json"];
+      if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
+      if (operation === "apply") args.push("--yes");
+      return runAgentctlJson(args, `provider ${operation}`);
+    };
+    const result = source === "cloud"
+      ? await remoteWorkspace.withProviderFiles(profile, target, execute)
+      : await execute();
+    const detail = result.data
+      ? providerPlanDetail(result.data, source)
+      : result.error || `Provider ${operation} failed.`;
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: operation === "apply" && result.ok
+        ? `${profile} applied from ${source === "cloud" ? "Workspace" : "local catalog"} to ${target}; start a new agent session`
+        : detail
+    };
+  }
+
+  async function providerSync(actionName) {
+    const direction = actionName === "provider-sync-push" ? "push" : "pull";
+    const result = await runAgentctlJson(
+      ["workspace", "agent", direction, "--yes", "--json"],
+      `Workspace agent ${direction}`
+    );
+    const bundle = result.data?.bundle || {};
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: result.ok
+        ? `${direction === "push" ? "Backed up" : "Merged"} ${bundle.profiles || 0} profile(s), ${bundle.secrets || 0} hidden Secret value(s), ${bundle.failover_routes || 0} failover route(s), and ${bundle.pricing_rates || 0} pricing rate(s).`
+        : result.error || `Workspace agent ${direction} failed.`
+    };
+  }
+
   async function remoteComponentAction(actionName, type, name, target) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
@@ -336,6 +483,12 @@ export function createController({
     source = "local",
     target = "codex"
   } = {}) {
+    if (actionName === "provider-plan" || actionName === "provider-apply") {
+      return providerAction(actionName, selection, target, source);
+    }
+    if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
+      return providerSync(actionName);
+    }
     if (actionName === "agent-providers" || actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
       const args = actionName === "agent-providers"
@@ -401,5 +554,12 @@ export function createController({
     return agentctlCommand(["setup", agent]);
   }
 
-  return { snapshot, action, interactiveCommand, promptPreview, remoteCatalog };
+  return {
+    snapshot,
+    action,
+    interactiveCommand,
+    promptPreview,
+    providerDashboard,
+    remoteCatalog
+  };
 }

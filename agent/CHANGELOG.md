@@ -1,5 +1,21 @@
 # Changelog — agent/
 
+## 2026-08-11 — four-client Providers terminal control plane
+
+- Added a dedicated Providers TUI section that combines local and encrypted
+  Workspace catalogs with explicit `L/W` source markers and separately colored
+  Claude Code, Codex, OpenCode, and Pi target badges.
+- Added exact target/platform resolution, compatibility and Secret-presence
+  status, requested/outbound model identity, device-local current selection,
+  plus local failover, pricing, and proxy summaries without Secret values.
+- Added read-only Provider plans, confirmed single-target apply, confirmed
+  encrypted upload, and merge-safe download. Remote apply uses only the selected
+  profile and required Secret in owner-only temporary files that are removed
+  immediately after the controller returns.
+- Standardized frequent list movement on `[`/`]` (with Up/Down aliases), kept
+  section navigation on Tab/arrows, and replaced the uniform navigation color
+  with distinct section, source, and four-client accents.
+
 ## 2026-08-11 — encrypted Provider Workspace and browser control plane
 
 - Upgraded the encrypted Workspace manifest to schema 3 with an optional agent
@@ -15,8 +31,8 @@
   catalog validation, masked Secret editing, local schema 1/2 compatibility,
   encrypted saves, and concurrency protection. No deployment is automatic.
 - Updated the terminal Workspace reader to accept schema 3 and expose only
-  redacted Provider catalog counts, preserving compatibility before the richer
-  Providers TUI controls are enabled.
+  redacted Provider catalog metadata for the dedicated Providers control
+  surface.
 
 ## 2026-08-11 — guarded provider failover and persistent circuits
 

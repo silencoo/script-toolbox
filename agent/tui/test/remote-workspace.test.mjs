@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { decryptValue } from "../../remote-store.mjs";
@@ -135,9 +135,34 @@ function workspaceSnapshot() {
     },
     agent: {
       schema: 1,
-      synced_at: null,
-      providers: null,
-      secrets: null,
+      synced_at: now,
+      providers: {
+        schema: 1,
+        kind: "agentctl-provider-store",
+        created_at: now,
+        updated_at: now,
+        profiles: {
+          gateway: {
+            schema: 1,
+            name: "gateway",
+            description: "Workspace gateway",
+            protocol: "openai_responses",
+            endpoint: "https://gateway.example.test/v1",
+            auth: { mode: "bearer", secret: "gateway_key" },
+            models: { default: "daily", aliases: { daily: "vendor-model" } },
+            targets: {},
+            platforms: {}
+          }
+        }
+      },
+      secrets: {
+        schema: 1,
+        kind: "agentctl-provider-secrets",
+        updated_at: now,
+        secrets: {
+          gateway_key: { value: secretValue, updated_at: now }
+        }
+      },
       failover: null,
       pricing: null
     }
@@ -189,6 +214,20 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
   assert.deepEqual(downloads, []);
   assert.equal(index.presets.web.source, "cloud");
   assert.equal(index.stores.mcp.latest.version, "v-1");
+  assert.equal(index.agent.profiles, 1);
+  assert.equal(index.agent.secrets, 1);
+  assert.equal(index.migration_pending, false);
+
+  const providers = await remote.catalog("providers", "codex");
+  assert.equal(providers.length, 1);
+  assert.equal(providers[0].name, "gateway");
+  assert.equal(providers[0].outbound_model, "vendor-model");
+  assert.equal(providers[0].secret_present, true);
+  assert.equal(JSON.stringify(providers).includes(secretValue), false);
+  const claudeProviders = await remote.catalog("providers", "claude");
+  assert.equal(claudeProviders[0].compatible, false);
+  assert.equal(claudeProviders[0].ready, false);
+  assert.deepEqual(downloads, []);
 
   const catalog = await remote.catalog("mcp", "codex");
   assert.deepEqual(downloads, ["mcp"]);
@@ -201,6 +240,22 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
   const snippets = await remote.catalog("snippets");
   assert.deepEqual(snippets.map(({ name }) => name), ["review-code"]);
   assert.equal(JSON.stringify(snippets).includes(snippetContent), false);
+});
+
+test("remote Provider actions use selected owner-only temporary files and clean them up", async () => {
+  const { remote } = await fixture();
+  await remote.index();
+  let temporary;
+  await remote.withProviderFiles("gateway", "codex", async ({ storePath, secretsPath }) => {
+    temporary = dirname(storePath);
+    const store = JSON.parse(await readFile(storePath, "utf8"));
+    const secrets = JSON.parse(await readFile(secretsPath, "utf8"));
+    assert.deepEqual(Object.keys(store.profiles), ["gateway"]);
+    assert.deepEqual(Object.keys(secrets.secrets), ["gateway_key"]);
+    assert.equal(secrets.secrets.gateway_key.value, secretValue);
+    assert.equal((await lstat(secretsPath)).mode & 0o077, 0);
+  });
+  await assert.rejects(() => lstat(temporary), { code: "ENOENT" });
 });
 
 test("profile and pack resolution honors inheritance and target overrides", () => {

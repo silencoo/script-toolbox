@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  PROVIDER_TARGETS,
   actionForKey,
   actionNeedsConfirmation,
   clampSelection,
   componentSummary,
   componentTargetState,
+  cycleTarget,
   mcpTargetComparison,
   moveSection,
   normalizeSection,
   otherTarget,
   promptTargetState,
+  providerEntries,
   safePromptPreviewText,
   selectionDelta,
   selectionWindow,
@@ -21,6 +24,7 @@ import {
 
 test("section navigation wraps and invalid sections fall back", () => {
   assert.equal(normalizeSection("mcp"), "mcp");
+  assert.equal(normalizeSection("providers"), "providers");
   assert.equal(normalizeSection("unknown"), "overview");
   assert.equal(moveSection("overview", -1), "cloud");
   assert.equal(moveSection("cloud", 1), "overview");
@@ -31,6 +35,10 @@ test("target and preset selection are deterministic", () => {
   assert.equal(otherTarget("claude"), "codex");
   assert.equal(targetLabel("codex"), "Codex");
   assert.equal(targetLabel("claude"), "Claude Code");
+  assert.equal(targetLabel("opencode"), "OpenCode");
+  assert.equal(targetLabel("pi"), "Pi");
+  assert.equal(cycleTarget("codex", 1, PROVIDER_TARGETS), "opencode");
+  assert.equal(cycleTarget("claude", -1, PROVIDER_TARGETS), "pi");
   assert.equal(clampSelection(4, 2), 1);
   assert.equal(clampSelection(-1, 2), 0);
   assert.equal(clampSelection(3, 0), 0);
@@ -150,6 +158,37 @@ test("Snippet presentation merges local and cloud metadata without content", () 
   assert.equal(JSON.stringify(entries).includes("never-render"), false);
 });
 
+test("Provider presentation distinguishes local/cloud entries and drops Secret values", () => {
+  const entries = providerEntries([{
+    name: "gateway",
+    description: "Local gateway",
+    protocol: "openai_responses",
+    endpoint: "https://gateway.example.test/v1",
+    requested_model: "daily",
+    outbound_model: "vendor-model",
+    ready: true,
+    auth_mode: "bearer",
+    secret_reference: "gateway_key",
+    secret_present: true,
+    applied: true,
+    target: "codex",
+    platform: "darwin",
+    secret_value: "never-render-local"
+  }], [{
+    name: "gateway",
+    protocol: "openai_responses",
+    ready: false,
+    issue: "local Secret is missing",
+    secret_value: "never-render-cloud"
+  }]);
+  assert.deepEqual(entries.map(({ key }) => key), ["local:gateway", "cloud:gateway"]);
+  assert.equal(entries[0].applied, true);
+  assert.equal(entries[0].secretReference, "gateway_key");
+  assert.equal(entries[1].source, "cloud");
+  assert.equal(JSON.stringify(entries).includes("never-render"), false);
+  assert.equal(Object.hasOwn(entries[0], "secret_value"), false);
+});
+
 test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("presets", "p"), "plan");
   assert.equal(actionForKey("presets", "P"), null);
@@ -163,6 +202,10 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("agents", "c"), "agent-configure");
   assert.equal(actionForKey("agents", "p"), "agent-providers");
   assert.equal(actionForKey("agents", "x"), "agent-uninstall");
+  assert.equal(actionForKey("providers", "p"), "provider-plan");
+  assert.equal(actionForKey("providers", "a"), "provider-apply");
+  assert.equal(actionForKey("providers", "u"), "provider-sync-push");
+  assert.equal(actionForKey("providers", "d"), "provider-sync-pull");
   assert.equal(actionForKey("cloud", "P"), null);
   assert.equal(actionNeedsConfirmation("plan"), false);
   assert.equal(actionNeedsConfirmation("apply"), true);
@@ -170,6 +213,10 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("snippets-apply"), true);
   assert.equal(actionNeedsConfirmation("snippet-copy"), false);
   assert.equal(actionNeedsConfirmation("agent-uninstall"), true);
+  assert.equal(actionNeedsConfirmation("provider-plan"), false);
+  assert.equal(actionNeedsConfirmation("provider-apply"), true);
+  assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
+  assert.equal(actionNeedsConfirmation("provider-sync-pull"), true);
 });
 
 test("Prompt previews strip terminal controls without redacting user text", () => {

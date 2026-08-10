@@ -12,10 +12,12 @@ dashboard:
 ./agent/agentctl/agentctl
 ```
 
-The dashboard starts on Overview and combines providers, MCP, Skills, Prompts,
-development presets, and encrypted Workspace state. It refreshes automatically,
-browses cloud catalogs on demand, and can plan/apply one selected remote
-Profile, Pack, Prompt, or Preset without first restoring the whole Store.
+The dashboard starts on Overview and combines portable Providers, MCP, Skills,
+Prompts, development presets, and encrypted Workspace state. It refreshes
+automatically, browses cloud catalogs on demand, and can plan/apply one selected
+Provider, Profile, Pack, Prompt, or Preset without first restoring the whole
+Store. The Providers view distinguishes local/Workspace sources and resolves
+Claude Code, Codex, OpenCode, and Pi independently.
 The Agents section also selects a client for provider discovery, interactive
 setup/install, or confirmed removal of agentctl-owned provider configuration.
 Node.js 22 or newer is required. Use `agentctl interactive` for the older

@@ -1,6 +1,7 @@
 export const SECTIONS = Object.freeze([
   { id: "overview", label: "Overview" },
   { id: "agents", label: "Agents" },
+  { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
@@ -10,10 +11,13 @@ export const SECTIONS = Object.freeze([
 ]);
 
 export const TARGETS = Object.freeze(["codex", "claude"]);
+export const PROVIDER_TARGETS = Object.freeze(["claude", "codex", "opencode", "pi"]);
 
 export function targetLabel(target) {
   if (target === "claude") return "Claude Code";
   if (target === "codex") return "Codex";
+  if (target === "opencode") return "OpenCode";
+  if (target === "pi") return "Pi";
   return String(target || "Unknown");
 }
 
@@ -27,7 +31,13 @@ export function moveSection(current, delta) {
 }
 
 export function otherTarget(target) {
-  return target === "claude" ? "codex" : "claude";
+  return cycleTarget(target, 1, TARGETS);
+}
+
+export function cycleTarget(target, delta = 1, targets = TARGETS) {
+  const values = Array.isArray(targets) && targets.length ? targets : TARGETS;
+  const index = Math.max(0, values.indexOf(target));
+  return values[(index + delta + values.length) % values.length];
 }
 
 export function targetReport(snapshot, target) {
@@ -109,6 +119,54 @@ export function snippetEntries(localEntries, remoteEntries) {
     merged.set(value.name, current);
   }
   return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function providerDisplayText(value, maximum = 2048) {
+  return typeof value === "string"
+    ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, maximum)
+    : "";
+}
+
+function providerEntry(value, source) {
+  if (!value || typeof value.name !== "string") return null;
+  const name = providerDisplayText(value.name, 64);
+  if (!name) return null;
+  return {
+    key: `${source}:${name}`,
+    name,
+    source,
+    description: providerDisplayText(value.description, 500),
+    protocol: providerDisplayText(value.protocol, 40),
+    endpoint: providerDisplayText(value.endpoint, 2048),
+    requestedModel: providerDisplayText(value.requested_model, 240),
+    outboundModel: providerDisplayText(value.outbound_model, 240),
+    enabled: value.enabled !== false,
+    compatible: value.compatible !== false,
+    ready: value.ready === true,
+    issue: providerDisplayText(value.issue, 500),
+    authMode: providerDisplayText(value.auth_mode, 32),
+    secretReference: providerDisplayText(value.secret_reference, 96),
+    secretPresent: value.secret_present === true,
+    applied: value.applied === true,
+    target: providerDisplayText(value.target, 32),
+    platform: providerDisplayText(value.platform, 32)
+  };
+}
+
+export function providerEntries(localEntries, remoteEntries) {
+  const entries = [];
+  for (const value of Array.isArray(localEntries) ? localEntries : []) {
+    const entry = providerEntry(value, "local");
+    if (entry) entries.push(entry);
+  }
+  for (const value of Array.isArray(remoteEntries) ? remoteEntries : []) {
+    const entry = providerEntry(value, "cloud");
+    if (entry) entries.push(entry);
+  }
+  return entries.sort((left, right) =>
+    left.name.localeCompare(right.name) ||
+    Number(right.source === "local") - Number(left.source === "local")
+  );
 }
 
 export function mcpTargetComparison(snapshot) {
@@ -224,6 +282,12 @@ export function actionForKey(section, input) {
     if (input === "c" || input === "\r") return "agent-configure";
     if (input === "x") return "agent-uninstall";
   }
+  if (section === "providers") {
+    if (input === "p") return "provider-plan";
+    if (input === "a") return "provider-apply";
+    if (input === "u") return "provider-sync-push";
+    if (input === "d") return "provider-sync-pull";
+  }
   if (["mcp", "skills", "prompts", "snippets"].includes(section)) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
@@ -241,6 +305,7 @@ export function actionForKey(section, input) {
 
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
+    action === "provider-sync-push" || action === "provider-sync-pull" ||
     action.endsWith("-apply");
 }
 
@@ -248,6 +313,10 @@ export function actionLabel(action, selection, target) {
   if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
   if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
+  if (action === "provider-plan") return `Plan Provider ${selection || "profile"} for ${targetLabel(target)}`;
+  if (action === "provider-apply") return `Apply Provider ${selection || "profile"} to ${targetLabel(target)}`;
+  if (action === "provider-sync-push") return "Back up local Provider catalogs to encrypted Workspace";
+  if (action === "provider-sync-pull") return "Merge encrypted Workspace Provider catalogs locally";
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
   if (action === "prompt-view-cloud") return `View Workspace Prompt ${selection || "selection"} for ${target}`;

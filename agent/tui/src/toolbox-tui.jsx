@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createController } from "./controller.mjs";
 import {
   SECTIONS,
+  PROVIDER_TARGETS,
   TARGETS,
   actionForKey,
   actionLabel,
@@ -11,11 +12,13 @@ import {
   clampSelection,
   componentSummary,
   componentTargetState,
+  cycleTarget,
   mcpTargetComparison,
   moveSection,
   normalizeSection,
   otherTarget,
   presetEntries,
+  providerEntries,
   promptTargetState,
   safePromptPreviewText,
   selectionDelta,
@@ -35,7 +38,23 @@ const COLORS = Object.freeze({
   accent: "cyan",
   selected: "magenta",
   codex: "cyan",
-  claude: "yellow"
+  claude: "yellow",
+  opencode: "green",
+  pi: "magenta",
+  local: "green",
+  cloud: "blue"
+});
+
+const SECTION_COLORS = Object.freeze({
+  overview: "white",
+  agents: "blue",
+  providers: "magenta",
+  mcp: "cyan",
+  skills: "green",
+  prompts: "yellow",
+  snippets: "blue",
+  presets: "magenta",
+  cloud: "cyan"
 });
 
 const COMPONENT_LABELS = Object.freeze({ mcp: "MCP", skills: "Skills", prompts: "Prompts" });
@@ -44,18 +63,19 @@ function usage() {
   process.stdout.write(`script-toolbox agent TUI
 
 Usage:
-  toolbox-tui [--section <overview|agents|mcp|skills|prompts|snippets|presets|cloud>]
+  toolbox-tui [--section <overview|agents|providers|mcp|skills|prompts|snippets|presets|cloud>]
   toolbox-tui --help
 
 Keys:
   Tab / Shift+Tab / Left / Right  Switch section
-  t                                 Switch Codex / Claude target
+  t                                 Switch target (four clients in Providers)
   r                                 Refresh live status
   [ / ] / Up / Down                 Select previous / next list item
-  p / a                             Plan / apply selected cloud configuration
+  p / a                             Plan / apply selected configuration
   Prompts: v local · V Workspace    View Prompt content on demand
   u                                 Roll back a preset
   Agents: c configure · p providers · x uninstall owned config
+  Providers: p plan · a apply · u upload · d download/merge
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -90,10 +110,19 @@ function TargetBadge({ target, selected = false }) {
   );
 }
 
-function Panel({ title, children, grow = 1 }) {
+function SourceBadge({ source, selected = false }) {
+  const label = source === "cloud" ? "WORKSPACE" : "LOCAL";
   return (
-    <Box borderStyle="round" borderColor="gray" paddingX={1} flexGrow={grow} flexDirection="column">
-      <Text bold color="cyan">{title}</Text>
+    <Text color={COLORS[source] || COLORS.muted} bold inverse={selected}>
+      {` ${label.padEnd(9)} `}
+    </Text>
+  );
+}
+
+function Panel({ title, children, grow = 1, accent = "cyan" }) {
+  return (
+    <Box borderStyle="round" borderColor={accent} paddingX={1} flexGrow={grow} flexDirection="column">
+      <Text bold color={accent}>{title}</Text>
       {children}
     </Box>
   );
@@ -201,6 +230,13 @@ function Overview({ snapshot, target }) {
       <Row label="Secrets" value={snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete"} kind={snapshot.doctor?.secrets?.ok ? "good" : "bad"} />
       <Row label="Remotes" value={`${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available`} />
       <Row label="Workspace" value={workspace ? `${workspace.latest?.version || "empty"} · ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status} kind={cloud.kind} />
+      {workspace && <Row
+        label="Provider backup"
+        value={workspace.agent?.synced
+          ? `${workspace.agent.profiles || 0} profile(s) · ${workspace.agent.secrets || 0} hidden Secret value(s)`
+          : "not backed up"}
+        kind={workspace.agent?.synced ? "cloud" : "muted"}
+      />}
       {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
     </Box>
   );
@@ -230,6 +266,116 @@ function Agents({ snapshot, selected }) {
           <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall owned config
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+function ProvidersView({ snapshot, surface, selected, target }) {
+  const entries = providerEntries(surface.local, surface.cloud);
+  const safeIndex = clampSelection(selected, entries.length);
+  const visible = selectionWindow(entries, safeIndex, 10);
+  const current = entries[safeIndex] || null;
+  const dashboard = surface.dashboard || {};
+  const localStatus = dashboard.status || {};
+  const failover = dashboard.failover || {};
+  const pricing = dashboard.pricing || {};
+  const proxy = dashboard.proxy || {};
+  const remote = snapshot.workspace?.agent || {};
+  const localCount = entries.filter((entry) => entry.source === "local").length;
+  const cloudCount = entries.filter((entry) => entry.source === "cloud").length;
+  const stateKind = !current?.enabled
+    ? "muted"
+    : current?.ready
+      ? "good"
+      : current?.compatible ? "warn" : "bad";
+  const proxyKind = proxy.status === "running"
+    ? "good"
+    : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
+  return (
+    <Box flexDirection="column">
+      <Box gap={1} marginBottom={1}>
+        <Text color="gray">Render target</Text>
+        {PROVIDER_TARGETS.map((entry) => (
+          <TargetBadge key={entry} target={entry} selected={entry === target} />
+        ))}
+        <Text color="gray">t cycle</Text>
+      </Box>
+      <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 98 ? "column" : "row"}>
+        <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={34}>
+          <Text color="gray">
+            Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} · {localCount} local / {cloudCount} cloud
+          </Text>
+          {visible.items.map(({ item, index }) => (
+            <Box key={item.key} gap={1}>
+              <Text color={index === safeIndex ? "white" : "gray"} bold={index === safeIndex}>
+                {index === safeIndex ? "›" : " "}
+              </Text>
+              <Text color={COLORS[item.source]} bold>{item.source === "cloud" ? "W" : "L"}</Text>
+              <Text color={index === safeIndex ? "magenta" : "white"} bold={index === safeIndex}>
+                {item.name}
+              </Text>
+              {item.applied && <Text color="green">●</Text>}
+              {!item.enabled && <Text color="gray">disabled</Text>}
+            </Box>
+          ))}
+          {entries.length === 0 && !surface.loading && <Text color="gray">(no Provider profiles)</Text>}
+        </Box>
+        <Box borderStyle="single" borderColor={current ? COLORS[current.source] : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
+          <Box gap={1}>
+            <Text color="gray">Selected</Text>
+            {current && <SourceBadge source={current.source} />}
+          </Box>
+          <Text bold color="magenta">{current?.name || "none"}</Text>
+          {current ? (
+            <>
+              <Row label="Target" value={`${targetLabel(target)} · ${current.platform || dashboard.platform || "unknown"}`} kind={target} />
+              <Row label="State" value={!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"} kind={stateKind} />
+              <Row label="Protocol" value={current.protocol || "unknown"} />
+              <Row label="Endpoint" value={current.endpoint || "unknown"} />
+              <Row label="Model" value={`${current.requestedModel || "unknown"} → ${current.outboundModel || "unknown"}`} />
+              <Row
+                label="Secret"
+                value={current.authMode === "none"
+                  ? "not required"
+                  : `${current.secretReference || "missing reference"} · ${current.secretPresent ? "present" : "missing"}`}
+                kind={current.authMode === "none" || current.secretPresent ? "good" : "warn"}
+              />
+              <Row label="Applied" value={current.applied ? "current on this device" : "not current"} kind={current.applied ? "good" : "muted"} />
+              {current.description && <Row label="About" value={current.description} />}
+              {current.issue && <Row label="Blocked by" value={current.issue} kind="bad" />}
+            </>
+          ) : (
+            <Text color="gray">Initialize locally or back up a Provider bundle to Workspace.</Text>
+          )}
+        </Box>
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Row
+          label="Local catalog"
+          value={localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) · ${localStatus.secret_count || 0} Secret value(s)` : "not initialized"}
+          kind={localStatus.store_exists ? "local" : "muted"}
+        />
+        <Row
+          label="Workspace backup"
+          value={remote.synced ? `${remote.profiles || 0} profile(s) · ${remote.secrets || 0} hidden Secret value(s)` : "not backed up"}
+          kind={remote.synced ? "cloud" : "muted"}
+        />
+        <Row label="Failover" value={`${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)`} />
+        <Row label="Pricing" value={`${pricing.version || "none"} · ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)`} />
+        <Row
+          label="Proxy"
+          value={`${proxy.status || "unavailable"}${proxy.profile ? ` · ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`}
+          kind={proxyKind}
+        />
+      </Box>
+      {surface.loading && <Text color="gray">◌ Loading local and encrypted Workspace Provider catalogs…</Text>}
+      <ErrorText value={surface.localError} />
+      <ErrorText value={surface.cloudError} />
+      {(dashboard.errors || []).map((error) => <ErrorText key={error} value={error} />)}
+      <Text color="gray">
+        [/] select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="green" bold>u</Text> upload local · <Text color="blue" bold>d</Text> download/merge
+      </Text>
+      <Text color="gray">Secret values remain hidden; applying writes only the selected client target.</Text>
     </Box>
   );
 }
@@ -528,7 +674,7 @@ function Cloud({ snapshot }) {
       <Row label="Version" value={workspace.latest?.version || "none"} />
       <Row label="Format" value={workspace.migration_pending
         ? `schema ${workspace.remote_schema} · compatible in memory`
-        : `schema ${workspace.remote_schema || 2}`} kind={workspace.migration_pending ? "warn" : "good"} />
+        : `schema ${workspace.remote_schema || 3}`} kind={workspace.migration_pending ? "warn" : "good"} />
       {workspace.migration_pending && <Text color="yellow">Upgrade preview: agentctl workspace migrate</Text>}
       <Row label="Web UI" value={workspace.web_ui_enabled ? "enabled" : "disabled"} kind={workspace.web_ui_enabled ? "good" : "muted"} />
       {Object.entries(workspace.stores || {}).map(([name, store]) => (
@@ -537,8 +683,15 @@ function Cloud({ snapshot }) {
           : "not attached"} kind={store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted"} />
       ))}
       <Row label="Presets" value={Object.keys(workspace.presets || {}).join(", ") || "none"} />
+      <Row
+        label="Providers"
+        value={workspace.agent?.synced
+          ? `${workspace.agent.profiles || 0} profile(s) · ${workspace.agent.secrets || 0} hidden Secret value(s) · ${workspace.agent.failover_routes || 0} route(s) · ${workspace.agent.pricing_rates || 0} rate(s)`
+          : "not backed up"}
+        kind={workspace.agent?.synced ? "cloud" : "muted"}
+      />
       <Text color="gray">Catalogs are browsed on demand and decrypted only in this process.</Text>
-      <Text color="gray">Only an applied Profile, Pack, Prompt, Snippet, or Preset is materialized locally.</Text>
+      <Text color="gray">Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally.</Text>
     </Box>
   );
 }
@@ -547,11 +700,12 @@ function Help() {
   return (
     <Panel title="Keyboard help">
       <Text>Tab / Shift+Tab or arrows  switch section</Text>
-      <Text>t  switch target     r  refresh     q  quit</Text>
+      <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers) · r refresh · q quit</Text>
       <Text>[ / ] or Up/Down  select previous / next item</Text>
       <Text>
         Agents: <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall
       </Text>
+      <Text>Providers: [/] select · p plan · a apply · u upload · d download/merge</Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
       <Text>Prompts: v view active local · V view selected Workspace · [/] scroll preview</Text>
       <Text>Snippets: [/] select · c copy local · p inspect cloud pull · a pull</Text>
@@ -565,17 +719,27 @@ function App({ initialSection, controller, onLaunch }) {
   const { exit } = useApp();
   const [section, setSection] = useState(initialSection);
   const [target, setTarget] = useState("codex");
+  const [providerTarget, setProviderTarget] = useState("codex");
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(0);
-  const [componentSelected, setComponentSelected] = useState({ mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [componentSelected, setComponentSelected] = useState({ providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
   const [catalogs, setCatalogs] = useState({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
     prompts: { items: [], loading: false, error: "", key: "" },
     snippets: { items: [], loading: false, error: "", key: "" }
+  });
+  const [providerSurface, setProviderSurface] = useState({
+    local: [],
+    cloud: [],
+    dashboard: null,
+    loading: false,
+    localError: "",
+    cloudError: "",
+    key: ""
   });
   const [message, setMessage] = useState("Loading diagnostics…");
   const [lastDetail, setLastDetail] = useState("");
@@ -639,11 +803,66 @@ function App({ initialSection, controller, onLaunch }) {
     return () => { cancelled = true; };
   }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
 
+  useEffect(() => {
+    if (section !== "providers" || !snapshot) return;
+    const key = `${snapshot.updatedAt}:${workspaceStoreId || "local"}:${snapshot.workspace?.latest?.version || "none"}:${providerTarget}`;
+    let cancelled = false;
+    setProviderSurface((value) => ({
+      ...value,
+      loading: true,
+      localError: "",
+      cloudError: "",
+      key
+    }));
+    const local = Promise.resolve()
+      .then(() => controller.providerDashboard(providerTarget))
+      .then((data) => ({ data, error: "" }))
+      .catch((error) => ({ data: null, error: String(error?.message || error) }));
+    const cloud = workspaceStoreId
+      ? controller.remoteCatalog("providers", providerTarget)
+      : Promise.resolve({ ok: true, items: [], error: "" });
+    void Promise.all([local, cloud]).then(([localResult, cloudResult]) => {
+      if (cancelled) return;
+      const localItems = localResult.data?.profiles || [];
+      const current = localResult.data?.status?.current?.[providerTarget];
+      const cloudItems = (cloudResult.items || []).map((profile) => ({
+        ...profile,
+        applied: current?.profile === profile.name &&
+          current.platform === profile.platform &&
+          current.protocol === profile.protocol &&
+          current.endpoint === profile.endpoint &&
+          current.requested_model === profile.requested_model &&
+          current.outbound_model === profile.outbound_model
+      }));
+      setProviderSurface({
+        local: localItems,
+        cloud: cloudItems,
+        dashboard: localResult.data,
+        loading: false,
+        localError: localResult.error,
+        cloudError: cloudResult.error,
+        key
+      });
+      const entries = providerEntries(localItems, cloudItems);
+      setComponentSelected((value) => ({
+        ...value,
+        providers: clampSelection(value.providers, entries.length)
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [controller, providerTarget, section, snapshot, workspaceStoreId]);
+
   const selectedPreset = useMemo(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents)
     ? snapshot.agents[selectedAgent]?.client || ""
     : "";
   const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
+  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud);
+  const selectedProvider = mergedProviders[
+    clampSelection(componentSelected.providers, mergedProviders.length)
+  ] || null;
+  const selectedProviderName = selectedProvider?.name || "";
+  const selectedProviderSource = selectedProvider?.source || "local";
   const selectedSnippet = mergedSnippets[clampSelection(componentSelected.snippets, mergedSnippets.length)] || null;
   const selectedRemote = section === "snippets"
     ? selectedSnippet?.remote ? selectedSnippet.name : ""
@@ -693,21 +912,28 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     setBusy(true);
+    const providerAction = action.startsWith("provider-");
+    const actionTarget = providerAction ? providerTarget : target;
     const selection = action.startsWith("agent-")
       ? selectedAgentId
+      : providerAction ? selectedProviderName
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
-    setMessage(`${actionLabel(action, selection, target)}…`);
+    setMessage(`${actionLabel(action, selection, actionTarget)}…`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
-        source: snapshot?.presetSource || "local",
-        target
+        selection: providerAction
+          ? selectedProviderName
+          : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        source: providerAction
+          ? selectedProviderSource
+          : snapshot?.presetSource || "local",
+        target: actionTarget
       });
-      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, target)}`);
+      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
       await refresh(true);
     } catch (error) {
@@ -715,7 +941,9 @@ function App({ initialSection, controller, onLaunch }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedLocalSnippet, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
+  }, [controller, exit, onLaunch, providerTarget, refresh, selectedAgentId, selectedLocalSnippet,
+    selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
+    snapshot?.presetSource, target]);
 
   useInput((input, key) => {
     if (busy) return;
@@ -749,7 +977,13 @@ function App({ initialSection, controller, onLaunch }) {
     if (showHelp && key.escape) return setShowHelp(false);
     if (key.tab || key.rightArrow) return setSection((value) => moveSection(value, key.shift ? -1 : 1));
     if (key.leftArrow) return setSection((value) => moveSection(value, -1));
-    if (input === "t") return setTarget((value) => otherTarget(value));
+    if (input === "t") {
+      if (section === "providers") {
+        setComponentSelected((value) => ({ ...value, providers: 0 }));
+        return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS));
+      }
+      return setTarget((value) => otherTarget(value));
+    }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
     if (section === "agents" && delta !== 0) {
@@ -759,6 +993,12 @@ function App({ initialSection, controller, onLaunch }) {
     }
     if (section === "presets" && delta !== 0) {
       return setSelected((value) => clampSelection(value + delta, presetEntries(snapshot).length));
+    }
+    if (section === "providers" && delta !== 0) {
+      return setComponentSelected((value) => ({
+        ...value,
+        providers: clampSelection(value.providers + delta, mergedProviders.length)
+      }));
     }
     if (["mcp", "skills", "prompts", "snippets"].includes(section) && delta !== 0) {
       const length = section === "snippets" ? mergedSnippets.length : catalogs[section].items.length;
@@ -776,6 +1016,15 @@ function App({ initialSection, controller, onLaunch }) {
       setMessage("No agent is selected.");
       return;
     }
+    if ((action === "provider-plan" || action === "provider-apply") && !selectedProviderName) {
+      setMessage("No local or Workspace Provider profile is selected.");
+      return;
+    }
+    if ((action === "provider-sync-push" || action === "provider-sync-pull") &&
+        !snapshot?.workspaceConnection?.configured) {
+      setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
+      return;
+    }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
       setMessage("No preset is selected.");
       return;
@@ -789,11 +1038,16 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     if (actionNeedsConfirmation(action)) {
+      const providerAction = action.startsWith("provider-");
       const selection = action.startsWith("agent-")
         ? selectedAgentId
+        : providerAction ? selectedProviderName
         : action === "snippet-copy" ? selectedLocalSnippet
           : action.includes("-") ? selectedRemote : selectedPreset;
-      setConfirm({ action, label: actionLabel(action, selection, target) });
+      setConfirm({
+        action,
+        label: actionLabel(action, selection, providerAction ? providerTarget : target)
+      });
     } else {
       void executeAction(action);
     }
@@ -803,6 +1057,14 @@ function App({ initialSection, controller, onLaunch }) {
   if (snapshot) {
     content = <Overview snapshot={snapshot} target={target} />;
     if (section === "agents") content = <Agents snapshot={snapshot} selected={selectedAgent} />;
+    if (section === "providers") content = (
+      <ProvidersView
+        snapshot={snapshot}
+        surface={providerSurface}
+        selected={componentSelected.providers}
+        target={providerTarget}
+      />
+    );
     if (section === "mcp") content = <McpView snapshot={snapshot} target={target} catalog={catalogs.mcp} selected={componentSelected.mcp} />;
     if (section === "skills") content = <ComponentView snapshot={snapshot} target={target} component="skills" catalog={catalogs.skills} selected={componentSelected.skills} />;
     if (section === "prompts") content = promptPreview
@@ -814,10 +1076,12 @@ function App({ initialSection, controller, onLaunch }) {
   }
 
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
+  const activeTarget = section === "providers" ? providerTarget : target;
   const panelTitle = promptPreview
     ? `Prompts · ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview`
     : ["mcp", "prompts"].includes(section)
     ? `${sectionLabel} · Claude Code vs Codex`
+    : section === "providers" ? `Providers · ${targetLabel(providerTarget)}`
     : section === "snippets" ? "Snippets · Shared library"
       : ["overview", "skills", "prompts", "presets"].includes(section)
       ? `${sectionLabel} · ${targetLabel(target)}`
@@ -829,23 +1093,26 @@ function App({ initialSection, controller, onLaunch }) {
         <Text bold color="cyan">script-toolbox / agents</Text>
         <Box gap={1}>
           <Text color="gray">{section === "snippets" ? "shared library" : "active target"}</Text>
-          {section !== "snippets" && <TargetBadge target={target} selected />}
+          {section !== "snippets" && <TargetBadge target={activeTarget} selected />}
           {section !== "snippets" && <Text color="gray">t switch</Text>}
         </Box>
       </Box>
-      <Box gap={1} marginBottom={1}>
+      <Box gap={1} marginBottom={1} flexWrap="wrap">
         {SECTIONS.map((item) => (
           <Text
             key={item.id}
-            color={section === item.id ? "black" : "gray"}
-            backgroundColor={section === item.id ? "cyan" : undefined}
+            color={section === item.id ? "black" : SECTION_COLORS[item.id]}
+            backgroundColor={section === item.id ? SECTION_COLORS[item.id] : undefined}
             bold={section === item.id}
+            dimColor={section !== item.id}
           >
             {` ${item.label} `}
           </Text>
         ))}
       </Box>
-      {showHelp ? <Help /> : <Panel title={panelTitle}>{content}</Panel>}
+      {showHelp
+        ? <Help />
+        : <Panel title={panelTitle} accent={SECTION_COLORS[section] || "cyan"}>{content}</Panel>}
       {lastDetail && !confirm && (
         <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" marginTop={1}>
           {lastDetail.split("\n").slice(0, 8).map((line, index) => (

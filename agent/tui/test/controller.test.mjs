@@ -215,3 +215,159 @@ test("Agents actions expose providers, owned uninstall, and interactive setup", 
   });
   assert.throws(() => controller.interactiveCommand("unknown"), /unsupported agent/);
 });
+
+test("Provider dashboard resolves exact target metadata without exposing Secret values", async () => {
+  const now = new Date().toISOString();
+  const runner = async (_executable, args) => {
+    const command = args.join(" ");
+    if (command === "provider status --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          schema: 1,
+          platform: "darwin",
+          store_exists: true,
+          secrets_exists: true,
+          profile_count: 1,
+          secret_count: 1,
+          missing_secrets: [],
+          current: {
+            codex: {
+              profile: "gateway",
+              platform: "darwin",
+              protocol: "openai_responses",
+              endpoint: "https://gateway.example.test/v1",
+              requested_model: "daily",
+              outbound_model: "vendor-model",
+              applied_at: now
+            }
+          }
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "provider list --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify([{
+          schema: 1,
+          name: "gateway",
+          description: "Daily gateway",
+          protocol: "openai_responses",
+          endpoint: "https://gateway.example.test/v1",
+          auth: { mode: "bearer", secret: "gateway_key" },
+          models: { default: "daily", aliases: { daily: "vendor-model" } },
+          targets: {},
+          platforms: {}
+        }]),
+        stderr: ""
+      };
+    }
+    if (command === "failover status --json") {
+      return { code: 0, stdout: '{"status":"available","routes":2}', stderr: "" };
+    }
+    if (command === "pricing status --json") {
+      return { code: 0, stdout: '{"status":"available","version":"2026-08","rates":3}', stderr: "" };
+    }
+    if (command === "proxy status --json") {
+      return { code: 0, stdout: '{"status":"running","running":true,"profile":"gateway","target":"codex"}', stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const dashboard = await createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {}
+  }).providerDashboard("codex");
+  assert.equal(dashboard.profiles.length, 1);
+  assert.equal(dashboard.profiles[0].requested_model, "daily");
+  assert.equal(dashboard.profiles[0].outbound_model, "vendor-model");
+  assert.equal(dashboard.profiles[0].secret_reference, "gateway_key");
+  assert.equal(dashboard.profiles[0].secret_present, true);
+  assert.equal(dashboard.profiles[0].applied, true);
+  assert.equal(dashboard.failover.routes, 2);
+  assert.equal(dashboard.pricing.version, "2026-08");
+  assert.equal(dashboard.proxy.status, "running");
+  assert.equal(JSON.stringify(dashboard).includes("secret-value"), false);
+});
+
+test("Provider actions plan/apply one source and synchronize only after explicit action", async () => {
+  const calls = [];
+  const temporary = [];
+  const runner = async (_executable, args) => {
+    calls.push(args);
+    if (args[0] === "provider" && args[1] === "plan") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          schema: 1,
+          profile: "gateway",
+          ready: true,
+          plans: [{
+            target: "codex",
+            target_label: "Codex",
+            enabled: true,
+            ready: true,
+            protocol: "openai_responses",
+            endpoint: "https://gateway.example.test/v1",
+            requested_model: "daily",
+            outbound_model: "vendor-model",
+            auth: { secret: "gateway_key", present: true }
+          }]
+        }),
+        stderr: ""
+      };
+    }
+    if (args[0] === "provider" && args[1] === "apply") {
+      return { code: 0, stdout: '{"ok":true,"profile":"gateway","applied":["codex"]}', stderr: "" };
+    }
+    if (args[0] === "workspace" && args[1] === "agent") {
+      return {
+        code: 0,
+        stdout: '{"ok":true,"bundle":{"profiles":1,"secrets":1,"failover_routes":0,"pricing_rates":0}}',
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const remoteWorkspace = {
+    withProviderFiles: async (name, target, callback) => {
+      temporary.push(`${name}:${target}`);
+      return callback({
+        storePath: "/tmp/providers.json",
+        secretsPath: "/tmp/provider-secrets.json"
+      });
+    }
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+
+  const plan = await controller.action("provider-plan", {
+    selection: "gateway",
+    source: "cloud",
+    target: "codex"
+  });
+  assert.equal(plan.ok, true);
+  assert.match(plan.detail, /No client file was changed/);
+  assert.deepEqual(temporary, ["gateway:codex"]);
+  assert.equal(calls[0].includes("/tmp/provider-secrets.json"), true);
+  assert.equal(calls[0].includes("--yes"), false);
+
+  const applied = await controller.action("provider-apply", {
+    selection: "gateway",
+    source: "local",
+    target: "codex"
+  });
+  assert.equal(applied.ok, true);
+  assert.match(applied.detail, /start a new agent session/);
+  assert.equal(calls[1].includes("--yes"), true);
+  assert.equal(calls[1].includes("--store"), false);
+
+  const pushed = await controller.action("provider-sync-push");
+  assert.equal(pushed.ok, true);
+  assert.match(pushed.detail, /Backed up 1 profile/);
+  assert.deepEqual(calls[2], ["workspace", "agent", "push", "--yes", "--json"]);
+  const pulled = await controller.action("provider-sync-pull");
+  assert.equal(pulled.ok, true);
+  assert.match(pulled.detail, /Merged 1 profile/);
+  assert.deepEqual(calls[3], ["workspace", "agent", "pull", "--yes", "--json"]);
+});

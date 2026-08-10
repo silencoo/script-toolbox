@@ -2003,8 +2003,8 @@ var require_react_reconciler_production = __commonJS({
           currentEntangledActionThenable = {
             status: "pending",
             value: void 0,
-            then: function(resolve4) {
-              entangledListeners.push(resolve4);
+            then: function(resolve5) {
+              entangledListeners.push(resolve5);
             }
           };
         }
@@ -2027,8 +2027,8 @@ var require_react_reconciler_production = __commonJS({
           status: "pending",
           value: null,
           reason: null,
-          then: function(resolve4) {
-            listeners.push(resolve4);
+          then: function(resolve5) {
+            listeners.push(resolve5);
           }
         };
         thenable.then(
@@ -12961,22 +12961,22 @@ var init_devtools = __esm({
     init_devtools_window_polyfill();
     init_wrapper();
     init_react_devtools_stub();
-    isDevToolsReachable = async () => new Promise((resolve4) => {
+    isDevToolsReachable = async () => new Promise((resolve5) => {
       const socket = new wrapper_default("ws://localhost:8097");
       const timeout = setTimeout(() => {
         socket.terminate();
-        resolve4(false);
+        resolve5(false);
       }, 2e3);
       timeout.unref();
       socket.on("open", () => {
         clearTimeout(timeout);
         socket.terminate();
-        resolve4(true);
+        resolve5(true);
       });
       socket.on("error", () => {
         clearTimeout(timeout);
         socket.terminate();
-        resolve4(false);
+        resolve5(false);
       });
     });
     if (await isDevToolsReachable()) {
@@ -21071,8 +21071,8 @@ var kittyModifiers = {
 var noop = () => {
 };
 var textEncoder = new TextEncoder();
-var yieldImmediate = async () => new Promise((resolve4) => {
-  setImmediate(resolve4);
+var yieldImmediate = async () => new Promise((resolve5) => {
+  setImmediate(resolve5);
 });
 var kittyQueryEscapeByte = 27;
 var kittyQueryOpenBracketByte = 91;
@@ -21289,8 +21289,8 @@ var Ink = class {
       };
     }
     this.initKittyKeyboard();
-    this.exitPromise = new Promise((resolve4, reject) => {
-      this.resolveExitPromise = resolve4;
+    this.exitPromise = new Promise((resolve5, reject) => {
+      this.resolveExitPromise = resolve5;
       this.rejectExitPromise = reject;
     });
     void this.exitPromise.catch(noop);
@@ -21601,9 +21601,9 @@ var Ink = class {
     settleThrottle(this.throttledOnRender, canWriteToStdout);
     settleThrottle(this.throttledLog, canWriteToStdout);
     if (canWriteToStdout && hasWritableState) {
-      await new Promise((resolve4) => {
+      await new Promise((resolve5) => {
         this.options.stdout.write("", () => {
-          resolve4();
+          resolve5();
         });
       });
       return;
@@ -21689,8 +21689,8 @@ var Ink = class {
   async awaitNextRender() {
     if (!this.nextRenderCommit) {
       let resolveRender;
-      const promise = new Promise((resolve4) => {
-        resolveRender = resolve4;
+      const promise = new Promise((resolve5) => {
+        resolveRender = resolve5;
       });
       this.nextRenderCommit = { promise, resolve: resolveRender };
     }
@@ -22489,22 +22489,23 @@ import { spawnSync } from "node:child_process";
 // src/controller.mjs
 import { spawn } from "node:child_process";
 import { lstat as lstat3, readFile as readFile3 } from "node:fs/promises";
-import { dirname as dirname3, isAbsolute, join as join3, resolve as resolve3 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname as dirname4, isAbsolute, join as join4, resolve as resolve4 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/remote-workspace.mjs
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import {
   chmod as chmod2,
   lstat as lstat2,
+  mkdtemp,
   mkdir as mkdir2,
   readFile as readFile2,
   rename as rename2,
   rm as rm2,
   writeFile
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
+import { homedir as homedir2, tmpdir } from "node:os";
+import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 
 // ../remote-store.mjs
 import {
@@ -23051,6 +23052,10 @@ function validatePlatform(value, label = "platform") {
   }
   return value;
 }
+function normalizeRuntimePlatform(value = process.platform) {
+  if (value === "win32") return "windows";
+  return validatePlatform(value, "runtime platform");
+}
 function validateEndpoint(value, label = "endpoint") {
   requireString(value, label, { min: 8, max: 2048 });
   let endpoint;
@@ -23232,6 +23237,55 @@ function validateProviderSecrets(value) {
     requireTimestamp(secret.updated_at, `secret '${name}' updated_at`);
   }
   return value;
+}
+function mergeOverride(base, override = {}) {
+  const result = { ...base, ...override };
+  if (override.auth) {
+    result.auth = override.auth.mode === "none" ? { mode: "none" } : { ...base.auth, ...override.auth };
+  }
+  return result;
+}
+function resolveProviderProfile(profile, {
+  target,
+  platform: platform2 = normalizeRuntimePlatform()
+}) {
+  validateProviderProfile(structuredClone(profile), profile.name);
+  validateTarget(target);
+  validatePlatform(platform2);
+  let resolved = {
+    profile: profile.name,
+    target,
+    platform: platform2,
+    enabled: true,
+    endpoint: profile.endpoint,
+    protocol: profile.protocol,
+    auth: structuredClone(profile.auth),
+    model: profile.models.default,
+    models: structuredClone(profile.models)
+  };
+  resolved = mergeOverride(resolved, profile.targets[target]);
+  resolved = mergeOverride(
+    resolved,
+    profile.platforms[platform2]?.targets?.[target]
+  );
+  resolved.endpoint = validateEndpoint(resolved.endpoint, "resolved endpoint");
+  validateProtocol2(resolved.protocol, "resolved protocol");
+  validateAuth(resolved.auth, "resolved auth");
+  validateModelId(resolved.model, "resolved model");
+  const seen = /* @__PURE__ */ new Set();
+  let outbound = resolved.model;
+  while (Object.hasOwn(resolved.models.aliases, outbound)) {
+    if (seen.has(outbound)) {
+      throw new ProviderSchemaError(
+        `model alias cycle detected in provider profile '${profile.name}'`
+      );
+    }
+    seen.add(outbound);
+    outbound = resolved.models.aliases[outbound];
+  }
+  resolved.requested_model = resolved.model;
+  resolved.outbound_model = outbound;
+  return resolved;
 }
 
 // ../agentctl/failover-schema.mjs
@@ -23577,6 +23631,159 @@ function normalizeWorkspaceSchema(snapshot) {
   return upgraded;
 }
 
+// ../agentctl/provider-renderer.mjs
+import { homedir } from "node:os";
+import { dirname as dirname2, join as join2, resolve as resolve2, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+var MODULE_DIR = dirname2(fileURLToPath(import.meta.url));
+var DEFAULT_AGENT_ROOT = resolve2(MODULE_DIR, "..");
+var TARGET_LABELS = Object.freeze({
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  pi: "Pi"
+});
+var TARGET_BACKENDS = Object.freeze({
+  claude: ["claude-code", "setup.sh"],
+  codex: ["codex", "setup.sh"],
+  opencode: ["opencode", "setup.sh"],
+  pi: ["pi", "setup.sh"]
+});
+function loopbackEndpoint(value) {
+  const host = new URL(value).hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+function compatibilityIssue(resolved) {
+  const { target, protocol, auth } = resolved;
+  if (target === "claude") {
+    if (protocol !== "anthropic_messages") {
+      return "Claude Code direct mode requires anthropic_messages";
+    }
+    if (!["bearer", "x-api-key"].includes(auth.mode)) {
+      return "Claude Code direct mode requires bearer or x-api-key authentication";
+    }
+  }
+  if (target === "codex") {
+    if (protocol !== "openai_responses") {
+      return "Codex direct mode requires openai_responses";
+    }
+    if (auth.mode !== "bearer") {
+      return "Codex direct mode requires bearer authentication";
+    }
+  }
+  if (target === "opencode") {
+    if (!["anthropic_messages", "openai_responses", "openai_chat"].includes(protocol)) {
+      return "OpenCode custom providers support Anthropic Messages, OpenAI Responses, or OpenAI Chat";
+    }
+    if (protocol === "anthropic_messages" && auth.mode !== "x-api-key") {
+      return "OpenCode Anthropic direct mode requires x-api-key authentication";
+    }
+    if (["openai_responses", "openai_chat"].includes(protocol) && auth.mode !== "bearer") {
+      return "OpenCode OpenAI direct mode requires bearer authentication";
+    }
+  }
+  if (target === "pi") {
+    if (auth.mode === "none" && !loopbackEndpoint(resolved.endpoint)) {
+      return "unauthenticated Pi profiles are restricted to loopback endpoints";
+    }
+    if (!["bearer", "x-api-key", "x-goog-api-key", "none"].includes(auth.mode)) {
+      return "Pi authentication mode is unsupported";
+    }
+  }
+  return "";
+}
+function targetPaths(target, { home = homedir() } = {}) {
+  validateTarget(target);
+  if (target === "claude") {
+    const root2 = join2(home, ".claude");
+    return {
+      root: root2,
+      config_files: [join2(root2, "settings.json")],
+      state_files: [join2(root2, ".script-toolbox-provider")],
+      key_dir: "",
+      key_file: ""
+    };
+  }
+  if (target === "codex") {
+    const root2 = join2(home, ".codex");
+    const keyDir2 = join2(root2, "provider-keys");
+    return {
+      root: root2,
+      config_files: [join2(root2, "config.toml")],
+      state_files: [
+        join2(root2, ".script-toolbox-provider-key"),
+        join2(root2, ".script-toolbox-defaults-backup.toml")
+      ],
+      key_dir: keyDir2,
+      key_file: join2(keyDir2, "script_toolbox_custom.key")
+    };
+  }
+  if (target === "opencode") {
+    const root2 = join2(home, ".config", "opencode");
+    const keyDir2 = join2(root2, "provider-keys");
+    return {
+      root: root2,
+      config_files: [join2(root2, "opencode.json")],
+      state_files: [join2(root2, ".script-toolbox-provider")],
+      key_dir: keyDir2,
+      key_file: join2(keyDir2, "script-toolbox-custom.key")
+    };
+  }
+  const root = join2(home, ".pi", "agent");
+  const keyDir = join2(root, "provider-keys");
+  return {
+    root,
+    config_files: [join2(root, "models.json"), join2(root, "settings.json")],
+    state_files: [join2(root, ".script-toolbox-provider")],
+    key_dir: keyDir,
+    key_file: join2(keyDir, "script-toolbox-custom.key")
+  };
+}
+function backendPath(target, agentRoot) {
+  const [directory, file] = TARGET_BACKENDS[target];
+  return join2(agentRoot, directory, file);
+}
+function renderProviderPlan(resolved, {
+  secretPresent = false,
+  home = homedir(),
+  agentRoot = process.env.AGENTCTL_AGENT_ROOT || DEFAULT_AGENT_ROOT
+} = {}) {
+  validateTarget(resolved.target);
+  validatePlatform(resolved.platform);
+  const paths = targetPaths(resolved.target, { home });
+  const issue = resolved.enabled ? compatibilityIssue(resolved) : "";
+  const needsSecret = resolved.auth.mode !== "none";
+  const secretReady = !needsSecret || secretPresent;
+  const compatible = !issue;
+  return {
+    schema: 1,
+    profile: resolved.profile,
+    target: resolved.target,
+    target_label: TARGET_LABELS[resolved.target],
+    platform: resolved.platform,
+    mode: "direct",
+    enabled: resolved.enabled,
+    compatible,
+    ready: !resolved.enabled || compatible && secretReady,
+    issue: issue || (!secretReady ? `local Secret '${resolved.auth.secret}' is missing` : ""),
+    protocol: resolved.protocol,
+    endpoint: resolved.endpoint,
+    requested_model: resolved.requested_model,
+    outbound_model: resolved.outbound_model,
+    auth: {
+      mode: resolved.auth.mode,
+      secret: resolved.auth.secret || null,
+      present: secretReady,
+      synthetic: resolved.auth.mode === "none"
+    },
+    backend: backendPath(resolved.target, agentRoot),
+    config_files: paths.config_files,
+    ownership_files: paths.state_files,
+    credential_file: paths.key_file || paths.config_files[0],
+    restart_required: true
+  };
+}
+
 // src/remote-workspace.mjs
 var MCP_NAME = /^[A-Za-z0-9._-]+$/;
 var SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -23587,7 +23794,7 @@ var PROTOCOLS = Object.freeze({
   prompts: PROMPT_REMOTE_PROTOCOL
 });
 function snippetsDirectory(home) {
-  return join2(home, ".local", "share", "script-toolbox", "snippets");
+  return join3(home, ".local", "share", "script-toolbox", "snippets");
 }
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
@@ -23643,22 +23850,22 @@ var RemoteWorkspaceError = class extends Error {
   }
 };
 function defaultConfigPath() {
-  const configHome = process.env.XDG_CONFIG_HOME || join2(homedir(), ".config");
-  return resolve2(process.env.AGENTCTL_WORKSPACE_CONFIG || join2(configHome, "agentctl", "workspace-remote.json"));
+  const configHome = process.env.XDG_CONFIG_HOME || join3(homedir2(), ".config");
+  return resolve3(process.env.AGENTCTL_WORKSPACE_CONFIG || join3(configHome, "agentctl", "workspace-remote.json"));
 }
 function defaultRuntimeRoot() {
   if (process.env.AGENTCTL_WORKSPACE_RUNTIME) {
-    return resolve2(process.env.AGENTCTL_WORKSPACE_RUNTIME);
+    return resolve3(process.env.AGENTCTL_WORKSPACE_RUNTIME);
   }
   if (process.platform === "win32") {
-    return resolve2(
-      process.env.LOCALAPPDATA || join2(homedir(), "AppData", "Local"),
+    return resolve3(
+      process.env.LOCALAPPDATA || join3(homedir2(), "AppData", "Local"),
       "script-toolbox",
       "workspaces"
     );
   }
-  return resolve2(
-    process.env.XDG_DATA_HOME || join2(homedir(), ".local", "share"),
+  return resolve3(
+    process.env.XDG_DATA_HOME || join3(homedir2(), ".local", "share"),
     "agentctl",
     "workspaces"
   );
@@ -23926,28 +24133,28 @@ function decodeFile(file, label) {
 }
 async function writeSkill(runtime, name, skill) {
   assertName(name, SKILL_NAME, "Skill name");
-  const root = join2(runtime, "skills");
+  const root = join3(runtime, "skills");
   await ensureDirectory(root);
-  const temporary = join2(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
+  const temporary = join3(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
   await ensureDirectory(temporary);
   try {
     for (const [path, file] of Object.entries(assertObject(skill.files, `Skill '${name}' files`))) {
       validateRelativePath(path);
-      const destination2 = join2(temporary, ...path.split("/"));
-      await ensureDirectory(dirname2(destination2));
+      const destination2 = join3(temporary, ...path.split("/"));
+      await ensureDirectory(dirname3(destination2));
       await writeFile(destination2, decodeFile(file, `${name}/${path}`), {
         flag: "wx",
         mode: (file.mode & 73) !== 0 ? 448 : 384
       });
     }
-    if (!await pathExists2(join2(temporary, "SKILL.md"))) {
+    if (!await pathExists2(join3(temporary, "SKILL.md"))) {
       throw new RemoteWorkspaceError(`remote Skill '${name}' has no SKILL.md`);
     }
-    const destination = join2(root, name);
+    const destination = join3(root, name);
     if (await pathExists2(destination)) {
-      const backupRoot = join2(runtime, "backups", `remote-${Date.now()}`);
+      const backupRoot = join3(runtime, "backups", `remote-${Date.now()}`);
       await ensureDirectory(backupRoot);
-      await rename2(destination, join2(backupRoot, name));
+      await rename2(destination, join3(backupRoot, name));
     }
     await rename2(temporary, destination);
   } finally {
@@ -23965,10 +24172,38 @@ function publicPreset(name, preset) {
     source: "cloud"
   };
 }
+function publicProviderProfile(profile, bundle, target, {
+  platform: platform2 = normalizeRuntimePlatform(),
+  home = homedir2()
+} = {}) {
+  const resolved = resolveProviderProfile(profile, { target, platform: platform2 });
+  const secretReference = resolved.auth.secret || "";
+  const secretPresent = resolved.auth.mode === "none" || Boolean(secretReference && bundle.secrets?.secrets?.[secretReference]);
+  const plan = renderProviderPlan(resolved, { secretPresent, home });
+  return {
+    name: profile.name,
+    description: profile.description,
+    target,
+    platform: platform2,
+    protocol: plan.protocol,
+    endpoint: plan.endpoint,
+    requested_model: plan.requested_model,
+    outbound_model: plan.outbound_model,
+    enabled: plan.enabled,
+    compatible: plan.compatible,
+    ready: plan.ready,
+    issue: plan.issue,
+    auth_mode: plan.auth.mode,
+    secret_reference: plan.auth.secret || "",
+    secret_present: plan.auth.present,
+    applied: false,
+    source: "cloud"
+  };
+}
 function createRemoteWorkspace({
   workspaceConfig = defaultConfigPath(),
   runtimeRoot = defaultRuntimeRoot(),
-  localHome = homedir(),
+  localHome = homedir2(),
   loadWorkspaceFn = loadRemoteWorkspace,
   readConfigFn = readRemoteConfig,
   statusFn = loadRemoteStatus,
@@ -24006,14 +24241,15 @@ function createRemoteWorkspace({
       }
     }));
     const previousStores = publicIndex?.stores || {};
+    const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
     workspaceCache = workspace;
     masterConfig = config;
     publicIndex = {
       schema: 2,
       mode: "workspace",
       source: "cloud",
-      remote_schema: workspace.source_schema || CURRENT_WORKSPACE_SCHEMA,
-      migration_pending: workspace.source_schema !== CURRENT_WORKSPACE_SCHEMA,
+      remote_schema: sourceSchema,
+      migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
       endpoint: config.endpoint,
       store_id: config.store_id,
       latest: status.latest,
@@ -24068,6 +24304,13 @@ function createRemoteWorkspace({
     return value;
   }
   async function catalog(type, target = "codex", options2 = {}) {
+    if (type === "providers") {
+      const workspace = await rawWorkspace();
+      if (!workspace.agent.providers || !workspace.agent.secrets) return [];
+      return Object.values(workspace.agent.providers.profiles).sort((left, right) => left.name.localeCompare(right.name)).map((profile) => publicProviderProfile(profile, workspace.agent, target, {
+        home: localHome
+      }));
+    }
     const storeType = type === "snippets" ? "prompts" : type;
     const { snapshot } = await child(storeType, options2);
     if (type === "mcp") {
@@ -24100,18 +24343,59 @@ function createRemoteWorkspace({
       source: "cloud"
     }));
   }
+  async function withProviderFiles(name, target, callback) {
+    if (typeof callback !== "function") {
+      throw new RemoteWorkspaceError("Provider action callback is invalid");
+    }
+    const workspace = await rawWorkspace();
+    if (!workspace.agent.providers || !workspace.agent.secrets) {
+      throw new RemoteWorkspaceError("Workspace has no Provider bundle");
+    }
+    const profile = workspace.agent.providers.profiles[name];
+    if (!profile) throw new RemoteWorkspaceError(`unknown remote Provider profile '${name}'`);
+    const resolved = resolveProviderProfile(profile, {
+      target,
+      platform: normalizeRuntimePlatform()
+    });
+    const providerStore = {
+      ...structuredClone(workspace.agent.providers),
+      profiles: { [name]: structuredClone(profile) }
+    };
+    const providerSecrets = {
+      ...structuredClone(workspace.agent.secrets),
+      secrets: {}
+    };
+    if (resolved.auth.mode !== "none" && resolved.auth.secret && workspace.agent.secrets.secrets[resolved.auth.secret]) {
+      providerSecrets.secrets[resolved.auth.secret] = structuredClone(
+        workspace.agent.secrets.secrets[resolved.auth.secret]
+      );
+    }
+    const temporary = await mkdtemp(join3(tmpdir(), "agentctl-tui-provider-"));
+    await chmod2(temporary, 448);
+    const storePath = join3(temporary, "providers.json");
+    const secretsPath = join3(temporary, "provider-secrets.json");
+    try {
+      await Promise.all([
+        writeJsonAtomic(storePath, providerStore),
+        writeJsonAtomic(secretsPath, providerSecrets)
+      ]);
+      return await callback({ storePath, secretsPath });
+    } finally {
+      await rm2(temporary, { recursive: true, force: true });
+    }
+  }
   async function runtimePaths() {
     if (!masterConfig) await index();
-    const root = join2(runtimeRoot, masterConfig.store_id);
+    const root = join3(runtimeRoot, masterConfig.store_id);
     return {
       root,
-      mcp: join2(root, "mcp"),
-      mcpRemote: join2(root, "mcp-remote.json"),
-      skills: join2(root, "skills"),
-      presets: join2(root, "presets.json"),
-      presetState: join2(root, "preset-state.json"),
-      promptBackups: join2(root, "prompt-backups"),
-      snippetBackups: join2(root, "snippet-backups")
+      mcp: join3(root, "mcp"),
+      mcpRemote: join3(root, "mcp-remote.json"),
+      skills: join3(root, "skills"),
+      presets: join3(root, "presets.json"),
+      presetState: join3(root, "preset-state.json"),
+      promptBackups: join3(root, "prompt-backups"),
+      snippetBackups: join3(root, "snippet-backups")
     };
   }
   async function runtimeEnvironment() {
@@ -24127,8 +24411,8 @@ function createRemoteWorkspace({
   async function runtimeAvailability() {
     const paths = await runtimePaths();
     return {
-      mcp: await pathExists2(join2(paths.mcp, "catalog.json")),
-      skills: await pathExists2(join2(paths.skills, "catalog.json")),
+      mcp: await pathExists2(join3(paths.mcp, "catalog.json")),
+      skills: await pathExists2(join3(paths.skills, "catalog.json")),
       presets: await pathExists2(paths.presets)
     };
   }
@@ -24137,8 +24421,8 @@ function createRemoteWorkspace({
     const selection = mcpSelection(snapshot, name, target);
     const paths = await runtimePaths();
     await ensureDirectory(paths.mcp);
-    await ensureDirectory(join2(paths.mcp, "profiles"));
-    const catalogPath = join2(paths.mcp, "catalog.json");
+    await ensureDirectory(join3(paths.mcp, "profiles"));
+    const catalogPath = join3(paths.mcp, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, servers: {} });
     if (catalog2.schema !== 1 || !catalog2.servers || typeof catalog2.servers !== "object") {
       throw new RemoteWorkspaceError("Workspace MCP runtime catalog is invalid");
@@ -24150,14 +24434,14 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const profile of selection.profiles) {
-      await writeJsonAtomic(join2(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
+      await writeJsonAtomic(join3(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
     }
     const neededSecrets = secretNames(selectedDefinitions);
     const secrets = {};
     for (const secret of neededSecrets) {
       if (typeof snapshot.secrets[secret] === "string") secrets[secret] = snapshot.secrets[secret];
     }
-    await writeJsonAtomic(join2(paths.mcp, "secrets.remote.enc"), encryptValue(
+    await writeJsonAtomic(join3(paths.mcp, "secrets.remote.enc"), encryptValue(
       "mcpctl-local-secrets",
       LOCAL_SECRETS_INFO,
       config,
@@ -24172,9 +24456,9 @@ function createRemoteWorkspace({
     const paths = await runtimePaths();
     await ensureDirectory(paths.skills);
     for (const directory of ["skills", "packs", "state", "backups"]) {
-      await ensureDirectory(join2(paths.skills, directory));
+      await ensureDirectory(join3(paths.skills, directory));
     }
-    const catalogPath = join2(paths.skills, "catalog.json");
+    const catalogPath = join3(paths.skills, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, skills: {} });
     if (catalog2.schema !== 1 || !catalog2.skills || typeof catalog2.skills !== "object") {
       throw new RemoteWorkspaceError("Workspace Skills runtime catalog is invalid");
@@ -24185,7 +24469,7 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const pack of selection.packs) {
-      await writeJsonAtomic(join2(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
+      await writeJsonAtomic(join3(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
     }
     return { name, ...selection, store: paths.skills };
   }
@@ -24203,8 +24487,8 @@ function createRemoteWorkspace({
   }
   async function promptSelection(name, target) {
     const document2 = await promptDocument(name, target);
-    const directory = join2(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
-    const path = join2(directory, `${name}.md`);
+    const directory = join3(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
+    const path = join3(directory, `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24224,13 +24508,13 @@ function createRemoteWorkspace({
   }
   async function writePrompt(selection) {
     if (selection.action === "keep") return { backup: "" };
-    await ensureDirectory(dirname2(selection.path));
+    await ensureDirectory(dirname3(selection.path));
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join2(paths.promptBackups, `${Date.now()}-${selection.target}`);
+      const backupDirectory = join3(paths.promptBackups, `${Date.now()}-${selection.target}`);
       await ensureDirectory(backupDirectory);
-      backup = join2(backupDirectory, `${selection.name}.md`);
+      backup = join3(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -24265,7 +24549,7 @@ function createRemoteWorkspace({
     assertName(name, MCP_NAME, "Snippet name");
     const snippet = snapshot.snippets?.[name];
     if (!snippet) throw new RemoteWorkspaceError(`unknown remote Snippet '${name}'`);
-    const path = join2(snippetsDirectory(localHome), `${name}.md`);
+    const path = join3(snippetsDirectory(localHome), `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24284,13 +24568,13 @@ function createRemoteWorkspace({
   }
   async function writeSnippet(selection) {
     if (selection.action === "keep") return { backup: "" };
-    await ensureDirectory(dirname2(selection.path));
+    await ensureDirectory(dirname3(selection.path));
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join2(paths.snippetBackups, `${Date.now()}`);
+      const backupDirectory = join3(paths.snippetBackups, `${Date.now()}`);
       await ensureDirectory(backupDirectory);
-      backup = join2(backupDirectory, `${selection.name}.md`);
+      backup = join3(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -24403,15 +24687,16 @@ function createRemoteWorkspace({
     runtimePaths,
     selectionPlan,
     snippetSelection,
+    withProviderFiles,
     writeSnippet,
     writePrompt
   };
 }
 
 // src/controller.mjs
-var moduleDirectory = dirname3(fileURLToPath(import.meta.url));
-var defaultAgentRoot = resolve3(
-  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join3(moduleDirectory, "..", "..")
+var moduleDirectory = dirname4(fileURLToPath2(import.meta.url));
+var defaultAgentRoot = resolve4(
+  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join4(moduleDirectory, "..", "..")
 );
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
@@ -24510,12 +24795,12 @@ function createController({
   remoteWorkspace = createRemoteWorkspace()
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
-  const orchestrator = join3(agentRoot, "agentctl", "orchestrator-client.mjs");
-  const agentctl = join3(agentRoot, "agentctl", "agentctl");
+  const orchestrator = join4(agentRoot, "agentctl", "orchestrator-client.mjs");
+  const agentctl = join4(agentRoot, "agentctl", "agentctl");
   const tools = {
-    mcp: join3(agentRoot, "mcpctl", "mcpctl"),
-    skills: join3(agentRoot, "skillsctl", "skillsctl"),
-    prompts: join3(agentRoot, "promptctl", "promptctl")
+    mcp: join4(agentRoot, "mcpctl", "mcpctl"),
+    skills: join4(agentRoot, "skillsctl", "skillsctl"),
+    prompts: join4(agentRoot, "promptctl", "promptctl")
   };
   function agentctlCommand(args) {
     return process.platform === "win32" ? { executable: "bash", args: [agentctl, ...args] } : { executable: agentctl, args };
@@ -24529,6 +24814,84 @@ function createController({
   async function runAgentctlJson(args, label) {
     const command = agentctlCommand(args);
     return runExecutableJson(command.executable, command.args, label);
+  }
+  async function providerDashboard(target = "codex") {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
+    const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
+      runAgentctlJson(["provider", "status", "--json"], "provider status"),
+      runAgentctlJson(["provider", "list", "--json"], "provider list"),
+      runAgentctlJson(["failover", "status", "--json"], "failover status"),
+      runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
+      runAgentctlJson(["proxy", "status", "--json"], "proxy status")
+    ]);
+    const status = providerStatus.data || {};
+    const missing = new Set(Array.isArray(status.missing_secrets) ? status.missing_secrets : []);
+    const platform2 = status.platform || normalizeRuntimePlatform();
+    const profiles = (Array.isArray(providerList.data) ? providerList.data : []).map((profile) => {
+      try {
+        const resolved = resolveProviderProfile(profile, { target, platform: platform2 });
+        const reference = resolved.auth.secret || "";
+        const secretPresent = resolved.auth.mode === "none" || Boolean(
+          providerStatus.ok && status.secrets_exists && reference && !missing.has(reference)
+        );
+        const plan = renderProviderPlan(resolved, { secretPresent, agentRoot });
+        const current = status.current?.[target];
+        const applied = current?.profile === profile.name && current.platform === plan.platform && current.protocol === plan.protocol && current.endpoint === plan.endpoint && current.requested_model === plan.requested_model && current.outbound_model === plan.outbound_model;
+        return {
+          name: profile.name,
+          description: profile.description,
+          target,
+          platform: platform2,
+          protocol: plan.protocol,
+          endpoint: plan.endpoint,
+          requested_model: plan.requested_model,
+          outbound_model: plan.outbound_model,
+          enabled: plan.enabled,
+          compatible: plan.compatible,
+          ready: plan.ready,
+          issue: plan.issue,
+          auth_mode: plan.auth.mode,
+          secret_reference: plan.auth.secret || "",
+          secret_present: plan.auth.present,
+          applied,
+          source: "local"
+        };
+      } catch (error) {
+        return {
+          name: String(profile?.name || "invalid"),
+          description: String(profile?.description || ""),
+          target,
+          platform: platform2,
+          enabled: true,
+          compatible: false,
+          ready: false,
+          issue: sanitizeOutput(error?.message || error),
+          source: "local"
+        };
+      }
+    });
+    const errors = [
+      ["Provider status", providerStatus],
+      ["Provider catalog", providerList],
+      ["Failover", failover],
+      ["Pricing", pricing],
+      ["Proxy", proxy]
+    ].filter(([, result]) => !result.ok && !result.data).map(([label, result]) => `${label}: ${result.error}`);
+    if (status.store_exists === false) {
+      const listError = errors.findIndex((value) => value.startsWith("Provider catalog:"));
+      if (listError >= 0) errors.splice(listError, 1);
+    }
+    return {
+      schema: 1,
+      target,
+      platform: platform2,
+      profiles,
+      status,
+      failover: failover.data || { status: "unavailable", routes: 0 },
+      pricing: pricing.data || { status: "unavailable", rates: 0 },
+      proxy: proxy.data || { status: "unavailable", running: false },
+      errors
+    };
   }
   async function snapshot() {
     const remoteResult = remoteWorkspace.index({ refresh: true }).then((data) => ({ data, connection: data, error: "" })).catch(async (error) => {
@@ -24660,6 +25023,52 @@ Snippet content remains hidden; no file was changed.`;
 ${plan.items.join(", ") || "none"}
 No remote catalog was written locally.`;
   }
+  function providerPlanDetail(plan, source) {
+    const entries = Array.isArray(plan?.plans) ? plan.plans : [];
+    const selected = entries[0] || {};
+    return [
+      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} \xB7 ${source === "cloud" ? "Workspace" : "Local"}`,
+      `State: ${selected.enabled === false ? "disabled" : selected.ready ? "ready" : "blocked"}`,
+      `Protocol: ${selected.protocol || "unknown"}`,
+      `Endpoint: ${selected.endpoint || "unknown"}`,
+      `Model: ${selected.requested_model || "unknown"} -> ${selected.outbound_model || "unknown"}`,
+      `Secret: ${selected.auth?.secret || "none"} (${selected.auth?.present ? "ready" : "missing"})`,
+      ...selected.issue ? [`Blocked by: ${selected.issue}`] : [],
+      "No client file was changed."
+    ].join("\n");
+  }
+  async function providerAction(actionName, profile, target, source) {
+    if (!profile) throw new Error("No Provider profile is selected.");
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
+    if (!["local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
+    const operation = actionName === "provider-apply" ? "apply" : "plan";
+    const execute = async (paths = null) => {
+      const args = ["provider", operation, profile, "--target", target, "--json"];
+      if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
+      if (operation === "apply") args.push("--yes");
+      return runAgentctlJson(args, `provider ${operation}`);
+    };
+    const result = source === "cloud" ? await remoteWorkspace.withProviderFiles(profile, target, execute) : await execute();
+    const detail = result.data ? providerPlanDetail(result.data, source) : result.error || `Provider ${operation} failed.`;
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: operation === "apply" && result.ok ? `${profile} applied from ${source === "cloud" ? "Workspace" : "local catalog"} to ${target}; start a new agent session` : detail
+    };
+  }
+  async function providerSync(actionName) {
+    const direction = actionName === "provider-sync-push" ? "push" : "pull";
+    const result = await runAgentctlJson(
+      ["workspace", "agent", direction, "--yes", "--json"],
+      `Workspace agent ${direction}`
+    );
+    const bundle = result.data?.bundle || {};
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: result.ok ? `${direction === "push" ? "Backed up" : "Merged"} ${bundle.profiles || 0} profile(s), ${bundle.secrets || 0} hidden Secret value(s), ${bundle.failover_routes || 0} failover route(s), and ${bundle.pricing_rates || 0} pricing rate(s).` : result.error || `Workspace agent ${direction} failed.`
+    };
+  }
   async function remoteComponentAction(actionName, type, name, target) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
@@ -24736,6 +25145,12 @@ No remote catalog was written locally.`;
     source = "local",
     target = "codex"
   } = {}) {
+    if (actionName === "provider-plan" || actionName === "provider-apply") {
+      return providerAction(actionName, selection, target, source);
+    }
+    if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
+      return providerSync(actionName);
+    }
     if (actionName === "agent-providers" || actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
       const args2 = actionName === "agent-providers" ? ["providers", agent] : ["uninstall", agent, "--yes"];
@@ -24793,13 +25208,21 @@ No remote catalog was written locally.`;
     if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
     return agentctlCommand(["setup", agent]);
   }
-  return { snapshot, action, interactiveCommand, promptPreview, remoteCatalog };
+  return {
+    snapshot,
+    action,
+    interactiveCommand,
+    promptPreview,
+    providerDashboard,
+    remoteCatalog
+  };
 }
 
 // src/model.mjs
 var SECTIONS = Object.freeze([
   { id: "overview", label: "Overview" },
   { id: "agents", label: "Agents" },
+  { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
@@ -24808,9 +25231,12 @@ var SECTIONS = Object.freeze([
   { id: "cloud", label: "Cloud" }
 ]);
 var TARGETS = Object.freeze(["codex", "claude"]);
+var PROVIDER_TARGETS2 = Object.freeze(["claude", "codex", "opencode", "pi"]);
 function targetLabel(target) {
   if (target === "claude") return "Claude Code";
   if (target === "codex") return "Codex";
+  if (target === "opencode") return "OpenCode";
+  if (target === "pi") return "Pi";
   return String(target || "Unknown");
 }
 function normalizeSection(value) {
@@ -24821,7 +25247,12 @@ function moveSection(current, delta) {
   return SECTIONS[(index + delta + SECTIONS.length) % SECTIONS.length].id;
 }
 function otherTarget(target) {
-  return target === "claude" ? "codex" : "claude";
+  return cycleTarget(target, 1, TARGETS);
+}
+function cycleTarget(target, delta = 1, targets = TARGETS) {
+  const values = Array.isArray(targets) && targets.length ? targets : TARGETS;
+  const index = Math.max(0, values.indexOf(target));
+  return values[(index + delta + values.length) % values.length];
 }
 function targetReport(snapshot, target) {
   return snapshot?.doctor?.targets?.find((report) => report.target === target) || null;
@@ -24888,6 +25319,48 @@ function snippetEntries(localEntries, remoteEntries) {
     merged.set(value.name, current);
   }
   return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+function providerDisplayText(value, maximum = 2048) {
+  return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, maximum) : "";
+}
+function providerEntry(value, source) {
+  if (!value || typeof value.name !== "string") return null;
+  const name = providerDisplayText(value.name, 64);
+  if (!name) return null;
+  return {
+    key: `${source}:${name}`,
+    name,
+    source,
+    description: providerDisplayText(value.description, 500),
+    protocol: providerDisplayText(value.protocol, 40),
+    endpoint: providerDisplayText(value.endpoint, 2048),
+    requestedModel: providerDisplayText(value.requested_model, 240),
+    outboundModel: providerDisplayText(value.outbound_model, 240),
+    enabled: value.enabled !== false,
+    compatible: value.compatible !== false,
+    ready: value.ready === true,
+    issue: providerDisplayText(value.issue, 500),
+    authMode: providerDisplayText(value.auth_mode, 32),
+    secretReference: providerDisplayText(value.secret_reference, 96),
+    secretPresent: value.secret_present === true,
+    applied: value.applied === true,
+    target: providerDisplayText(value.target, 32),
+    platform: providerDisplayText(value.platform, 32)
+  };
+}
+function providerEntries(localEntries, remoteEntries) {
+  const entries = [];
+  for (const value of Array.isArray(localEntries) ? localEntries : []) {
+    const entry = providerEntry(value, "local");
+    if (entry) entries.push(entry);
+  }
+  for (const value of Array.isArray(remoteEntries) ? remoteEntries : []) {
+    const entry = providerEntry(value, "cloud");
+    if (entry) entries.push(entry);
+  }
+  return entries.sort(
+    (left, right) => left.name.localeCompare(right.name) || Number(right.source === "local") - Number(left.source === "local")
+  );
 }
 function mcpTargetComparison(snapshot) {
   const targets = Object.fromEntries(TARGETS.map((target) => [
@@ -24989,6 +25462,12 @@ function actionForKey(section, input) {
     if (input === "c" || input === "\r") return "agent-configure";
     if (input === "x") return "agent-uninstall";
   }
+  if (section === "providers") {
+    if (input === "p") return "provider-plan";
+    if (input === "a") return "provider-apply";
+    if (input === "u") return "provider-sync-push";
+    if (input === "d") return "provider-sync-pull";
+  }
   if (["mcp", "skills", "prompts", "snippets"].includes(section)) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
@@ -25004,12 +25483,16 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
   if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
+  if (action === "provider-plan") return `Plan Provider ${selection || "profile"} for ${targetLabel(target)}`;
+  if (action === "provider-apply") return `Apply Provider ${selection || "profile"} to ${targetLabel(target)}`;
+  if (action === "provider-sync-push") return "Back up local Provider catalogs to encrypted Workspace";
+  if (action === "provider-sync-pull") return "Merge encrypted Workspace Provider catalogs locally";
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
   if (action === "prompt-view-cloud") return `View Workspace Prompt ${selection || "selection"} for ${target}`;
@@ -25129,25 +25612,41 @@ var COLORS = Object.freeze({
   accent: "cyan",
   selected: "magenta",
   codex: "cyan",
-  claude: "yellow"
+  claude: "yellow",
+  opencode: "green",
+  pi: "magenta",
+  local: "green",
+  cloud: "blue"
+});
+var SECTION_COLORS = Object.freeze({
+  overview: "white",
+  agents: "blue",
+  providers: "magenta",
+  mcp: "cyan",
+  skills: "green",
+  prompts: "yellow",
+  snippets: "blue",
+  presets: "magenta",
+  cloud: "cyan"
 });
 var COMPONENT_LABELS = Object.freeze({ mcp: "MCP", skills: "Skills", prompts: "Prompts" });
 function usage() {
   process.stdout.write(`script-toolbox agent TUI
 
 Usage:
-  toolbox-tui [--section <overview|agents|mcp|skills|prompts|snippets|presets|cloud>]
+  toolbox-tui [--section <overview|agents|providers|mcp|skills|prompts|snippets|presets|cloud>]
   toolbox-tui --help
 
 Keys:
   Tab / Shift+Tab / Left / Right  Switch section
-  t                                 Switch Codex / Claude target
+  t                                 Switch target (four clients in Providers)
   r                                 Refresh live status
   [ / ] / Up / Down                 Select previous / next list item
-  p / a                             Plan / apply selected cloud configuration
+  p / a                             Plan / apply selected configuration
   Prompts: v local \xB7 V Workspace    View Prompt content on demand
   u                                 Roll back a preset
   Agents: c configure \xB7 p providers \xB7 x uninstall owned config
+  Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -25174,8 +25673,12 @@ function TargetBadge({ target, selected = false }) {
   const label = targetLabel(target).toUpperCase().padEnd(11);
   return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[target] || COLORS.accent, bold: true, inverse: selected }, ` ${label} `);
 }
-function Panel({ title, children, grow = 1 }) {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "round", borderColor: "gray", paddingX: 1, flexGrow: grow, flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, title), children);
+function SourceBadge({ source, selected = false }) {
+  const label = source === "cloud" ? "WORKSPACE" : "LOCAL";
+  return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[source] || COLORS.muted, bold: true, inverse: selected }, ` ${label.padEnd(9)} `);
+}
+function Panel({ title, children, grow = 1, accent = "cyan" }) {
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "round", borderColor: accent, paddingX: 1, flexGrow: grow, flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: accent }, title), children);
 }
 function Row({ label, value, kind = "value" }) {
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, String(label).padEnd(18)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.value }, value));
@@ -25222,7 +25725,14 @@ function Overview({ snapshot, target }) {
   if (!report) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? "connected" : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), workspace && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Provider backup",
+      value: workspace.agent?.synced ? `${workspace.agent.profiles || 0} profile(s) \xB7 ${workspace.agent.secrets || 0} hidden Secret value(s)` : "not backed up",
+      kind: workspace.agent?.synced ? "cloud" : "muted"
+    }
+  ), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
 }
 function Agents({ snapshot, selected }) {
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
@@ -25230,6 +25740,51 @@ function Agents({ snapshot, selected }) {
   const safeIndex = clampSelection(selected, agents.length);
   const current = agents[safeIndex];
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
+}
+function ProvidersView({ snapshot, surface, selected, target }) {
+  const entries = providerEntries(surface.local, surface.cloud);
+  const safeIndex = clampSelection(selected, entries.length);
+  const visible = selectionWindow(entries, safeIndex, 10);
+  const current = entries[safeIndex] || null;
+  const dashboard = surface.dashboard || {};
+  const localStatus = dashboard.status || {};
+  const failover = dashboard.failover || {};
+  const pricing = dashboard.pricing || {};
+  const proxy = dashboard.proxy || {};
+  const remote = snapshot.workspace?.agent || {};
+  const localCount = entries.filter((entry) => entry.source === "local").length;
+  const cloudCount = entries.filter((entry) => entry.source === "cloud").length;
+  const stateKind = !current?.enabled ? "muted" : current?.ready ? "good" : current?.compatible ? "warn" : "bad";
+  const proxyKind = proxy.status === "running" ? "good" : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " \xB7 ", localCount, " local / ", cloudCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[item.source], bold: true }, item.source === "cloud" ? "W" : "L"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.enabled && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "disabled"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[current.source] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(SourceBadge, { source: current.source })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: !current.enabled ? "disabled" : current.ready ? "ready" : "blocked", kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Protocol", value: current.protocol || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Secret",
+      value: current.authMode === "none" ? "not required" : `${current.secretReference || "missing reference"} \xB7 ${current.secretPresent ? "present" : "missing"}`,
+      kind: current.authMode === "none" || current.secretPresent ? "good" : "warn"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Applied", value: current.applied ? "current on this device" : "not current", kind: current.applied ? "good" : "muted" }), current.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: current.description }), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" })) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Initialize locally or back up a Provider bundle to Workspace."))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Local catalog",
+      value: localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) \xB7 ${localStatus.secret_count || 0} Secret value(s)` : "not initialized",
+      kind: localStatus.store_exists ? "local" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Workspace backup",
+      value: remote.synced ? `${remote.profiles || 0} profile(s) \xB7 ${remote.secrets || 0} hidden Secret value(s)` : "not backed up",
+      kind: remote.synced ? "cloud" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Failover", value: `${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Pricing", value: `${pricing.version || "none"} \xB7 ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)` }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Proxy",
+      value: `${proxy.status || "unavailable"}${proxy.profile ? ` \xB7 ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`,
+      kind: proxyKind
+    }
+  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading local and encrypted Workspace Provider catalogs\u2026"), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " upload local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " download/merge"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Secret values remain hidden; applying writes only the selected client target."));
 }
 function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
@@ -25335,26 +25890,43 @@ function Cloud({ snapshot }) {
   if (!workspace) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }), connection?.store_id && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store ID", value: connection.store_id }), /* @__PURE__ */ import_react34.default.createElement(Text, null, presentation.description), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, presentation.safety), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "Next step"), presentation.commands.map((command, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${command}-${index}`, color: command.startsWith("agentctl ") ? "cyan" : "gray" }, command))), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "bad" }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 2}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 3}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Providers",
+      value: workspace.agent?.synced ? `${workspace.agent.profiles || 0} profile(s) \xB7 ${workspace.agent.secrets || 0} hidden Secret value(s) \xB7 ${workspace.agent.failover_routes || 0} route(s) \xB7 ${workspace.agent.pricing_rates || 0} rate(s)` : "not backed up",
+      kind: workspace.agent?.synced ? "cloud" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  switch target     r  refresh     q  quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: [/] select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
   const [section, setSection] = (0, import_react34.useState)(initialSection);
   const [target, setTarget] = (0, import_react34.useState)("codex");
+  const [providerTarget, setProviderTarget] = (0, import_react34.useState)("codex");
   const [snapshot, setSnapshot] = (0, import_react34.useState)(null);
   const [loading, setLoading] = (0, import_react34.useState)(true);
   const [busy, setBusy] = (0, import_react34.useState)(false);
   const [selected, setSelected] = (0, import_react34.useState)(0);
   const [selectedAgent, setSelectedAgent] = (0, import_react34.useState)(0);
-  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
   const [catalogs, setCatalogs] = (0, import_react34.useState)({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
     prompts: { items: [], loading: false, error: "", key: "" },
     snippets: { items: [], loading: false, error: "", key: "" }
+  });
+  const [providerSurface, setProviderSurface] = (0, import_react34.useState)({
+    local: [],
+    cloud: [],
+    dashboard: null,
+    loading: false,
+    localError: "",
+    cloudError: "",
+    key: ""
   });
   const [message, setMessage] = (0, import_react34.useState)("Loading diagnostics\u2026");
   const [lastDetail, setLastDetail] = (0, import_react34.useState)("");
@@ -25414,9 +25986,53 @@ function App2({ initialSection, controller, onLaunch }) {
       cancelled = true;
     };
   }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
+  (0, import_react34.useEffect)(() => {
+    if (section !== "providers" || !snapshot) return;
+    const key = `${snapshot.updatedAt}:${workspaceStoreId || "local"}:${snapshot.workspace?.latest?.version || "none"}:${providerTarget}`;
+    let cancelled = false;
+    setProviderSurface((value) => ({
+      ...value,
+      loading: true,
+      localError: "",
+      cloudError: "",
+      key
+    }));
+    const local = Promise.resolve().then(() => controller.providerDashboard(providerTarget)).then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: String(error?.message || error) }));
+    const cloud = workspaceStoreId ? controller.remoteCatalog("providers", providerTarget) : Promise.resolve({ ok: true, items: [], error: "" });
+    void Promise.all([local, cloud]).then(([localResult, cloudResult]) => {
+      if (cancelled) return;
+      const localItems = localResult.data?.profiles || [];
+      const current = localResult.data?.status?.current?.[providerTarget];
+      const cloudItems = (cloudResult.items || []).map((profile) => ({
+        ...profile,
+        applied: current?.profile === profile.name && current.platform === profile.platform && current.protocol === profile.protocol && current.endpoint === profile.endpoint && current.requested_model === profile.requested_model && current.outbound_model === profile.outbound_model
+      }));
+      setProviderSurface({
+        local: localItems,
+        cloud: cloudItems,
+        dashboard: localResult.data,
+        loading: false,
+        localError: localResult.error,
+        cloudError: cloudResult.error,
+        key
+      });
+      const entries = providerEntries(localItems, cloudItems);
+      setComponentSelected((value) => ({
+        ...value,
+        providers: clampSelection(value.providers, entries.length)
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller, providerTarget, section, snapshot, workspaceStoreId]);
   const selectedPreset = (0, import_react34.useMemo)(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents) ? snapshot.agents[selectedAgent]?.client || "" : "";
   const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
+  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud);
+  const selectedProvider = mergedProviders[clampSelection(componentSelected.providers, mergedProviders.length)] || null;
+  const selectedProviderName = selectedProvider?.name || "";
+  const selectedProviderSource = selectedProvider?.source || "local";
   const selectedSnippet = mergedSnippets[clampSelection(componentSelected.snippets, mergedSnippets.length)] || null;
   const selectedRemote = section === "snippets" ? selectedSnippet?.remote ? selectedSnippet.name : "" : ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
   const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local ? selectedSnippet.name : "";
@@ -25458,18 +26074,20 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     setBusy(true);
-    const selection = action.startsWith("agent-") ? selectedAgentId : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
-    setMessage(`${actionLabel(action, selection, target)}\u2026`);
+    const providerAction = action.startsWith("provider-");
+    const actionTarget = providerAction ? providerTarget : target;
+    const selection = action.startsWith("agent-") ? selectedAgentId : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    setMessage(`${actionLabel(action, selection, actionTarget)}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
-        source: snapshot?.presetSource || "local",
-        target
+        selection: providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
+        target: actionTarget
       });
-      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, target)}`);
+      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
       await refresh(true);
     } catch (error) {
@@ -25477,7 +26095,21 @@ function App2({ initialSection, controller, onLaunch }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, exit, onLaunch, refresh, selectedAgentId, selectedLocalSnippet, selectedPreset, selectedRemote, snapshot?.presetSource, target]);
+  }, [
+    controller,
+    exit,
+    onLaunch,
+    providerTarget,
+    refresh,
+    selectedAgentId,
+    selectedLocalSnippet,
+    selectedPreset,
+    selectedProviderName,
+    selectedProviderSource,
+    selectedRemote,
+    snapshot?.presetSource,
+    target
+  ]);
   use_input_default((input, key) => {
     if (busy) return;
     if (confirm) {
@@ -25510,7 +26142,13 @@ function App2({ initialSection, controller, onLaunch }) {
     if (showHelp && key.escape) return setShowHelp(false);
     if (key.tab || key.rightArrow) return setSection((value) => moveSection(value, key.shift ? -1 : 1));
     if (key.leftArrow) return setSection((value) => moveSection(value, -1));
-    if (input === "t") return setTarget((value) => otherTarget(value));
+    if (input === "t") {
+      if (section === "providers") {
+        setComponentSelected((value) => ({ ...value, providers: 0 }));
+        return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS2));
+      }
+      return setTarget((value) => otherTarget(value));
+    }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
     if (section === "agents" && delta !== 0) {
@@ -25521,6 +26159,12 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     if (section === "presets" && delta !== 0) {
       return setSelected((value) => clampSelection(value + delta, presetEntries(snapshot).length));
+    }
+    if (section === "providers" && delta !== 0) {
+      return setComponentSelected((value) => ({
+        ...value,
+        providers: clampSelection(value.providers + delta, mergedProviders.length)
+      }));
     }
     if (["mcp", "skills", "prompts", "snippets"].includes(section) && delta !== 0) {
       const length = section === "snippets" ? mergedSnippets.length : catalogs[section].items.length;
@@ -25538,6 +26182,14 @@ function App2({ initialSection, controller, onLaunch }) {
       setMessage("No agent is selected.");
       return;
     }
+    if ((action === "provider-plan" || action === "provider-apply") && !selectedProviderName) {
+      setMessage("No local or Workspace Provider profile is selected.");
+      return;
+    }
+    if ((action === "provider-sync-push" || action === "provider-sync-pull") && !snapshot?.workspaceConnection?.configured) {
+      setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
+      return;
+    }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
       setMessage("No preset is selected.");
       return;
@@ -25551,8 +26203,12 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     if (actionNeedsConfirmation(action)) {
-      const selection = action.startsWith("agent-") ? selectedAgentId : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
-      setConfirm({ action, label: actionLabel(action, selection, target) });
+      const providerAction = action.startsWith("provider-");
+      const selection = action.startsWith("agent-") ? selectedAgentId : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+      setConfirm({
+        action,
+        label: actionLabel(action, selection, providerAction ? providerTarget : target)
+      });
     } else {
       void executeAction(action);
     }
@@ -25561,6 +26217,15 @@ function App2({ initialSection, controller, onLaunch }) {
   if (snapshot) {
     content = /* @__PURE__ */ import_react34.default.createElement(Overview, { snapshot, target });
     if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot, selected: selectedAgent });
+    if (section === "providers") content = /* @__PURE__ */ import_react34.default.createElement(
+      ProvidersView,
+      {
+        snapshot,
+        surface: providerSurface,
+        selected: componentSelected.providers,
+        target: providerTarget
+      }
+    );
     if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(McpView, { snapshot, target, catalog: catalogs.mcp, selected: componentSelected.mcp });
     if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot, target, component: "skills", catalog: catalogs.skills, selected: componentSelected.skills });
     if (section === "prompts") content = promptPreview ? /* @__PURE__ */ import_react34.default.createElement(PromptPreview, { preview: promptPreview, offset: promptPreviewOffset, pageSize: promptPreviewPageSize }) : /* @__PURE__ */ import_react34.default.createElement(PromptView, { snapshot, target, catalog: catalogs.prompts, selected: componentSelected.prompts });
@@ -25569,17 +26234,19 @@ function App2({ initialSection, controller, onLaunch }) {
     if (section === "cloud") content = /* @__PURE__ */ import_react34.default.createElement(Cloud, { snapshot });
   }
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
-  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true }), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
+  const activeTarget = section === "providers" ? providerTarget : target;
+  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "providers" ? `Providers \xB7 ${targetLabel(providerTarget)}` : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: activeTarget, selected: true }), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1, flexWrap: "wrap" }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
     Text,
     {
       key: item.id,
-      color: section === item.id ? "black" : "gray",
-      backgroundColor: section === item.id ? "cyan" : void 0,
-      bold: section === item.id
+      color: section === item.id ? "black" : SECTION_COLORS[item.id],
+      backgroundColor: section === item.id ? SECTION_COLORS[item.id] : void 0,
+      bold: section === item.id,
+      dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", section === "snippets" ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", section === "snippets" ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {
