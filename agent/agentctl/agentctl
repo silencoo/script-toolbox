@@ -20,10 +20,11 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.8.0"
+VERSION="0.9.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
+PROXY_CLIENT="${SCRIPT_DIR}/proxy-client.mjs"
 TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 
 # shellcheck source=../ctl-lib.sh
@@ -43,6 +44,7 @@ Usage:
   agentctl statusline <install|status|uninstall> [options]
   agentctl providers <claude|codex|opencode|pi>
   agentctl provider <command> [options]
+  agentctl proxy <plan|start|status|stop|token> ...
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl help <claude|codex|opencode|pi>
   agentctl workspace <command> [options]
@@ -61,6 +63,8 @@ Commands:
   providers   Show the selected client's provider/model presets.
   provider    Manage portable provider profiles, target/platform overlays,
               model aliases, and local Secret references.
+  proxy       Manage the optional loopback-only native protocol proxy. It does
+              not take over client configuration automatically.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   help        Show the selected client's setup options.
@@ -79,6 +83,7 @@ for the guided Shell menu. Setup options after the
 client name are passed unchanged to that client's existing setup.sh backend.
 Run "agentctl workspace --help" for Workspace commands.
 Run "agentctl provider --help" for portable Provider Store commands.
+Run "agentctl proxy --help" for the optional local proxy lifecycle.
 Run "agentctl preset --help" for development-preset commands.
 Run "agentctl statusline --help" for Claude status-line commands.
 EOF
@@ -96,6 +101,13 @@ run_provider() {
   [ -r "$PROVIDER_CLIENT" ] ||
     die "Provider Store client not found: $PROVIDER_CLIENT"
   exec node "$PROVIDER_CLIENT" "$@"
+}
+
+run_proxy() {
+  require_node22 "agentctl proxy"
+  [ -r "$PROXY_CLIENT" ] ||
+    die "Proxy controller not found: $PROXY_CLIENT"
+  exec node "$PROXY_CLIENT" "$@"
 }
 
 run_orchestrator() {
@@ -798,6 +810,10 @@ case "${1:-}" in
   provider|profile)
     shift
     run_provider "$@"
+    ;;
+  proxy)
+    shift
+    run_proxy "$@"
     ;;
   preset)
     run_orchestrator "$@"

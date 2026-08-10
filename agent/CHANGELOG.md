@@ -1,5 +1,23 @@
 # Changelog — agent/
 
+## 2026-08-11 — explicit loopback provider proxy
+
+- Added the independent `agentproxyd` process and preview-first `agentctl proxy`
+  plan/start/status/stop/token lifecycle. Opening agentctl never starts it and
+  no client configuration is automatically taken over.
+- Added native Anthropic Messages, OpenAI Responses, OpenAI Chat, and Google
+  Generative pass-through with protocol route allowlists, endpoint-prefix
+  preservation, and upstream authentication replacement.
+- Enforced loopback-only binding and a hidden 256-bit local capability accepted
+  through the common client auth headers. Upstream Secrets remain in the local
+  owner-only Store and never enter daemon arguments or generated proxy config.
+- Added separate first-byte, streaming-idle, and non-streaming total timeouts;
+  streaming request-size enforcement; verified PID/instance shutdown; stale
+  lock cleanup; and metadata-only bounded logs without bodies or headers.
+- Added real detached-daemon integration tests for all four protocols,
+  capability rejection, auth stripping, timeout and body-size failures,
+  secret-free logs, lifecycle previews, clean shutdown, and token rotation.
+
 ## 2026-08-11 — native provider profile projection
 
 - Added `agentctl provider plan/apply/current` renderers for Claude Code,

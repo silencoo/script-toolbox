@@ -52,12 +52,16 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.8.0" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.9.0" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"
 [ -x "$RUNTIME/claude-code/statusline.py" ] ||
   fail "standalone runtime omitted the Claude status-line renderer"
+[ -f "$RUNTIME/agentctl/proxy-client.mjs" ] ||
+  fail "standalone runtime omitted the proxy controller"
+[ -f "$RUNTIME/proxy/agentproxyd.mjs" ] ||
+  fail "standalone runtime omitted the proxy daemon"
 "$PREFIX/mcpctl" --help >/dev/null || fail "mcpctl standalone command failed"
 "$PREFIX/promptctl" --help >/dev/null || fail "promptctl standalone command failed"
 "$PREFIX/skillsctl" --help >/dev/null || fail "skillsctl standalone command failed"

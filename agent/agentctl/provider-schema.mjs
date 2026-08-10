@@ -145,6 +145,13 @@ export function validateEndpoint(value, label = "endpoint") {
       `${label} must be an HTTP(S) URL without embedded credentials or a fragment`
     );
   }
+  for (const name of endpoint.searchParams.keys()) {
+    if (/^(?:api[-_]?key|access[-_]?token|token|secret|auth|authorization|signature|sig|credential)$/i.test(name)) {
+      throw new ProviderSchemaError(
+        `${label} must reference credentials through auth.secret, not a URL query parameter`
+      );
+    }
+  }
   const loopback = endpoint.hostname === "localhost" ||
     endpoint.hostname === "127.0.0.1" || endpoint.hostname === "[::1]";
   if (endpoint.protocol !== "https:" && !loopback) {

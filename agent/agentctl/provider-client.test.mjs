@@ -94,6 +94,10 @@ test("provider schema is strict and rejects machine state or insecure endpoints"
   const credentials = structuredClone(base);
   credentials.profiles.lab.endpoint = "https://token@example.com/v1";
   assert.throws(() => validateProviderStore(credentials), /embedded credentials/);
+
+  const querySecret = structuredClone(base);
+  querySecret.profiles.lab.endpoint = "https://api.example.com/v1?api_key=secret";
+  assert.throws(() => validateProviderStore(querySecret), /auth\.secret/);
 });
 
 test("target and platform overlays resolve deterministically before aliases", () => {

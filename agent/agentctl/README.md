@@ -198,6 +198,47 @@ path into Windows is therefore impossible through this schema. On the Windows
 machine the same command automatically selects its Windows overlay and native
 user-home paths.
 
+## Optional native protocol proxy
+
+The proxy is a separate Node process with an explicit lifecycle. It does not
+run inside agentctl, start with the TUI, or modify an agent configuration in
+this phase:
+
+```bash
+agentctl proxy plan work-gateway --target codex
+agentctl proxy start work-gateway --target codex --yes
+agentctl proxy status --json
+agentctl proxy stop
+agentctl proxy stop --yes
+```
+
+It binds only to loopback and accepts only the selected native protocol's
+allowlisted routes. The local base URL is reported after start: OpenAI
+Responses/Chat use `/v1`, Google uses `/v1beta`, and Anthropic uses the listener
+root. Every request must present the hidden local capability as
+`x-agentctl-proxy-token`, Bearer, `x-api-key`, or `x-goog-api-key`. The proxy
+strips all of those client credentials before applying the real upstream
+Secret in memory.
+
+Plans, runtime state, daemon arguments, and metadata logs never contain the
+capability or upstream Secret value. Request/response bodies and headers are
+not logged. The three independent timeout dimensions can be set with
+`--first-byte-timeout-ms`, `--stream-idle-timeout-ms`, and
+`--request-timeout-ms`; request bodies and metadata logs also have explicit
+byte limits.
+
+Capability rotation requires a stopped daemon and remains redacted:
+
+```bash
+agentctl proxy token status
+agentctl proxy token rotate --yes
+```
+
+Shutdown first verifies the authenticated health instance before signaling the
+recorded PID. A stale dead runtime can be cleaned with `stop --yes`, while a
+live but unverifiable process is preserved. See [`../proxy/`](../proxy/) for
+the route matrix and complete security boundary.
+
 ## Development presets
 
 A development preset binds one named MCP profile, Skills pack, and Prompt
@@ -403,6 +444,8 @@ Workspace manifest:
 - It configures provider, model, and owned credential state.
 - It owns the portable Provider Store and its separate local Secret Store;
   normal exports never contain Secret values.
+- It explicitly starts/stops the optional loopback proxy without implicitly
+  binding or rewriting any client.
 - It can install or remove a separately owned Claude status-line renderer while
   preserving an existing external setting.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.
