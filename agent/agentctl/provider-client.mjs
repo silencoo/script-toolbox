@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   chmod,
   lstat,
+  mkdtemp,
   mkdir,
   readFile,
   rename,
+  rm,
   unlink,
   writeFile
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -35,6 +38,14 @@ import {
   validateReferenceName,
   validateTarget
 } from "./provider-schema.mjs";
+import {
+  ProviderRendererError,
+  allProviderTargets,
+  assertApplyPlatform,
+  backendArguments,
+  managedTargetPaths,
+  renderProviderPlan
+} from "./provider-renderer.mjs";
 
 const MAX_STORE_BYTES = 5 * 1024 * 1024;
 
@@ -54,6 +65,10 @@ Usage:
   agentctl provider list [--json]
   agentctl provider show <profile> [--json]
   agentctl provider resolve <profile> --target <target> [--platform <platform>] [--json]
+  agentctl provider plan <profile> --target <target|all> [--platform <platform>] [--json]
+  agentctl provider apply <profile> --target <target|all> [--platform <platform>]
+      [--skip-validate] [--force] [--yes]
+  agentctl provider current [--target <target|all>] [--json]
   agentctl provider create <profile> --protocol <protocol> --base-url <url>
       --model <id> [--auth-mode <mode>] [--secret <reference>]
       [--description <text>] [--alias <requested=outbound>]... [--yes]
@@ -65,6 +80,8 @@ Usage:
   agentctl provider secret delete <name> [--yes]
   agentctl provider export --output <file> [--force] [--yes]
   agentctl provider import --input <file> [--replace] [--yes]
+  agentctl provider restore <profile> --input <file> --target <target|all>
+      [--replace] [--skip-validate] [--force] [--yes]
 
 Protocols:
   ${PROVIDER_PROTOCOLS.join(", ")}
@@ -87,6 +104,8 @@ Override options:
 Storage options:
   --store <file>             Portable catalog (default: platform config dir).
   --secrets <file>           Local chmod-600 Secret Store.
+  --state <file>             Device-local applied-selection state.
+  --skip-validate            Do not probe the provider models endpoint on apply.
   --yes, -y                  Apply the displayed mutation; otherwise preview.
 
 Provider exports contain Secret reference names but never Secret values.
@@ -106,11 +125,17 @@ export function providerDefaults({
   } else {
     configHome = environment.XDG_CONFIG_HOME || join(home, ".config");
   }
+  const stateHome = platform === "win32"
+    ? (environment.LOCALAPPDATA || environment.APPDATA ||
+      join(home, "AppData", "Local"))
+    : (environment.XDG_STATE_HOME || join(home, ".local", "state"));
   const root = join(configHome, "agentctl");
   return {
     storePath: environment.AGENTCTL_PROVIDER_STORE || join(root, "providers.json"),
     secretsPath: environment.AGENTCTL_PROVIDER_SECRETS ||
-      join(root, "provider-secrets.json")
+      join(root, "provider-secrets.json"),
+    statePath: environment.AGENTCTL_PROVIDER_STATE ||
+      join(stateHome, "agentctl", "providers.json")
   };
 }
 
@@ -131,7 +156,8 @@ export function parseArguments(argv, defaults = providerDefaults()) {
     replace: false,
     inherit: false,
     enabled: undefined,
-    platform: undefined
+    platform: undefined,
+    skipValidate: false
   };
   const positional = [];
   argv = [...argv];
@@ -140,6 +166,7 @@ export function parseArguments(argv, defaults = providerDefaults()) {
     switch (argument) {
       case "--store": options.storePath = takeValue(argv, argument); break;
       case "--secrets": options.secretsPath = takeValue(argv, argument); break;
+      case "--state": options.statePath = takeValue(argv, argument); break;
       case "--description": options.description = takeValue(argv, argument); break;
       case "--protocol": options.protocol = takeValue(argv, argument); break;
       case "--base-url":
@@ -164,6 +191,7 @@ export function parseArguments(argv, defaults = providerDefaults()) {
       case "--inherit": options.inherit = true; break;
       case "--replace": options.replace = true; break;
       case "--force": options.force = true; break;
+      case "--skip-validate": options.skipValidate = true; break;
       case "--yes":
       case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
@@ -178,6 +206,7 @@ export function parseArguments(argv, defaults = providerDefaults()) {
   }
   options.storePath = resolve(options.storePath);
   options.secretsPath = resolve(options.secretsPath);
+  options.statePath = resolve(options.statePath);
   if (options.output) options.output = resolve(options.output);
   if (options.input) options.input = resolve(options.input);
   if (options.secretFile) options.secretFile = resolve(options.secretFile);
@@ -213,6 +242,10 @@ async function readJson(path, label) {
 }
 
 async function writeJsonAtomic(path, value) {
+  await writeBytesAtomic(path, Buffer.from(`${JSON.stringify(value, null, 2)}\n`), 0o600);
+}
+
+async function writeBytesAtomic(path, bytes, mode = 0o600) {
   const parent = dirname(path);
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const existing = await pathState(path);
@@ -221,11 +254,11 @@ async function writeJsonAtomic(path, value) {
   }
   const temporary = join(parent, `.${path.split(/[\\/]/).pop()}.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    await writeFile(temporary, bytes, {
       flag: "wx",
-      mode: 0o600
+      mode
     });
-    await chmod(temporary, 0o600);
+    await chmod(temporary, mode);
     await rename(temporary, path);
   } catch (error) {
     await unlink(temporary).catch(() => {});
@@ -262,6 +295,73 @@ export async function saveProviderSecrets(path, secrets) {
   const next = structuredClone(secrets);
   next.updated_at = new Date().toISOString();
   validateProviderSecrets(next);
+  await writeJsonAtomic(path, next);
+  return next;
+}
+
+const PROVIDER_STATE_KIND = "agentctl-provider-state";
+
+function newProviderState() {
+  return {
+    schema: 1,
+    kind: PROVIDER_STATE_KIND,
+    updated_at: new Date().toISOString(),
+    current: {}
+  };
+}
+
+function validateProviderState(value) {
+  if (!value || value.schema !== 1 || value.kind !== PROVIDER_STATE_KIND ||
+      typeof value.updated_at !== "string" || Number.isNaN(Date.parse(value.updated_at)) ||
+      !value.current || typeof value.current !== "object" || Array.isArray(value.current)) {
+    throw new ProviderClientError("provider selection state is invalid");
+  }
+  for (const key of Object.keys(value)) {
+    if (!["schema", "kind", "updated_at", "current"].includes(key)) {
+      throw new ProviderClientError(`provider selection state contains unsupported field '${key}'`);
+    }
+  }
+  for (const [target, record] of Object.entries(value.current)) {
+    validateTarget(target, "provider state target");
+    if (!record || typeof record !== "object" || Array.isArray(record) ||
+        record.target !== target || typeof record.profile !== "string" ||
+        typeof record.platform !== "string" || typeof record.protocol !== "string" ||
+        typeof record.endpoint !== "string" || typeof record.requested_model !== "string" ||
+        typeof record.outbound_model !== "string" ||
+        typeof record.applied_at !== "string" || Number.isNaN(Date.parse(record.applied_at))) {
+      throw new ProviderClientError(`provider selection state for '${target}' is invalid`);
+    }
+    validateProfileName(record.profile, `provider state profile for '${target}'`);
+    validatePlatform(record.platform, `provider state platform for '${target}'`);
+    validateProtocol(record.protocol, `provider state protocol for '${target}'`);
+    validateEndpoint(record.endpoint, `provider state endpoint for '${target}'`);
+    validateModelId(record.requested_model, `provider state requested model for '${target}'`);
+    validateModelId(record.outbound_model, `provider state outbound model for '${target}'`);
+    const allowed = [
+      "target", "profile", "platform", "protocol", "endpoint",
+      "requested_model", "outbound_model", "applied_at"
+    ];
+    for (const key of Object.keys(record)) {
+      if (!allowed.includes(key)) {
+        throw new ProviderClientError(
+          `provider selection state for '${target}' contains unsupported field '${key}'`
+        );
+      }
+    }
+  }
+  return value;
+}
+
+async function loadProviderState(path, { allowMissing = false } = {}) {
+  const details = await pathState(path);
+  if (!details && allowMissing) return newProviderState();
+  return validateProviderState(await readJson(path, "provider selection state"));
+}
+
+async function saveProviderState(path, state) {
+  const next = structuredClone(state);
+  next.updated_at = new Date().toISOString();
+  validateProviderState(next);
   await writeJsonAtomic(path, next);
   return next;
 }
@@ -330,10 +430,14 @@ async function init(options) {
 async function status(options) {
   const storeDetails = await pathState(options.storePath);
   const secretsDetails = await pathState(options.secretsPath);
+  const stateDetails = await pathState(options.statePath);
   const store = storeDetails ? await loadProviderStore(options.storePath) : newProviderStore();
   const secrets = secretsDetails
     ? await loadProviderSecrets(options.secretsPath)
     : newProviderSecrets();
+  const state = stateDetails
+    ? await loadProviderState(options.statePath)
+    : newProviderState();
   const references = collectSecretReferences(store);
   const missing = [...references.keys()].filter((name) => !secrets.secrets[name]).sort();
   const output = {
@@ -343,10 +447,13 @@ async function status(options) {
     store_exists: Boolean(storeDetails),
     secrets: options.secretsPath,
     secrets_exists: Boolean(secretsDetails),
+    state: options.statePath,
+    state_exists: Boolean(stateDetails),
     profile_count: Object.keys(store.profiles).length,
     secret_count: Object.keys(secrets.secrets).length,
     referenced_secrets: [...references.keys()].sort(),
-    missing_secrets: missing
+    missing_secrets: missing,
+    current: structuredClone(state.current)
   };
   if (options.json) return process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.stdout.write(`Provider Store: ${output.store_exists ? output.store : "not initialized"}\n`);
@@ -354,6 +461,7 @@ async function status(options) {
   process.stdout.write(`Platform:       ${output.platform}\n`);
   process.stdout.write(`Profiles:       ${output.profile_count}\n`);
   process.stdout.write(`Secrets:        ${output.secret_count} present, ${missing.length} missing\n`);
+  process.stdout.write(`Applied:        ${Object.keys(state.current).length} target(s)\n`);
   if (missing.length) process.stdout.write(`Missing refs:   ${missing.join(", ")}\n`);
 }
 
@@ -508,6 +616,261 @@ async function resolveProfile(name, options) {
   process.stdout.write(`${JSON.stringify(resolvedProfile, null, 2)}\n`);
 }
 
+function requestedTargets(value) {
+  if (!value) throw new ProviderClientError("--target is required");
+  if (value === "all") return allProviderTargets();
+  return [validateTarget(value)];
+}
+
+async function applicationPlans(name, options, {
+  store = null,
+  secrets = null
+} = {}) {
+  store ||= await loadProviderStore(options.storePath);
+  secrets ||= await loadProviderSecrets(options.secretsPath, { allowMissing: true });
+  const profile = profileOrThrow(store, name);
+  const platform = options.platform || normalizeRuntimePlatform();
+  validatePlatform(platform);
+  return requestedTargets(options.target).map((target) => {
+    const resolved = resolveProviderProfile(profile, { target, platform });
+    const secretPresent = resolved.auth.mode === "none" ||
+      Boolean(secrets.secrets[resolved.auth.secret]);
+    return renderProviderPlan(resolved, { secretPresent });
+  });
+}
+
+function plansHaveErrors(plans) {
+  return plans.some((plan) => plan.enabled && !plan.ready);
+}
+
+function emitApplicationPlans(name, plans, options, { preview = false } = {}) {
+  const output = {
+    schema: 1,
+    profile: name,
+    platform: plans[0]?.platform || options.platform || normalizeRuntimePlatform(),
+    ready: !plansHaveErrors(plans),
+    plans
+  };
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  } else {
+    for (const plan of plans) {
+      process.stdout.write(`${plan.target_label} (${plan.target})\n`);
+      process.stdout.write(`  State       : ${plan.enabled ? (plan.ready ? "ready" : "blocked") : "disabled"}\n`);
+      process.stdout.write(`  Platform    : ${plan.platform}\n`);
+      process.stdout.write(`  Protocol    : ${plan.protocol}\n`);
+      process.stdout.write(`  Endpoint    : ${plan.endpoint}\n`);
+      process.stdout.write(`  Model       : ${plan.requested_model} -> ${plan.outbound_model}\n`);
+      process.stdout.write(`  Secret      : ${plan.auth.secret || "none"} (${plan.auth.present ? "ready" : "missing"})\n`);
+      process.stdout.write(`  Config      : ${plan.config_files.join(", ")}\n`);
+      if (plan.issue) process.stdout.write(`  Blocked by  : ${plan.issue}\n`);
+    }
+    if (preview && output.ready) {
+      process.stdout.write("[preview] no client files were changed; re-run with --yes to apply.\n");
+    }
+  }
+  return output;
+}
+
+async function planApplication(name, options) {
+  const plans = await applicationPlans(name, options);
+  const output = emitApplicationPlans(name, plans, options);
+  if (!output.ready) process.exitCode = 1;
+  return output;
+}
+
+async function snapshotManagedFiles(paths) {
+  const snapshots = new Map();
+  for (const path of [...new Set(paths)]) {
+    const details = await pathState(path);
+    if (!details) {
+      snapshots.set(path, { existed: false });
+      continue;
+    }
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new ProviderClientError(`refusing to update non-regular managed path: ${path}`);
+    }
+    if (details.size > MAX_STORE_BYTES) {
+      throw new ProviderClientError(`managed provider file is unexpectedly large: ${path}`);
+    }
+    snapshots.set(path, {
+      existed: true,
+      bytes: await readFile(path),
+      mode: details.mode & 0o777
+    });
+  }
+  return snapshots;
+}
+
+async function restoreManagedFiles(snapshots) {
+  const errors = [];
+  for (const [path, snapshot] of [...snapshots.entries()].reverse()) {
+    try {
+      if (snapshot.existed) {
+        await writeBytesAtomic(path, snapshot.bytes, snapshot.mode || 0o600);
+      } else {
+        const details = await pathState(path);
+        if (details?.isSymbolicLink() || (details && !details.isFile())) {
+          throw new Error("new managed path is no longer a regular file");
+        }
+        if (details) await unlink(path);
+      }
+    } catch (error) {
+      errors.push(`${path}: ${error.message}`);
+    }
+  }
+  if (errors.length) {
+    throw new ProviderClientError(`provider rollback was incomplete: ${errors.join("; ")}`);
+  }
+}
+
+async function assertBackend(plan) {
+  const details = await pathState(plan.backend);
+  if (!details || details.isSymbolicLink() || !details.isFile()) {
+    throw new ProviderClientError(`provider setup backend is missing: ${plan.backend}`);
+  }
+  if (process.platform !== "win32" && (details.mode & 0o111) === 0) {
+    throw new ProviderClientError(`provider setup backend is not executable: ${plan.backend}`);
+  }
+}
+
+function appliedRecord(plan) {
+  return {
+    target: plan.target,
+    profile: plan.profile,
+    platform: plan.platform,
+    protocol: plan.protocol,
+    endpoint: plan.endpoint,
+    requested_model: plan.requested_model,
+    outbound_model: plan.outbound_model,
+    applied_at: new Date().toISOString()
+  };
+}
+
+async function applyApplication(name, options, prepared = {}) {
+  const store = prepared.store || await loadProviderStore(options.storePath);
+  const secrets = prepared.secrets ||
+    await loadProviderSecrets(options.secretsPath, { allowMissing: true });
+  const plans = prepared.plans || await applicationPlans(name, options, { store, secrets });
+  const preview = prepared.suppressPlan
+    ? {
+      schema: 1,
+      profile: name,
+      platform: plans[0]?.platform || options.platform || normalizeRuntimePlatform(),
+      ready: !plansHaveErrors(plans),
+      plans
+    }
+    : options.json && options.yes && !plansHaveErrors(plans)
+    ? {
+      schema: 1,
+      profile: name,
+      platform: plans[0]?.platform || options.platform || normalizeRuntimePlatform(),
+      ready: true,
+      plans
+    }
+    : emitApplicationPlans(name, plans, options, { preview: !options.yes });
+  if (!preview.ready) {
+    throw new ProviderClientError("provider plan is blocked; resolve the reported issues before apply");
+  }
+  if (!options.yes) return preview;
+  assertApplyPlatform(plans[0]?.platform || options.platform || normalizeRuntimePlatform());
+  const activePlans = plans.filter((plan) => plan.enabled);
+  if (!activePlans.length) throw new ProviderClientError("the selected profile disables every requested target");
+  for (const plan of activePlans) await assertBackend(plan);
+
+  const managedPaths = [options.statePath];
+  for (const plan of activePlans) {
+    managedPaths.push(...await managedTargetPaths(plan.target));
+  }
+  const snapshots = await snapshotManagedFiles(managedPaths);
+  const state = await loadProviderState(options.statePath, { allowMissing: true });
+  const secretDirectory = await mkdtemp(join(tmpdir(), "agentctl-provider-"));
+  const applied = [];
+  try {
+    for (const plan of activePlans) {
+      const secretValue = plan.auth.mode === "none"
+        ? "agentctl-loopback-no-auth"
+        : secrets.secrets[plan.auth.secret]?.value;
+      if (!secretValue) {
+        throw new ProviderClientError(`local Secret '${plan.auth.secret}' is missing`);
+      }
+      const keyFile = join(secretDirectory, `${plan.target}.key`);
+      await writeFile(keyFile, `${secretValue}\n`, { flag: "wx", mode: 0o600 });
+      await chmod(keyFile, 0o600);
+      const args = backendArguments(plan, {
+        keyFile,
+        skipValidate: options.skipValidate,
+        force: options.force
+      });
+      const result = spawnSync(plan.backend, args, {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          AGENTCTL_SETUP_COMMAND: `agentctl provider apply ${name} --target ${plan.target}`,
+          AGENTCTL_UNINSTALL_COMMAND: `agentctl uninstall ${plan.target}`
+        },
+        stdio: options.json ? "pipe" : "inherit"
+      });
+      if (result.error || result.status !== 0) {
+        throw new ProviderClientError(
+          `${plan.target_label} provider backend failed; previous managed files will be restored`
+        );
+      }
+      state.current[plan.target] = appliedRecord(plan);
+      applied.push(plan.target);
+    }
+    await saveProviderState(options.statePath, state);
+  } catch (error) {
+    let rollbackError;
+    try {
+      await restoreManagedFiles(snapshots);
+    } catch (failure) {
+      rollbackError = failure;
+    }
+    if (rollbackError) {
+      throw new ProviderClientError(`${error.message}; ${rollbackError.message}`);
+    }
+    throw error;
+  } finally {
+    await rm(secretDirectory, { recursive: true, force: true });
+  }
+  const output = {
+    ok: true,
+    profile: name,
+    platform: plans[0].platform,
+    applied,
+    restart_required: true
+  };
+  if (!prepared.suppressResult) {
+    if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    else process.stdout.write(`Applied '${name}' to ${applied.join(", ")}. Start new agent sessions to use it.\n`);
+  }
+  return output;
+}
+
+async function current(options) {
+  const state = await loadProviderState(options.statePath, { allowMissing: true });
+  let selected = state.current;
+  if (options.target && options.target !== "all") {
+    validateTarget(options.target);
+    selected = state.current[options.target]
+      ? { [options.target]: state.current[options.target] }
+      : {};
+  }
+  const output = {
+    schema: 1,
+    state: options.statePath,
+    current: selected
+  };
+  if (options.json) return process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  if (!Object.keys(selected).length) return process.stdout.write("(no applied provider profiles)\n");
+  for (const [target, record] of Object.entries(selected)) {
+    process.stdout.write(
+      `${target.padEnd(10)} ${record.profile.padEnd(24)} ${record.outbound_model} (${record.platform})\n`
+    );
+  }
+}
+
 async function deleteProfile(name, options) {
   const store = await loadProviderStore(options.storePath);
   profileOrThrow(store, name);
@@ -621,12 +984,9 @@ async function exportStore(options) {
   if (options.yes) await writeJsonAtomic(options.output, store);
 }
 
-async function importStore(options) {
-  if (!options.input) throw new ProviderClientError("import requires --input");
-  const incoming = validateProviderStore(await readJson(options.input, "provider import"));
-  const current = await loadProviderStore(options.storePath, { allowMissing: true });
+function importedStore(current, incoming, replace) {
   let next;
-  if (options.replace) {
+  if (replace) {
     next = structuredClone(incoming);
     next.created_at = current.created_at;
   } else {
@@ -641,7 +1001,14 @@ async function importStore(options) {
       next.profiles[name] = structuredClone(profile);
     }
   }
-  validateProviderStore(next);
+  return validateProviderStore(next);
+}
+
+async function importStore(options) {
+  if (!options.input) throw new ProviderClientError("import requires --input");
+  const incoming = validateProviderStore(await readJson(options.input, "provider import"));
+  const current = await loadProviderStore(options.storePath, { allowMissing: true });
+  const next = importedStore(current, incoming, options.replace);
   printMutation(options.replace ? "replace provider Store from import" : "merge provider Store import", {
     source: options.input,
     destination: options.storePath,
@@ -649,6 +1016,68 @@ async function importStore(options) {
     secret_values: "not present in portable imports"
   }, options);
   if (options.yes) await saveProviderStore(options.storePath, next);
+}
+
+async function restorePortable(name, options) {
+  validateProfileName(name);
+  if (!options.input) throw new ProviderClientError("restore requires --input");
+  const incoming = validateProviderStore(await readJson(options.input, "provider restore input"));
+  const currentStore = await loadProviderStore(options.storePath, { allowMissing: true });
+  const nextStore = importedStore(currentStore, incoming, options.replace);
+  profileOrThrow(nextStore, name);
+  const secrets = await loadProviderSecrets(options.secretsPath, { allowMissing: true });
+  const plans = await applicationPlans(name, options, { store: nextStore, secrets });
+
+  if (!options.json) {
+    process.stdout.write(
+      `${options.yes ? "[apply]" : "[preview]"} restore portable provider Store from ${options.input}\n`
+    );
+    process.stdout.write("  Secret values: use the local encrypted/owner-only Secret Store\n");
+  }
+  const preview = options.json && options.yes && !plansHaveErrors(plans)
+    ? {
+      schema: 1,
+      profile: name,
+      platform: plans[0]?.platform || options.platform || normalizeRuntimePlatform(),
+      ready: true,
+      plans
+    }
+    : emitApplicationPlans(name, plans, options, { preview: !options.yes });
+  if (!preview.ready) {
+    throw new ProviderClientError("provider restore is blocked; restore the reported Secrets or fix the profile first");
+  }
+  if (!options.yes) return preview;
+  assertApplyPlatform(plans[0]?.platform || options.platform || normalizeRuntimePlatform());
+  const catalogSnapshot = await snapshotManagedFiles([options.storePath]);
+  let applied;
+  try {
+    await saveProviderStore(options.storePath, nextStore);
+    applied = await applyApplication(name, options, {
+      store: nextStore,
+      secrets,
+      plans,
+      suppressPlan: true,
+      suppressResult: true
+    });
+  } catch (error) {
+    try {
+      await restoreManagedFiles(catalogSnapshot);
+    } catch (rollback) {
+      throw new ProviderClientError(`${error.message}; catalog rollback failed: ${rollback.message}`);
+    }
+    throw error;
+  }
+  const output = {
+    ...applied,
+    restored_from: options.input,
+    catalog_mode: options.replace ? "replace" : "merge",
+    secret_values: "local Secret Store"
+  };
+  if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  else process.stdout.write(
+    `Restored and applied '${name}' to ${output.applied.join(", ")}; start new agent sessions to use it.\n`
+  );
+  return output;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -660,6 +1089,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (action === "list" && positional.length === 0) return list(options);
   if (action === "show" && positional.length === 1) return show(positional[0], options);
   if (action === "resolve" && positional.length === 1) return resolveProfile(positional[0], options);
+  if (action === "plan" && positional.length === 1) return planApplication(positional[0], options);
+  if (action === "apply" && positional.length === 1) return applyApplication(positional[0], options);
+  if (action === "current" && positional.length === 0) return current(options);
   if (action === "create" && positional.length === 1) return create(positional[0], options);
   if (action === "target" && positional.length === 2) {
     return mutateTarget(positional[0], positional[1], "", options);
@@ -671,12 +1103,14 @@ export async function main(argv = process.argv.slice(2)) {
   if (action === "secret") return secretCommand(positional, options);
   if (action === "export" && positional.length === 0) return exportStore(options);
   if (action === "import" && positional.length === 0) return importStore(options);
+  if (action === "restore" && positional.length === 1) return restorePortable(positional[0], options);
   throw new ProviderClientError("invalid provider command; use agentctl provider --help");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
-    const safe = error instanceof ProviderClientError || error instanceof ProviderSchemaError
+    const safe = error instanceof ProviderClientError ||
+      error instanceof ProviderSchemaError || error instanceof ProviderRendererError
       ? error.message
       : "unexpected provider Store failure";
     process.stderr.write(`[error] ${safe}\n`);

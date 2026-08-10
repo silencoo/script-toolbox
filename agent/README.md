@@ -43,6 +43,7 @@ The public controllers can be called directly:
 ./skillsctl/skillsctl --help
 ./agentctl/agentctl statusline status
 ./agentctl/agentctl provider status
+./agentctl/agentctl provider plan work-gateway --target codex
 ```
 
 Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and

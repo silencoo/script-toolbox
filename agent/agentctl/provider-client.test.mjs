@@ -4,6 +4,7 @@ import {
   chmod,
   lstat,
   mkdtemp,
+  mkdir,
   readFile,
   rm,
   symlink,
@@ -24,10 +25,10 @@ import { providerDefaults } from "./provider-client.mjs";
 
 const CLIENT = join(dirname(fileURLToPath(import.meta.url)), "provider-client.mjs");
 
-function run(args, expectedStatus = 0) {
+function run(args, expectedStatus = 0, environment = {}) {
   const result = spawnSync(process.execPath, [CLIENT, ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" }
+    env: { ...process.env, NO_COLOR: "1", ...environment }
   });
   assert.equal(
     result.status,
@@ -40,13 +41,18 @@ function run(args, expectedStatus = 0) {
 function paths(root) {
   return {
     store: join(root, "config", "providers.json"),
-    secrets: join(root, "config", "provider-secrets.json")
+    secrets: join(root, "config", "provider-secrets.json"),
+    state: join(root, "state", "providers.json")
   };
 }
 
 function common(root) {
   const value = paths(root);
-  return ["--store", value.store, "--secrets", value.secrets];
+  return [
+    "--store", value.store,
+    "--secrets", value.secrets,
+    "--state", value.state
+  ];
 }
 
 test("provider schema is strict and rejects machine state or insecure endpoints", () => {

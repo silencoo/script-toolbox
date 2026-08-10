@@ -148,6 +148,56 @@ resolution is deterministic: base profile, then target override, then the
 selected platform overlay, then exact alias expansion. Alias cycles are
 rejected.
 
+Plan and apply project the resolved profile through the existing ownership-safe
+backend for each client. The model written to a native direct configuration is
+the final outbound model after exact alias expansion:
+
+```bash
+agentctl provider plan work-gateway --target codex
+agentctl provider apply work-gateway --target codex --yes
+agentctl provider current
+
+# Apply every enabled and compatible target as one rollback-capable operation.
+agentctl provider apply work-gateway --target all --yes
+```
+
+Direct mode deliberately rejects protocol/auth combinations a client cannot
+natively speak:
+
+| Target | Direct protocols | Authentication |
+| --- | --- | --- |
+| Claude Code | `anthropic_messages` | `bearer`, `x-api-key` |
+| Codex | `openai_responses` | `bearer` |
+| OpenCode | `anthropic_messages`, `openai_responses`, `openai_chat` | Anthropic uses `x-api-key`; OpenAI uses `bearer` |
+| Pi | all four Store protocols | `bearer`, `x-api-key`, `x-goog-api-key`; loopback-only `none` |
+
+Disable an incompatible target or give it an explicit endpoint/protocol/auth
+override. Protocol conversion belongs to the optional proxy layer, not these
+native renderers. `apply` passes each Secret through a short-lived owner-only
+file and records only the profile, endpoint, protocol, requested/outbound
+models, platform, and timestamp in device-local state. Claude profile apply
+does not alter the separately managed status-line setting.
+
+For a fresh machine, restore the Secret reference locally (or later through
+the encrypted Workspace), then import and apply the portable catalog in one
+operation:
+
+```bash
+agentctl provider init --yes
+agentctl provider secret set work_gateway_key \
+  --secret-file /secure/work-gateway-key --yes
+agentctl provider restore work-gateway \
+  --input provider-profiles.json --target codex --yes
+```
+
+The command merges by default and rolls back the catalog if native application
+fails. Use `--replace` only when the imported catalog should replace every
+local profile. A Windows overlay can be inspected from macOS or Linux with
+`plan --platform windows`, but `apply` rejects it; copying a macOS absolute
+path into Windows is therefore impossible through this schema. On the Windows
+machine the same command automatically selects its Windows overlay and native
+user-home paths.
+
 ## Development presets
 
 A development preset binds one named MCP profile, Skills pack, and Prompt

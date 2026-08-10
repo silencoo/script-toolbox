@@ -1,5 +1,22 @@
 # Changelog — agent/
 
+## 2026-08-11 — native provider profile projection
+
+- Added `agentctl provider plan/apply/current` renderers for Claude Code,
+  Codex, OpenCode, and Pi. Direct protocol/auth compatibility is checked from
+  explicit profile metadata instead of guessed from provider URLs.
+- Reused each client's owned setup backend while passing Secret values through
+  short-lived mode-`0600` files. Values never enter argv, environment variables,
+  plans, selection state, or controller output.
+- Added multi-target transaction snapshots and rollback for every exact managed
+  config/state/key path. Applying a later target failure restores earlier
+  targets and leaves selection state unchanged.
+- Added `provider restore` to merge or replace one portable catalog and apply a
+  selected profile in one guarded operation. Non-native overlays can be planned
+  anywhere but can only be applied on their matching operating system.
+- Added end-to-end native config tests for all four clients, cross-platform
+  guards, Secret-free portable recovery, and failed-transaction rollback.
+
 ## 2026-08-11 — portable provider profiles
 
 - Added a strict, preview-first `agentctl provider` Store for reusable OpenAI,
