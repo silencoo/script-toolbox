@@ -687,6 +687,13 @@ else
   fail=1
 fi
 
+if node --test "$SCRIPT_DIR/agentctl/provider-client.test.mjs"; then
+  :
+else
+  echo "FAIL: portable provider Store tests" >&2
+  fail=1
+fi
+
 if node "$SCRIPT_DIR/agentctl/orchestrator-client.test.mjs"; then
   :
 else

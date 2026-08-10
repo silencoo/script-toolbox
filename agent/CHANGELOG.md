@@ -1,5 +1,20 @@
 # Changelog — agent/
 
+## 2026-08-11 — portable provider profiles
+
+- Added a strict, preview-first `agentctl provider` Store for reusable OpenAI,
+  Anthropic, and Google-compatible endpoints, explicit model aliases, per-agent
+  target overrides, and whitelisted Darwin/Linux/Windows overlays.
+- Split API-key values into a separate owner-only Secret Store. Status and
+  normal exports expose reference names and presence only; plaintext portable
+  exports can never include Secret values.
+- Added deterministic base → target → platform resolution, alias-cycle
+  rejection, HTTPS-by-default endpoint validation, atomic writes, safe import
+  conflict handling, and standalone-runtime packaging.
+- Added isolated tests proving that machine paths/runtime fields are rejected,
+  Windows uses its native config root, unsafe Secret files fail closed, and
+  portable exports remain secret-free.
+
 ## 2026-08-10 — managed Claude Code status line
 
 - Added `agentctl statusline install/status/uninstall` with preview-first

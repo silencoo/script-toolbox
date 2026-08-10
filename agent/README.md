@@ -6,7 +6,8 @@ key when the provider exposes a models endpoint, and preserve credentials with
 mode `0600`.
 
 - [`agentctl/`](./agentctl/README.md) — shared public Shell entrypoint for
-  installing a client and configuring its provider/model.
+  installing a client, configuring its provider/model, and managing portable
+  provider profiles with platform-specific target overlays.
 - [`claude-code/`](./claude-code/README.md) — Anthropic, DeepSeek, OpenRouter,
   MiniMax China/global, a custom Anthropic Messages endpoint, and the managed
   low-overhead status-line preset.
@@ -41,6 +42,7 @@ The public controllers can be called directly:
 ./promptctl/promptctl
 ./skillsctl/skillsctl --help
 ./agentctl/agentctl statusline status
+./agentctl/agentctl provider status
 ```
 
 Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and
@@ -105,7 +107,7 @@ backward-compatible setup option for MiniMax where MiniMax is supported.
 
 | Controller | Owns | Does not own |
 | --- | --- | --- |
-| `agentctl` | Client installation, provider/model/credential configuration, Claude's status-line preset, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
+| `agentctl` | Client installation, portable provider profiles, local provider Secrets, provider/model configuration, Claude's status-line preset, and the optional encrypted Workspace manifest | Child MCP/Skills/Prompt snapshots, prompt files, CLI removal |
 | `mcpctl` | Task-oriented MCP profiles and their encrypted backup state | Providers, models, persistent instructions |
 | `promptctl` | Persistent instruction links and initial editable Markdown | Clients, providers, credentials, MCP state |
 | `skillsctl` | Portable skill directories, inherited packs, managed target links, encrypted backups | Providers, MCP state, project-scoped skills |

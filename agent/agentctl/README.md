@@ -1,9 +1,9 @@
 # agentctl
 
 `agentctl` is the public Shell entrypoint for installing a supported coding
-agent, configuring its provider/model/credential, managing Claude Code's
-optional status-line preset, and managing the optional unified encrypted
-Toolbox Workspace.
+agent, configuring its provider/model/credential, managing reusable portable
+provider profiles, managing Claude Code's optional status-line preset, and
+managing the optional unified encrypted Toolbox Workspace.
 
 Run it without arguments from the repository root to open the unified terminal
 dashboard:
@@ -87,6 +87,66 @@ Claude provider setup also installs the status-line preset when no external
 `agentctl statusline` lifecycle previews mutations by default, can privately
 preserve an external setting with `install --force --yes`, and restores that
 setting on uninstall. It never prints the saved command.
+
+## Portable provider profiles
+
+The Provider Store captures portable intent rather than a snapshot of one
+machine's generated configuration. A profile contains one base endpoint and
+protocol, a Secret reference, explicit model aliases, optional per-agent
+overrides, and optional Darwin/Linux/Windows target overlays. Its strict schema
+has no fields for absolute config paths, PIDs, ports, logs, health state, or
+generated client files.
+
+```bash
+# Preview and initialize the two local Stores.
+agentctl provider init
+agentctl provider init --yes
+
+# Create one reusable OpenAI Responses profile.
+agentctl provider create work-gateway \
+  --protocol openai_responses \
+  --base-url https://gateway.example.com/v1 \
+  --model daily \
+  --alias daily=vendor-model-2026 \
+  --auth-mode bearer \
+  --secret work_gateway_key \
+  --yes
+
+# Disable an incompatible direct target, then specialize Windows without
+# storing a Windows path.
+agentctl provider target work-gateway claude --disable --yes
+agentctl provider platform work-gateway windows codex \
+  --model daily --yes
+
+agentctl provider resolve work-gateway \
+  --target codex --platform windows --json
+```
+
+Secret values live separately in
+`~/.config/agentctl/provider-secrets.json` on Unix-like systems and the native
+`%APPDATA%\\agentctl` directory on Windows. Set one from an owner-only,
+single-line input file so the value does not enter shell history:
+
+```bash
+chmod 600 /secure/work-gateway-key
+agentctl provider secret set work_gateway_key \
+  --secret-file /secure/work-gateway-key --yes
+agentctl provider secret list
+```
+
+Portable JSON export always excludes those values, while retaining the
+reference names needed to report missing credentials on another machine:
+
+```bash
+agentctl provider export --output provider-profiles.json --yes
+agentctl provider import --input provider-profiles.json --yes
+```
+
+Import merges non-conflicting profiles. A conflicting profile fails closed;
+`--replace --yes` is required to replace the destination catalog. Target
+resolution is deterministic: base profile, then target override, then the
+selected platform overlay, then exact alias expansion. Alias cycles are
+rejected.
 
 ## Development presets
 
@@ -234,8 +294,9 @@ After recovery, the TUI queries version metadata from the endpoint and lazily
 decrypts a child Store only when its section is opened. Plans remain in memory;
 an apply writes only the chosen selection and its dependencies to
 `~/.local/share/agentctl/workspaces/<workspace-store-id>/` (or the platform data
-directory on Windows), then invokes the existing controller transaction. Agent
-provider, model, and API-key configuration always remain local.
+directory on Windows), then invokes the existing controller transaction. At
+this stage the Provider Store remains an independently exportable local Store;
+generated provider configuration always remains device-local.
 
 ## Standalone PATH commands
 
@@ -290,6 +351,8 @@ Workspace manifest:
 
 - It can install a missing CLI through the selected setup backend.
 - It configures provider, model, and owned credential state.
+- It owns the portable Provider Store and its separate local Secret Store;
+  normal exports never contain Secret values.
 - It can install or remove a separately owned Claude status-line renderer while
   preserving an existing external setting.
 - Its `uninstall` command calls that backend's provider-only `--uninstall`.

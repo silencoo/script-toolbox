@@ -20,9 +20,10 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.6.0"
+VERSION="0.7.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
+PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
 TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 
 # shellcheck source=../ctl-lib.sh
@@ -41,6 +42,7 @@ Usage:
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl statusline <install|status|uninstall> [options]
   agentctl providers <claude|codex|opencode|pi>
+  agentctl provider <command> [options]
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl help <claude|codex|opencode|pi>
   agentctl workspace <command> [options]
@@ -57,6 +59,8 @@ Commands:
   statusline  Preview/install, inspect, or safely uninstall the managed Claude
               Code status-line preset. Existing external settings are preserved.
   providers   Show the selected client's provider/model presets.
+  provider    Manage portable provider profiles, target/platform overlays,
+              model aliases, and local Secret references.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   help        Show the selected client's setup options.
@@ -74,6 +78,7 @@ Run without arguments in a terminal for the unified TUI. Use "interactive"
 for the guided Shell menu. Setup options after the
 client name are passed unchanged to that client's existing setup.sh backend.
 Run "agentctl workspace --help" for Workspace commands.
+Run "agentctl provider --help" for portable Provider Store commands.
 Run "agentctl preset --help" for development-preset commands.
 Run "agentctl statusline --help" for Claude status-line commands.
 EOF
@@ -84,6 +89,13 @@ run_workspace() {
   [ -r "$WORKSPACE_CLIENT" ] ||
     die "Workspace client not found: $WORKSPACE_CLIENT"
   exec node "$WORKSPACE_CLIENT" "$@"
+}
+
+run_provider() {
+  require_node22 "agentctl provider"
+  [ -r "$PROVIDER_CLIENT" ] ||
+    die "Provider Store client not found: $PROVIDER_CLIENT"
+  exec node "$PROVIDER_CLIENT" "$@"
 }
 
 run_orchestrator() {
@@ -782,6 +794,10 @@ case "${1:-}" in
   workspace)
     shift
     run_workspace "$@"
+    ;;
+  provider|profile)
+    shift
+    run_provider "$@"
     ;;
   preset)
     run_orchestrator "$@"
