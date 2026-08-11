@@ -22,11 +22,13 @@ import {
   providerEntries,
   promptTargetState,
   safePromptPreviewText,
+  sectionDelta,
   selectionDelta,
   selectionWindow,
   snippetEntries,
   targetLabel,
   targetReport,
+  workspaceConfigured,
   workspacePresentation
 } from "./model.mjs";
 
@@ -70,16 +72,18 @@ Usage:
   toolbox-tui --help
 
 Keys:
-  Tab / Shift+Tab / Left / Right  Switch section
+  [ / ] / Tab / Shift+Tab / Left / Right
+                                    Switch section
   t                                 Switch target (four clients in Providers)
   r                                 Refresh live status
-  [ / ] / Up / Down                 Select previous / next list item
+  Up / Down                         Select previous / next list item
   p / a                             Plan / apply selected configuration
   Prompts: v local · V Workspace    View Prompt content on demand
   u                                 Roll back a preset
   Agents: c / p / Enter unified Providers · x uninstall owned config
   Accounts: a/Enter switch · x delete saved account
   Providers: p plan · a apply · u upload · d download/merge · i incompatible
+  MCP: f                            Repair current local profile drift
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -591,7 +595,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       <ErrorText value={surface.cloudError} />
       {(dashboard.errors || []).map((error) => <ErrorText key={error} value={error} />)}
       <Text color="gray">
-        [/] select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="yellow" bold>i</Text> incompatible
+        ↑/↓ select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="yellow" bold>i</Text> incompatible
       </Text>
       <Text color="gray">
         <Text color="green" bold>u</Text> keep Local → Workspace · <Text color="blue" bold>d</Text> keep Workspace → Local
@@ -639,7 +643,7 @@ function CloudCatalog({ catalog, selected, target, component }) {
         </Box>
       </Box>
       <Text color="gray">
-        [/] select · <Text color="cyan" bold>p</Text> inspect plan · <Text color="magenta" bold>a</Text> apply to {targetLabel(target)} only
+        ↑/↓ select · <Text color="cyan" bold>p</Text> inspect plan · <Text color="magenta" bold>a</Text> apply to {targetLabel(target)} only
       </Text>
     </Box>
   );
@@ -647,6 +651,10 @@ function CloudCatalog({ catalog, selected, target, component }) {
 
 function McpView({ snapshot, target, catalog, selected }) {
   const comparison = mcpTargetComparison(snapshot);
+  const active = comparison.targets[target];
+  const repairable = active?.drift?.length > 0 &&
+    active?.data?.selection_mode !== "manual" &&
+    active?.selection && active.selection !== "none";
   return (
     <Box flexDirection="column">
       <Text color="gray">Local assignments by client; the highlighted client receives Workspace actions.</Text>
@@ -686,6 +694,14 @@ function McpView({ snapshot, target, catalog, selected }) {
             : ""}
         />
       ))}
+      {repairable && (
+        <Text color="yellow">
+          <Text bold>f</Text> repair current local profile {active.selection} for {targetLabel(target)} · replaces same-name MCP entries only
+        </Text>
+      )}
+      {active?.drift?.length > 0 && !repairable && (
+        <Text color="yellow">Current MCP selection uses manual state; apply a named profile before automatic repair.</Text>
+      )}
       {snapshot.workspace
         ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="mcp" />
         : <WorkspaceCatalogFallback snapshot={snapshot} />}
@@ -759,7 +775,7 @@ function PromptPreview({ preview, offset, pageSize }) {
       </Box>
       <Text color="gray">
         Lines {totalLines === 0 ? 0 : safeOffset + 1}–{totalLines === 0 ? 0 : Math.min(safeOffset + pageSize, totalLines)} of {totalLines}
-        {totalLines > pageSize ? " · [/] or arrows scroll" : ""} · v/V/Esc close
+        {totalLines > pageSize ? " · ↑/↓ scroll" : ""} · v/V/Esc close
       </Text>
       <Text color="gray">Content exists only in this TUI process and is cleared when the preview closes.</Text>
     </Box>
@@ -801,7 +817,7 @@ function SnippetView({ snapshot, catalog, selected }) {
       <ErrorText value={catalog.error} />
       <ErrorText value={snapshot.snippetsError} />
       <Text color="gray">
-        [/] select · <Text color="green" bold>c</Text> copy local · <Text color="cyan" bold>p</Text> inspect cloud pull · <Text color="magenta" bold>a</Text> pull selected
+        ↑/↓ select · <Text color="green" bold>c</Text> copy local · <Text color="cyan" bold>p</Text> inspect cloud pull · <Text color="magenta" bold>a</Text> pull selected
       </Text>
       <Text color="gray">Create: promptctl snippet create &lt;name&gt; --yes · Edit: promptctl snippet path &lt;name&gt;</Text>
     </Box>
@@ -929,17 +945,18 @@ function Cloud({ snapshot }) {
 function Help() {
   return (
     <Panel title="Keyboard help">
-      <Text>Tab / Shift+Tab or arrows  switch section</Text>
+      <Text>[ / ] or Tab / Shift+Tab / Left / Right  switch section</Text>
       <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers) · r refresh · q quit</Text>
-      <Text>[ / ] or Up/Down  select previous / next item</Text>
+      <Text>Up / Down  select previous / next item inside the current section</Text>
       <Text>
         Agents: <Text color="cyan" bold>c/p/Enter</Text> open unified Providers · <Text color="red" bold>x</Text> uninstall
       </Text>
-      <Text>Accounts: [/] select · a/Enter switch or refresh · x delete non-current snapshot</Text>
-      <Text>Providers: [/] select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
+      <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
+      <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
-      <Text>Prompts: v view active local · V view selected Workspace · [/] scroll preview</Text>
-      <Text>Snippets: [/] select · c copy local · p inspect cloud pull · a pull</Text>
+      <Text>MCP: f repair the current local profile when Drift is reported</Text>
+      <Text>Prompts: v view active local · V view selected Workspace · ↑/↓ scroll preview</Text>
+      <Text>Snippets: ↑/↓ select · c copy local · p inspect cloud pull · a pull</Text>
       <Text>Presets: p inspect plan · a apply · u rollback</Text>
       <Text>Destructive actions require y confirmation.</Text>
     </Panel>
@@ -1170,6 +1187,10 @@ function App({ initialSection, controller, onLaunch }) {
   const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local
     ? selectedSnippet.name
     : "";
+  const selectedMcpState = componentTargetState(snapshot, "mcp", target);
+  const selectedMcpProfile = selectedMcpState.data?.selection_mode === "manual"
+    ? ""
+    : selectedMcpState.selection === "none" ? "" : selectedMcpState.selection;
   const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
 
   const openPromptPreview = useCallback(async (source) => {
@@ -1210,11 +1231,13 @@ function App({ initialSection, controller, onLaunch }) {
     setBusy(true);
     const providerAction = action.startsWith("provider-");
     const accountAction = action.startsWith("account-");
+    const mcpRepairAction = action === "mcp-repair";
     const actionTarget = providerAction ? providerTarget : target;
     const selection = action.startsWith("agent-")
       ? selectedAgentId
       : accountAction ? selectedAccountName
       : providerAction ? selectedProviderName
+      : mcpRepairAction ? selectedMcpProfile
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, actionTarget)}…`);
@@ -1227,6 +1250,8 @@ function App({ initialSection, controller, onLaunch }) {
           ? selectedAccountName
           : providerAction
           ? selectedProviderName
+          : mcpRepairAction
+          ? selectedMcpProfile
           : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction
           ? selectedProviderSource
@@ -1242,7 +1267,7 @@ function App({ initialSection, controller, onLaunch }) {
       setBusy(false);
     }
   }, [controller, providerTarget, refresh, selectedAccountName, selectedAgentId, selectedLocalSnippet,
-    selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
+    selectedMcpProfile, selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
     snapshot?.presetSource, target]);
 
   useInput((input, key) => {
@@ -1256,6 +1281,16 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     if (input === "q" || (key.ctrl && input === "c")) return exit();
+    const sectionDirection = sectionDelta(input, key);
+    if (sectionDirection !== 0) {
+      if (promptPreview) {
+        setPromptPreview(null);
+        setPromptPreviewOffset(0);
+        setMessage("Prompt preview closed; content cleared from the view.");
+      }
+      if (showHelp) setShowHelp(false);
+      return setSection((value) => moveSection(value, sectionDirection));
+    }
     if (promptPreview) {
       if (key.escape || input === "v" || input === "V") {
         setPromptPreview(null);
@@ -1275,8 +1310,6 @@ function App({ initialSection, controller, onLaunch }) {
     }
     if (input === "?") return setShowHelp((value) => !value);
     if (showHelp && key.escape) return setShowHelp(false);
-    if (key.tab || key.rightArrow) return setSection((value) => moveSection(value, key.shift ? -1 : 1));
-    if (key.leftArrow) return setSection((value) => moveSection(value, -1));
     if (input === "t") {
       if (section === "providers") {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
@@ -1344,7 +1377,7 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     if ((action === "provider-sync-push" || action === "provider-sync-pull") &&
-        !snapshot?.workspaceConnection?.configured) {
+        !workspaceConfigured(snapshot)) {
       setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
       return;
     }
@@ -1356,6 +1389,14 @@ function App({ initialSection, controller, onLaunch }) {
     }
     if (action === "provider-sync-pull" && !selectedProvider?.sources?.includes("cloud")) {
       setMessage("The selected Provider has no Workspace copy to download.");
+      return;
+    }
+    if (action === "mcp-repair" && selectedMcpState.drift.length === 0) {
+      setMessage(`${targetLabel(target)} MCP configuration is already healthy.`);
+      return;
+    }
+    if (action === "mcp-repair" && !selectedMcpProfile) {
+      setMessage("Automatic MCP repair requires a current named profile; the current selection is manual or unknown.");
       return;
     }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
@@ -1373,10 +1414,12 @@ function App({ initialSection, controller, onLaunch }) {
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
       const accountAction = action.startsWith("account-");
+      const mcpRepairAction = action === "mcp-repair";
       const selection = action.startsWith("agent-")
         ? selectedAgentId
         : accountAction ? selectedAccountName
         : providerAction ? selectedProviderName
+        : mcpRepairAction ? selectedMcpProfile
         : action === "snippet-copy" ? selectedLocalSnippet
           : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
@@ -1463,7 +1506,7 @@ function App({ initialSection, controller, onLaunch }) {
       ) : (
         <Box marginTop={1} justifyContent="space-between">
           <Text color={message.startsWith("Failed") ? "red" : "gray"} wrap="truncate-end">{loading || busy ? "◌ " : ""}{message}</Text>
-          <Text color="gray">? help · {(["snippets", "accounts"].includes(section)) ? "" : "t target · "}r refresh · q quit</Text>
+          <Text color="gray">? help · [/] tabs · {(["snippets", "accounts"].includes(section)) ? "" : "t target · "}r refresh · q quit</Text>
         </Box>
       )}
     </Box>

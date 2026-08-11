@@ -16,10 +16,12 @@ import {
   promptTargetState,
   providerEntries,
   safePromptPreviewText,
+  sectionDelta,
   selectionDelta,
   selectionWindow,
   snippetEntries,
   targetLabel,
+  workspaceConfigured,
   workspacePresentation
 } from "../src/model.mjs";
 
@@ -30,6 +32,20 @@ test("section navigation wraps and invalid sections fall back", () => {
   assert.equal(normalizeSection("unknown"), "overview");
   assert.equal(moveSection("overview", -1), "cloud");
   assert.equal(moveSection("cloud", 1), "overview");
+});
+
+test("Workspace configuration survives local-first snapshot hydration", () => {
+  assert.equal(workspaceConfigured({
+    workspaceConnection: { configured: true }
+  }), true);
+  assert.equal(workspaceConfigured({
+    workspace: {
+      mode: "workspace",
+      endpoint: "https://workspace.example.test",
+      store_id: "a".repeat(32)
+    }
+  }), true);
+  assert.equal(workspaceConfigured({ workspace: null, workspaceConnection: null }), false);
 });
 
 test("official account presentation exposes labels only and marks the active snapshot", () => {
@@ -72,12 +88,19 @@ test("target and preset selection are deterministic", () => {
   assert.equal(clampSelection(4, 2), 1);
   assert.equal(clampSelection(-1, 2), 0);
   assert.equal(clampSelection(3, 0), 0);
-  assert.equal(selectionDelta("]"), 1);
-  assert.equal(selectionDelta("["), -1);
+  assert.equal(selectionDelta("]"), 0);
+  assert.equal(selectionDelta("["), 0);
   assert.equal(selectionDelta("", { downArrow: true }), 1);
   assert.equal(selectionDelta("", { upArrow: true }), -1);
   assert.equal(selectionDelta("j"), 0);
   assert.equal(selectionDelta("k"), 0);
+  assert.equal(sectionDelta("]"), 1);
+  assert.equal(sectionDelta("["), -1);
+  assert.equal(sectionDelta("", { rightArrow: true }), 1);
+  assert.equal(sectionDelta("", { leftArrow: true }), -1);
+  assert.equal(sectionDelta("", { tab: true }), 1);
+  assert.equal(sectionDelta("", { tab: true, shift: true }), -1);
+  assert.equal(sectionDelta("", { downArrow: true }), 0);
 });
 
 test("MCP comparison makes shared and per-client assignments explicit", () => {
@@ -362,6 +385,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("presets", "p"), "plan");
   assert.equal(actionForKey("presets", "P"), null);
   assert.equal(actionForKey("mcp", "p"), "mcp-plan");
+  assert.equal(actionForKey("mcp", "f"), "mcp-repair");
   assert.equal(actionForKey("skills", "a"), "skills-apply");
   assert.equal(actionForKey("prompts", "v"), "prompt-view-local");
   assert.equal(actionForKey("prompts", "V"), "prompt-view-cloud");
@@ -392,6 +416,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("provider-apply"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-pull"), true);
+  assert.equal(actionNeedsConfirmation("mcp-repair"), true);
 });
 
 test("Prompt previews strip terminal controls without redacting user text", () => {

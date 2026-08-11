@@ -25035,6 +25035,7 @@ var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 var WORKSPACE_RETRY_DELAY_MS = 250;
 var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
+var MCP_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode"]);
 var PROMPT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex"]);
 function transientWorkspaceError(error) {
   return /could not reach|request timed out|HTTP (?:408|425|429|5\d\d)\b/i.test(String(error?.message || error));
@@ -25223,8 +25224,8 @@ function createController({
     if (codexReport?.provider?.data?.identity && accountLabel) {
       codexReport.provider.data.identity.account = accountLabel;
     }
-    const workspaceConfigured = Boolean(connectionResult.data?.configured);
-    if (!workspaceConfigured) {
+    const workspaceConfigured2 = Boolean(connectionResult.data?.configured);
+    if (!workspaceConfigured2) {
       cachedWorkspace = null;
       workspaceLastConnectedAt = "";
       workspaceLastError = "";
@@ -25246,15 +25247,25 @@ function createController({
       snippetsError: snippetsResult.error,
       workspace: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
       workspaceConnection: connectionResult.data,
-      workspaceLoading: workspaceConfigured,
-      workspaceError: workspaceConfigured ? workspaceLastError : connectionResult.error,
+      workspaceLoading: workspaceConfigured2,
+      workspaceError: workspaceConfigured2 ? workspaceLastError : connectionResult.error,
       workspaceStale: Boolean(cachedWorkspace && workspaceLastError),
       workspaceLastConnectedAt,
       workspaceFailureCount
     };
   }
   async function hydrateSnapshot(local) {
-    const remoteResult = refreshWorkspaceIndex().then((data) => ({ data, connection: data, error: "", fresh: true })).catch((error) => ({
+    const remoteResult = refreshWorkspaceIndex().then((data) => ({
+      data,
+      connection: {
+        ...local.workspaceConnection || {},
+        endpoint: local.workspaceConnection?.endpoint || data?.endpoint || "",
+        store_id: local.workspaceConnection?.store_id || data?.store_id || "",
+        configured: true
+      },
+      error: "",
+      fresh: true
+    })).catch((error) => ({
       data: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
       connection: local.workspaceConnection,
       error: sanitizeOutput(error?.message || error),
@@ -25452,6 +25463,23 @@ No remote catalog was written locally.`;
       detail: result.ok ? `${direction === "push" ? "Used the local" : "Used the Workspace"} '${profile}' profile ${direction === "push" ? "in encrypted Workspace" : "in the local catalog"}; ${secretCount} referenced Secret value(s) copied without being printed. Every other profile and catalog was preserved.` : result.error || `Workspace agent ${direction} failed.`
     };
   }
+  async function localMcpRepair(profile, target) {
+    if (!profile) throw new Error("No current local MCP profile is available to repair.");
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const result = await run(tools.mcp, [
+      "apply",
+      "--target",
+      target,
+      "--profile",
+      profile,
+      "--force"
+    ]);
+    return {
+      ok: result.code === 0,
+      data: { profile, target },
+      detail: result.code === 0 ? `${profile} was reapplied to ${target}; only same-name MCP entries were adopted, unrelated client configuration was preserved, and a new ${target} session is recommended.` : sanitizeOutput(result.stderr || result.stdout) || `MCP repair failed with code ${result.code}`
+    };
+  }
   async function remoteComponentAction(actionName, type, name, target) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
@@ -25534,6 +25562,7 @@ No remote catalog was written locally.`;
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
       return providerSync(actionName, selection);
     }
+    if (actionName === "mcp-repair") return localMcpRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
       const operation = actionName === "account-use" ? "use" : "delete";
@@ -25873,8 +25902,13 @@ function clampSelection(index, length) {
   return Math.min(Math.max(index, 0), length - 1);
 }
 function selectionDelta(input, key = {}) {
-  if (input === "]" || key.downArrow) return 1;
-  if (input === "[" || key.upArrow) return -1;
+  if (key.downArrow) return 1;
+  if (key.upArrow) return -1;
+  return 0;
+}
+function sectionDelta(input, key = {}) {
+  if (input === "]" || key.rightArrow || key.tab && !key.shift) return 1;
+  if (input === "[" || key.leftArrow || key.tab && key.shift) return -1;
   return 0;
 }
 function selectionWindow(items, selected, size = 9) {
@@ -26003,6 +26037,7 @@ function actionForKey(section, input) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
   }
+  if (section === "mcp" && input === "f") return "mcp-repair";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
   if (section === "snippets" && input === "c") return "snippet-copy";
@@ -26014,7 +26049,7 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
@@ -26028,6 +26063,9 @@ function actionLabel(action, selection, target) {
   }
   if (action === "provider-sync-pull") {
     return `Use Workspace ${selection || "Provider"} in the local catalog`;
+  }
+  if (action === "mcp-repair") {
+    return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
@@ -26045,6 +26083,11 @@ function actionLabel(action, selection, target) {
 }
 function safePromptPreviewText(value) {
   return String(value ?? "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+}
+function workspaceConfigured(snapshot) {
+  if (snapshot?.workspaceConnection?.configured === true) return true;
+  const workspace = snapshot?.workspace;
+  return Boolean(workspace?.mode === "workspace" && typeof workspace.endpoint === "string" && workspace.endpoint && typeof workspace.store_id === "string" && workspace.store_id);
 }
 function workspacePresentation(workspace, error = "", loading = false) {
   const diagnostic = String(error || "").replace(/^\s*\[error\]\s*/i, "").trim();
@@ -26212,16 +26255,18 @@ Usage:
   toolbox-tui --help
 
 Keys:
-  Tab / Shift+Tab / Left / Right  Switch section
+  [ / ] / Tab / Shift+Tab / Left / Right
+                                    Switch section
   t                                 Switch target (four clients in Providers)
   r                                 Refresh live status
-  [ / ] / Up / Down                 Select previous / next list item
+  Up / Down                         Select previous / next list item
   p / a                             Plan / apply selected configuration
   Prompts: v local \xB7 V Workspace    View Prompt content on demand
   u                                 Roll back a preset
   Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
   Accounts: a/Enter switch \xB7 x delete saved account
   Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
+  MCP: f                            Repair current local profile drift
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -26478,7 +26523,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       value: `${proxy.status || "unavailable"}${proxy.profile ? ` \xB7 ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`,
       kind: proxyKind
     }
-  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
+  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
 }
 function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
@@ -26488,10 +26533,12 @@ function CloudCatalog({ catalog, selected, target, component }) {
   const item = catalog.items[safeIndex];
   const visible = selectionWindow(catalog.items, safeIndex);
   const catalogLabel = component === "mcp" ? "MCP profiles" : component === "skills" ? "Skill packs" : "Prompt profiles";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
 }
 function McpView({ snapshot, target, catalog, selected }) {
   const comparison = mcpTargetComparison(snapshot);
+  const active = comparison.targets[target];
+  const repairable = active?.drift?.length > 0 && active?.data?.selection_mode !== "manual" && active?.selection && active.selection !== "none";
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local assignments by client; the highlighted client receives Workspace actions."), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
     TargetStatusRow,
     {
@@ -26521,7 +26568,7 @@ function McpView({ snapshot, target, catalog, selected }) {
       key: `${entry}-error`,
       value: !comparison.targets[entry].check?.ok ? `${targetLabel(entry)}: ${comparison.targets[entry].check?.summary || comparison.targets[entry].check?.error || snapshot.doctorError || "status unavailable"}` : ""
     }
-  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
+  )), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local profile ", active.selection, " for ", targetLabel(target), " \xB7 replaces same-name MCP entries only"), active?.drift?.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current MCP selection uses manual state; apply a named profile before automatic repair."), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }
 function PromptView({ snapshot, target, catalog, selected }) {
   const states = Object.fromEntries(TARGETS.map((entry) => [
@@ -26548,7 +26595,7 @@ function PromptPreview({ preview, offset, pageSize }) {
   const safeOffset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)));
   const visible = lines.slice(safeOffset, safeOffset + pageSize);
   const source = preview.source === "cloud" ? "Workspace" : "Local";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: preview.source === "cloud" ? "cyan" : "green" }, source, " Prompt preview"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: preview.target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Profile", value: preview.name }), preview.path && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "File", value: displayPath(preview.path) }), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, content.length === 0 ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(empty Prompt)") : visible.map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: safeOffset + index, wrap: "truncate-end" }, line || " "))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Lines ", totalLines === 0 ? 0 : safeOffset + 1, "\u2013", totalLines === 0 ? 0 : Math.min(safeOffset + pageSize, totalLines), " of ", totalLines, totalLines > pageSize ? " \xB7 [/] or arrows scroll" : "", " \xB7 v/V/Esc close"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Content exists only in this TUI process and is cleared when the preview closes."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: preview.source === "cloud" ? "cyan" : "green" }, source, " Prompt preview"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: preview.target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Profile", value: preview.name }), preview.path && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "File", value: displayPath(preview.path) }), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, content.length === 0 ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(empty Prompt)") : visible.map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: safeOffset + index, wrap: "truncate-end" }, line || " "))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Lines ", totalLines === 0 ? 0 : safeOffset + 1, "\u2013", totalLines === 0 ? 0 : Math.min(safeOffset + pageSize, totalLines), " of ", totalLines, totalLines > pageSize ? " \xB7 \u2191/\u2193 scroll" : "", " \xB7 v/V/Esc close"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Content exists only in this TUI process and is cleared when the preview closes."));
 }
 function SnippetView({ snapshot, catalog, selected }) {
   const entries = snippetEntries(snapshot.snippets, catalog.items);
@@ -26557,7 +26604,7 @@ function SnippetView({ snapshot, catalog, selected }) {
   const current = entries[safeIndex] || null;
   const localCount = entries.filter((entry) => entry.local).length;
   const remoteCount = entries.filter((entry) => entry.remote).length;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Snippets are connecting in the background; local Snippets are ready."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Snippets are connecting in the background; local Snippets are ready."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
 }
 function ComponentView({ snapshot, target, component, catalog, selected }) {
   const state = componentTargetState(snapshot, component, target);
@@ -26594,7 +26641,7 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: [/] select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: [/] select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: f repair the current local profile when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -26786,6 +26833,8 @@ function App2({ initialSection, controller, onLaunch }) {
   const selectedSnippet = mergedSnippets[clampSelection(componentSelected.snippets, mergedSnippets.length)] || null;
   const selectedRemote = section === "snippets" ? selectedSnippet?.remote ? selectedSnippet.name : "" : ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
   const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local ? selectedSnippet.name : "";
+  const selectedMcpState = componentTargetState(snapshot, "mcp", target);
+  const selectedMcpProfile = selectedMcpState.data?.selection_mode === "manual" ? "" : selectedMcpState.selection === "none" ? "" : selectedMcpState.selection;
   const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
   const openPromptPreview = (0, import_react34.useCallback)(async (source) => {
     const local = promptTargetState(snapshot, target);
@@ -26824,15 +26873,16 @@ function App2({ initialSection, controller, onLaunch }) {
     setBusy(true);
     const providerAction = action.startsWith("provider-");
     const accountAction = action.startsWith("account-");
+    const mcpRepairAction = action === "mcp-repair";
     const actionTarget = providerAction ? providerTarget : target;
-    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : mcpRepairAction ? selectedMcpProfile : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, actionTarget)}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : mcpRepairAction ? selectedMcpProfile : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
         target: actionTarget
       });
@@ -26851,6 +26901,7 @@ function App2({ initialSection, controller, onLaunch }) {
     selectedAccountName,
     selectedAgentId,
     selectedLocalSnippet,
+    selectedMcpProfile,
     selectedPreset,
     selectedProviderName,
     selectedProviderSource,
@@ -26869,6 +26920,16 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     if (input === "q" || key.ctrl && input === "c") return exit();
+    const sectionDirection = sectionDelta(input, key);
+    if (sectionDirection !== 0) {
+      if (promptPreview) {
+        setPromptPreview(null);
+        setPromptPreviewOffset(0);
+        setMessage("Prompt preview closed; content cleared from the view.");
+      }
+      if (showHelp) setShowHelp(false);
+      return setSection((value) => moveSection(value, sectionDirection));
+    }
     if (promptPreview) {
       if (key.escape || input === "v" || input === "V") {
         setPromptPreview(null);
@@ -26888,8 +26949,6 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     if (input === "?") return setShowHelp((value) => !value);
     if (showHelp && key.escape) return setShowHelp(false);
-    if (key.tab || key.rightArrow) return setSection((value) => moveSection(value, key.shift ? -1 : 1));
-    if (key.leftArrow) return setSection((value) => moveSection(value, -1));
     if (input === "t") {
       if (section === "providers") {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
@@ -26955,7 +27014,7 @@ function App2({ initialSection, controller, onLaunch }) {
       setMessage("No local or Workspace Provider profile is selected.");
       return;
     }
-    if ((action === "provider-sync-push" || action === "provider-sync-pull") && !snapshot?.workspaceConnection?.configured) {
+    if ((action === "provider-sync-push" || action === "provider-sync-pull") && !workspaceConfigured(snapshot)) {
       setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
       return;
     }
@@ -26965,6 +27024,14 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     if (action === "provider-sync-pull" && !selectedProvider?.sources?.includes("cloud")) {
       setMessage("The selected Provider has no Workspace copy to download.");
+      return;
+    }
+    if (action === "mcp-repair" && selectedMcpState.drift.length === 0) {
+      setMessage(`${targetLabel(target)} MCP configuration is already healthy.`);
+      return;
+    }
+    if (action === "mcp-repair" && !selectedMcpProfile) {
+      setMessage("Automatic MCP repair requires a current named profile; the current selection is manual or unknown.");
       return;
     }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
@@ -26982,7 +27049,8 @@ function App2({ initialSection, controller, onLaunch }) {
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
       const accountAction = action.startsWith("account-");
-      const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+      const mcpRepairAction = action === "mcp-repair";
+      const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : mcpRepairAction ? selectedMcpProfile : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
         label: actionLabel(action, selection, providerAction ? providerTarget : target)
@@ -27026,7 +27094,7 @@ function App2({ initialSection, controller, onLaunch }) {
       dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {

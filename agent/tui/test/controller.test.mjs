@@ -203,6 +203,8 @@ test("local snapshot publishes account and agent state before Workspace hydratio
   const hydrated = await hydration;
   assert.equal(hydrated.phase, "workspace");
   assert.equal(hydrated.workspace.latest.version, "v2");
+  assert.equal(hydrated.workspaceConnection.configured, true);
+  assert.equal(hydrated.workspaceConnection.endpoint, "https://workspace.example.test");
   assert.equal(hydrated.workspaceLoading, false);
   assert.equal(hydrated.accounts.active.saved_as, "primary");
 });
@@ -246,6 +248,16 @@ test("remote actions plan without writes and apply through the selected runtime"
   assert.match(plan.detail, /No remote catalog was written locally/);
   assert.deepEqual(writes, []);
   assert.deepEqual(calls, []);
+
+  const repaired = await controller.action("mcp-repair", {
+    selection: "ccs-current",
+    target: "codex"
+  });
+  assert.equal(repaired.ok, true);
+  assert.match(repaired.detail, /same-name MCP entries/);
+  assert.deepEqual(calls.at(-1).args, [
+    "apply", "--target", "codex", "--profile", "ccs-current", "--force"
+  ]);
 
   const applied = await controller.action("skills-apply", { selection: "frontend", target: "claude" });
   assert.equal(applied.ok, true);

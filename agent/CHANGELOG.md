@@ -2,6 +2,22 @@
 
 ## 2026-08-11 — native compaction capabilities
 
+- Added an actionable MCP drift repair to the TUI. `f` now confirms reapplying
+  the current named local profile for the highlighted client with mcpctl's
+  bounded `--force` behavior: only conflicting same-name MCP entries are
+  adopted, unrelated client configuration remains untouched, and Workspace is
+  not required. Bumped `agentctl` to 0.16.6.
+- Corrected the navigation contract: `[` / `]` now move between top-level TUI
+  sections (with Tab/Shift+Tab and Left/Right as aliases), while Up/Down move
+  within the current list or Prompt preview. Switching away also clears an
+  open Prompt preview. Updated every inline/help/doc hint and bumped
+  `agentctl` to 0.16.5.
+- Fixed a hydrated TUI snapshot regression where a successful Workspace index
+  replaced the small `configured` connection record. The header could show
+  `Online` while Provider `u` / `d` incorrectly claimed that no Workspace was
+  connected. Hydration now preserves capability metadata, and the write guard
+  also recognizes a validated live Workspace index. Bumped `agentctl` to
+  0.16.4.
 - Added profile-scoped Workspace reconciliation. In the Providers TUI, `u`
   now means the selected Local profile wins and `d` means its Workspace copy
   wins; only that profile and its referenced encrypted Secret values are
@@ -135,8 +151,8 @@
   encrypted upload, and merge-safe download. Remote apply uses only the selected
   profile and required Secret in owner-only temporary files that are removed
   immediately after the controller returns.
-- Standardized frequent list movement on `[`/`]` (with Up/Down aliases), kept
-  section navigation on Tab/arrows, and replaced the uniform navigation color
+- Assigned `[`/`]` to top-level section navigation (with Tab/Shift+Tab and
+  Left/Right aliases), kept list movement on Up/Down, and replaced the uniform navigation color
   with distinct section, source, and four-client accents.
 
 ## 2026-08-11 — encrypted Provider Workspace and browser control plane

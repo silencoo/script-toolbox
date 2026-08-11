@@ -89,7 +89,11 @@ requiring the operator to switch targets and remember two lists. The active
 target remains highlighted because Workspace plan/apply actions are scoped to
 that client. Long Workspace catalogs use a bounded list pane beside a separate
 detail pane so profile names cannot be mistaken for the selected profile's
-metadata.
+metadata. When a named local profile reports `Drift`, `f` confirms a local
+repair: it reapplies that current profile with mcpctl's bounded `--force`
+adoption, replacing only conflicting same-name MCP entries while preserving
+unrelated client configuration. This repair does not require or pull a
+Workspace profile.
 
 The Prompts view likewise shows both clients' local Promptctl bindings before
 the Workspace catalog: active profile, managed state, binding path,
@@ -123,7 +127,7 @@ client auto-compact trigger, or `Client default` when the Provider leaves both
 values unmanaged.
 
 The Agents view is actionable as well as diagnostic. Select Claude Code,
-Codex, OpenCode, or Pi with `[`/`]` (or Up/Down); `c`, `p`, or Enter opens the
+Codex, OpenCode, or Pi with Up/Down; `c`, `p`, or Enter opens the
 same unified Providers section for that client. `x` removes only
 agentctl-owned provider configuration after confirmation. There is no second
 interactive setup catalog.
@@ -138,13 +142,14 @@ the remote snapshot itself cannot be opened.
 
 | Key | Action |
 | --- | --- |
-| Tab / Shift+Tab, Left / Right | Change section |
+| `[` / `]`, Tab / Shift+Tab, Left / Right | Change top-level section |
 | `t` | Switch Codex/Claude normally; cycle Claude/Codex/OpenCode/Pi in Providers |
 | `r` | Refresh now |
-| `[` / `]`, Up / Down | Select the previous / next Profile, Pack, Prompt, Snippet, or Preset |
+| Up / Down | Select the previous / next Profile, Pack, Prompt, Snippet, or Preset inside the section |
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
 | Providers: `i` | Show or hide profiles incompatible with the selected client |
+| MCP: `f` | Confirm repair of the current named local profile when Drift is reported |
 | Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
 | Snippets: `c` | Copy the selected local snippet without rendering it |
 | `u` | Roll back a preset transaction |

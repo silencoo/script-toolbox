@@ -12,6 +12,7 @@ const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const WORKSPACE_RETRY_DELAY_MS = 250;
 const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
+const MCP_CLIENTS = new Set(["claude", "codex", "opencode"]);
 const PROMPT_CLIENTS = new Set(["claude", "codex"]);
 
 function transientWorkspaceError(error) {
@@ -266,7 +267,17 @@ export function createController({
 
   async function hydrateSnapshot(local) {
     const remoteResult = refreshWorkspaceIndex()
-      .then((data) => ({ data, connection: data, error: "", fresh: true }))
+      .then((data) => ({
+        data,
+        connection: {
+          ...(local.workspaceConnection || {}),
+          endpoint: local.workspaceConnection?.endpoint || data?.endpoint || "",
+          store_id: local.workspaceConnection?.store_id || data?.store_id || "",
+          configured: true
+        },
+        error: "",
+        fresh: true
+      }))
       .catch((error) => ({
         data: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
         connection: local.workspaceConnection,
@@ -470,6 +481,22 @@ export function createController({
     };
   }
 
+  async function localMcpRepair(profile, target) {
+    if (!profile) throw new Error("No current local MCP profile is available to repair.");
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const result = await run(tools.mcp, [
+      "apply", "--target", target, "--profile", profile, "--force"
+    ]);
+    return {
+      ok: result.code === 0,
+      data: { profile, target },
+      detail: result.code === 0
+        ? `${profile} was reapplied to ${target}; only same-name MCP entries were adopted, unrelated client configuration was preserved, and a new ${target} session is recommended.`
+        : sanitizeOutput(result.stderr || result.stdout) ||
+          `MCP repair failed with code ${result.code}`
+    };
+  }
+
   async function remoteComponentAction(actionName, type, name, target) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
@@ -552,6 +579,7 @@ export function createController({
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
       return providerSync(actionName, selection);
     }
+    if (actionName === "mcp-repair") return localMcpRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
       const operation = actionName === "account-use" ? "use" : "delete";

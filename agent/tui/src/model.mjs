@@ -322,8 +322,14 @@ export function clampSelection(index, length) {
 }
 
 export function selectionDelta(input, key = {}) {
-  if (input === "]" || key.downArrow) return 1;
-  if (input === "[" || key.upArrow) return -1;
+  if (key.downArrow) return 1;
+  if (key.upArrow) return -1;
+  return 0;
+}
+
+export function sectionDelta(input, key = {}) {
+  if (input === "]" || key.rightArrow || (key.tab && !key.shift)) return 1;
+  if (input === "[" || key.leftArrow || (key.tab && key.shift)) return -1;
   return 0;
 }
 
@@ -471,6 +477,7 @@ export function actionForKey(section, input) {
     if (input === "p") return `${section}-plan`;
     if (input === "a") return `${section}-apply`;
   }
+  if (section === "mcp" && input === "f") return "mcp-repair";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
   if (section === "snippets" && input === "c") return "snippet-copy";
@@ -485,6 +492,7 @@ export function actionForKey(section, input) {
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
     action === "account-use" || action === "account-delete" ||
+    action === "mcp-repair" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
     action.endsWith("-apply");
 }
@@ -501,6 +509,9 @@ export function actionLabel(action, selection, target) {
   }
   if (action === "provider-sync-pull") {
     return `Use Workspace ${selection || "Provider"} in the local catalog`;
+  }
+  if (action === "mcp-repair") {
+    return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
@@ -523,6 +534,14 @@ export function safePromptPreviewText(value) {
   return String(value ?? "")
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+}
+
+export function workspaceConfigured(snapshot) {
+  if (snapshot?.workspaceConnection?.configured === true) return true;
+  const workspace = snapshot?.workspace;
+  return Boolean(workspace?.mode === "workspace" &&
+    typeof workspace.endpoint === "string" && workspace.endpoint &&
+    typeof workspace.store_id === "string" && workspace.store_id);
 }
 
 export function workspacePresentation(workspace, error = "", loading = false) {
