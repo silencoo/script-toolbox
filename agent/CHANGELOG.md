@@ -12,6 +12,8 @@
   used by Skills, Prompts, and Workspace. The `mcpstore1_` prefix remains the
   current type marker for an independent logical MCP Store, not a deployment
   compatibility path.
+- Bumped the standalone controller suite to `agentctl 0.13.0`; older MCP
+  clients must update before writing to the migrated Toolbox Store.
 
 ## 2026-08-11 — product-neutral Toolbox Store defaults
 
