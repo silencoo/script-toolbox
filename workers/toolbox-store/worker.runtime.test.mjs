@@ -28,11 +28,11 @@ let runtimeWorker;
 before(async () => {
   await harness.listen();
   runtimeWorker = harness.getWorker();
-});
+}, { timeout: 15_000 });
 
 after(async () => {
   await harness.close();
-});
+}, { timeout: 15_000 });
 
 function headers(extra = {}) {
   return {

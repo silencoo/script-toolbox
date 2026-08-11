@@ -594,6 +594,44 @@ function validateMcpSnapshot(snapshot) {
       throw new Error("MCP Secret values are invalid.")
     }
   }
+  const artifacts = snapshot.artifacts === undefined ? {} : snapshot.artifacts
+  if (!isObject(artifacts)) throw new Error("MCP artifacts are invalid.")
+  let artifactBytes = 0
+  for (const [name, artifact] of Object.entries(artifacts)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(name) ||
+        !isObject(artifact) || artifact.encoding !== "base64" ||
+        !/^[a-f0-9]{64}$/i.test(artifact.sha256 || "") ||
+        typeof artifact.data !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(artifact.data)) {
+      throw new Error("MCP artifact '" + name + "' is invalid.")
+    }
+    artifactBytes += Math.floor(artifact.data.length * 3 / 4)
+    if (artifactBytes > 2560 * 1024) {
+      throw new Error("MCP artifacts exceed the safe size limit.")
+    }
+  }
+  for (const definition of Object.values(snapshot.catalog.servers)) {
+    const candidates = [
+      definition,
+      ...Object.values(isObject(definition.target_overrides) ? definition.target_overrides : {})
+    ]
+    for (const candidate of candidates) {
+      const reference = candidate?.host?.install?.package
+      if (typeof reference !== "string" || !reference.startsWith("@mcpctl-store/")) {
+        continue
+      }
+      const prefix = "@mcpctl-store/artifacts/"
+      if (!reference.startsWith(prefix)) {
+        throw new Error("MCP Store artifact reference is invalid.")
+      }
+      const name = reference.slice(prefix.length)
+      const expected = candidate.host.install.sha256
+      if (!artifacts[name] || !/^[a-f0-9]{64}$/i.test(expected || "") ||
+          artifacts[name].sha256.toLowerCase() !== expected.toLowerCase()) {
+        throw new Error("MCP artifact '" + name + "' does not match its catalog entry.")
+      }
+    }
+  }
   const profiles = Object.entries(snapshot.profiles)
   if (profiles.length === 0 || profiles.some(([name, profile]) =>
     !safeProfileName(name) || (profile?.schema ?? 1) !== 1 ||

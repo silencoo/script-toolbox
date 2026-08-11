@@ -39,6 +39,11 @@ checkout when applied. After upgrading the toolbox, `mcpctl sync` adds missing
 bundled servers and profiles and can migrate exact recognized legacy package
 launchers, without changing custom package versions.
 
+Unpublished Python MCPs may be stored as small wheels under `artifacts/` and
+referenced with `@mcpctl-store/artifacts/<wheel>` plus a pinned SHA-256 in the
+server's `host.install` object. Only referenced artifacts are included in the
+end-to-end encrypted backup; absolute local binary paths are not portable.
+
 `mcpctl import --target claude|codex --write` can add existing user MCP
 definitions and creates an importer-owned `imported` profile with a separate
 enabled set for each target. Static environment, Header, and credential

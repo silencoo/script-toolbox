@@ -12,7 +12,7 @@ import {
   rm
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -306,6 +306,49 @@ function importCommand(target, server, command, secrets) {
   return result;
 }
 
+function normalizeImportedCommand(command, server, warnings) {
+  const result = clone(command);
+  const executable = result[0];
+  if (typeof executable !== "string" || executable.length === 0) return result;
+
+  const normalizedExecutable = normalize(executable);
+  const knownBinDirectories = new Set([
+    normalize(join(homedir(), ".local", "bin")),
+    normalize("/usr/local/bin"),
+    normalize("/opt/homebrew/bin"),
+    normalize("/home/linuxbrew/.linuxbrew/bin")
+  ]);
+  if (isAbsolute(normalizedExecutable) &&
+      knownBinDirectories.has(dirname(normalizedExecutable))) {
+    result[0] = basename(normalizedExecutable);
+    warnings.push(
+      `${server}: normalized local executable ${executable} to PATH command ${result[0]}`
+    );
+  } else if (isAbsolute(normalizedExecutable)) {
+    warnings.push(
+      `${server}: command uses machine-specific absolute executable ${executable}; ` +
+      "use a portable package installer or @mcpctl-store artifact before backup"
+    );
+  } else if (executable.includes("/") || executable.includes("\\")) {
+    warnings.push(
+      `${server}: command uses relative executable ${executable}; verify its cwd on every machine`
+    );
+  }
+  return result;
+}
+
+function importedHost(command) {
+  return {
+    lifecycle: "client",
+    install: { type: "manual" },
+    requirements: [{
+      type: "command",
+      name: command[0],
+      label: `MCP executable ${command[0]}`
+    }]
+  };
+}
+
 function secretIdentity(target, server, kind, key) {
   return `${target}:${server}:${kind}:${key}`;
 }
@@ -496,8 +539,10 @@ function parseClaudeConfig(document) {
             rawDefinition.command,
             ...validateStringArray(rawDefinition.args, `${name}.args`)
           ];
+      const portableCommand = normalizeImportedCommand(command, name, warnings);
       definition.transport = "stdio";
-      definition.command = importCommand("claude", name, command, secrets);
+      definition.command = importCommand("claude", name, portableCommand, secrets);
+      definition.host = importedHost(portableCommand);
       const environment = secretEnvironmentMap(
         "claude",
         name,
@@ -642,12 +687,13 @@ function parseCodexList(document) {
     };
 
     if (transport.type === "stdio") {
-      const command = [
+      const command = normalizeImportedCommand([
         transport.command,
         ...validateStringArray(transport.args, `${name}.args`)
-      ];
+      ], name, warnings);
       definition.transport = "stdio";
       definition.command = importCommand("codex", name, command, secrets);
+      definition.host = importedHost(command);
       const environment = secretEnvironmentMap(
         "codex",
         name,

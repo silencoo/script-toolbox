@@ -10,6 +10,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -145,6 +146,27 @@ test("Codex import preserves structured transport options and disabled selection
   assert.equal(remote.definition.headers["X-Dynamic"].env, "DYNAMIC_HEADER");
   assert.equal(Object.values(imported.secrets).includes("codex-static-token"), true);
   assert.equal(Object.values(imported.secrets).includes("codex-header-token"), true);
+});
+
+test("import normalizes user tool launchers and records executable requirements", () => {
+  const executable = join(homedir(), ".local", "bin", "private-mcp");
+  const imported = parseCodexList([{
+    name: "private",
+    enabled: true,
+    transport: {
+      type: "stdio",
+      command: executable,
+      args: ["--stdio"]
+    }
+  }]);
+  const definition = imported.servers[0].definition;
+  assert.deepEqual(definition.command, ["private-mcp", "--stdio"]);
+  assert.deepEqual(definition.host.requirements, [{
+    type: "command",
+    name: "private-mcp",
+    label: "MCP executable private-mcp"
+  }]);
+  assert.match(imported.warnings.join("\n"), /normalized local executable/);
 });
 
 test("import refuses URL credentials and extracts credential command arguments", () => {

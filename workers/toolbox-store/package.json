@@ -10,7 +10,7 @@
     "dev": "npm run build && wrangler dev",
     "dev:ui": "vite",
     "deploy": "npm run build && wrangler deploy",
-    "test": "node --test worker.test.mjs worker.runtime.test.mjs store-crypto.test.mjs mcp-model.test.mjs prompt-model.test.mjs catalog-view.test.mjs ui-contract.test.mjs",
+    "test": "node --test --test-force-exit worker.test.mjs worker.runtime.test.mjs store-crypto.test.mjs mcp-model.test.mjs prompt-model.test.mjs catalog-view.test.mjs ui-contract.test.mjs",
     "typecheck": "tsc --noEmit",
     "types": "wrangler types --include-runtime false",
     "validate": "npm run typecheck && npm run build && npm run test && npm run types && wrangler deploy --dry-run --outdir .wrangler/dry-run"

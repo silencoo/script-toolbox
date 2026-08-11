@@ -152,9 +152,20 @@ an internal, non-interactive engine rather than the user-facing guide.
 
 ## Encrypted backup and recovery
 
-Promptctl can collect every regular `*.md` document under the Claude and Codex
-instruction directories into a client-side encrypted Prompt Store. It never
-backs up `CLAUDE.md`, `config.toml`, provider credentials, or unrelated files.
+Promptctl collects every regular `*.md` document under the Claude and Codex
+instruction directories into a client-side encrypted Prompt Store. For a
+user-level legacy Claude Keysmith installation, backup also collects regular
+`~/.claude/keysmith/*.md` profiles, including recoverable files left after a
+migration removed their old import block. Exact `claude-keysmith` blocks in
+`~/.claude/CLAUDE.md` are parsed and must contain only
+`@keysmith/<same-name>.md`. Backup rejects malformed blocks, traversal,
+symlinks, missing targets, and conflicting same-name sources. It never uploads
+`CLAUDE.md` itself, `config.toml`, provider credentials, or arbitrary imports.
+
+Restoring a discovered Keysmith document writes it to Promptctl's canonical
+`~/.claude/instructions/<name>.md` location. It does not recreate the legacy
+Keysmith block; apply the restored profile explicitly through Promptctl or
+Agentctl. Prompt bodies are never printed by backup or listing commands.
 
 ```bash
 promptctl remote init \

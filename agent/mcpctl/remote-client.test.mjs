@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cp,
   mkdtemp,
@@ -244,6 +245,40 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
 
   try {
     await cp(TEMPLATE_STORE, sourceStore, { recursive: true });
+    const artifactBytes = Buffer.from("portable-wheel-test-payload\n");
+    const artifactName = "private_mcp-1.0.0-py3-none-any.whl";
+    const artifactSha256 = createHash("sha256").update(artifactBytes).digest("hex");
+    await mkdir(join(sourceStore, "artifacts"), { recursive: true });
+    await writeFile(join(sourceStore, "artifacts", artifactName), artifactBytes, {
+      mode: 0o600
+    });
+    const sourceCatalogPath = join(sourceStore, "catalog.json");
+    const sourceCatalog = JSON.parse(await readFile(sourceCatalogPath, "utf8"));
+    sourceCatalog.servers["private-wheel"] = {
+      transport: "stdio",
+      command: [
+        "@mcpctl/adapters/mcp-package",
+        "uv",
+        "private-wheel",
+        `@mcpctl-store/artifacts/${artifactName}`,
+        "private-mcp",
+        "with:mcp<2",
+        `sha256:${artifactSha256}`,
+        "--"
+      ],
+      host: {
+        lifecycle: "client",
+        install: {
+          type: "uv",
+          package: `@mcpctl-store/artifacts/${artifactName}`,
+          bin: "private-mcp",
+          with: ["mcp<2"],
+          sha256: artifactSha256
+        }
+      },
+      supported_targets: ["claude", "codex"]
+    };
+    await writeFile(sourceCatalogPath, `${JSON.stringify(sourceCatalog, null, 2)}\n`);
     const secretEnvironment = {
       BRAVE_API_KEY: "remote-test-brave-secret",
       EXA_API_KEY: "remote-test-exa-secret",
@@ -306,6 +341,14 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
     assert.equal((await stat(restoredConfig)).mode & 0o777, 0o600);
     assert.equal(
       (await stat(join(restoredStore, "secrets.remote.enc"))).mode & 0o777,
+      0o600
+    );
+    assert.deepEqual(
+      await readFile(join(restoredStore, "artifacts", artifactName)),
+      artifactBytes
+    );
+    assert.equal(
+      (await stat(join(restoredStore, "artifacts", artifactName))).mode & 0o777,
       0o600
     );
 

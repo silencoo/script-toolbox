@@ -278,7 +278,7 @@ fi
 [ ! -s "$TEST_ROOT/js-reverse-relative.out" ] ||
   fail "JavaScript reverse adapter wrote diagnostics to MCP stdout"
 
-if PATH="$FAKE_BIN:$PATH" \
+if PATH="$FAKE_BIN:/usr/bin:/bin" \
   "$SCRIPT_DIR/adapters/mcp-host" ghidra \
     >"$TEST_ROOT/ghidra-adapter.out" \
     2>"$TEST_ROOT/ghidra-adapter.err"; then
@@ -302,7 +302,9 @@ MCP_ADAPTER_CAPTURE="$TEST_ROOT/ghidra-headless.args" \
   PATH="$FAKE_BIN:$PATH" \
   "$SCRIPT_DIR/adapters/mcp-host" ghidra-headless >/dev/null
 diff -u - "$TEST_ROOT/ghidra-headless.args" <<EOF >/dev/null ||
+--from
 pyghidra-mcp==0.2.3
+pyghidra-mcp
 --transport
 stdio
 --project-path
@@ -401,6 +403,82 @@ HOME="$TEST_HOME" MCPCTL_HOST_ROOT="$HOST_ROOT" \
   fail "server uninstall left the owned installation active"
 find "$HOST_TRASH" -name manifest.json -type f |
   grep -q . || fail "server uninstall did not preserve a recoverable copy"
+
+# Private wheels live in the portable Store rather than an ephemeral source
+# checkout. The catalog keeps a logical Store reference and a pinned digest;
+# rendering resolves it for this machine, while install verifies it first.
+mkdir -p "$STORE/artifacts"
+ARTIFACT_NAME="private_mcp-1.0.0-py3-none-any.whl"
+printf '%s\n' portable-wheel > "$STORE/artifacts/$ARTIFACT_NAME"
+ARTIFACT_SHA="$(shasum -a 256 "$STORE/artifacts/$ARTIFACT_NAME" | awk '{print $1}')"
+jq --arg artifact "$ARTIFACT_NAME" --arg sha "$ARTIFACT_SHA" '
+  .servers["private-wheel"] = {
+    category: "test",
+    description: "Private portable wheel",
+    transport: "stdio",
+    command: [
+      "@mcpctl/adapters/mcp-package", "uv", "private-wheel",
+      ("@mcpctl-store/artifacts/" + $artifact), "private-mcp",
+      "with:mcp<2", ("sha256:" + $sha), "--"
+    ],
+    host: {
+      lifecycle: "client",
+      install: {
+        type: "uv",
+        package: ("@mcpctl-store/artifacts/" + $artifact),
+        bin: "private-mcp",
+        sha256: $sha,
+        with: ["mcp<2"]
+      },
+      platforms: ["darwin", "linux", "windows"]
+    },
+    supported_targets: ["claude", "codex", "opencode"]
+  }
+' "$STORE/catalog.json" > "$TEST_ROOT/catalog-with-artifact.json"
+mv "$TEST_ROOT/catalog-with-artifact.json" "$STORE/catalog.json"
+HOME="$TEST_HOME" "$MCPCTL" server show private-wheel --target codex \
+  --store "$STORE" |
+  jq -e --arg path "$STORE/artifacts/$ARTIFACT_NAME" \
+    '.command[3] == $path' >/dev/null ||
+  fail "portable artifact reference was not resolved for the active Store"
+cp "$STORE/artifacts/$ARTIFACT_NAME" "$TEST_ROOT/private-wheel.good"
+printf '%s\n' tampered > "$STORE/artifacts/$ARTIFACT_NAME"
+if HOME="$TEST_HOME" "$MCPCTL" server doctor private-wheel --store "$STORE" \
+  >"$TEST_ROOT/private-wheel-doctor.out" 2>&1; then
+  fail "server doctor accepted a portable artifact with the wrong digest"
+fi
+grep -q 'artifact or its SHA-256 is invalid' "$TEST_ROOT/private-wheel-doctor.out" ||
+  fail "server doctor did not explain the portable artifact failure"
+mv "$TEST_ROOT/private-wheel.good" "$STORE/artifacts/$ARTIFACT_NAME"
+cat > "$FAKE_BIN/uv" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "$UV_TOOL_BIN_DIR"
+cp "$MCP_FAKE_ENTRY" "$UV_TOOL_BIN_DIR/private-mcp"
+chmod +x "$UV_TOOL_BIN_DIR/private-mcp"
+EOF
+chmod +x "$FAKE_BIN/uv"
+HOME="$TEST_HOME" MCPCTL_HOST_ROOT="$HOST_ROOT" \
+  MCP_FAKE_ENTRY="$FAKE_PACKAGE_ENTRY" PATH="$FAKE_BIN:$PATH" \
+  "$MCPCTL" server install private-wheel --store "$STORE" >/dev/null
+jq -e --arg artifact "$ARTIFACT_NAME" '
+  .manager == "uv"
+  and .package == ("@mcpctl-store/artifacts/" + $artifact)
+  and .binary == "private-mcp"
+  and (.sha256 | length) == 64
+  and .with == ["mcp<2"]
+' "$HOST_ROOT/private-wheel/manifest.json" >/dev/null ||
+  fail "portable wheel installation lost its logical Store reference"
+MCP_PACKAGE_CAPTURE="$TEST_ROOT/owned-private-wheel.args" \
+  MCPCTL_HOST_ROOT="$HOST_ROOT" PATH="$FAKE_BIN:$PATH" \
+  "$SCRIPT_DIR/adapters/mcp-package" uv private-wheel \
+    "$STORE/artifacts/$ARTIFACT_NAME" private-mcp \
+    "with:mcp<2" "sha256:$ARTIFACT_SHA" -- --stdio
+diff -u - "$TEST_ROOT/owned-private-wheel.args" <<'EOF' >/dev/null ||
+owned
+--stdio
+EOF
+  fail "package adapter did not match the pinned portable ownership manifest"
 
 mkdir -p "$HOST_ROOT/frida"
 printf '%s\n' user-owned > "$HOST_ROOT/frida/keep.txt"

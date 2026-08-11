@@ -549,6 +549,46 @@ never execute an installer. An optional `service` object can provide a
 loopback `url` and `url_env` for reachability checks; non-loopback endpoints
 are deliberately not probed by host lifecycle commands.
 
+Packages that are not published to a registry can be kept as small portable
+artifacts in `artifacts/`. Reference the file logically instead of embedding a
+machine-specific absolute path, and pin its digest:
+
+```json
+{
+  "command": [
+    "@mcpctl/adapters/mcp-package",
+    "uv",
+    "private-analysis",
+    "@mcpctl-store/artifacts/private_analysis-1.0.0-py3-none-any.whl",
+    "private-analysis-mcp",
+    "with:mcp<2",
+    "sha256:<64 lowercase hex characters>",
+    "--"
+  ],
+  "host": {
+    "lifecycle": "client",
+    "install": {
+      "type": "uv",
+      "package": "@mcpctl-store/artifacts/private_analysis-1.0.0-py3-none-any.whl",
+      "bin": "private-analysis-mcp",
+      "with": ["mcp<2"],
+      "sha256": "<64 lowercase hex characters>"
+    }
+  }
+}
+```
+
+Referenced artifacts are SHA-256 checked, included inside the end-to-end
+encrypted remote snapshot, restored with mode `0600`, and resolved against the
+active Store path on each machine. Individual files are limited to 2 MiB and
+the raw artifact set to 2.5 MiB so the doubly encoded encrypted upload remains
+within the default Worker limit. Large or public packages should remain pinned
+registry/Git sources instead. Native wheels must also restrict `host.platforms`
+to the platforms they actually support. Optional `host.install.with` entries
+are rendered as `uvx --with` requirements and recorded in the ownership
+manifest; use them when an upstream wheel omitted a necessary compatibility
+bound such as `mcp<2`.
+
 Imported stdio environment variables, HTTP Headers, and credential command
 arguments use Secret descriptors instead of plaintext values. For example:
 

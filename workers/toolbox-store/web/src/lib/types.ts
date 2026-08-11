@@ -66,6 +66,11 @@ export interface McpSnapshot {
   catalog: { schema?: number; servers: Record<string, McpDefinition> }
   profiles: Record<string, SelectableCollection>
   secrets: Record<string, string>
+  artifacts?: Record<string, {
+    encoding: "base64"
+    sha256: string
+    data: string
+  }>
   _toolbox_export?: unknown
 }
 

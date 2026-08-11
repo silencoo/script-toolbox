@@ -128,6 +128,14 @@ function instructionsDirectory(home, client) {
   return join(home, client === "claude" ? ".claude" : ".codex", "instructions");
 }
 
+function claudeMemoryFile(home) {
+  return join(home, ".claude", "CLAUDE.md");
+}
+
+function claudeKeysmithDirectory(home) {
+  return join(home, ".claude", "keysmith");
+}
+
 function snippetsDirectory(home) {
   return join(home, ".local", "share", "script-toolbox", "snippets");
 }
@@ -217,10 +225,153 @@ function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function parseClaudeKeysmithReferences(content) {
+  const references = [];
+  const seen = new Set();
+  const lines = content.split(/\r?\n/);
+  const startPattern = /^<!-- claude-keysmith:start name=([A-Za-z0-9._-]+) -->[ \t]*$/;
+  const endPattern = /^<!-- claude-keysmith:end name=([A-Za-z0-9._-]+) -->[ \t]*$/;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const start = startPattern.exec(line);
+    if (!start) {
+      if (line.includes("<!-- claude-keysmith:start") ||
+          line.includes("<!-- claude-keysmith:end")) {
+        throw new PromptRemoteError("Claude Keysmith import block is malformed");
+      }
+      continue;
+    }
+
+    const name = validateName(start[1]);
+    if (seen.has(name)) {
+      throw new PromptRemoteError(`Claude Keysmith import '${name}' is duplicated`);
+    }
+    const body = [];
+    let closed = false;
+    for (index += 1; index < lines.length; index += 1) {
+      const nested = startPattern.exec(lines[index]);
+      if (nested || lines[index].includes("<!-- claude-keysmith:start")) {
+        throw new PromptRemoteError(`Claude Keysmith import '${name}' is nested or malformed`);
+      }
+      const end = endPattern.exec(lines[index]);
+      if (!end) {
+        if (lines[index].includes("<!-- claude-keysmith:end")) {
+          throw new PromptRemoteError(`Claude Keysmith import '${name}' has a malformed end marker`);
+        }
+        body.push(lines[index]);
+        continue;
+      }
+      if (end[1] !== name) {
+        throw new PromptRemoteError(`Claude Keysmith import '${name}' has a mismatched end marker`);
+      }
+      closed = true;
+      break;
+    }
+    if (!closed) {
+      throw new PromptRemoteError(`Claude Keysmith import '${name}' is not closed`);
+    }
+    const meaningful = body.map((value) => value.trim()).filter(Boolean);
+    if (meaningful.length !== 1 || meaningful[0] !== `@keysmith/${name}.md`) {
+      throw new PromptRemoteError(
+        `Claude Keysmith import '${name}' must reference @keysmith/${name}.md`
+      );
+    }
+    seen.add(name);
+    references.push(name);
+  }
+  return references;
+}
+
+async function collectClaudeKeysmithReferences(home) {
+  const memoryFile = claudeMemoryFile(home);
+  let names = [];
+  if (await pathExists(memoryFile)) {
+    const memoryDetails = await lstat(memoryFile);
+    if (memoryDetails.isSymbolicLink() || !memoryDetails.isFile()) {
+      throw new PromptRemoteError(`Claude memory file must be a regular file: ${memoryFile}`);
+    }
+    if (memoryDetails.size > MAX_DOCUMENT_BYTES) {
+      throw new PromptRemoteError(`Claude memory file is too large to inspect safely: ${memoryFile}`);
+    }
+    names = parseClaudeKeysmithReferences(await readFile(memoryFile, "utf8"));
+  }
+
+  const directory = claudeKeysmithDirectory(home);
+  if (!await pathExists(directory)) {
+    if (names.length > 0) {
+      throw new PromptRemoteError(`Claude Keysmith directory is missing: ${directory}`);
+    }
+    return [];
+  }
+  const directoryDetails = await lstat(directory);
+  if (directoryDetails.isSymbolicLink() || !directoryDetails.isDirectory()) {
+    throw new PromptRemoteError(`Claude Keysmith path must be a real directory: ${directory}`);
+  }
+
+  const references = [];
+  const discovered = new Set();
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.name.endsWith(".md")) continue;
+    const name = validateName(entry.name.slice(0, -3));
+    const file = join(directory, entry.name);
+    const details = await lstat(file);
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new PromptRemoteError(`Claude Keysmith document must be a regular file: ${file}`);
+    }
+    if (details.size > MAX_DOCUMENT_BYTES) {
+      throw new PromptRemoteError(`Claude Keysmith document is too large: ${file}`);
+    }
+    discovered.add(name);
+    references.push({
+      name,
+      content: validateContent(await readFile(file, "utf8"), file)
+    });
+  }
+  for (const name of names) {
+    if (!discovered.has(name)) {
+      throw new PromptRemoteError(
+        `Claude Keysmith import target is missing: ${join(directory, `${name}.md`)}`
+      );
+    }
+  }
+  return references;
+}
+
 async function collectSnapshot(home) {
   const profiles = {};
   const snippets = {};
   let total = 0;
+  function addDocument(name, client, content) {
+    const digest = sha256(content);
+    const existing = profiles[name]?.documents?.[client];
+    if (existing) {
+      if (existing.sha256 === digest) return;
+      throw new PromptRemoteError(
+        `prompt profile '${name}' has conflicting ${client} document sources`
+      );
+    }
+    total += Buffer.byteLength(content, "utf8");
+    if (total > MAX_TOTAL_BYTES) {
+      throw new PromptRemoteError(`prompt snapshot exceeds ${MAX_TOTAL_BYTES} bytes`);
+    }
+    if (!profiles[name]) {
+      profiles[name] = {
+        schema: SCHEMA,
+        name,
+        description: "",
+        documents: {}
+      };
+    }
+    profiles[name].documents[client] = {
+      schema: SCHEMA,
+      client,
+      content,
+      sha256: digest
+    };
+  }
+
   for (const client of CLIENTS) {
     const directory = instructionsDirectory(home, client);
     if (!await pathExists(directory)) continue;
@@ -241,25 +392,12 @@ async function collectSnapshot(home) {
         throw new PromptRemoteError(`instruction document is too large: ${file}`);
       }
       const content = validateContent(await readFile(file, "utf8"), file);
-      total += Buffer.byteLength(content, "utf8");
-      if (total > MAX_TOTAL_BYTES) {
-        throw new PromptRemoteError(`prompt snapshot exceeds ${MAX_TOTAL_BYTES} bytes`);
-      }
-      if (!profiles[name]) {
-        profiles[name] = {
-          schema: SCHEMA,
-          name,
-          description: "",
-          documents: {}
-        };
-      }
-      profiles[name].documents[client] = {
-        schema: SCHEMA,
-        client,
-        content,
-        sha256: sha256(content)
-      };
+      addDocument(name, client, content);
     }
+  }
+
+  for (const reference of await collectClaudeKeysmithReferences(home)) {
+    addDocument(reference.name, "claude", reference.content);
   }
 
   const snippetDirectory = snippetsDirectory(home);

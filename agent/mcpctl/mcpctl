@@ -1870,11 +1870,15 @@ effective_server() {
 
 resolved_effective_server() {
   local server="$1"
-  effective_server "$server" | jq -c --arg mcpctl_dir "$SCRIPT_DIR" '
+  effective_server "$server" | jq -c \
+    --arg mcpctl_dir "$SCRIPT_DIR" \
+    --arg store_dir "$STORE_DIR" '
     if (.command // null | type) == "array" then
       .command |= map(
         if type == "string" and startswith("@mcpctl/") then
           $mcpctl_dir + "/" + ltrimstr("@mcpctl/")
+        elif type == "string" and startswith("@mcpctl-store/") then
+          $store_dir + "/" + ltrimstr("@mcpctl-store/")
         else
           .
         end
@@ -1913,7 +1917,7 @@ resolve_suppressed_servers() {
 }
 
 validate_effective_server() {
-  local server="$1" definition="$2"
+  local server="$1" definition="$2" package_ref artifact expected_sha actual_sha requirement
   if ! printf '%s' "$definition" | jq -e --arg target "$TARGET" '
     type == "object"
     and (
@@ -2002,6 +2006,57 @@ validate_effective_server() {
   ' >/dev/null 2>&1; then
     die "server '$server' is invalid or unsupported by target '$TARGET'"
   fi
+
+  package_ref="$(printf '%s' "$definition" | jq -r '.host.install.package // empty')"
+  case "$package_ref" in
+    @mcpctl-store/artifacts/*)
+      artifact="${package_ref#@mcpctl-store/artifacts/}"
+      case "$artifact" in
+        ""|.|..|*/*|*\\*|*[!A-Za-z0-9._-]*)
+          die "server '$server' has an invalid portable artifact reference"
+          ;;
+      esac
+      artifact="$STORE_DIR/artifacts/$artifact"
+      [ -f "$artifact" ] && [ ! -L "$artifact" ] ||
+        die "server '$server' portable artifact is missing or unsafe: $artifact"
+      expected_sha="$(printf '%s' "$definition" | jq -r '.host.install.sha256 // empty')"
+      case "$expected_sha" in
+        ""|*[!A-Fa-f0-9]*)
+          die "server '$server' portable artifact has no valid SHA-256"
+          ;;
+      esac
+      [ "${#expected_sha}" -eq 64 ] ||
+        die "server '$server' portable artifact has no valid SHA-256"
+      printf '%s' "$definition" | jq -e --arg digest "sha256:$expected_sha" \
+        '(.command // []) | index($digest) != null' >/dev/null 2>&1 ||
+        die "server '$server' command does not pin its portable artifact digest"
+      printf '%s' "$definition" | jq -e '
+        (.host.install.with // []) as $with
+        | ($with | type) == "array"
+        and all($with[]; type == "string" and length > 0 and (startswith("-") | not))
+      ' >/dev/null 2>&1 ||
+        die "server '$server' has invalid uv companion requirements"
+      while IFS= read -r requirement; do
+        [ -n "$requirement" ] || continue
+        printf '%s' "$definition" | jq -e --arg option "with:$requirement" \
+          '(.command // []) | index($option) != null' >/dev/null 2>&1 ||
+          die "server '$server' command omits uv companion requirement '$requirement'"
+      done < <(printf '%s' "$definition" | jq -r '.host.install.with[]?')
+      if command -v shasum >/dev/null 2>&1; then
+        actual_sha="$(shasum -a 256 -- "$artifact" | awk '{print $1}')"
+      elif command -v sha256sum >/dev/null 2>&1; then
+        actual_sha="$(sha256sum -- "$artifact" | awk '{print $1}')"
+      else
+        die "shasum or sha256sum is required to verify portable MCP artifacts"
+      fi
+      [ "$(printf '%s' "$actual_sha" | tr 'A-F' 'a-f')" = \
+        "$(printf '%s' "$expected_sha" | tr 'A-F' 'a-f')" ] ||
+        die "server '$server' portable artifact failed SHA-256 verification"
+      ;;
+    @mcpctl-store/*)
+      die "server '$server' has an unsupported portable Store reference"
+      ;;
+  esac
 }
 
 validate_enabled_variant_groups() {

@@ -24,6 +24,7 @@ const [
   dialog,
   tabs,
   toggle,
+  select,
   mcpModel,
   storeClient,
 ] = await Promise.all([
@@ -46,6 +47,7 @@ const [
   read("./web/src/components/ui/dialog.tsx"),
   read("./web/src/components/ui/tabs.tsx"),
   read("./web/src/components/ui/switch.tsx"),
+  read("./web/src/components/ui/select.tsx"),
   read("./web/src/lib/mcp-model.js"),
   read("./web/src/lib/store-client.js"),
 ]);
@@ -71,6 +73,10 @@ test("Workspace UI is built from real shadcn/ui source with neutral theming", ()
   assert.match(workspace, /preferredCatalogScope/);
   assert.match(workspace, /catalog-select-scroll/);
   assert.match(workspace, /catalog-scroll/);
+  assert.match(select, /position = "popper"/);
+  assert.match(select, /align = "start"/);
+  assert.match(select, /sideOffset = 4/);
+  assert.match(select, /min-w-\(--radix-select-trigger-width\)/);
   assert.match(catalogView, /Number\(enabled\.has\(nameB\)\) - Number\(enabled\.has\(nameA\)\)/);
   assert.match(styles, /scrollbar-gutter: stable/);
   assert.match(workspace, /@\/components\/ui\/dialog/);

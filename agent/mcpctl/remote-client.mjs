@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import {
   createCipheriv,
   createDecipheriv,
+  createHash,
   hkdfSync,
   randomBytes
 } from "node:crypto";
@@ -41,6 +42,13 @@ const MAX_SOPS_OUTPUT_BYTES = 10 * 1024 * 1024;
 const MAX_API_JSON_BYTES = 1024 * 1024;
 const MAX_API_ERROR_BYTES = 64 * 1024;
 const MAX_REMOTE_SNAPSHOT_BYTES = 32 * 1024 * 1024;
+// Artifact bytes are base64 encoded inside the plaintext snapshot, then the
+// encrypted envelope is encoded again. These limits keep the default Worker
+// upload below its 5 MiB body limit with room for catalog and profile data.
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const MAX_ARTIFACT_TOTAL_BYTES = 2560 * 1024;
+const ARTIFACT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+const STORE_ARTIFACT_PREFIX = "@mcpctl-store/artifacts/";
 const MIN_CREATE_TOKEN_LENGTH = 32;
 const MAX_CREATE_TOKEN_LENGTH = 512;
 
@@ -283,7 +291,8 @@ async function backupStore(options) {
   if (!options.quiet) {
     process.stdout.write(
       `Backed up ${Object.keys(snapshot.profiles).length} profiles and ` +
-      `${Object.keys(snapshot.secrets).length} secrets as ${result.version}.\n`
+      `${Object.keys(snapshot.secrets).length} secrets with ` +
+      `${Object.keys(snapshot.artifacts).length} portable artifacts as ${result.version}.\n`
     );
   }
 }
@@ -343,14 +352,132 @@ async function collectSnapshot(storePath, config, sopsFile) {
     }
   }
   validateSecrets(secrets);
+  const artifacts = await collectStoreArtifacts(storePath, catalog);
 
   return {
     schema: SCHEMA,
     created_at: new Date().toISOString(),
     catalog,
     profiles,
-    secrets
+    secrets,
+    artifacts
   };
+}
+
+function collectCatalogArtifactReferences(catalog) {
+  return [...collectCatalogArtifactSpecifications(catalog).keys()];
+}
+
+function collectCatalogArtifactSpecifications(catalog) {
+  const references = new Map();
+  for (const definition of Object.values(catalog.servers)) {
+    if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
+      continue;
+    }
+    const candidates = [definition];
+    if (definition.target_overrides &&
+        typeof definition.target_overrides === "object" &&
+        !Array.isArray(definition.target_overrides)) {
+      candidates.push(...Object.values(definition.target_overrides));
+    }
+    for (const candidate of candidates) {
+      const packageReference = candidate?.host?.install?.package;
+      if (typeof packageReference !== "string" ||
+          !packageReference.startsWith("@mcpctl-store/")) {
+        continue;
+      }
+      if (!packageReference.startsWith(STORE_ARTIFACT_PREFIX)) {
+        throw new RemoteError(`unsupported portable Store reference: ${packageReference}`);
+      }
+      const name = packageReference.slice(STORE_ARTIFACT_PREFIX.length);
+      validateArtifactName(name);
+      const sha256 = candidate?.host?.install?.sha256;
+      if (typeof sha256 !== "string" || !/^[A-Fa-f0-9]{64}$/.test(sha256)) {
+        throw new RemoteError(`MCP artifact '${name}' is missing a valid catalog SHA-256`);
+      }
+      const normalizedSha256 = sha256.toLowerCase();
+      if (references.has(name) && references.get(name) !== normalizedSha256) {
+        throw new RemoteError(`MCP artifact '${name}' has conflicting catalog digests`);
+      }
+      references.set(name, normalizedSha256);
+    }
+  }
+  return new Map([...references].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+async function collectStoreArtifacts(storePath, catalog) {
+  const artifacts = Object.create(null);
+  let totalBytes = 0;
+  for (const [name, expectedSha256] of collectCatalogArtifactSpecifications(catalog)) {
+    const artifactPath = join(storePath, "artifacts", name);
+    const details = await assertRegularFile(artifactPath, `MCP artifact '${name}'`);
+    if (details.size > MAX_ARTIFACT_BYTES) {
+      throw new RemoteError(`MCP artifact '${name}' exceeds the safe size limit`);
+    }
+    totalBytes += details.size;
+    if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) {
+      throw new RemoteError("MCP artifacts exceed the safe total size limit");
+    }
+    const bytes = await readFile(artifactPath);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (sha256 !== expectedSha256) {
+      throw new RemoteError(`MCP artifact '${name}' does not match its catalog SHA-256`);
+    }
+    artifacts[name] = {
+      encoding: "base64",
+      sha256,
+      data: bytes.toString("base64")
+    };
+  }
+  return artifacts;
+}
+
+function validateArtifactName(name) {
+  if (typeof name !== "string" || !ARTIFACT_NAME_PATTERN.test(name) ||
+      name === "." || name === "..") {
+    throw new RemoteError("MCP artifact name is invalid");
+  }
+}
+
+function decodeArtifact(name, artifact) {
+  validateArtifactName(name);
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact) ||
+      artifact.encoding !== "base64" ||
+      typeof artifact.data !== "string" ||
+      !/^[A-Fa-f0-9]{64}$/.test(artifact.sha256 || "")) {
+    throw new RemoteError(`MCP artifact '${name}' is invalid`);
+  }
+  const bytes = Buffer.from(artifact.data, "base64");
+  if (bytes.length > MAX_ARTIFACT_BYTES || bytes.toString("base64") !== artifact.data) {
+    throw new RemoteError(`MCP artifact '${name}' has invalid base64 or size`);
+  }
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (digest !== artifact.sha256.toLowerCase()) {
+    throw new RemoteError(`MCP artifact '${name}' failed SHA-256 verification`);
+  }
+  return bytes;
+}
+
+function validateArtifacts(catalog, artifacts) {
+  const normalized = artifacts === undefined ? {} : artifacts;
+  if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
+    throw new RemoteError("MCP artifacts must be an object");
+  }
+  let totalBytes = 0;
+  for (const [name, artifact] of Object.entries(normalized)) {
+    totalBytes += decodeArtifact(name, artifact).length;
+    if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) {
+      throw new RemoteError("MCP artifacts exceed the safe total size limit");
+    }
+  }
+  for (const [name, expectedSha256] of collectCatalogArtifactSpecifications(catalog)) {
+    if (!Object.hasOwn(normalized, name)) {
+      throw new RemoteError(`MCP catalog references missing artifact '${name}'`);
+    }
+    if (normalized[name].sha256.toLowerCase() !== expectedSha256) {
+      throw new RemoteError(`MCP artifact '${name}' does not match its catalog SHA-256`);
+    }
+  }
 }
 
 function collectCatalogSecretReferences(catalog) {
@@ -518,7 +645,8 @@ async function restoreStore(options) {
   if (!options.quiet) {
     process.stdout.write(
       `Restored ${Object.keys(snapshot.profiles).length} profiles and ` +
-      `${Object.keys(snapshot.secrets).length} encrypted secrets from ${restoredVersion}.\n`
+      `${Object.keys(snapshot.secrets).length} encrypted secrets with ` +
+      `${Object.keys(snapshot.artifacts || {}).length} portable artifacts from ${restoredVersion}.\n`
     );
   }
 }
@@ -569,15 +697,27 @@ async function writeRestoredStore(storePath, config, snapshot, force) {
       throw new RemoteError(`profiles path must be a real directory: ${profilesPath}`);
     }
   }
+  const artifactsPath = join(storePath, "artifacts");
+  if (await pathExists(artifactsPath)) {
+    const details = await lstat(artifactsPath);
+    if (details.isSymbolicLink() || !details.isDirectory()) {
+      throw new RemoteError(`artifacts path must be a real directory: ${artifactsPath}`);
+    }
+  }
 
   await mkdir(storePath, { recursive: true, mode: 0o700 });
   await mkdir(profilesPath, { recursive: true, mode: 0o700 });
+  await mkdir(artifactsPath, { recursive: true, mode: 0o700 });
   await chmod(storePath, 0o700);
   await chmod(profilesPath, 0o700);
+  await chmod(artifactsPath, 0o700);
 
   await writeJsonAtomic(catalogPath, snapshot.catalog);
   for (const [profileName, profile] of Object.entries(snapshot.profiles)) {
     await writeJsonAtomic(join(profilesPath, `${profileName}.json`), profile);
+  }
+  for (const [name, artifact] of Object.entries(snapshot.artifacts || {})) {
+    await writeBinaryAtomic(join(artifactsPath, name), decodeArtifact(name, artifact));
   }
 
   const localSecretsEnvelope = encryptValue(
@@ -1059,6 +1199,7 @@ function validateSnapshot(snapshot) {
     throw new RemoteError("decrypted snapshot has an invalid schema");
   }
   validateCatalog(snapshot.catalog);
+  validateArtifacts(snapshot.catalog, snapshot.artifacts);
   for (const [name, profile] of Object.entries(snapshot.profiles)) {
     validateProfileName(name);
     validateProfile(name, profile);
@@ -1153,6 +1294,36 @@ async function writeJsonAtomic(filePath, value) {
   }
 }
 
+async function writeBinaryAtomic(filePath, value) {
+  const targetPath = resolve(filePath);
+  const parentPath = dirname(targetPath);
+  if (await pathExists(targetPath)) {
+    const details = await lstat(targetPath);
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new RemoteError(`refusing to replace non-regular file: ${targetPath}`);
+    }
+  }
+
+  await mkdir(parentPath, { recursive: true, mode: 0o700 });
+  const temporaryPath = join(
+    parentPath,
+    `.${targetPath.slice(parentPath.length + 1)}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`
+  );
+  let handle;
+  try {
+    handle = await open(temporaryPath, "wx", 0o600);
+    await handle.writeFile(value);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, targetPath);
+    await chmod(targetPath, 0o600);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await rm(temporaryPath, { force: true }).catch(() => {});
+  }
+}
+
 async function readStandardInput(maxBytes) {
   const chunks = [];
   let total = 0;
@@ -1197,6 +1368,7 @@ export {
   LOCAL_SECRETS_INFO,
   RECOVERY_PREFIX,
   SNAPSHOT_INFO,
+  collectCatalogArtifactReferences,
   collectCatalogSecretReferences,
   collectSnapshot,
   decryptValue,

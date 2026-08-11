@@ -144,6 +144,82 @@ homepage_for() {
   definition_for "$1" | jq -r '.homepage // empty'
 }
 
+resolve_package_reference() {
+  local reference="$1" relative name artifact
+  case "$reference" in
+    @mcpctl-store/artifacts/*)
+      relative="${reference#@mcpctl-store/artifacts/}"
+      case "$relative" in
+        ""|.|..|*/*|*\\*|*[!A-Za-z0-9._-]*)
+          die "invalid portable MCP artifact reference '$reference'"
+          ;;
+      esac
+      artifact="$(dirname "$CATALOG")/artifacts/$relative"
+      [ -f "$artifact" ] && [ ! -L "$artifact" ] ||
+        die "portable MCP artifact is missing or unsafe: $artifact"
+      printf '%s' "$artifact"
+      ;;
+    @mcpctl-store/*)
+      die "unsupported portable Store reference '$reference'"
+      ;;
+    *)
+      printf '%s' "$reference"
+      ;;
+  esac
+}
+
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -- "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$1" | awk '{print $1}'
+  else
+    die "shasum or sha256sum is required to verify a portable MCP artifact"
+  fi
+}
+
+portable_artifact_status() {
+  local host="$1" reference relative artifact expected actual
+  reference="$(printf '%s' "$host" | jq -r '.install.package // empty')"
+  case "$reference" in
+    @mcpctl-store/artifacts/*)
+      relative="${reference#@mcpctl-store/artifacts/}"
+      case "$relative" in
+        ""|.|..|*/*|*\\*|*[!A-Za-z0-9._-]*)
+          printf 'invalid'
+          return 0
+          ;;
+      esac
+      artifact="$(dirname "$CATALOG")/artifacts/$relative"
+      [ -f "$artifact" ] && [ ! -L "$artifact" ] || {
+        printf 'missing'
+        return 0
+      }
+      expected="$(printf '%s' "$host" | jq -r '.install.sha256 // empty')"
+      case "$expected" in
+        ""|*[!A-Fa-f0-9]*) printf 'invalid'; return 0 ;;
+      esac
+      [ "${#expected}" -eq 64 ] || { printf 'invalid'; return 0; }
+      if command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 -- "$artifact" | awk '{print $1}')"
+      elif command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum -- "$artifact" | awk '{print $1}')"
+      else
+        printf 'unverifiable'
+        return 0
+      fi
+      if [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" = \
+        "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]; then
+        printf 'ready'
+      else
+        printf 'invalid'
+      fi
+      ;;
+    @mcpctl-store/*) printf 'invalid' ;;
+    *) printf 'not-artifact' ;;
+  esac
+}
+
 platform_supported() {
   local host="$1"
   printf '%s' "$host" | jq -e --arg platform "$PLATFORM" '
@@ -268,7 +344,7 @@ owned_entrypoint() {
 }
 
 install_state() {
-  local name="$1" host="$2" install_type runner entrypoint
+  local name="$1" host="$2" install_type runner entrypoint artifact_status
   install_type="$(printf '%s' "$host" | jq -r '.install.type // "manual"')"
   if entrypoint="$(owned_entrypoint "$name" 2>/dev/null)" && [ -x "$entrypoint" ]; then
     printf 'owned'
@@ -280,6 +356,12 @@ install_state() {
       command -v "$runner" >/dev/null 2>&1 && printf 'lazy' || printf 'missing'
       ;;
     uv)
+      artifact_status="$(portable_artifact_status "$host")"
+      case "$artifact_status" in
+        missing) printf 'artifact-missing'; return 0 ;;
+        invalid) printf 'artifact-invalid'; return 0 ;;
+        unverifiable) printf 'artifact-unverifiable'; return 0 ;;
+      esac
       runner="uvx"
       command -v "$runner" >/dev/null 2>&1 && printf 'lazy' || printf 'missing'
       ;;
@@ -397,6 +479,18 @@ doctor_one() {
     lazy) printf '  [ok] lazy package runner available (not isolated yet)\n' ;;
     not-needed) printf '  [ok] no local package installation required\n' ;;
     external) printf '  [info] installation is managed outside mcpctl\n' ;;
+    artifact-missing)
+      printf '  [missing] portable package artifact is not present in the Store\n'
+      failed=1
+      ;;
+    artifact-invalid)
+      printf '  [missing] portable package artifact or its SHA-256 is invalid\n'
+      failed=1
+      ;;
+    artifact-unverifiable)
+      printf '  [missing] shasum or sha256sum is required to verify the portable artifact\n'
+      failed=1
+      ;;
     *)
       printf '  [missing] package runtime is not available\n'
       failed=1
@@ -459,12 +553,40 @@ for_each_selected() {
 }
 
 install_one() {
-  local name="$1" host manager package binary server_dir temp_dir entrypoint
-  local created_at
+  local name="$1" host manager package_ref package binary server_dir temp_dir entrypoint
+  local created_at expected_sha actual_sha with_json requirement
+  local uv_install_args=()
   host="$(host_for "$name")"
   manager="$(printf '%s' "$host" | jq -r '.install.type // "manual"')"
-  package="$(printf '%s' "$host" | jq -r '.install.package // empty')"
+  package_ref="$(printf '%s' "$host" | jq -r '.install.package // empty')"
+  package="$(resolve_package_reference "$package_ref")"
   binary="$(printf '%s' "$host" | jq -r '.install.bin // empty')"
+  expected_sha="$(printf '%s' "$host" | jq -r '.install.sha256 // empty')"
+  with_json="$(printf '%s' "$host" | jq -c '.install.with // []')"
+  printf '%s' "$with_json" | jq -e '
+    type == "array"
+    and all(.[]; type == "string" and length > 0 and (startswith("-") | not))
+  ' >/dev/null 2>&1 ||
+    die "server '$name' has invalid uv companion requirements"
+  if [ "$manager" != "uv" ] && [ "$(printf '%s' "$with_json" | jq 'length')" -ne 0 ]; then
+    die "server '$name' uses uv companion requirements with a non-uv installer"
+  fi
+
+  case "$package_ref" in
+    @mcpctl-store/artifacts/*)
+      case "$expected_sha" in
+        ""|*[!A-Fa-f0-9]*)
+          die "server '$name' portable artifact is missing a valid SHA-256 digest"
+          ;;
+      esac
+      [ "${#expected_sha}" -eq 64 ] ||
+        die "server '$name' portable artifact is missing a valid SHA-256 digest"
+      actual_sha="$(sha256_file "$package")"
+      [ "$(printf '%s' "$actual_sha" | tr 'A-F' 'a-f')" = \
+        "$(printf '%s' "$expected_sha" | tr 'A-F' 'a-f')" ] ||
+        die "server '$name' portable artifact failed SHA-256 verification"
+      ;;
+  esac
 
   platform_supported "$host" ||
     die "server '$name' does not support the current $PLATFORM platform"
@@ -484,7 +606,7 @@ install_one() {
     *) die "server '$name' has unsupported installer '$manager'" ;;
   esac
 
-  [ -n "$package" ] && [ -n "$binary" ] ||
+  [ -n "$package_ref" ] && [ -n "$binary" ] ||
     die "server '$name' has incomplete package install metadata"
   case "$package" in
     -*) die "server '$name' has an invalid package reference" ;;
@@ -498,8 +620,11 @@ install_one() {
   if owned_manifest_valid "$name"; then
     entrypoint="$(owned_entrypoint "$name")"
     if [ -x "$entrypoint" ] &&
-       [ "$(jq -r '.package' "${server_dir}/manifest.json")" = "$package" ] &&
-       [ "$(jq -r '.binary' "${server_dir}/manifest.json")" = "$binary" ]; then
+       [ "$(jq -r '.package' "${server_dir}/manifest.json")" = "$package_ref" ] &&
+       [ "$(jq -r '.binary' "${server_dir}/manifest.json")" = "$binary" ] &&
+       [ "$(jq -r '.sha256 // empty' "${server_dir}/manifest.json")" = "$expected_sha" ] &&
+       jq -e --argjson with "$with_json" '(.with // []) == $with' \
+         "${server_dir}/manifest.json" >/dev/null 2>&1; then
       log "$name is already installed by mcpctl at $server_dir"
       return 0
     fi
@@ -509,7 +634,7 @@ install_one() {
     die "refusing to replace unowned path $server_dir"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "Would install $package with $manager into $server_dir"
+    log "Would install $package_ref with $manager into $server_dir"
     return 0
   fi
 
@@ -532,9 +657,13 @@ install_one() {
       ;;
     uv)
       require_command uv
+      while IFS= read -r requirement; do
+        [ -n "$requirement" ] || continue
+        uv_install_args+=(--with "$requirement")
+      done < <(printf '%s' "$with_json" | jq -r '.[]')
       UV_TOOL_DIR="${temp_dir}/tools" \
         UV_TOOL_BIN_DIR="${temp_dir}/bin" \
-        uv tool install -- "$package"
+        uv tool install "${uv_install_args[@]}" -- "$package"
       entrypoint="${temp_dir}/bin/${binary}"
       ;;
   esac
@@ -545,8 +674,10 @@ install_one() {
   jq -n \
     --arg server "$name" \
     --arg manager "$manager" \
-    --arg package "$package" \
+    --arg package "$package_ref" \
     --arg binary "$binary" \
+    --arg sha256 "$expected_sha" \
+    --argjson with "$with_json" \
     --arg installed_at "$created_at" '
       {
         schema: 1,
@@ -555,6 +686,8 @@ install_one() {
         manager: $manager,
         package: $package,
         binary: $binary,
+        sha256: $sha256,
+        with: $with,
         installed_at: $installed_at
       }
     ' > "${temp_dir}/manifest.json"
