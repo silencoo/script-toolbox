@@ -37,7 +37,7 @@ async function createStore(env) {
   return worker.fetch(request(`/v1/stores/${STORE_ID}`, {
     method: "PUT",
     headers: authenticatedHeaders({
-      "X-MCP-Store-Create-Token": CREATE_TOKEN
+      "X-Toolbox-Store-Create-Token": CREATE_TOKEN
     })
   }), env);
 }
@@ -47,7 +47,7 @@ async function backup(env, body, baseVersion = "none") {
     method: "PUT",
     headers: authenticatedHeaders({
       "Content-Type": SNAPSHOT_TYPE,
-      "X-MCPCTL-Base-Version": baseVersion
+      "X-Toolbox-Base-Version": baseVersion
     }),
     body
   }), env);
@@ -63,23 +63,13 @@ test("health check is public and security headers are attached", async () => {
     schema: 1,
     service: "toolbox-store",
     compatibility: [
-      "mcp-store-v1",
+      "mcpctl-store-v1",
       "skills-store-v1",
       "prompt-store-v1",
       "toolbox-workspace-v1"
     ],
     status: "ok"
   });
-});
-
-test("legacy MCP_STORE binding remains accepted for in-place upgrades", async () => {
-  const response = await worker.fetch(request("/health"), {
-    MCP_STORE: new MemoryR2Bucket(),
-    MAX_BLOB_BYTES: "5242880",
-    CREATE_TOKEN
-  });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).service, "toolbox-store");
 });
 
 test("non-API routes are delegated to the same-origin asset binding", async () => {
@@ -244,7 +234,7 @@ test("store creation fails closed without the deployment bootstrap secret", asyn
     request(`/v1/stores/${STORE_ID}`, {
       method: "PUT",
       headers: authenticatedHeaders({
-        "X-MCP-Store-Create-Token": "wrong-token-".padEnd(48, "W")
+        "X-Toolbox-Store-Create-Token": "wrong-token-".padEnd(48, "W")
       })
     }),
     env
@@ -301,7 +291,7 @@ test("uploads immutable versions and returns the exact opaque bytes", async () =
     env
   );
   assert.equal(latest.status, 200);
-  assert.equal(latest.headers.get("x-mcpctl-version"), secondMetadata.version);
+  assert.equal(latest.headers.get("x-toolbox-store-version"), secondMetadata.version);
   assert.equal(await latest.text(), secondBody);
 
   const oldVersion = await worker.fetch(

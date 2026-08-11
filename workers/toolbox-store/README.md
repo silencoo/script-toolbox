@@ -110,10 +110,9 @@ Store creation additionally accepts the product-neutral header:
 X-Toolbox-Store-Create-Token: <deployment bootstrap secret>
 ```
 
-The legacy `X-MCP-Store-Create-Token`, `X-MCPCTL-Base-Version`, and MCP
-content type remain supported. Skills clients use
-`X-Toolbox-Base-Version` and
-`application/vnd.skillsctl.snapshot+json`.
+Every controller uses the product-neutral `X-Toolbox-Base-Version` and
+`X-Toolbox-Store-Version` headers. Snapshot content types remain
+controller-specific so encrypted envelopes can be validated before storage.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -131,11 +130,6 @@ content type remain supported. Skills clients use
 A first upload sends a base version of `none`; later uploads send the current
 version. A stale upload receives `409 version_conflict`, preventing one tab or
 machine from silently replacing a newer backup.
-
-Existing installations created under the old `mcp-store` Worker and bucket
-remain supported through `wrangler.mcp-store.jsonc`; this compatibility target
-updates the original deployment without moving or duplicating its encrypted
-objects.
 
 ## Local development
 
@@ -182,23 +176,6 @@ endpoint:
 ./agent/agentctl/agentctl workspace init \
   --endpoint https://toolbox-store.<account-subdomain>.workers.dev
 ```
-
-If the deployment already uses the historical `mcp-store` Worker and bucket,
-upgrade that deployment explicitly instead:
-
-```bash
-npm run validate
-npm run deploy:mcp-store
-```
-
-That command uses `wrangler.mcp-store.jsonc`, including the original
-`MCP_STORE` binding and bucket. Existing recovery codes and endpoint
-capabilities continue to work. Do not run the default deploy command expecting
-it to rename or migrate an old deployment: Cloudflare treats the new Worker and
-R2 bucket names as separate resources. The Worker runtime accepts both binding
-names so the default and compatibility targets run the same code. Pass
-`--config wrangler.mcp-store.jsonc` to direct any manual Wrangler secret command
-at the historical deployment.
 
 Each command prints its own recovery code and uploads an initial snapshot.
 Attach all child Stores to make the master code the normal login:

@@ -210,7 +210,7 @@ async function initializeRemote(options) {
   const response = await authenticatedFetch(config, storeApiPath(config), {
     method: "PUT",
     headers: {
-      "X-MCP-Store-Create-Token": createToken
+      "X-Toolbox-Store-Create-Token": createToken
     }
   });
   const created = await readApiJson(response, [201]);
@@ -270,7 +270,7 @@ async function backupStore(options) {
       method: "PUT",
       headers: {
         "Content-Type": SNAPSHOT_CONTENT_TYPE,
-        "X-MCPCTL-Base-Version": baseVersion
+        "X-Toolbox-Base-Version": baseVersion
       },
       body
     }
@@ -492,7 +492,7 @@ async function restoreStore(options) {
 
   const response = await authenticatedFetch(config, remotePath);
   await requireApiSuccess(response, [200]);
-  const restoredVersionHeader = response.headers.get("X-MCPCTL-Version");
+  const restoredVersionHeader = response.headers.get("X-Toolbox-Store-Version");
   if (restoredVersionHeader !== null &&
       !VERSION_ID_PATTERN.test(restoredVersionHeader)) {
     throw new RemoteError("remote service returned an invalid restored-version header");

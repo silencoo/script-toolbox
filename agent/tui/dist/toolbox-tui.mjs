@@ -22537,8 +22537,8 @@ var MCP_REMOTE_PROTOCOL = Object.freeze({
   snapshotInfo: "mcpctl/snapshot-encryption/v1",
   snapshotKind: "mcpctl-snapshot",
   contentType: "application/vnd.mcpctl.snapshot+json",
-  createTokenHeader: "X-MCP-Store-Create-Token",
-  baseVersionHeader: "X-MCPCTL-Base-Version"
+  createTokenHeader: "X-Toolbox-Store-Create-Token",
+  baseVersionHeader: "X-Toolbox-Base-Version"
 });
 var SKILLS_REMOTE_PROTOCOL = Object.freeze({
   id: "skillsctl",

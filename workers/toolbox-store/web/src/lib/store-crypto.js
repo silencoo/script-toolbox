@@ -9,7 +9,7 @@ const PROTOCOLS = {
     snapshotInfo: "mcpctl/snapshot-encryption/v1",
     envelopeKind: "mcpctl-snapshot",
     contentType: "application/vnd.mcpctl.snapshot+json",
-    baseHeader: "X-MCPCTL-Base-Version"
+    baseHeader: "X-Toolbox-Base-Version"
   }),
   skills: Object.freeze({
     id: "skillsctl",

@@ -1,5 +1,18 @@
 # Changelog — agent/
 
+## 2026-08-11 — completed Toolbox Store cloud migration
+
+- Copied and byte-verified every opaque R2 object into the product-neutral
+  `toolbox-store` bucket, deployed the renamed Worker, updated all four local
+  capabilities, and rewrote the encrypted Workspace attachments as schema 3.
+- Removed the retired `mcp-store` Worker and bucket after recovery and Web UI
+  verification, then removed the legacy Wrangler target and `MCP_STORE`
+  runtime fallback.
+- Standardized MCP remote requests on the same product-neutral Toolbox headers
+  used by Skills, Prompts, and Workspace. The `mcpstore1_` prefix remains the
+  current type marker for an independent logical MCP Store, not a deployment
+  compatibility path.
+
 ## 2026-08-11 — product-neutral Toolbox Store defaults
 
 - Renamed the shared Worker source directory from `workers/mcp-store` to

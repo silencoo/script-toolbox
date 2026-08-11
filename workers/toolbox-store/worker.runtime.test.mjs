@@ -45,7 +45,7 @@ test("production runtime creates, authenticates, conditionally updates, and read
   const created = await runtimeWorker.fetch(`/v1/stores/${STORE_ID}`, {
     method: "PUT",
     headers: headers({
-      "X-MCP-Store-Create-Token": CREATE_TOKEN
+      "X-Toolbox-Store-Create-Token": CREATE_TOKEN
     })
   });
   assert.equal(created.status, 201);
@@ -68,7 +68,7 @@ test("production runtime creates, authenticates, conditionally updates, and read
       method: "PUT",
       headers: headers({
         "Content-Type": SNAPSHOT_TYPE,
-        "X-MCPCTL-Base-Version": "none"
+        "X-Toolbox-Base-Version": "none"
       }),
       body: encryptedEnvelope
     }
@@ -82,7 +82,7 @@ test("production runtime creates, authenticates, conditionally updates, and read
       method: "PUT",
       headers: headers({
         "Content-Type": SNAPSHOT_TYPE,
-        "X-MCPCTL-Base-Version": "none"
+        "X-Toolbox-Base-Version": "none"
       }),
       body: encryptedEnvelope
     }
@@ -93,6 +93,6 @@ test("production runtime creates, authenticates, conditionally updates, and read
     headers: headers()
   });
   assert.equal(latest.status, 200);
-  assert.equal(latest.headers.get("X-MCPCTL-Version"), metadata.version);
+  assert.equal(latest.headers.get("X-Toolbox-Store-Version"), metadata.version);
   assert.equal(await latest.text(), encryptedEnvelope);
 });

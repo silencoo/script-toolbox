@@ -10,13 +10,13 @@ const MAX_CONFIGURED_BLOB_BYTES = 25 * 1024 * 1024;
 const STORE_ID_PATTERN = /^[a-f0-9]{32}$/;
 const VERSION_ID_PATTERN = /^[0-9]{13}-[a-f0-9-]{36}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const LEGACY_MCP_SNAPSHOT_CONTENT_TYPE = "application/vnd.mcpctl.snapshot+json";
+const MCP_SNAPSHOT_CONTENT_TYPE = "application/vnd.mcpctl.snapshot+json";
 const TOOLBOX_SNAPSHOT_CONTENT_TYPE = "application/vnd.script-toolbox.snapshot+json";
 const SKILLS_SNAPSHOT_CONTENT_TYPE = "application/vnd.skillsctl.snapshot+json";
 const PROMPT_SNAPSHOT_CONTENT_TYPE = "application/vnd.promptctl.snapshot+json";
 const WORKSPACE_SNAPSHOT_CONTENT_TYPE = "application/vnd.agentctl.workspace+json";
 const SNAPSHOT_CONTENT_TYPES = new Set([
-  LEGACY_MCP_SNAPSHOT_CONTENT_TYPE,
+  MCP_SNAPSHOT_CONTENT_TYPE,
   TOOLBOX_SNAPSHOT_CONTENT_TYPE,
   SKILLS_SNAPSHOT_CONTENT_TYPE,
   PROMPT_SNAPSHOT_CONTENT_TYPE,
@@ -92,7 +92,7 @@ async function route(request, env) {
       schema: API_SCHEMA,
       service: "toolbox-store",
       compatibility: [
-        "mcp-store-v1",
+        "mcpctl-store-v1",
         "skills-store-v1",
         "prompt-store-v1",
         "toolbox-workspace-v1"
@@ -170,12 +170,12 @@ function assertEnvironment(env) {
   if (!bucket ||
       typeof bucket.get !== "function" ||
       typeof bucket.put !== "function") {
-    throw new Error("TOOLBOX_STORE/MCP_STORE R2 binding is missing");
+    throw new Error("TOOLBOX_STORE R2 binding is missing");
   }
 }
 
 function storeBucket(env) {
-  return env?.TOOLBOX_STORE || env?.MCP_STORE;
+  return env?.TOOLBOX_STORE;
 }
 
 function parsePath(pathname) {
@@ -318,10 +318,7 @@ async function authorizeStoreCreation(request, env) {
     );
   }
 
-  const supplied =
-    request.headers.get("X-Toolbox-Store-Create-Token") ||
-    request.headers.get("X-MCP-Store-Create-Token") ||
-    "";
+  const supplied = request.headers.get("X-Toolbox-Store-Create-Token") || "";
   if (supplied.length < MIN_CREATE_TOKEN_LENGTH ||
       supplied.length > MAX_CREATE_TOKEN_LENGTH ||
       /[\u0000-\u001f\u007f]/.test(supplied)) {
@@ -529,9 +526,7 @@ async function uploadVersion(request, env, storeId) {
     validateHead(oldHead);
   }
 
-  const baseVersion =
-    request.headers.get("X-Toolbox-Base-Version") ||
-    request.headers.get("X-MCPCTL-Base-Version");
+  const baseVersion = request.headers.get("X-Toolbox-Base-Version");
   const expectedBase = oldHead === null ? "none" : oldHead.version;
   if (baseVersion !== expectedBase) {
     throw new ApiError(
@@ -701,11 +696,10 @@ async function downloadVersion(env, storeId, versionId) {
   object.writeHttpMetadata(headers);
   const contentType = SNAPSHOT_CONTENT_TYPES.has(object.customMetadata?.contentType)
     ? object.customMetadata.contentType
-    : LEGACY_MCP_SNAPSHOT_CONTENT_TYPE;
+    : MCP_SNAPSHOT_CONTENT_TYPE;
   headers.set("Content-Type", contentType);
   headers.set("Content-Length", String(object.size));
   headers.set("ETag", object.httpEtag);
-  headers.set("X-MCPCTL-Version", versionId);
   headers.set("X-Toolbox-Store-Version", versionId);
   if (object.customMetadata?.sha256) {
     headers.set("X-Content-SHA256", object.customMetadata.sha256);

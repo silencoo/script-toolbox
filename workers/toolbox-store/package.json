@@ -8,14 +8,12 @@
   "scripts": {
     "build": "vite build",
     "dev": "npm run build && wrangler dev",
-    "dev:mcp-store": "npm run build && wrangler dev --config wrangler.mcp-store.jsonc",
     "dev:ui": "vite",
     "deploy": "npm run build && wrangler deploy",
-    "deploy:mcp-store": "npm run build && wrangler deploy --config wrangler.mcp-store.jsonc",
     "test": "node --test worker.test.mjs worker.runtime.test.mjs store-crypto.test.mjs mcp-model.test.mjs prompt-model.test.mjs ui-contract.test.mjs",
     "typecheck": "tsc --noEmit",
     "types": "wrangler types --include-runtime false",
-    "validate": "npm run typecheck && npm run build && npm run test && npm run types && wrangler deploy --dry-run --outdir .wrangler/dry-run && wrangler deploy --config wrangler.mcp-store.jsonc --dry-run --outdir .wrangler/dry-run-mcp-store"
+    "validate": "npm run typecheck && npm run build && npm run test && npm run types && wrangler deploy --dry-run --outdir .wrangler/dry-run"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
