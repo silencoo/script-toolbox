@@ -497,6 +497,22 @@ export function createController({
     };
   }
 
+  async function localSkillsRepair(pack, target) {
+    if (!pack) throw new Error("No current local Skills pack is available to repair.");
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const result = await run(tools.skills, [
+      "apply", "--target", target, "--pack", pack, "--yes"
+    ]);
+    return {
+      ok: result.code === 0,
+      data: { pack, target },
+      detail: result.code === 0
+        ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.`
+        : sanitizeOutput(result.stderr || result.stdout) ||
+          `Skills repair failed with code ${result.code}`
+    };
+  }
+
   async function remoteComponentAction(actionName, type, name, target) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
@@ -580,6 +596,7 @@ export function createController({
       return providerSync(actionName, selection);
     }
     if (actionName === "mcp-repair") return localMcpRepair(selection, target);
+    if (actionName === "skills-repair") return localSkillsRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
       const operation = actionName === "account-use" ? "use" : "delete";

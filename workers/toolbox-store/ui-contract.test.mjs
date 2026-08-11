@@ -14,6 +14,7 @@ const [
   presetWorkspace,
   workspaceTabs,
   inspector,
+  catalogView,
   modeToggle,
   themeProvider,
   sonner,
@@ -35,6 +36,7 @@ const [
   read("./web/src/components/preset-workspace.tsx"),
   read("./web/src/components/workspace-tabs.tsx"),
   read("./web/src/components/store-inspector.tsx"),
+  read("./web/src/lib/catalog-view.js"),
   read("./web/src/components/mode-toggle.tsx"),
   read("./web/src/components/theme-provider.tsx"),
   read("./web/src/components/ui/sonner.tsx"),
@@ -63,6 +65,14 @@ test("Workspace UI is built from real shadcn/ui source with neutral theming", ()
   assert.match(workspace, /@\/components\/ui\/switch/);
   assert.match(workspaceTabs, /@\/components\/ui\/tabs/);
   assert.match(workspace, /@\/components\/ui\/select/);
+  assert.match(workspace, /Enabled \{enabled\.size\}/);
+  assert.match(workspace, /All \{allItems\.length\}/);
+  assert.match(workspace, /CATALOG_SCOPE_LABELS/);
+  assert.match(workspace, /preferredCatalogScope/);
+  assert.match(workspace, /catalog-select-scroll/);
+  assert.match(workspace, /catalog-scroll/);
+  assert.match(catalogView, /Number\(enabled\.has\(nameB\)\) - Number\(enabled\.has\(nameA\)\)/);
+  assert.match(styles, /scrollbar-gutter: stable/);
   assert.match(workspace, /@\/components\/ui\/dialog/);
   assert.match(workspaceTabs, /grid w-full items-stretch gap-1/);
   assert.match(workspaceTabs, /visible\.length === 1 \? "grid-cols-1 sm:max-w-72" : "grid-cols-2 sm:grid-cols-5"/);

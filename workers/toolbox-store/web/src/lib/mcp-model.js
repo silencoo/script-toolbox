@@ -22,7 +22,7 @@ function requireMcpProfile(snapshot, profileName) {
   return profile;
 }
 
-export function resolveMcpProfile(snapshot, profileName) {
+export function resolveMcpProfile(snapshot, profileName, target = "") {
   const result = new Set();
   const visiting = new Set();
   const visited = new Set();
@@ -39,54 +39,71 @@ export function resolveMcpProfile(snapshot, profileName) {
     visited.add(name);
     for (const server of profile.enable || profile.servers || []) result.add(server);
     for (const server of profile.disable || []) result.delete(server);
+    const override = target && isObject(profile.target_overrides?.[target])
+      ? profile.target_overrides[target]
+      : null;
+    for (const server of override?.enable || []) result.add(server);
+    for (const server of override?.disable || []) result.delete(server);
   }
 
   visit(profileName);
   return result;
 }
 
-export function setMcpServerEnabled(snapshot, profileName, serverName, enabled) {
+export function setMcpServerEnabled(snapshot, profileName, serverName, enabled, target = "") {
   const profile = requireMcpProfile(snapshot, profileName);
   const definition = snapshot?.catalog?.servers?.[serverName];
   if (!isObject(definition)) throw new Error("Unknown MCP server '" + serverName + "'.");
-  const field = profileServerField(profile);
-  profile[field] = uniqueSorted(profile[field] || []);
-  profile.disable = uniqueSorted(profile.disable || []);
+  const selection = target
+    ? (profile.target_overrides ||= {}, profile.target_overrides[target] ||= {})
+    : profile;
+  const field = target ? "enable" : profileServerField(profile);
+  selection[field] = uniqueSorted(selection[field] || []);
+  selection.disable = uniqueSorted(selection.disable || []);
 
-  profile[field] = profile[field].filter((value) => value !== serverName);
-  profile.disable = profile.disable.filter((value) => value !== serverName);
+  selection[field] = selection[field].filter((value) => value !== serverName);
+  selection.disable = selection.disable.filter((value) => value !== serverName);
 
   if (enabled) {
     const group = definition.variant_group;
     if (typeof group === "string" && group) {
       for (const [name, candidate] of Object.entries(snapshot.catalog.servers)) {
         if (name === serverName || candidate?.variant_group !== group) continue;
-        profile[field] = profile[field].filter((value) => value !== name);
-        profile.disable = uniqueSorted([...profile.disable, name]);
+        selection[field] = selection[field].filter((value) => value !== name);
+        selection.disable = uniqueSorted([...selection.disable, name]);
       }
     }
-    profile[field] = uniqueSorted([...profile[field], serverName]);
+    selection[field] = uniqueSorted([...selection[field], serverName]);
   } else {
-    profile.disable = uniqueSorted([...profile.disable, serverName]);
+    selection.disable = uniqueSorted([...selection.disable, serverName]);
   }
 
-  profile[field] = uniqueSorted(profile[field]);
-  profile.disable = uniqueSorted(profile.disable);
+  selection[field] = uniqueSorted(selection[field]);
+  selection.disable = uniqueSorted(selection.disable);
 }
 
 export function findMcpVariantConflicts(snapshot) {
   const conflicts = [];
   for (const profileName of Object.keys(snapshot?.profiles || {})) {
-    const groups = new Map();
-    for (const serverName of resolveMcpProfile(snapshot, profileName)) {
-      const group = snapshot?.catalog?.servers?.[serverName]?.variant_group;
-      if (typeof group !== "string" || !group) continue;
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group).push(serverName);
-    }
-    for (const [group, servers] of groups) {
-      if (servers.length > 1) {
-        conflicts.push({ profile: profileName, group, servers: servers.sort() });
+    const profile = snapshot.profiles[profileName];
+    const targets = ["", ...Object.keys(profile?.target_overrides || {}).sort()];
+    for (const target of targets) {
+      const groups = new Map();
+      for (const serverName of resolveMcpProfile(snapshot, profileName, target)) {
+        const group = snapshot?.catalog?.servers?.[serverName]?.variant_group;
+        if (typeof group !== "string" || !group) continue;
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(serverName);
+      }
+      for (const [group, servers] of groups) {
+        if (servers.length > 1) {
+          conflicts.push({
+            profile: profileName,
+            ...(target ? { target } : {}),
+            group,
+            servers: servers.sort(),
+          });
+        }
       }
     }
   }

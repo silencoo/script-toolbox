@@ -827,6 +827,8 @@ function SnippetView({ snapshot, catalog, selected }) {
 function ComponentView({ snapshot, target, component, catalog, selected }) {
   const state = componentTargetState(snapshot, component, target);
   const { check, data, selection, items, summary } = state;
+  const skillsRepairable = component === "skills" && data?.drift?.length > 0 &&
+    data?.selection_mode !== "manual" && selection && selection !== "none";
   return (
     <Box flexDirection="column">
       <Box gap={1} marginBottom={1}>
@@ -839,6 +841,14 @@ function ComponentView({ snapshot, target, component, catalog, selected }) {
       {component !== "prompts" && <Row label="Items" value={items?.length ? items.join(", ") : "none"} />}
       {Array.isArray(data.drift) && data.drift.length > 0 && <Row label="Drift" value={data.drift.join(", ")} kind="bad" />}
       <ErrorText value={!check?.ok ? check?.summary || check?.error || snapshot.doctorError : ""} />
+      {skillsRepairable && (
+        <Text color="yellow">
+          <Text bold>f</Text> repair current local pack {selection} for {targetLabel(target)} · restores managed links only
+        </Text>
+      )}
+      {component === "skills" && data?.drift?.length > 0 && !skillsRepairable && (
+        <Text color="yellow">Current Skills selection uses manual state; apply a named pack before automatic repair.</Text>
+      )}
       {snapshot.workspace
         ? <CloudCatalog catalog={catalog} selected={selected} target={target} component={component} />
         : <WorkspaceCatalogFallback snapshot={snapshot} />}
@@ -954,7 +964,7 @@ function Help() {
       <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
       <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
-      <Text>MCP: f repair the current local profile when Drift is reported</Text>
+      <Text>MCP / Skills: f repair the current named local selection when Drift is reported</Text>
       <Text>Prompts: v view active local · V view selected Workspace · ↑/↓ scroll preview</Text>
       <Text>Snippets: ↑/↓ select · c copy local · p inspect cloud pull · a pull</Text>
       <Text>Presets: p inspect plan · a apply · u rollback</Text>
@@ -1191,6 +1201,10 @@ function App({ initialSection, controller, onLaunch }) {
   const selectedMcpProfile = selectedMcpState.data?.selection_mode === "manual"
     ? ""
     : selectedMcpState.selection === "none" ? "" : selectedMcpState.selection;
+  const selectedSkillsState = componentTargetState(snapshot, "skills", target);
+  const selectedSkillsPack = selectedSkillsState.data?.selection_mode === "manual"
+    ? ""
+    : selectedSkillsState.selection === "none" ? "" : selectedSkillsState.selection;
   const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
 
   const openPromptPreview = useCallback(async (source) => {
@@ -1231,13 +1245,14 @@ function App({ initialSection, controller, onLaunch }) {
     setBusy(true);
     const providerAction = action.startsWith("provider-");
     const accountAction = action.startsWith("account-");
-    const mcpRepairAction = action === "mcp-repair";
+    const localRepairAction = action === "mcp-repair" || action === "skills-repair";
+    const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
     const actionTarget = providerAction ? providerTarget : target;
     const selection = action.startsWith("agent-")
       ? selectedAgentId
       : accountAction ? selectedAccountName
       : providerAction ? selectedProviderName
-      : mcpRepairAction ? selectedMcpProfile
+      : localRepairAction ? localRepairSelection
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, actionTarget)}…`);
@@ -1250,8 +1265,8 @@ function App({ initialSection, controller, onLaunch }) {
           ? selectedAccountName
           : providerAction
           ? selectedProviderName
-          : mcpRepairAction
-          ? selectedMcpProfile
+          : localRepairAction
+          ? localRepairSelection
           : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction
           ? selectedProviderSource
@@ -1268,6 +1283,7 @@ function App({ initialSection, controller, onLaunch }) {
     }
   }, [controller, providerTarget, refresh, selectedAccountName, selectedAgentId, selectedLocalSnippet,
     selectedMcpProfile, selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
+    selectedSkillsPack,
     snapshot?.presetSource, target]);
 
   useInput((input, key) => {
@@ -1399,6 +1415,14 @@ function App({ initialSection, controller, onLaunch }) {
       setMessage("Automatic MCP repair requires a current named profile; the current selection is manual or unknown.");
       return;
     }
+    if (action === "skills-repair" && selectedSkillsState.drift.length === 0) {
+      setMessage(`${targetLabel(target)} Skills configuration is already healthy.`);
+      return;
+    }
+    if (action === "skills-repair" && !selectedSkillsPack) {
+      setMessage("Automatic Skills repair requires a current named pack; the current selection is manual or unknown.");
+      return;
+    }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
       setMessage("No preset is selected.");
       return;
@@ -1414,12 +1438,13 @@ function App({ initialSection, controller, onLaunch }) {
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
       const accountAction = action.startsWith("account-");
-      const mcpRepairAction = action === "mcp-repair";
+      const localRepairAction = action === "mcp-repair" || action === "skills-repair";
+      const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
       const selection = action.startsWith("agent-")
         ? selectedAgentId
         : accountAction ? selectedAccountName
         : providerAction ? selectedProviderName
-        : mcpRepairAction ? selectedMcpProfile
+        : localRepairAction ? localRepairSelection
         : action === "snippet-copy" ? selectedLocalSnippet
           : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({

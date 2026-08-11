@@ -10,6 +10,7 @@ import {
   resolveMcpProfile,
 } from "@/lib/mcp-model.js"
 import { ensurePromptSnippets } from "@/lib/prompt-model.js"
+export { resolvePack } from "@/lib/skill-model.js"
 
 export const SECTION_ORDER = ["mcp", "skills", "prompts"]
 export const WORKSPACE_VIEW_ORDER = ["providers", ...SECTION_ORDER, "presets"]
@@ -623,17 +624,6 @@ export function collectionNamesFor(protocol, snapshot) {
   return Object.keys(
     protocol === PROTOCOLS.skills ? snapshot.packs : snapshot.profiles,
   ).sort()
-}
-
-export function resolvePack(snapshot, name, stack = [], result = new Set()) {
-  const pack = snapshot.packs[name]
-  if (!pack || stack.includes(name)) return result
-  for (const parent of pack.extends || []) {
-    resolvePack(snapshot, parent, [...stack, name], result)
-  }
-  for (const skill of pack.enable || []) result.add(skill)
-  for (const skill of pack.disable || []) result.delete(skill)
-  return result
 }
 
 export async function prepareSnapshot(protocol, snapshot) {

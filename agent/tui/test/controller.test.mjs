@@ -259,6 +259,16 @@ test("remote actions plan without writes and apply through the selected runtime"
     "apply", "--target", "codex", "--profile", "ccs-current", "--force"
   ]);
 
+  const skillsRepaired = await controller.action("skills-repair", {
+    selection: "imported-claude",
+    target: "claude"
+  });
+  assert.equal(skillsRepaired.ok, true);
+  assert.match(skillsRepaired.detail, /managed skill links/);
+  assert.deepEqual(calls.at(-1).args, [
+    "apply", "--target", "claude", "--pack", "imported-claude", "--yes"
+  ]);
+
   const applied = await controller.action("skills-apply", { selection: "frontend", target: "claude" });
   assert.equal(applied.ok, true);
   assert.deepEqual(writes, ["materialize:skills:frontend:claude"]);

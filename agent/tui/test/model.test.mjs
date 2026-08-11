@@ -387,6 +387,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("mcp", "p"), "mcp-plan");
   assert.equal(actionForKey("mcp", "f"), "mcp-repair");
   assert.equal(actionForKey("skills", "a"), "skills-apply");
+  assert.equal(actionForKey("skills", "f"), "skills-repair");
   assert.equal(actionForKey("prompts", "v"), "prompt-view-local");
   assert.equal(actionForKey("prompts", "V"), "prompt-view-cloud");
   assert.equal(actionForKey("snippets", "p"), "snippets-plan");
@@ -417,6 +418,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-pull"), true);
   assert.equal(actionNeedsConfirmation("mcp-repair"), true);
+  assert.equal(actionNeedsConfirmation("skills-repair"), true);
 });
 
 test("Prompt previews strip terminal controls without redacting user text", () => {

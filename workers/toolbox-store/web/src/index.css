@@ -135,6 +135,29 @@
     }
 }
 
+.catalog-scroll,
+.catalog-select-scroll {
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+.catalog-scroll {
+  padding-right: 0.25rem;
+}
+
+.catalog-scroll::-webkit-scrollbar,
+.catalog-select-scroll::-webkit-scrollbar {
+  width: 0.625rem;
+}
+
+.catalog-scroll::-webkit-scrollbar-thumb,
+.catalog-select-scroll::-webkit-scrollbar-thumb {
+  border: 0.1875rem solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+  background-clip: padding-box;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

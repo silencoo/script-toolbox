@@ -47,10 +47,11 @@ export type MutateSession = (mutator: (session: StoreSession) => void) => void
 interface StoreInspectorProps {
   session: StoreSession
   enabled: Set<string>
+  scopeLabel: string
   mutateSession: MutateSession
 }
 
-export function StoreInspector({ session, enabled, mutateSession }: StoreInspectorProps) {
+export function StoreInspector({ session, enabled, scopeLabel, mutateSession }: StoreInspectorProps) {
   if (!session.snapshot) return null
   if (session.type === "prompts") {
     return <PromptInspector session={session} mutateSession={mutateSession} />
@@ -61,6 +62,7 @@ export function StoreInspector({ session, enabled, mutateSession }: StoreInspect
       <McpInspector
         session={session}
         enabled={enabled.has(session.selectedItem)}
+        scopeLabel={scopeLabel}
         mutateSession={mutateSession}
       />
     )
@@ -89,6 +91,7 @@ export function StoreInspector({ session, enabled, mutateSession }: StoreInspect
         {session.type === "skills" && (
           <Detail label="Extends" value={(collection.extends || []).join(", ") || "None"} />
         )}
+        <Detail label="Scope" value={scopeLabel} />
         <Detail label="Enabled items" value={String(enabled.size)} />
       </dl>
       <div>
@@ -109,10 +112,12 @@ export function StoreInspector({ session, enabled, mutateSession }: StoreInspect
 function McpInspector({
   session,
   enabled,
+  scopeLabel,
   mutateSession,
 }: {
   session: McpSession
   enabled: boolean
+  scopeLabel: string
   mutateSession: MutateSession
 }) {
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
@@ -137,6 +142,7 @@ function McpInspector({
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
             {definition.description || "No server description."}
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">{scopeLabel} scope</p>
         </div>
         <Badge variant={enabled ? "default" : "outline"}>
           {enabled ? <CheckCircle2 /> : <Server />}

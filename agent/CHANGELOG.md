@@ -2,6 +2,10 @@
 
 ## 2026-08-11 — native compaction capabilities
 
+- Added the same local-only drift repair flow to Skills. In the Skills section,
+  `f` now confirms reapplying the current named pack for the highlighted
+  client, restoring missing managed links without requiring Workspace or
+  touching unrelated local skills. Bumped `agentctl` to 0.16.7.
 - Added an actionable MCP drift repair to the TUI. `f` now confirms reapplying
   the current named local profile for the highlighted client with mcpctl's
   bounded `--force` behavior: only conflicting same-name MCP entries are

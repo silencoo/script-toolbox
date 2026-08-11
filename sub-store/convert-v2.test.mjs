@@ -466,7 +466,7 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
   const homarrPolicies = policyLines.filter((line) =>
     line.includes("/icon/homarr/108/"),
   );
-  assert.equal(homarrPolicies.length, 17);
+  assert.equal(homarrPolicies.length, 16);
   assert.match(
     policyLines.join("\n"),
     /static=X,.*\/icon\/selfhst\/108\/x\.png/,
@@ -478,6 +478,10 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
   assert.match(
     policyLines.join("\n"),
     /static=AI,.*\/icon\/apps-proxy\/chatgpt-v2\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=Apple,.*\/icon\/apps-cn\/apple-v2\.png/,
   );
   assert.match(
     policyLines.join("\n"),

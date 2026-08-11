@@ -80,6 +80,26 @@ test("selecting an MCP variant disables inherited siblings", () => {
   assert.deepEqual(findMcpVariantConflicts(snapshot), []);
 });
 
+test("target-specific MCP selections resolve and mutate without changing shared defaults", () => {
+  const snapshot = fixture();
+  snapshot.profiles.research.target_overrides = {
+    claude: { enable: ["tavily-api"], disable: ["tavily-keyless"] }
+  };
+  assert.deepEqual(
+    [...resolveMcpProfile(snapshot, "research", "claude")].sort(),
+    ["context7", "tavily-api"]
+  );
+  assert.deepEqual(
+    [...resolveMcpProfile(snapshot, "research")].sort(),
+    ["context7", "tavily-keyless"]
+  );
+  setMcpServerEnabled(snapshot, "research", "context7", false, "claude");
+  assert.deepEqual(snapshot.profiles.research.target_overrides.claude.disable.sort(), [
+    "context7", "tavily-keyless"
+  ]);
+  assert.equal(snapshot.profiles.research.disable.includes("context7"), false);
+});
+
 test("conflicting hand-written MCP variants are reported", () => {
   const snapshot = fixture();
   snapshot.profiles.base.enable.push("tavily-api");

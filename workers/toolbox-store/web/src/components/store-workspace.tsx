@@ -79,6 +79,10 @@ import {
   setMcpServerEnabled,
 } from "@/lib/mcp-model.js"
 import {
+  catalogEntriesForView,
+  collectionOptionLabel,
+} from "@/lib/catalog-view.js"
+import {
   SECTION_META,
   SECTION_ORDER,
   WORKSPACE_VIEW_ORDER,
@@ -110,15 +114,27 @@ interface CatalogItem {
   present?: boolean
 }
 
+type CatalogScope = "shared" | "claude" | "codex" | "opencode" | "pi"
+
+const CATALOG_SCOPE_LABELS: Record<CatalogScope, string> = {
+  shared: "Shared",
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  pi: "Pi",
+}
+
 export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps) {
   const [query, setQuery] = useState("")
-  const [sort, setSort] = useState("name")
+  const [catalogMode, setCatalogMode] = useState<"enabled" | "all">("enabled")
+  const [catalogScope, setCatalogScope] = useState<CatalogScope>("shared")
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [promptSurface, setPromptSurface] = useState<"profiles" | "snippets">("profiles")
   const fileInput = useRef<HTMLInputElement>(null)
+  const catalogList = useRef<HTMLDivElement>(null)
   const sectionView = SECTION_ORDER.includes(state.activeView)
     ? state.activeView as SectionType
     : null
@@ -154,6 +170,7 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   function changeSection(value: WorkspaceView) {
     if (!WORKSPACE_VIEW_ORDER.includes(value)) return
     setQuery("")
+    setCatalogMode("enabled")
     setState((current) => ({ ...current, activeView: value }))
   }
 
@@ -195,31 +212,43 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
   const selectedCollection = names.includes(session.selectedCollection)
     ? session.selectedCollection
     : names[0] || ""
-  const enabled = resolvedItems(session, selectedCollection)
+  const scopeOptions = availableCatalogScopes(session)
+  const effectiveCatalogScope = scopeOptions.includes(catalogScope) ? catalogScope : "shared"
+  const catalogTarget = effectiveCatalogScope === "shared" ? "" : effectiveCatalogScope
+  const enabled = resolvedItems(session, selectedCollection, catalogTarget)
   const allItems = catalogEntries(session, selectedCollection)
-  const entries = allItems
-    .filter(([name, item]) =>
-      `${name} ${item.description || ""}`.toLowerCase().includes(query.trim().toLowerCase()),
-    )
-    .sort(([nameA, itemA], [nameB, itemB]) => {
-      if (sort === "description") {
-        return (itemA.description || "").localeCompare(itemB.description || "") ||
-          nameA.localeCompare(nameB)
-      }
-      if (sort === "enabled") {
-        return Number(enabled.has(nameB)) - Number(enabled.has(nameA)) ||
-          nameA.localeCompare(nameB)
-      }
-      return nameA.localeCompare(nameB)
-    })
   const skills = session.type === "skills"
   const prompts = session.type === "prompts"
+  const effectiveCatalogMode = prompts ? "all" : catalogMode
+  const entries = catalogEntriesForView(allItems, enabled, query, effectiveCatalogMode) as Array<[string, CatalogItem]>
+  const collectionOptions = new Map(names.map((name) => {
+    const scope = preferredCatalogScope(session, name)
+    const target = scope === "shared" ? "" : scope
+    return [name, {
+      scope,
+      count: resolvedItems(session, name, target).size,
+    }]
+  }))
 
   function selectCollection(value: string) {
+    const nextScope = preferredCatalogScope(loadedSession, value)
+    setQuery("")
+    if (!prompts) setCatalogMode("enabled")
+    setCatalogScope(nextScope)
     updateActiveSession((next) => {
       next.selectedCollection = value
       next.selectedItem = next.type === "prompts" ? "claude" : ""
     })
+    requestAnimationFrame(() => catalogList.current?.scrollTo({ top: 0 }))
+  }
+
+  function selectCatalogScope(value: string) {
+    if (!scopeOptions.includes(value as CatalogScope)) return
+    setCatalogScope(value as CatalogScope)
+    setCatalogMode("enabled")
+    setQuery("")
+    updateActiveSession((next) => { next.selectedItem = "" })
+    requestAnimationFrame(() => catalogList.current?.scrollTo({ top: 0 }))
   }
 
   function selectItem(name: string) {
@@ -233,13 +262,16 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
       if (!next.snapshot || !selectedCollection) return
       if (next.type === "skills") {
         const pack = next.snapshot.packs[selectedCollection]
-        pack.enable = (pack.enable || []).filter((value) => value !== name)
-        pack.disable = (pack.disable || []).filter((value) => value !== name)
-        ;(currentlyEnabled ? pack.disable : pack.enable).push(name)
-        pack.enable.sort()
-        pack.disable.sort()
+        const selection = catalogTarget
+          ? (pack.target_overrides[catalogTarget] ||= { enable: [], disable: [] })
+          : pack
+        selection.enable = (selection.enable || []).filter((value) => value !== name)
+        selection.disable = (selection.disable || []).filter((value) => value !== name)
+        ;(currentlyEnabled ? selection.disable : selection.enable).push(name)
+        selection.enable.sort()
+        selection.disable.sort()
       } else if (next.type === "mcp") {
-        setMcpServerEnabled(next.snapshot, selectedCollection, name, !currentlyEnabled)
+        setMcpServerEnabled(next.snapshot, selectedCollection, name, !currentlyEnabled, catalogTarget)
       }
     })
   }
@@ -406,7 +438,9 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
       ) : (
         <>
           <Card className="mt-4">
-            <CardContent className="grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_180px_220px_auto]">
+            <CardContent className={`grid gap-3 p-4 ${scopeOptions.length > 1
+              ? "md:grid-cols-[minmax(200px,1fr)_minmax(230px,300px)_170px_auto]"
+              : "md:grid-cols-[minmax(220px,1fr)_minmax(240px,320px)_auto]"}`}>
               <div className="space-y-2">
                 <Label htmlFor="catalog-search" className="text-xs">Search</Label>
                 <div className="relative">
@@ -422,25 +456,51 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
                 </div>
               </div>
               <div className="space-y-2">
-                <Label className="text-xs">Sort</Label>
-                <Select value={sort} onValueChange={setSort}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="name">Name</SelectItem>
-                    <SelectItem value="description">Description</SelectItem>
-                    <SelectItem value="enabled">Enabled first</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs">{skills ? "Pack" : "Profile"}</Label>
+                <Label className="text-xs">
+                  {skills ? "Pack" : "Profile"} · {enabled.size} enabled
+                </Label>
                 <Select value={selectedCollection || undefined} onValueChange={selectCollection} disabled={!names.length}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder={`No ${skills ? "pack" : "profile"}`} /></SelectTrigger>
-                  <SelectContent>
-                    {names.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder={`No ${skills ? "pack" : "profile"}`}>
+                      {selectedCollection
+                        ? collectionOptionLabel(
+                            selectedCollection,
+                            enabled.size,
+                            effectiveCatalogScope === "shared"
+                              ? ""
+                              : CATALOG_SCOPE_LABELS[effectiveCatalogScope],
+                          )
+                        : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="catalog-select-scroll max-h-[min(24rem,var(--radix-select-content-available-height))]">
+                    {names.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {collectionOptionLabel(
+                          name,
+                          collectionOptions.get(name)?.count || 0,
+                          collectionOptions.get(name)?.scope === "shared"
+                            ? ""
+                            : CATALOG_SCOPE_LABELS[collectionOptions.get(name)?.scope || "shared"],
+                        )}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
+              {scopeOptions.length > 1 && (
+                <div className="space-y-2">
+                  <Label className="text-xs">Scope</Label>
+                  <Select value={effectiveCatalogScope} onValueChange={selectCatalogScope}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {scopeOptions.map((scope) => (
+                        <SelectItem key={scope} value={scope}>{CATALOG_SCOPE_LABELS[scope]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="flex items-end gap-2 md:justify-end">
                 <Button type="button" variant="outline" onClick={() => setCreateOpen(true)}>
                   <FolderPlus />
@@ -462,23 +522,64 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
 
           <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(340px,.75fr)]">
             <Card className="overflow-hidden">
-              <CardHeader className="flex flex-row items-center justify-between border-b">
+              <CardHeader className="flex flex-col gap-3 border-b sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle>{skills ? "Skills catalog" : prompts ? "Client documents" : "MCP catalog"}</CardTitle>
-                  <CardDescription>{entries.length} of {allItems.length} items</CardDescription>
+                  <CardDescription aria-live="polite">
+                    {prompts
+                      ? `${entries.length} of ${allItems.length} documents`
+                      : `${enabled.size} enabled · ${entries.length} shown · ${allItems.length} total`}
+                  </CardDescription>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={addItem}>
-                  <Plus />
-                  {prompts ? "Add document" : skills ? "Import skill" : "Add server"}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!prompts && (
+                    <div className="inline-flex rounded-lg border bg-muted/40 p-0.5" aria-label="Catalog visibility">
+                      <Button
+                        type="button"
+                        variant={catalogMode === "enabled" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-7 px-2.5"
+                        aria-pressed={catalogMode === "enabled"}
+                        onClick={() => setCatalogMode("enabled")}
+                      >
+                        Enabled {enabled.size}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={catalogMode === "all" ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-7 px-2.5"
+                        aria-pressed={catalogMode === "all"}
+                        onClick={() => setCatalogMode("all")}
+                      >
+                        All {allItems.length}
+                      </Button>
+                    </div>
+                  )}
+                  <Button type="button" variant="outline" size="sm" onClick={addItem}>
+                    <Plus />
+                    {prompts ? "Add document" : skills ? "Import skill" : "Add server"}
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="max-h-[640px] overflow-y-auto p-0">
+              <CardContent ref={catalogList} className="catalog-scroll max-h-[640px] overflow-y-auto p-0">
                 {entries.length === 0 ? (
                   <div className="grid min-h-52 place-items-center p-8 text-center">
                     <div>
                       <PackageOpen className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
-                      <p className="mt-3 text-sm font-medium">No matching items</p>
-                      <p className="mt-1 text-xs text-muted-foreground">Change the search or choose another collection.</p>
+                      <p className="mt-3 text-sm font-medium">
+                        {effectiveCatalogMode === "enabled" ? "Nothing enabled in this selection" : "No matching items"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {effectiveCatalogMode === "enabled"
+                          ? `Choose another ${skills ? "pack" : "profile"} or browse the complete catalog.`
+                          : "Clear the search or choose another selection."}
+                      </p>
+                      {effectiveCatalogMode === "enabled" ? (
+                        <Button type="button" variant="link" size="sm" onClick={() => setCatalogMode("all")}>Show all items</Button>
+                      ) : query ? (
+                        <Button type="button" variant="link" size="sm" onClick={() => setQuery("")}>Clear search</Button>
+                      ) : null}
                     </div>
                   </div>
                 ) : entries.map(([name, item]) => (
@@ -498,7 +599,12 @@ export function StoreWorkspace({ state, setState, onLock }: StoreWorkspaceProps)
             </Card>
 
             <Card className="overflow-hidden lg:sticky lg:top-4">
-              <StoreInspector session={session} enabled={enabled} mutateSession={mutateSession} />
+              <StoreInspector
+                session={session}
+                enabled={enabled}
+                scopeLabel={CATALOG_SCOPE_LABELS[effectiveCatalogScope]}
+                mutateSession={mutateSession}
+              />
             </Card>
           </div>
         </>
@@ -589,7 +695,7 @@ function CatalogRow({
   const Icon = type === "mcp" ? Server : type === "skills" ? Wrench : FileText
   const title = type === "prompts" ? (name === "claude" ? "Claude Code" : "Codex") : name
   return (
-    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center border-b last:border-b-0 ${selected ? "bg-muted" : "hover:bg-muted/50"}`}>
+    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center border-b transition-colors last:border-b-0 ${selected ? "bg-muted" : "hover:bg-muted/50"}`}>
       <button
         type="button"
         onClick={onSelect}
@@ -606,7 +712,7 @@ function CatalogRow({
           </span>
         </span>
       </button>
-      <div className="pr-4">
+      <div className="mr-1 pr-3">
         {type === "prompts" ? (
           <Badge variant={enabled ? "secondary" : "outline"}>{enabled ? "Ready" : "New"}</Badge>
         ) : (
@@ -822,15 +928,42 @@ function UnavailableState({
   )
 }
 
-function resolvedItems(session: StoreSession, collection: string) {
+function resolvedItems(session: StoreSession, collection: string, target = "") {
   if (!session.snapshot || !collection) return new Set<string>()
   if (session.type === "mcp") {
-    return resolveMcpProfile(session.snapshot, collection) as Set<string>
+    return resolveMcpProfile(session.snapshot, collection, target) as Set<string>
   }
   if (session.type === "skills") {
-    return resolvePack(session.snapshot, collection) as Set<string>
+    return resolvePack(session.snapshot, collection, target) as Set<string>
   }
   return new Set(Object.keys(session.snapshot.profiles[collection]?.documents || {}))
+}
+
+function collectionTargetOverrides(session: StoreSession, collection: string) {
+  if (!session.snapshot || session.type === "prompts") return {} as Record<string, unknown>
+  const selected = session.type === "skills"
+    ? session.snapshot.packs[collection]
+    : session.snapshot.profiles[collection]
+  return selected?.target_overrides || {}
+}
+
+function preferredCatalogScope(session: StoreSession, collection: string): CatalogScope {
+  const targets = Object.keys(collectionTargetOverrides(session, collection))
+  return (["claude", "codex", "opencode", "pi"] as CatalogScope[])
+    .find((target) => targets.includes(target)) || "shared"
+}
+
+function availableCatalogScopes(session: StoreSession): CatalogScope[] {
+  if (!session.snapshot || session.type === "prompts") return ["shared"]
+  const collections = session.type === "skills" ? session.snapshot.packs : session.snapshot.profiles
+  const available = new Set<CatalogScope>(["shared"])
+  for (const collection of Object.values(collections)) {
+    for (const target of Object.keys(collection.target_overrides || {})) {
+      if (target in CATALOG_SCOPE_LABELS) available.add(target as CatalogScope)
+    }
+  }
+  return (["shared", "claude", "codex", "opencode", "pi"] as CatalogScope[])
+    .filter((scope) => available.has(scope))
 }
 
 function catalogEntries(session: StoreSession, collection: string): Array<[string, CatalogItem]> {

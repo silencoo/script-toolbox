@@ -478,6 +478,7 @@ export function actionForKey(section, input) {
     if (input === "a") return `${section}-apply`;
   }
   if (section === "mcp" && input === "f") return "mcp-repair";
+  if (section === "skills" && input === "f") return "skills-repair";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
   if (section === "snippets" && input === "c") return "snippet-copy";
@@ -492,7 +493,7 @@ export function actionForKey(section, input) {
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
     action === "account-use" || action === "account-delete" ||
-    action === "mcp-repair" ||
+    action === "mcp-repair" || action === "skills-repair" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
     action.endsWith("-apply");
 }
@@ -512,6 +513,9 @@ export function actionLabel(action, selection, target) {
   }
   if (action === "mcp-repair") {
     return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-repair") {
+    return `Repair local Skills pack ${selection || "selection"} for ${targetLabel(target)}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;

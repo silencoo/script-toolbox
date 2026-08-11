@@ -95,6 +95,11 @@ adoption, replacing only conflicting same-name MCP entries while preserving
 unrelated client configuration. This repair does not require or pull a
 Workspace profile.
 
+The Skills view uses the same local-only recovery contract for named packs.
+When `Drift` is reported, `f` confirms reapplying the active pack to restore
+missing managed links. Unrelated local skills are preserved and Workspace is
+not required.
+
 The Prompts view likewise shows both clients' local Promptctl bindings before
 the Workspace catalog: active profile, managed state, binding path,
 instruction-file path, and file health. Prompt bodies stay outside the periodic
@@ -149,7 +154,7 @@ the remote snapshot itself cannot be opened.
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
 | Providers: `i` | Show or hide profiles incompatible with the selected client |
-| MCP: `f` | Confirm repair of the current named local profile when Drift is reported |
+| MCP / Skills: `f` | Confirm repair of the current named local profile or pack when Drift is reported |
 | Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
 | Snippets: `c` | Copy the selected local snippet without rendering it |
 | `u` | Roll back a preset transaction |
