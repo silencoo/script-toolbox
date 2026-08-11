@@ -141,18 +141,26 @@ function emptyAgentBundle() {
 }
 
 export function normalizeWorkspaceSnapshot(snapshot) {
-  if (!snapshot || ![1, 2].includes(snapshot.schema) ||
-      snapshot.kind !== "agentctl-workspace" || !isObject(snapshot.stores) ||
-      (snapshot.presets !== undefined && !isObject(snapshot.presets))) {
-    return snapshot
-  }
+  const legacyWorkspace = snapshot && [1, 2].includes(snapshot.schema) &&
+    snapshot.kind === "agentctl-workspace" && isObject(snapshot.stores) &&
+    (snapshot.presets === undefined || isObject(snapshot.presets))
+  const providerStore = snapshot?.schema === 3 && snapshot.kind === "agentctl-workspace"
+    ? snapshot.agent?.providers
+    : null
+  const legacyProvider = providerStore?.schema === 1 ||
+    Object.values(providerStore?.profiles || {}).some((profile) =>
+      profile?.schema === 1 || profile?.context === undefined
+    )
+  if (!legacyWorkspace && !legacyProvider) return snapshot
   const upgraded = structuredClone(snapshot)
-  upgraded.schema = 3
-  upgraded.presets ||= {}
-  for (const attachment of Object.values(upgraded.stores)) {
-    if (attachment?.schema === 1) attachment.schema = 2
+  if (legacyWorkspace) {
+    upgraded.schema = 3
+    upgraded.presets ||= {}
+    for (const attachment of Object.values(upgraded.stores)) {
+      if (attachment?.schema === 1) attachment.schema = 2
+    }
+    upgraded.agent = emptyAgentBundle()
   }
-  upgraded.agent = emptyAgentBundle()
   return upgraded
 }
 
@@ -178,8 +186,9 @@ function validateAgentBundle(bundle) {
 }
 
 function validateProviderStore(store) {
+  if (store?.schema === 1 && store.kind === "agentctl-provider-store") store.schema = 2
   exactKeys(store, ["schema", "kind", "created_at", "updated_at", "profiles"], "Provider Store")
-  if (store.schema !== 1 || store.kind !== "agentctl-provider-store" ||
+  if (store.schema !== 2 || store.kind !== "agentctl-provider-store" ||
       !validTimestamp(store.created_at) || !validTimestamp(store.updated_at) ||
       !isObject(store.profiles) || Object.keys(store.profiles).length > 128) {
     throw new Error("Workspace Provider Store is invalid.")
@@ -191,17 +200,32 @@ function validateProviderStore(store) {
 }
 
 function validateProviderProfile(profile, name) {
+  if (profile?.schema === 1) {
+    exactKeys(profile, [
+      "schema", "name", "description", "protocol", "endpoint", "auth", "models",
+      "targets", "platforms",
+    ], `Provider profile '${name}' schema 1`)
+    profile.schema = 2
+    profile.compaction = legacyProviderCompaction(profile)
+    profile.context = { window_tokens: null, auto_compact_tokens: null }
+  }
+  if (profile.context === undefined) {
+    profile.context = { window_tokens: null, auto_compact_tokens: null }
+  }
   exactKeys(profile, [
     "schema", "name", "description", "protocol", "endpoint", "auth", "models",
-    "targets", "platforms",
+    "compaction", "context", "targets", "platforms",
   ], `Provider profile '${name}'`)
-  if (profile.schema !== 1 || profile.name !== name ||
+  if (profile.schema !== 2 || profile.name !== name ||
       !plainText(profile.description, 0, 500) || !validProviderProtocol(profile.protocol)) {
     throw new Error(`Provider profile '${name}' is invalid.`)
   }
   validateProviderEndpoint(profile.endpoint, `Provider profile '${name}' endpoint`)
   validateProviderAuth(profile.auth, false, `Provider profile '${name}' auth`)
   validateProviderModels(profile.models, name)
+  validateProviderCompaction(profile.compaction, false, profile.protocol,
+    `Provider profile '${name}' compaction`)
+  validateProviderContext(profile.context, false, `Provider profile '${name}' context`)
   if (!isObject(profile.targets) || !isObject(profile.platforms)) {
     throw new Error(`Provider profile '${name}' overlays are invalid.`)
   }
@@ -222,10 +246,42 @@ function validateProviderProfile(profile, name) {
       validateProviderOverride(override, `Provider platform '${platform}/${target}'`)
     }
   }
+  validateProviderOverlayPolicies(profile, name)
+}
+
+function validateProviderOverlayPolicies(profile, name) {
+  const targets = ["claude", "codex", "opencode", "pi"]
+  const platforms = ["darwin", "linux", "windows"]
+  for (const target of targets) {
+    const targetOverride = profile.targets[target] || {}
+    const targetResolved = {
+      protocol: targetOverride.protocol || profile.protocol,
+      compaction: { ...profile.compaction, ...(targetOverride.compaction || {}) },
+      context: { ...profile.context, ...(targetOverride.context || {}) },
+    }
+    validateProviderCompaction(targetResolved.compaction, false, targetResolved.protocol,
+      `Provider profile '${name}' target '${target}' resolved compaction`)
+    validateProviderContext(targetResolved.context, false,
+      `Provider profile '${name}' target '${target}' resolved context`)
+    for (const platform of platforms) {
+      const override = profile.platforms[platform]?.targets?.[target] || {}
+      const resolved = {
+        protocol: override.protocol || targetResolved.protocol,
+        compaction: { ...targetResolved.compaction, ...(override.compaction || {}) },
+        context: { ...targetResolved.context, ...(override.context || {}) },
+      }
+      validateProviderCompaction(resolved.compaction, false, resolved.protocol,
+        `Provider profile '${name}' platform '${platform}/${target}' resolved compaction`)
+      validateProviderContext(resolved.context, false,
+        `Provider profile '${name}' platform '${platform}/${target}' resolved context`)
+    }
+  }
 }
 
 function validateProviderOverride(override, label) {
-  exactKeys(override, ["enabled", "endpoint", "protocol", "auth", "model"], label)
+  exactKeys(override, [
+    "enabled", "endpoint", "protocol", "auth", "model", "compaction", "context",
+  ], label)
   if (Object.keys(override).length === 0 ||
       (override.enabled !== undefined && typeof override.enabled !== "boolean") ||
       (override.protocol !== undefined && !validProviderProtocol(override.protocol)) ||
@@ -234,6 +290,62 @@ function validateProviderOverride(override, label) {
   }
   if (override.endpoint !== undefined) validateProviderEndpoint(override.endpoint, `${label} endpoint`)
   if (override.auth !== undefined) validateProviderAuth(override.auth, true, `${label} auth`)
+  if (override.compaction !== undefined) {
+    validateProviderCompaction(override.compaction, true, override.protocol || "",
+      `${label} compaction`)
+  }
+  if (override.context !== undefined) {
+    validateProviderContext(override.context, true, `${label} context`)
+  }
+}
+
+function legacyProviderCompaction(profile) {
+  let endpoint = ""
+  try { endpoint = new URL(profile.endpoint).toString().replace(/\/$/, "") } catch {}
+  if (profile.name === "openai-api" && profile.protocol === "openai_responses" &&
+      endpoint === "https://api.openai.com/v1") {
+    return { upstream: "responses_v2", policy: "auto" }
+  }
+  if (profile.name === "anthropic-api" && profile.protocol === "anthropic_messages" &&
+      endpoint === "https://api.anthropic.com") {
+    return { upstream: "anthropic_messages_beta", policy: "auto" }
+  }
+  return { upstream: "none", policy: "auto" }
+}
+
+function validateProviderCompaction(compaction, partial, protocol, label) {
+  exactKeys(compaction, ["upstream", "policy"], label)
+  const upstreams = ["responses_v2", "responses_v1", "anthropic_messages_beta", "none"]
+  const policies = ["auto", "remote", "local"]
+  if ((!partial || compaction.upstream !== undefined) &&
+      !upstreams.includes(compaction.upstream)) throw new Error(`${label} upstream is invalid.`)
+  if ((!partial || compaction.policy !== undefined) &&
+      !policies.includes(compaction.policy)) throw new Error(`${label} policy is invalid.`)
+  if (partial && Object.keys(compaction).length === 0) throw new Error(`${label} cannot be empty.`)
+  if (compaction.policy === "remote" && compaction.upstream === "none") {
+    throw new Error(`${label} cannot force an unavailable remote capability.`)
+  }
+  const required = ["responses_v2", "responses_v1"].includes(compaction.upstream)
+    ? "openai_responses"
+    : compaction.upstream === "anthropic_messages_beta" ? "anthropic_messages" : ""
+  if (protocol && required && protocol !== required) {
+    throw new Error(`${label} does not match the Provider protocol.`)
+  }
+}
+
+function validateProviderContext(context, partial, label) {
+  exactKeys(context, ["window_tokens", "auto_compact_tokens"], label)
+  const validTokens = (value) => value === null || boundedInteger(value, 1, 10000000)
+  if ((!partial || context.window_tokens !== undefined) &&
+      !validTokens(context.window_tokens)) throw new Error(`${label} window is invalid.`)
+  if ((!partial || context.auto_compact_tokens !== undefined) &&
+      !validTokens(context.auto_compact_tokens)) throw new Error(`${label} auto-compact is invalid.`)
+  if (partial && Object.keys(context).length === 0) throw new Error(`${label} cannot be empty.`)
+  if (context.window_tokens !== undefined && context.window_tokens !== null &&
+      context.auto_compact_tokens !== undefined && context.auto_compact_tokens !== null &&
+      context.auto_compact_tokens > context.window_tokens) {
+    throw new Error(`${label} auto-compact cannot exceed its window.`)
+  }
 }
 
 function validateProviderAuth(auth, partial, label) {
@@ -562,7 +674,7 @@ export async function saveEncryptedSession(session) {
 }
 
 export async function saveEncryptedWorkspace(config, snapshot, version) {
-  validateWorkspaceSnapshot(snapshot, config)
+  snapshot = validateWorkspaceSnapshot(snapshot, config)
   const status = await apiFor(config, PROTOCOLS.workspace, "")
   const remoteVersion = status.latest?.version || "none"
   if (version && remoteVersion !== version) {

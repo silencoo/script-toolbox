@@ -493,6 +493,15 @@ function publicProviderProfile(profile, bundle, target, {
     auth_mode: plan.auth.mode,
     secret_reference: plan.auth.secret || "",
     secret_present: plan.auth.present,
+    compaction_upstream: plan.compaction.upstream,
+    compaction_policy: plan.compaction.policy,
+    compaction_mode: plan.compaction.mode,
+    compaction_label: plan.compaction.label,
+    context_window_tokens: plan.context.window_tokens,
+    auto_compact_tokens: plan.context.auto_compact_tokens,
+    context_label: plan.context.label,
+    official_identity_policy: plan.official_identity?.policy || "",
+    official_identity_account: plan.official_identity?.account || "",
     applied: false,
     source: "cloud"
   };
@@ -511,6 +520,7 @@ export function createRemoteWorkspace({
   let workspaceCache = null;
   let masterConfig = null;
   let publicIndex = null;
+  let indexInFlight = null;
   const childCache = new Map();
   const childStoreIds = new Map();
 
@@ -526,66 +536,75 @@ export function createRemoteWorkspace({
 
   async function index({ refresh = false } = {}) {
     if (publicIndex && !refresh) return structuredClone(publicIndex);
-    const config = await readConfigFn(workspaceConfig);
-    const [workspace, status] = await Promise.all([
-      loadWorkspaceFn(workspaceConfig, config),
-      statusFn(config, WORKSPACE_REMOTE_PROTOCOL)
-    ]);
-    const childStatuses = await Promise.all(["mcp", "skills", "prompts"].map(async (type) => {
-      const attachment = workspace.stores[type];
-      if (!attachment) return [type, null];
-      try {
-        return [type, await childStatusFn(attachment.config, PROTOCOLS[type])];
-      } catch (error) {
-        return [type, { latest: null, error: String(error?.message || error) }];
-      }
-    }));
-    const previousStores = publicIndex?.stores || {};
-    const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
-    workspaceCache = workspace;
-    masterConfig = config;
-    publicIndex = {
-      schema: 2,
-      mode: "workspace",
-      source: "cloud",
-      remote_schema: sourceSchema,
-      migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
-      endpoint: config.endpoint,
-      store_id: config.store_id,
-      latest: status.latest,
-      web_ui_enabled: status.web_ui_enabled,
-      stores: Object.fromEntries(childStatuses.map(([type, childStatus]) => {
+    if (indexInFlight) return structuredClone(await indexInFlight);
+    const pending = (async () => {
+      const config = await readConfigFn(workspaceConfig);
+      const [workspace, status] = await Promise.all([
+        loadWorkspaceFn(workspaceConfig, config).then(validateWorkspaceSnapshot),
+        statusFn(config, WORKSPACE_REMOTE_PROTOCOL)
+      ]);
+      const childStatuses = await Promise.all(["mcp", "skills", "prompts"].map(async (type) => {
         const attachment = workspace.stores[type];
-        if (!attachment) {
-          childCache.delete(type);
-          childStoreIds.delete(type);
-          return [type, { attached: false }];
+        if (!attachment) return [type, null];
+        try {
+          return [type, await childStatusFn(attachment.config, PROTOCOLS[type])];
+        } catch (error) {
+          return [type, { latest: null, error: String(error?.message || error) }];
         }
-        const store = {
-          attached: true,
-          attached_at: attachment.attached_at,
-          latest: childStatus?.latest || null,
-          available: !childStatus?.error
-        };
-        if (previousStores[type]?.latest?.version !== store.latest?.version ||
-            childStoreIds.get(type) !== attachment.config.store_id) childCache.delete(type);
-        childStoreIds.set(type, attachment.config.store_id);
-        return [type, store];
-      })),
-      presets: Object.fromEntries(Object.entries(workspace.presets)
-        .map(([name, preset]) => [name, publicPreset(name, preset)])),
-      agent: {
-        synced: workspace.agent.providers !== null,
-        synced_at: workspace.agent.synced_at,
-        profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
-        secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
-        failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
-        pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
-        pricing_version: workspace.agent.pricing?.version || null,
-        secret_values: "hidden"
-      }
-    };
-    return structuredClone(publicIndex);
+      }));
+      const previousStores = publicIndex?.stores || {};
+      const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
+      workspaceCache = workspace;
+      masterConfig = config;
+      publicIndex = {
+        schema: 2,
+        mode: "workspace",
+        source: "cloud",
+        remote_schema: sourceSchema,
+        migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
+        endpoint: config.endpoint,
+        store_id: config.store_id,
+        latest: status.latest,
+        web_ui_enabled: status.web_ui_enabled,
+        stores: Object.fromEntries(childStatuses.map(([type, childStatus]) => {
+          const attachment = workspace.stores[type];
+          if (!attachment) {
+            childCache.delete(type);
+            childStoreIds.delete(type);
+            return [type, { attached: false }];
+          }
+          const store = {
+            attached: true,
+            attached_at: attachment.attached_at,
+            latest: childStatus?.latest || null,
+            available: !childStatus?.error
+          };
+          if (previousStores[type]?.latest?.version !== store.latest?.version ||
+              childStoreIds.get(type) !== attachment.config.store_id) childCache.delete(type);
+          childStoreIds.set(type, attachment.config.store_id);
+          return [type, store];
+        })),
+        presets: Object.fromEntries(Object.entries(workspace.presets)
+          .map(([name, preset]) => [name, publicPreset(name, preset)])),
+        agent: {
+          synced: workspace.agent.providers !== null,
+          synced_at: workspace.agent.synced_at,
+          profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
+          secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
+          failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
+          pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
+          pricing_version: workspace.agent.pricing?.version || null,
+          secret_values: "hidden"
+        }
+      };
+      return publicIndex;
+    })();
+    indexInFlight = pending;
+    try {
+      return structuredClone(await pending);
+    } finally {
+      if (indexInFlight === pending) indexInFlight = null;
+    }
   }
 
   async function rawWorkspace() {

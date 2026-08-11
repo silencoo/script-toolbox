@@ -52,7 +52,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.12.0" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.16.3" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"
@@ -60,6 +60,10 @@ done
   fail "standalone runtime omitted the Claude status-line renderer"
 [ -f "$RUNTIME/agentctl/proxy-client.mjs" ] ||
   fail "standalone runtime omitted the proxy controller"
+[ -f "$RUNTIME/agentctl/account-client.mjs" ] ||
+  fail "standalone runtime omitted the Codex account controller"
+[ -f "$RUNTIME/agentctl/provider-catalog.mjs" ] ||
+  fail "standalone runtime omitted the unified Provider catalog"
 [ -f "$RUNTIME/agentctl/failover-client.mjs" ] &&
 [ -f "$RUNTIME/agentctl/failover-schema.mjs" ] &&
 [ -f "$RUNTIME/proxy/circuit-breaker.mjs" ] ||
@@ -75,6 +79,8 @@ done
   fail "standalone pricing command failed"
 "$PREFIX/agentctl" failover --help >/dev/null ||
   fail "standalone failover command failed"
+"$PREFIX/agentctl" account --help >/dev/null ||
+  fail "standalone Codex account command failed"
 "$PREFIX/mcpctl" --help >/dev/null || fail "mcpctl standalone command failed"
 "$PREFIX/promptctl" --help >/dev/null || fail "promptctl standalone command failed"
 "$PREFIX/skillsctl" --help >/dev/null || fail "skillsctl standalone command failed"

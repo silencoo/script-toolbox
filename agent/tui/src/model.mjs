@@ -1,6 +1,7 @@
 export const SECTIONS = Object.freeze([
   { id: "overview", label: "Overview" },
   { id: "agents", label: "Agents" },
+  { id: "accounts", label: "Accounts" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
@@ -127,46 +128,170 @@ function providerDisplayText(value, maximum = 2048) {
     : "";
 }
 
-function providerEntry(value, source) {
+function providerTokenCount(value) {
+  return value === null || (Number.isSafeInteger(value) && value >= 1 && value <= 10_000_000)
+    ? value
+    : null;
+}
+
+function providerEntry(value, fallbackSource) {
   if (!value || typeof value.name !== "string") return null;
   const name = providerDisplayText(value.name, 64);
   if (!name) return null;
+  const source = ["builtin", "local", "cloud"].includes(value.source)
+    ? value.source
+    : fallbackSource;
   return {
     key: `${source}:${name}`,
     name,
+    label: providerDisplayText(value.label, 80),
     source,
+    materialized: value.materialized === true,
     description: providerDisplayText(value.description, 500),
     protocol: providerDisplayText(value.protocol, 40),
     endpoint: providerDisplayText(value.endpoint, 2048),
     requestedModel: providerDisplayText(value.requested_model, 240),
     outboundModel: providerDisplayText(value.outbound_model, 240),
+    modelsAvailable: Array.isArray(value.models_available)
+      ? value.models_available.map((model) => providerDisplayText(model, 240)).filter(Boolean)
+      : [],
     enabled: value.enabled !== false,
     compatible: value.compatible !== false,
     ready: value.ready === true,
+    status: providerDisplayText(value.status, 32),
     issue: providerDisplayText(value.issue, 500),
     authMode: providerDisplayText(value.auth_mode, 32),
     secretReference: providerDisplayText(value.secret_reference, 96),
     secretPresent: value.secret_present === true,
+    nativeAuthPresent: value.native_auth_present === true,
+    nativeAuthProvider: providerDisplayText(value.native_auth_provider, 96),
+    nativeAuthType: providerDisplayText(value.native_auth_type, 32),
+    nativeSelected: value.native_selected === true,
+    nativeSelectedModel: providerDisplayText(value.native_selected_model, 240),
+    compactionUpstream: providerDisplayText(value.compaction_upstream, 40),
+    compactionPolicy: providerDisplayText(value.compaction_policy, 20),
+    compactionMode: providerDisplayText(value.compaction_mode, 40),
+    compactionLabel: providerDisplayText(value.compaction_label, 100),
+    contextWindowTokens: providerTokenCount(value.context_window_tokens),
+    autoCompactTokens: providerTokenCount(value.auto_compact_tokens),
+    contextLabel: providerDisplayText(value.context_label, 120),
+    officialIdentityPolicy: providerDisplayText(value.official_identity_policy, 32),
+    officialIdentityAccount: providerDisplayText(value.official_identity_account, 64),
     applied: value.applied === true,
     target: providerDisplayText(value.target, 32),
     platform: providerDisplayText(value.platform, 32)
   };
 }
 
-export function providerEntries(localEntries, remoteEntries) {
-  const entries = [];
+const PROVIDER_SYNC_FIELDS = Object.freeze([
+  ["description", "Description"],
+  ["protocol", "Protocol"],
+  ["endpoint", "Endpoint"],
+  ["requestedModel", "Requested model"],
+  ["outboundModel", "Outbound model"],
+  ["enabled", "Target availability"],
+  ["compatible", "Target compatibility"],
+  ["authMode", "Authentication"],
+  ["secretReference", "Secret reference"],
+  ["secretPresent", "Secret availability"],
+  ["compactionUpstream", "Compaction capability"],
+  ["compactionPolicy", "Compaction policy"],
+  ["compactionMode", "Effective compaction"],
+  ["contextWindowTokens", "Context window"],
+  ["autoCompactTokens", "Auto-compact trigger"],
+  ["officialIdentityPolicy", "Official identity policy"],
+  ["officialIdentityAccount", "Official identity account"]
+]);
+
+function providerSyncConflicts(local, cloud) {
+  if (!local || !cloud) return [];
+  return PROVIDER_SYNC_FIELDS
+    .filter(([field]) => local[field] !== cloud[field])
+    .map(([, label]) => label);
+}
+
+function providerCandidate(group) {
+  const ordered = [group.local, group.cloud, group.builtin].filter(Boolean);
+  return ordered.find((entry) => entry.enabled && entry.compatible) || ordered[0] || null;
+}
+
+function mergedProviderEntry(name, group) {
+  const selected = providerCandidate(group);
+  if (!selected) return null;
+  const native = [group.local, group.builtin]
+    .find((entry) => entry?.nativeAuthPresent) || null;
+  const source = group.cloud === selected
+    ? "cloud"
+    : group.local === selected ? "local" : "builtin";
+  const sources = [];
+  if (group.builtin) sources.push("builtin");
+  if (group.local) sources.push("local");
+  if (group.cloud) sources.push("cloud");
+  const syncConflicts = providerSyncConflicts(group.local, group.cloud);
+  const syncStatus = group.local && group.cloud
+    ? syncConflicts.length > 0 ? "conflict" : "backed-up"
+    : group.local ? "local-only"
+      : group.cloud ? "workspace-only" : "builtin-only";
+  return {
+    ...selected,
+    key: name,
+    source,
+    sources,
+    syncStatus,
+    syncConflicts,
+    nativeAuthPresent: native?.nativeAuthPresent || selected.nativeAuthPresent,
+    nativeAuthProvider: native?.nativeAuthProvider || selected.nativeAuthProvider,
+    nativeAuthType: native?.nativeAuthType || selected.nativeAuthType,
+    nativeSelected: native?.nativeSelected || selected.nativeSelected,
+    nativeSelectedModel: native?.nativeSelectedModel || selected.nativeSelectedModel
+  };
+}
+
+export function providerEntries(localEntries, remoteEntries, { includeIncompatible = false } = {}) {
+  const groups = new Map();
+  const add = (value, fallbackSource) => {
+    const entry = providerEntry(value, fallbackSource);
+    if (!entry) return;
+    const group = groups.get(entry.name) || { builtin: null, local: null, cloud: null };
+    if (entry.source === "builtin") {
+      group.builtin = entry;
+      if (entry.materialized) group.local = entry;
+    } else if (entry.source === "cloud") {
+      group.cloud = entry;
+    } else {
+      group.local = entry;
+    }
+    groups.set(entry.name, group);
+  };
   for (const value of Array.isArray(localEntries) ? localEntries : []) {
-    const entry = providerEntry(value, "local");
-    if (entry) entries.push(entry);
+    add(value, "local");
   }
   for (const value of Array.isArray(remoteEntries) ? remoteEntries : []) {
-    const entry = providerEntry(value, "cloud");
-    if (entry) entries.push(entry);
+    add(value, "cloud");
   }
-  return entries.sort((left, right) =>
-    left.name.localeCompare(right.name) ||
-    Number(right.source === "local") - Number(left.source === "local")
-  );
+  return [...groups.entries()]
+    .map(([name, group]) => mergedProviderEntry(name, group))
+    .filter((entry) => entry && (
+      includeIncompatible || entry.applied || (entry.enabled && entry.compatible)
+    ))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function accountEntries(snapshot) {
+  const entries = Array.isArray(snapshot?.accounts?.accounts)
+    ? snapshot.accounts.accounts
+    : [];
+  return entries
+    .filter((value) => value && typeof value.name === "string" &&
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name))
+    .map((value) => ({
+      name: value.name.slice(0, 64),
+      current: value.current === true,
+      savedAt: typeof value.saved_at === "string" ? value.saved_at.slice(0, 40) : "",
+      credentialPrivate: value.credential_private === true
+    }))
+    .sort((left, right) => Number(right.current) - Number(left.current) ||
+      left.name.localeCompare(right.name));
 }
 
 export function mcpTargetComparison(snapshot) {
@@ -229,21 +354,10 @@ export function statusKind(value) {
 export function componentSummary(component, check) {
   if (!check?.ok) return { label: "Unavailable", kind: "bad", detail: check?.summary || check?.error || "No status" };
   const data = check.data || {};
+  if (component === "identity") return identitySummary(data);
+  if (component === "inference") return inferenceSummary(data);
   if (component === "provider") {
-    const label = data.provider_status === "configured" ? "Configured" : data.provider_status || "Unknown";
-    const source = {
-      agentctl: "agentctl",
-      external: "external config",
-      "official-login": "official login"
-    }[data.provider_source] || "";
-    const configured = data.provider_status === "configured";
-    const insecureCredential = configured && data.credential_exists === true && data.credential_private === false;
-    const selection = [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected";
-    return {
-      label,
-      kind: configured ? insecureCredential ? "warn" : "good" : "bad",
-      detail: source ? `${selection} · ${source}` : selection
-    };
+    return inferenceSummary(data);
   }
   if (component === "mcp") {
     const selection = data.selection_mode === "manual" ? "custom" : data.profile || "none";
@@ -276,11 +390,76 @@ export function componentSummary(component, check) {
   };
 }
 
+export function identitySummary(data = {}) {
+  let identity = data.identity;
+  if (!identity || typeof identity !== "object") {
+    identity = data.provider_source === "official-login"
+      ? {
+          status: "configured",
+          kind: data.provider === "openai-chatgpt" ? "chatgpt" : null,
+          account: data.provider === "openai-chatgpt" ? "current" : null,
+          source: "official-login",
+          credential_exists: data.credential_exists,
+          credential_private: data.credential_private
+        }
+      : { status: "not-applicable", source: "none" };
+  }
+  if (identity.status === "not-applicable") {
+    return { label: "N/A", kind: "muted", detail: "No separate official Identity" };
+  }
+  if (identity.status !== "configured") {
+    return { label: "Not logged in", kind: "muted", detail: "No ChatGPT official login" };
+  }
+  const insecure = identity.credential_exists === true && identity.credential_private === false;
+  const kind = identity.kind === "chatgpt" ? "ChatGPT" : identity.kind || "Official";
+  const account = identity.account === "current"
+    ? "current account"
+    : identity.account || "current account";
+  return {
+    label: "Active",
+    kind: insecure ? "warn" : "good",
+    detail: `${kind} · ${account} · official login`
+  };
+}
+
+export function inferenceSummary(data = {}) {
+  const inference = data.inference && typeof data.inference === "object"
+    ? data.inference
+    : {
+        status: data.provider_status,
+        provider: data.provider,
+        model: data.model,
+        source: data.provider_source,
+        credential_exists: data.credential_exists,
+        credential_private: data.credential_private
+      };
+  const label = inference.status === "configured" ? "Configured" : inference.status || "Unknown";
+  const source = {
+    agentctl: "agentctl",
+    external: "external config",
+    "official-login": "official login",
+    "official-account": "ChatGPT subscription"
+  }[inference.source] || "";
+  const configured = inference.status === "configured";
+  const insecureCredential = configured && inference.credential_exists === true &&
+    inference.credential_private === false;
+  const selection = [inference.provider, inference.model].filter(Boolean).join(" / ") ||
+    "No Provider selected";
+  return {
+    label,
+    kind: configured ? insecureCredential ? "warn" : "good" : "bad",
+    detail: source ? `${selection} · ${source}` : selection
+  };
+}
+
 export function actionForKey(section, input) {
   if (section === "agents") {
-    if (input === "p") return "agent-providers";
-    if (input === "c" || input === "\r") return "agent-configure";
+    if (input === "p" || input === "c" || input === "\r") return "agent-provider";
     if (input === "x") return "agent-uninstall";
+  }
+  if (section === "accounts") {
+    if (input === "a" || input === "\r") return "account-use";
+    if (input === "x") return "account-delete";
   }
   if (section === "providers") {
     if (input === "p") return "provider-plan";
@@ -305,18 +484,24 @@ export function actionForKey(section, input) {
 
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
+    action === "account-use" || action === "account-delete" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
     action.endsWith("-apply");
 }
 
 export function actionLabel(action, selection, target) {
-  if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
-  if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
+  if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
+  if (action === "account-use") return `Switch Codex official account to ${selection || "account"}`;
+  if (action === "account-delete") return `Delete saved Codex account ${selection || "account"}`;
   if (action === "provider-plan") return `Plan Provider ${selection || "profile"} for ${targetLabel(target)}`;
   if (action === "provider-apply") return `Apply Provider ${selection || "profile"} to ${targetLabel(target)}`;
-  if (action === "provider-sync-push") return "Back up local Provider catalogs to encrypted Workspace";
-  if (action === "provider-sync-pull") return "Merge encrypted Workspace Provider catalogs locally";
+  if (action === "provider-sync-push") {
+    return `Use local ${selection || "Provider"} in encrypted Workspace`;
+  }
+  if (action === "provider-sync-pull") {
+    return `Use Workspace ${selection || "Provider"} in the local catalog`;
+  }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
   if (action === "prompt-view-cloud") return `View Workspace Prompt ${selection || "selection"} for ${target}`;
@@ -340,7 +525,37 @@ export function safePromptPreviewText(value) {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
 }
 
-export function workspacePresentation(workspace, error = "") {
+export function workspacePresentation(workspace, error = "", loading = false) {
+  const diagnostic = String(error || "")
+    .replace(/^\s*\[error\]\s*/i, "")
+    .trim();
+
+  if (workspace && diagnostic) {
+    return {
+      state: "stale",
+      kind: "warn",
+      heading: "Workspace reconnecting",
+      status: "Cached · retrying",
+      description: "The last successful Workspace index remains available while the connection is retried.",
+      safety: "Local state and cached cloud metadata remain ready; writes still require a live connection.",
+      commands: [],
+      diagnostic
+    };
+  }
+
+  if (workspace && loading) {
+    return {
+      state: "refreshing",
+      kind: "good",
+      heading: "Workspace connected",
+      status: "Online · refreshing",
+      description: "The last successful Workspace index remains visible while fresh metadata loads.",
+      safety: "No local view is blocked by this refresh.",
+      commands: [],
+      diagnostic: ""
+    };
+  }
+
   if (workspace) {
     return {
       state: "ready",
@@ -354,9 +569,19 @@ export function workspacePresentation(workspace, error = "") {
     };
   }
 
-  const diagnostic = String(error || "")
-    .replace(/^\s*\[error\]\s*/i, "")
-    .trim();
+  if (loading) {
+    return {
+      state: "connecting",
+      kind: "warn",
+      heading: "Workspace connecting",
+      status: "Connecting…",
+      description: "Local configuration is already available while encrypted Workspace metadata loads.",
+      safety: "No local view is blocked by this connection.",
+      commands: [],
+      diagnostic: ""
+    };
+  }
+
   if (/remote configuration not found/i.test(diagnostic)) {
     return {
       state: "unconfigured",

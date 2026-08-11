@@ -7,7 +7,9 @@ mode `0600`.
 
 - [`agentctl/`](./agentctl/README.md) — shared public Shell entrypoint for
   installing a client, configuring its provider/model, and managing portable
-  provider profiles with platform-specific target overlays.
+  provider profiles with platform-specific target overlays and explicit native
+  compaction capabilities/policies plus independently restorable model-context
+  and auto-compact settings.
 - [`claude-code/`](./claude-code/README.md) — Anthropic, DeepSeek, OpenRouter,
   MiniMax China/global, a custom Anthropic Messages endpoint, and the managed
   low-overhead status-line preset.
@@ -88,33 +90,32 @@ promptctl update --yes
 skillsctl update --yes
 ```
 
-Every model menu also has a custom model-ID entry. All selections can be
-supplied as flags for automation:
+The unified Provider catalog is target-aware. Built-ins are visible before any
+local initialization, and `use` installs/configures only the selected client:
 
 ```bash
-./agentctl/agentctl setup claude
-./agentctl/agentctl setup codex --provider openai --model gpt-5.6
-./agentctl/agentctl setup opencode --provider custom --protocol chat \
-  --base-url https://gateway.example.com/v1 --model my-model --key-env MY_API_KEY
-./agentctl/agentctl setup pi --provider openrouter --model openai/gpt-5.6
+./agentctl/agentctl provider list --target claude
+./agentctl/agentctl provider use deepseek --target claude \
+  --secret-file /secure/deepseek-api-key --yes
+./agentctl/agentctl provider use openai-api --target codex \
+  --model gpt-5.6 --secret-file /secure/openai-api-key --yes
+./agentctl/agentctl provider use openrouter --target pi \
+  --model openai/gpt-5.6 --secret-file /secure/openrouter-api-key --yes
 ```
 
-Provider setup can be inspected without a credential or any mutation, and a
+Provider selection can be inspected without a credential or mutation, and a
 private file avoids exposing a key in shell history:
 
 ```bash
-./agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 --dry-run
-./agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 --key-file /secure/openai-api-key
+./agentctl/agentctl provider plan openai-api --target codex
+./agentctl/agentctl provider current --target codex
 ./agentctl/agentctl status all
 ./agentctl/agentctl status codex --json
 ./agentctl/agentctl statusline install --yes
 ```
 
-Use `./agentctl/agentctl providers <client>` to see current built-in model IDs
-without installing anything. `--region china|global` remains as a
-backward-compatible setup option for MiniMax where MiniMax is supported.
+`agentctl provider` is the only public Provider namespace; the per-client
+setup scripts are internal render backends and are not a second catalog.
 
 ## Controller boundaries
 

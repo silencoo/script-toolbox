@@ -57,6 +57,7 @@ done
 chmod +x "$BACKEND_ROOT/claude-code/statusline-setup.sh"
 
 mkdir -p "$TEST_HOME" "$FAKE_BIN"
+: > "$LOG_FILE"
 for command_name in claude codex opencode pi; do
   {
     printf '%s\n' '#!/usr/bin/env bash'
@@ -79,9 +80,9 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.12.0" ] ||
+  "agentctl 0.16.3" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.12.0" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.16.3" ] ||
   fail "version output is incorrect"
 
 run_agentctl failover --help >/dev/null ||
@@ -91,25 +92,18 @@ run_agentctl failover --help >/dev/null ||
   "statusline <install> <--yes> <--force>" ] ||
   fail "statusline command did not reach the Claude preset manager"
 
-[ "$(run_agentctl providers claude)" = "claude-code-provider" ] ||
-  fail "Claude alias did not resolve to claude-code"
-[ "$(run_agentctl list-providers open-code)" = "opencode-provider" ] ||
-  fail "OpenCode alias did not resolve"
-[ "$(run_agentctl help codex)" = "usage: agentctl setup codex [options]" ] ||
-  fail "client help did not reach the setup backend"
+provider_catalog="$(run_agentctl provider list --target claude --json)"
+printf '%s' "$provider_catalog" | jq -e '
+  any(.[]; .name == "deepseek" and .source == "builtin" and .status == "needs-key")
+' >/dev/null || fail "unified Provider catalog omitted the DeepSeek built-in"
 
-real_help="$("$AGENTCTL" help codex)"
-printf '%s' "$real_help" |
-  grep -qF "$AGENTCTL setup codex [options]" ||
-  fail "real client help did not retain the public agentctl command"
-
-run_agentctl setup codex --provider openai --model gpt-test >/dev/null
-grep -qF 'setup codex <--provider> <openai> <--model> <gpt-test>' "$LOG_FILE" ||
-  fail "setup options were not forwarded unchanged"
-
-run_agentctl init pi --provider anthropic >/dev/null
-grep -qF 'setup pi <--provider> <anthropic>' "$LOG_FILE" ||
-  fail "init alias did not route to setup"
+for removed_command in providers list-providers setup configure init; do
+  if run_agentctl "$removed_command" claude >"$TEST_ROOT/removed-${removed_command}.out" 2>&1; then
+    fail "removed Provider command '$removed_command' was still accepted"
+  fi
+  grep -q "unknown command '$removed_command'" "$TEST_ROOT/removed-${removed_command}.out" ||
+    fail "removed Provider command '$removed_command' did not fail clearly"
+done
 
 mkdir -p "$TEST_HOME/.codex/provider-keys"
 cat > "$TEST_HOME/.codex/config.toml" <<'EOF'
@@ -129,6 +123,10 @@ chmod 600 "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key"
 printf '%s\n' "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key" \
   > "$TEST_HOME/.codex/.script-toolbox-provider-key"
 chmod 600 "$TEST_HOME/.codex/.script-toolbox-provider-key"
+printf '%s\n' \
+  '{"auth_mode":"chatgpt","tokens":{"access_token":"PRESERVED-OFFICIAL-LOGIN-MUST-NOT-APPEAR"}}' \
+  > "$TEST_HOME/.codex/auth.json"
+chmod 600 "$TEST_HOME/.codex/auth.json"
 
 status_json="$(run_agentctl status codex --json)"
 printf '%s' "$status_json" | jq -e '
@@ -142,9 +140,19 @@ printf '%s' "$status_json" | jq -e '
   and .credential_exists == true
   and .credential_mode == "600"
   and .credential_private == true
+  and .identity.status == "configured"
+  and .identity.kind == "chatgpt"
+  and .identity.account == "current"
+  and .identity.credential_exists == true
+  and .identity.credential_private == true
+  and .inference.provider == "script_toolbox_openai"
+  and .inference.model == "gpt-test"
+  and .inference.source == "agentctl"
+  and .official_login_preserved == true
+  and .identity_inference_split == true
 ' >/dev/null || fail "Codex JSON status omitted provider or credential metadata"
 case "$status_json" in
-  *STATUS-SECRET-MUST-NOT-APPEAR*)
+  *STATUS-SECRET-MUST-NOT-APPEAR*|*PRESERVED-OFFICIAL-LOGIN-MUST-NOT-APPEAR*)
     fail "status JSON exposed a credential value"
     ;;
 esac
@@ -168,6 +176,14 @@ printf '%s' "$official_status" | jq -e '
   and .provider_source == "official-login"
   and .provider == "openai-chatgpt"
   and .model == "gpt-official"
+  and .identity.status == "configured"
+  and .identity.kind == "chatgpt"
+  and .identity.account == "current"
+  and .inference.provider == "openai-official"
+  and .inference.model == "gpt-official"
+  and .inference.source == "official-account"
+  and .official_login_preserved == true
+  and .identity_inference_split == false
   and .ownership_marker == false
   and .credential_kind == "official-auth"
   and .credential_exists == true
@@ -176,6 +192,32 @@ printf '%s' "$official_status" | jq -e '
 case "$official_status" in
   *OFFICIAL-LOGIN-SECRET-MUST-NOT-APPEAR*)
     fail "Codex official-login status exposed a token"
+    ;;
+esac
+
+mkdir -p "$TEST_HOME/.config/opencode" "$TEST_HOME/.local/share/opencode"
+printf '%s\n' '{"$schema":"https://opencode.ai/config.json","provider":{}}' \
+  > "$TEST_HOME/.config/opencode/opencode.json"
+printf '%s\n' \
+  '{"google":{"type":"api","key":"OPENCODE-GOOGLE-SECRET-MUST-NOT-APPEAR"}}' \
+  > "$TEST_HOME/.local/share/opencode/auth.json"
+chmod 600 "$TEST_HOME/.local/share/opencode/auth.json"
+native_opencode_status="$(run_agentctl status opencode --json)"
+printf '%s' "$native_opencode_status" | jq -e '
+  .provider_status == "configured"
+  and .provider_source == "external-native-auth"
+  and .provider == "google-gemini"
+  and .model == null
+  and .ownership_marker == false
+  and .credential_kind == "native-auth"
+  and .credential_exists == true
+  and .credential_private == true
+  and .inference.provider == "google-gemini"
+  and .inference.source == "external-native-auth"
+' >/dev/null || fail "OpenCode status did not recognize native Google auth"
+case "$native_opencode_status" in
+  *OPENCODE-GOOGLE-SECRET-MUST-NOT-APPEAR*)
+    fail "OpenCode native-auth status exposed an API key"
     ;;
 esac
 
@@ -239,9 +281,9 @@ esac
 printf '%s\n' "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key" \
   > "$TEST_HOME/.codex/.script-toolbox-provider-key"
 
-# No arguments enter the Shell guide. Read-only provider listing is delegated
-# after the action and client selections.
-printf '3\n4\n' |
+# No arguments enter the Shell guide. The first action reads the unified
+# catalog after the client selection.
+printf '1\n4\n' |
   HOME="$TEST_HOME" \
     PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
@@ -250,8 +292,8 @@ printf '3\n4\n' |
   fail "no-argument provider guide failed"
 grep -q 'Agentctl guided Shell setup' "$TEST_ROOT/interactive-providers.out" ||
   fail "no-argument command did not enter the guide"
-grep -q 'pi-provider' "$TEST_ROOT/interactive-providers.out" ||
-  fail "guided provider action selected the wrong backend"
+grep -q 'deepseek' "$TEST_ROOT/interactive-providers.out" ||
+  fail "guided Provider action omitted the unified catalog"
 
 # Guided status is read-only and uses the same status implementation.
 printf '2\n2\n' |
@@ -261,24 +303,13 @@ printf '2\n2\n' |
     AGENTCTL_TEST_LOG="$LOG_FILE" \
     "$AGENTCTL" >"$TEST_ROOT/interactive-status.out" 2>&1 ||
   fail "guided status failed"
-grep -q 'Provider    : configured (script_toolbox_openai)' \
+grep -q 'Inference   : configured (script_toolbox_openai)' \
   "$TEST_ROOT/interactive-status.out" ||
   fail "guided status omitted the configured Codex provider"
 
-# Guided setup delegates to the selected setup backend.
-printf '1\n1\n' |
-  HOME="$TEST_HOME" \
-    PATH="${FAKE_BIN}:${PATH}" \
-  AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
-    AGENTCTL_TEST_LOG="$LOG_FILE" \
-    "$AGENTCTL" >"$TEST_ROOT/interactive-setup.out" 2>&1 ||
-  fail "guided setup routing failed"
-grep -q '^setup claude-code$' "$LOG_FILE" ||
-  fail "guided setup did not invoke Claude Code"
-
 # Provider uninstall always asks separately and defaults to cancellation.
 line_count_before="$(wc -l < "$LOG_FILE" | tr -d ' ')"
-printf '5\n2\n\n' |
+printf '4\n2\n\n' |
   HOME="$TEST_HOME" \
     PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
@@ -292,7 +323,7 @@ grep -qF '[cancelled] no provider configuration was changed' \
   "$TEST_ROOT/interactive-cancel.out" ||
   fail "guided uninstall cancellation was not reported"
 
-printf '5\n2\ny\n' |
+printf '4\n2\ny\n' |
   HOME="$TEST_HOME" \
     PATH="${FAKE_BIN}:${PATH}" \
   AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
@@ -316,10 +347,10 @@ fi
 grep -q 'interactive input ended' "$TEST_ROOT/eof.out" ||
   fail "guided EOF was not actionable"
 
-if run_agentctl providers unknown >"$TEST_ROOT/unknown.out" 2>&1; then
+if run_agentctl provider list --target unknown >"$TEST_ROOT/unknown.out" 2>&1; then
   fail "unknown client was accepted"
 fi
-grep -q "unsupported client 'unknown'" "$TEST_ROOT/unknown.out" ||
+grep -q "target.*must be one of" "$TEST_ROOT/unknown.out" ||
   fail "unknown client error was not actionable"
 
 printf '%s\n' "ok  : agentctl guide, status, routing, and ownership boundary"

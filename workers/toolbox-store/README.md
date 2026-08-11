@@ -189,7 +189,8 @@ agentctl workspace status
 
 The current Workspace manifest is strict schema 3. It includes the encrypted
 `presets` object plus an optional agent bundle for portable Provider profiles,
-Provider Secret values, failover routes, and versioned pricing. The browser
+their native compaction and model-context policies, Provider Secret values,
+failover routes, and versioned pricing. The browser
 normalizes legacy schema 1 and 2 manifests in memory without mutating their
 immutable remote versions; the CLI exposes an explicit preview-first migration.
 Generated client files and proxy/runtime state are never stored in Workspace.

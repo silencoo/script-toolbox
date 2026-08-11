@@ -52,6 +52,9 @@ import {
 } from "./provider-client.mjs";
 import {
   ProviderSchemaError,
+  newProviderSecrets,
+  newProviderStore,
+  validateProfileName,
   validateProviderSecrets,
   validateProviderStore
 } from "./provider-schema.mjs";
@@ -100,7 +103,8 @@ Usage:
   agentctl workspace restore [--force]
   agentctl workspace restore --recovery-file <file> [--force]
   agentctl workspace migrate [--yes] [--json]
-  agentctl workspace agent <status|push|pull> [--replace] [--yes] [--json]
+  agentctl workspace agent <status|push|pull> [--profile <name>]
+      [--replace] [--yes] [--json]
   agentctl workspace versions [--limit <1-100>]
   agentctl workspace ui <status|enable|disable>
 
@@ -114,6 +118,8 @@ Options:
   --provider-secrets <file>  Local owner-only provider Secret Store.
   --failover-store <file>    Local portable failover route Store.
   --pricing <file>           Local versioned pricing catalog.
+  --profile <name>           Push or pull one Provider profile and only the
+                             Secret references used by that profile.
   --replace                  Pull the remote agent bundle as the exact local
                              catalog set instead of merging safely.
   --yes, -y                  Apply a previewed Workspace migration or agent
@@ -163,6 +169,7 @@ function parseArguments(argv) {
     endpoint: "",
     createTokenFile: "",
     recoveryFile: "",
+    profile: "",
     force: false,
     replace: false,
     yes: false,
@@ -206,6 +213,10 @@ function parseArguments(argv) {
       options.failoverStore = takeValue(input, argument);
     } else if (argument === "--pricing") {
       options.pricing = takeValue(input, argument);
+    } else if (argument === "--profile") {
+      options.profile = takeValue(input, argument);
+    } else if (argument.startsWith("--profile=")) {
+      options.profile = argument.slice("--profile=".length);
     } else if (argument === "--limit") {
       options.limit = Number(takeValue(input, argument));
     } else if (argument.startsWith("--limit=")) {
@@ -416,6 +427,78 @@ async function buildLocalAgentBundle(options) {
 
 function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function profileSecretReferences(profile) {
+  const references = new Set();
+  const add = (auth) => {
+    if (auth?.secret) references.add(auth.secret);
+  };
+  add(profile.auth);
+  for (const override of Object.values(profile.targets || {})) add(override.auth);
+  for (const overlay of Object.values(profile.platforms || {})) {
+    for (const override of Object.values(overlay.targets || {})) add(override.auth);
+  }
+  return [...references].sort();
+}
+
+function profileTransferPlan({
+  name,
+  sourceProviders,
+  sourceSecrets,
+  targetProviders,
+  targetSecrets
+}) {
+  validateProfileName(name);
+  const profile = sourceProviders?.profiles?.[name];
+  if (!profile) throw new WorkspaceError(`Provider profile '${name}' was not found in the source catalog`);
+  const now = new Date().toISOString();
+  const providers = targetProviders
+    ? structuredClone(targetProviders)
+    : {
+        ...structuredClone(sourceProviders || newProviderStore(now)),
+        profiles: {}
+      };
+  const secrets = targetSecrets
+    ? structuredClone(targetSecrets)
+    : {
+        ...structuredClone(sourceSecrets || newProviderSecrets(now)),
+        secrets: {}
+      };
+  const profileChanged = !sameJson(providers.profiles[name], profile);
+  if (profileChanged) {
+    providers.profiles[name] = structuredClone(profile);
+    providers.updated_at = now;
+  }
+  const copiedSecrets = [];
+  const missingSecrets = [];
+  for (const reference of profileSecretReferences(profile)) {
+    const source = sourceSecrets?.secrets?.[reference];
+    if (!source) {
+      missingSecrets.push(reference);
+      continue;
+    }
+    const current = secrets.secrets[reference];
+    if (!current || current.value !== source.value) {
+      secrets.secrets[reference] = structuredClone(source);
+      copiedSecrets.push(reference);
+    }
+  }
+  const providerStoreChanged = !targetProviders || profileChanged;
+  const secretStoreChanged = !targetSecrets || copiedSecrets.length > 0;
+  if (secretStoreChanged) secrets.updated_at = now;
+  validateProviderStore(providers);
+  validateProviderSecrets(secrets);
+  return {
+    providers,
+    secrets,
+    profileChanged,
+    copiedSecrets,
+    missingSecrets,
+    providerStoreChanged,
+    secretStoreChanged,
+    changed: providerStoreChanged || secretStoreChanged
+  };
 }
 
 function mergeProviderStores(local, remote) {
@@ -877,7 +960,146 @@ async function agentStatus(options) {
   return output;
 }
 
+async function agentProfilePush(options) {
+  if (options.replace) {
+    throw new WorkspaceError("--replace cannot be combined with --profile; the selected local profile already replaces only its Workspace counterpart");
+  }
+  const name = validateProfileName(options.profile);
+  const [workspace, local] = await Promise.all([
+    loadWorkspace(options.workspaceConfig),
+    loadLocalAgentState(options)
+  ]);
+  if (!local.providers) {
+    throw new WorkspaceError(
+      `Provider Store not found: ${options.providerStore} (run agentctl provider init --yes first)`
+    );
+  }
+  const plan = profileTransferPlan({
+    name,
+    sourceProviders: local.providers,
+    sourceSecrets: local.secrets,
+    targetProviders: workspace.agent.providers,
+    targetSecrets: workspace.agent.secrets
+  });
+  const preview = {
+    schema: 1,
+    ok: true,
+    action: "push",
+    scope: "profile",
+    profile: name,
+    changed: Boolean(options.yes && plan.changed),
+    preview: !options.yes,
+    profile_changed: plan.profileChanged,
+    secrets_copied: plan.copiedSecrets.length,
+    missing_secret_references: plan.missingSecrets.length,
+    replace_remote_agent_bundle: false,
+    secret_values: "hidden",
+    safety: agentSafety()
+  };
+  if (!options.yes) {
+    emitAgent(preview, options, [
+      `[preview] use the local Provider profile '${name}' in encrypted Workspace.`,
+      `${plan.copiedSecrets.length} referenced Secret value(s) would be copied without being printed; every other remote profile and catalog remains unchanged.`,
+      "Re-run with --yes to upload this profile only."
+    ]);
+    return preview;
+  }
+  if (!plan.changed) {
+    emitAgent(preview, options, [
+      `Provider profile '${name}' already matches encrypted Workspace; no new version was created.`,
+      "Secret values were not printed."
+    ]);
+    return preview;
+  }
+  workspace.agent = validateAgentBundle({
+    ...structuredClone(workspace.agent),
+    schema: WORKSPACE_AGENT_SCHEMA,
+    synced_at: new Date().toISOString(),
+    providers: plan.providers,
+    secrets: plan.secrets
+  });
+  const result = await saveWorkspace(options.workspaceConfig, workspace);
+  const output = { ...preview, changed: true, version: result.version };
+  emitAgent(output, options, [
+    `Local Provider profile '${name}' saved as Workspace version ${result.version}.`,
+    `${plan.copiedSecrets.length} referenced Secret value(s) were encrypted and were not printed; every other remote profile and catalog was preserved.`
+  ]);
+  return output;
+}
+
+async function agentProfilePull(options) {
+  if (options.replace) {
+    throw new WorkspaceError("--replace cannot be combined with --profile; the selected Workspace profile already replaces only its local counterpart");
+  }
+  const name = validateProfileName(options.profile);
+  const [workspace, local] = await Promise.all([
+    loadWorkspace(options.workspaceConfig),
+    loadLocalAgentState(options)
+  ]);
+  if (!workspace.agent.providers || !workspace.agent.secrets) {
+    throw new WorkspaceError("Workspace does not contain an agent provider bundle; push one first");
+  }
+  const plan = profileTransferPlan({
+    name,
+    sourceProviders: workspace.agent.providers,
+    sourceSecrets: workspace.agent.secrets,
+    targetProviders: local.providers,
+    targetSecrets: local.secrets
+  });
+  const paths = localAgentPaths(options);
+  const writes = [];
+  if (plan.providerStoreChanged) writes.push("providers");
+  if (plan.secretStoreChanged) writes.push("secrets");
+  const preview = {
+    schema: 1,
+    ok: true,
+    action: "pull",
+    scope: "profile",
+    profile: name,
+    mode: "profile-replace",
+    changed: Boolean(options.yes && writes.length > 0),
+    preview: !options.yes,
+    profile_changed: plan.profileChanged,
+    secrets_copied: plan.copiedSecrets.length,
+    missing_secret_references: plan.missingSecrets.length,
+    writes,
+    deletes: [],
+    secret_values: "hidden",
+    safety: agentSafety()
+  };
+  if (!options.yes) {
+    emitAgent(preview, options, [
+      `[preview] use encrypted Workspace Provider profile '${name}' in the local catalog.`,
+      `${plan.copiedSecrets.length} referenced Secret value(s) would be restored without being printed; every other local profile and catalog remains unchanged.`,
+      "Re-run with --yes to restore this profile only."
+    ]);
+    return preview;
+  }
+  if (writes.length > 0) {
+    await applyPullPlan({
+      next: {
+        providers: plan.providers,
+        secrets: plan.secrets,
+        failover: local.failover,
+        pricing: local.pricing
+      },
+      paths,
+      writes,
+      deletes: []
+    });
+  }
+  emitAgent(preview, options, [
+    writes.length > 0
+      ? `Workspace Provider profile '${name}' replaced only its local counterpart transactionally.`
+      : `Provider profile '${name}' already matches the encrypted Workspace; no local file was changed.`,
+    `${plan.copiedSecrets.length} referenced Secret value(s) were restored without being printed; every other local profile and catalog was preserved.`,
+    "The device-local applied Provider selection was not changed."
+  ]);
+  return preview;
+}
+
 async function agentPush(options) {
+  if (options.profile) return agentProfilePush(options);
   const [workspace, bundle] = await Promise.all([
     loadWorkspace(options.workspaceConfig),
     buildLocalAgentBundle(options)
@@ -911,6 +1133,7 @@ async function agentPush(options) {
 }
 
 async function agentPull(options) {
+  if (options.profile) return agentProfilePull(options);
   const [workspace, local] = await Promise.all([
     loadWorkspace(options.workspaceConfig),
     loadLocalAgentState(options)
@@ -1095,6 +1318,10 @@ async function main() {
     return;
   }
   const action = positional.shift();
+  if (options.profile && (action !== "agent" || positional.length !== 1 ||
+      !["push", "pull"].includes(positional[0]))) {
+    throw new WorkspaceError("--profile is supported only by workspace agent push or pull");
+  }
   if (action === "init" && positional.length === 0) return init(options);
   if (action === "status" && positional.length === 0) return status(options);
   if (action === "recovery" && positional.length === 0) return recovery(options);

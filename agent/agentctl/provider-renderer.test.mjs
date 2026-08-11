@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -107,6 +108,7 @@ test("target renderer exposes native paths and never places a Secret value in ar
     protocol: "anthropic_messages",
     endpoint: "https://api.example.com",
     auth: { mode: "x-api-key", secret: "lab_key" },
+    context: { window_tokens: 1_000_000, auto_compact_tokens: 500_000 },
     requested_model: "daily",
     outbound_model: "model-a"
   };
@@ -123,6 +125,13 @@ test("target renderer exposes native paths and never places a Secret value in ar
   ]);
   assert.equal(args.includes("lab_key"), false);
   assert.equal(args.includes("--no-statusline"), true);
+  assert.equal(args[args.indexOf("--context-window-tokens") + 1], "1000000");
+  assert.equal(args[args.indexOf("--auto-compact-tokens") + 1], "500000");
+  assert.match(plan.context.label, /compact at 500,000/);
+  assert.equal(
+    plan.ownership_files.includes("/Users/test/.claude/.script-toolbox-provider-context.json"),
+    true
+  );
 });
 
 test("direct compatibility is explicit instead of inferred from endpoint names", () => {
@@ -142,6 +151,9 @@ test("direct compatibility is explicit instead of inferred from endpoint names",
   }, { secretPresent: true });
   assert.equal(codexChat.ready, false);
   assert.match(codexChat.issue, /requires openai_responses/);
+  assert.equal(codexChat.official_identity.policy, "preserve");
+  assert.equal(codexChat.official_identity.account, "current");
+  assert.equal(codexChat.official_identity.managed, false);
 
   const claudeResponses = renderProviderPlan({
     ...base,
@@ -163,6 +175,45 @@ test("direct compatibility is explicit instead of inferred from endpoint names",
   });
   assert.equal(piLocal.ready, true);
   assert.equal(piLocal.auth.synthetic, true);
+
+  const unsupportedContext = renderProviderPlan({
+    ...base,
+    target: "codex",
+    protocol: "openai_responses",
+    context: { window_tokens: 1_000_000, auto_compact_tokens: null }
+  }, { secretPresent: true });
+  assert.equal(unsupportedContext.ready, false);
+  assert.match(unsupportedContext.issue, /does not yet support managed context policy/);
+});
+
+test("Codex enables its native remote compactor only for declared official OpenAI capability", () => {
+  const base = {
+    profile: "openai-api",
+    target: "codex",
+    platform: "darwin",
+    enabled: true,
+    protocol: "openai_responses",
+    endpoint: "https://api.openai.com/v1",
+    auth: { mode: "bearer", secret: "openai_api_key" },
+    requested_model: "gpt-5.6",
+    outbound_model: "gpt-5.6"
+  };
+  const remote = renderProviderPlan({
+    ...base,
+    compaction: { upstream: "responses_v2", policy: "auto" }
+  }, { secretPresent: true });
+  assert.equal(remote.provider_name, "OpenAI");
+  assert.equal(remote.compaction.mode, "remote_native");
+  assert.match(remote.compaction.label, /Remote/);
+  const remoteArgs = backendArguments(remote, { keyFile: "/tmp/private.key" });
+  assert.equal(remoteArgs[remoteArgs.indexOf("--provider-name") + 1], "OpenAI");
+
+  const local = renderProviderPlan({
+    ...base,
+    compaction: { upstream: "responses_v2", policy: "local" }
+  }, { secretPresent: true });
+  assert.equal(local.provider_name, "openai-api");
+  assert.equal(local.compaction.mode, "client_local");
 });
 
 test("one portable profile applies native configs to Claude, Codex, OpenCode, and Pi", async () => {
@@ -170,6 +221,14 @@ test("one portable profile applies native configs to Claude, Codex, OpenCode, an
   const home = join(root, "home");
   try {
     await mkdir(home, { recursive: true });
+    await mkdir(join(home, ".codex"), { recursive: true });
+    const officialAuth = [
+      '{"auth_mode":"chatgpt","tokens":',
+      '{"access_token":"OFFICIAL-AUTH-MUST-STAY-BYTE-IDENTICAL"}}\n'
+    ].join("");
+    const officialAuthPath = join(home, ".codex", "auth.json");
+    await writeFile(officialAuthPath, officialAuth, { mode: 0o600 });
+    await chmod(officialAuthPath, 0o600);
     const secretFile = join(root, "shared-key");
     await writeFile(secretFile, "NATIVE-CONFIG-SECRET\n", { mode: 0o600 });
     await chmod(secretFile, 0o600);
@@ -183,6 +242,11 @@ test("one portable profile applies native configs to Claude, Codex, OpenCode, an
       ], { home, path });
       const output = JSON.parse(result.stdout);
       assert.deepEqual(output.applied, [target]);
+      if (target === "codex") {
+        assert.deepEqual(output.official_identity, { policy: "preserve", account: "current" });
+      } else {
+        assert.equal(output.official_identity, null);
+      }
       assert.equal(result.stdout.includes("NATIVE-CONFIG-SECRET"), false);
       assert.equal(result.stderr.includes("NATIVE-CONFIG-SECRET"), false);
     }
@@ -203,6 +267,8 @@ test("one portable profile applies native configs to Claude, Codex, OpenCode, an
       (await readFile(join(home, ".codex", "provider-keys", "script_toolbox_custom.key"), "utf8")).trim(),
       "NATIVE-CONFIG-SECRET"
     );
+    assert.equal(await readFile(officialAuthPath, "utf8"), officialAuth);
+    assert.equal((await stat(officialAuthPath)).mode & 0o077, 0);
 
     const opencode = JSON.parse(await readFile(
       join(home, ".config", "opencode", "opencode.json"), "utf8"
@@ -226,6 +292,8 @@ test("one portable profile applies native configs to Claude, Codex, OpenCode, an
       assert.equal(Object.hasOwn(record, "secret"), false);
       assert.equal(record.profile, "universal");
     }
+    assert.equal(current.current.codex.official_identity_policy, "preserve");
+    assert.equal(Object.hasOwn(current.current.claude, "official_identity_policy"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -357,6 +425,45 @@ test("multi-target apply restores earlier client files when a later backend fail
       JSON.parse(await readFile(join(home, ".claude", "settings.json"), "utf8")),
       { original: true }
     );
+    const current = JSON.parse(run(root, ["current", "--json"], { home }).stdout);
+    assert.deepEqual(current.current, {});
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex apply rejects and rolls back a backend that modifies official Identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "provider-identity-guard-"));
+  const home = join(root, "home");
+  const backendRoot = join(root, "backends");
+  try {
+    await mkdir(join(home, ".codex"), { recursive: true });
+    const authPath = join(home, ".codex", "auth.json");
+    const original = '{"auth_mode":"chatgpt","tokens":{"access_token":"ORIGINAL"}}\n';
+    await writeFile(authPath, original, { mode: 0o600 });
+    await chmod(authPath, 0o600);
+    const secretFile = join(root, "shared-key");
+    await writeFile(secretFile, "PROVIDER-SECRET\n", { mode: 0o600 });
+    await chmod(secretFile, 0o600);
+    await createSharedProfile(root, secretFile);
+
+    const backend = join(backendRoot, "codex", "setup.sh");
+    await mkdir(dirname(backend), { recursive: true });
+    await writeFile(backend, [
+      "#!/usr/bin/env sh",
+      "printf '%s\\n' '{\"auth_mode\":\"chatgpt\",\"tokens\":{\"access_token\":\"CHANGED\"}}' > \"$HOME/.codex/auth.json\"",
+      "chmod 600 \"$HOME/.codex/auth.json\"",
+      "exit 0",
+      ""
+    ].join("\n"), { mode: 0o700 });
+    await chmod(backend, 0o700);
+
+    const result = run(root, [
+      "apply", "universal", "--target", "codex",
+      "--skip-validate", "--yes", "--json"
+    ], { status: 1, home, agentRoot: backendRoot });
+    assert.match(result.stderr, /modified protected Identity file/);
+    assert.equal(await readFile(authPath, "utf8"), original);
     const current = JSON.parse(run(root, ["current", "--json"], { home }).stdout);
     assert.deepEqual(current.current, {});
   } finally {

@@ -223,6 +223,13 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
   assert.equal(providers[0].name, "gateway");
   assert.equal(providers[0].outbound_model, "vendor-model");
   assert.equal(providers[0].secret_present, true);
+  assert.equal(providers[0].official_identity_policy, "preserve");
+  assert.equal(providers[0].official_identity_account, "current");
+  assert.equal(providers[0].compaction_upstream, "none");
+  assert.equal(providers[0].compaction_mode, "client_local");
+  assert.equal(providers[0].context_window_tokens, null);
+  assert.equal(providers[0].auto_compact_tokens, null);
+  assert.equal(providers[0].context_label, "Client default");
   assert.equal(JSON.stringify(providers).includes(secretValue), false);
   const claudeProviders = await remote.catalog("providers", "claude");
   assert.equal(claudeProviders[0].compatible, false);
@@ -251,6 +258,15 @@ test("remote Provider actions use selected owner-only temporary files and clean 
     const store = JSON.parse(await readFile(storePath, "utf8"));
     const secrets = JSON.parse(await readFile(secretsPath, "utf8"));
     assert.deepEqual(Object.keys(store.profiles), ["gateway"]);
+    assert.equal(store.schema, 2);
+    assert.deepEqual(store.profiles.gateway.compaction, {
+      upstream: "none",
+      policy: "auto"
+    });
+    assert.deepEqual(store.profiles.gateway.context, {
+      window_tokens: null,
+      auto_compact_tokens: null
+    });
     assert.deepEqual(Object.keys(secrets.secrets), ["gateway_key"]);
     assert.equal(secrets.secrets.gateway_key.value, secretValue);
     assert.equal((await lstat(secretsPath)).mode & 0o077, 0);

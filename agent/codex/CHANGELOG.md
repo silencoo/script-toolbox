@@ -1,5 +1,20 @@
 # Changelog — codex (agent)
 
+## 2026-08-11 — multiple official accounts
+
+- Added `agentctl account` to save and switch multiple official ChatGPT login
+  snapshots locally while leaving Codex Provider/Model configuration unchanged.
+- Added fail-closed credential checks, owner-only files, outgoing-token refresh,
+  redacted status, and a dedicated Accounts view in the shared TUI.
+
+## 2026-08-11 — preserved official Identity
+
+- Codex status now reports the current ChatGPT login separately from the
+  inference Provider and Model, including the supported combination of an
+  official login with an agentctl-managed third-party Responses endpoint.
+- Provider plans declare a `preserve` official-Identity policy. Applying or
+  uninstalling a Provider leaves `~/.codex/auth.json` byte-for-byte untouched.
+
 ## 2026-08-01 — default provider activation
 
 - The selected model and custom provider are now written as top-level user

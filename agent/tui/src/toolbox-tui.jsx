@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import { spawnSync } from "node:child_process";
 import { createController } from "./controller.mjs";
@@ -9,6 +9,7 @@ import {
   actionForKey,
   actionLabel,
   actionNeedsConfirmation,
+  accountEntries,
   clampSelection,
   componentSummary,
   componentTargetState,
@@ -41,6 +42,7 @@ const COLORS = Object.freeze({
   claude: "yellow",
   opencode: "green",
   pi: "magenta",
+  builtin: "yellow",
   local: "green",
   cloud: "blue"
 });
@@ -48,6 +50,7 @@ const COLORS = Object.freeze({
 const SECTION_COLORS = Object.freeze({
   overview: "white",
   agents: "blue",
+  accounts: "yellow",
   providers: "magenta",
   mcp: "cyan",
   skills: "green",
@@ -63,7 +66,7 @@ function usage() {
   process.stdout.write(`script-toolbox agent TUI
 
 Usage:
-  toolbox-tui [--section <overview|agents|providers|mcp|skills|prompts|snippets|presets|cloud>]
+  toolbox-tui [--section <overview|agents|accounts|providers|mcp|skills|prompts|snippets|presets|cloud>]
   toolbox-tui --help
 
 Keys:
@@ -74,8 +77,9 @@ Keys:
   p / a                             Plan / apply selected configuration
   Prompts: v local · V Workspace    View Prompt content on demand
   u                                 Roll back a preset
-  Agents: c configure · p providers · x uninstall owned config
-  Providers: p plan · a apply · u upload · d download/merge
+  Agents: c / p / Enter unified Providers · x uninstall owned config
+  Accounts: a/Enter switch · x delete saved account
+  Providers: p plan · a apply · u upload · d download/merge · i incompatible
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -110,11 +114,46 @@ function TargetBadge({ target, selected = false }) {
   );
 }
 
-function SourceBadge({ source, selected = false }) {
-  const label = source === "cloud" ? "WORKSPACE" : "LOCAL";
+function providerStorageMark(entry) {
+  if (entry?.syncStatus === "conflict") return "L≠W";
+  if (entry?.syncStatus === "backed-up") return "L+W";
+  if (entry?.syncStatus === "workspace-only") return "W";
+  if (entry?.syncStatus === "local-only") return "L";
+  return "B";
+}
+
+function providerStorageKind(entry) {
+  if (entry?.syncStatus === "conflict") return "bad";
+  if (entry?.syncStatus === "backed-up") return "good";
+  if (entry?.syncStatus === "workspace-only") return "cloud";
+  if (entry?.syncStatus === "local-only") return "local";
+  return "builtin";
+}
+
+function providerStorageLabel(entry) {
+  if (entry?.syncStatus === "conflict") return "LOCAL ≠ WORKSPACE";
+  if (entry?.syncStatus === "backed-up") return "LOCAL + WORKSPACE";
+  if (entry?.syncStatus === "workspace-only") return "WORKSPACE ONLY";
+  if (entry?.syncStatus === "local-only") return "LOCAL ONLY";
+  return "BUILT-IN TEMPLATE";
+}
+
+function providerSyncDetail(entry) {
+  if (entry?.syncStatus === "conflict") {
+    return `Choose a winner: u Local → Workspace · d Workspace → Local · differs in ${(entry.syncConflicts || []).join(", ") || "configuration metadata"}`;
+  }
+  if (entry?.syncStatus === "backed-up") return "Local profile is backed up in Workspace";
+  if (entry?.syncStatus === "workspace-only") return "Workspace only · apply directly or press d to install this profile locally";
+  if (entry?.syncStatus === "local-only") return "Local only · press u to upload this profile";
+  return "Built-in template · applying materializes it locally";
+}
+
+function ProviderSourceBadge({ entry, selected = false }) {
+  const kind = providerStorageKind(entry);
+  const label = providerStorageLabel(entry);
   return (
-    <Text color={COLORS[source] || COLORS.muted} bold inverse={selected}>
-      {` ${label.padEnd(9)} `}
+    <Text color={COLORS[kind] || COLORS.muted} bold inverse={selected}>
+      {` ${label} `}
     </Text>
   );
 }
@@ -195,11 +234,29 @@ function ErrorText({ value }) {
   return <Text color="red" wrap="truncate-end">{String(value).split("\n")[0]}</Text>;
 }
 
+function accountSummary(snapshot) {
+  const accounts = snapshot?.accounts || {};
+  const active = accounts.active || {};
+  const state = active.saved_as
+    ? active.saved_as
+    : active.official_login ? "current login is unsaved" : "not logged in";
+  return {
+    value: `${accounts.account_count || 0} saved · ${state}`,
+    kind: active.saved_as ? "good" : active.official_login ? "warn" : "muted"
+  };
+}
+
+function WorkspaceCatalogFallback({ snapshot }) {
+  return snapshot.workspaceLoading
+    ? <Text color="yellow">Workspace is connecting in the background; local state is already available.</Text>
+    : <Text color="gray">Connect a Workspace to browse remote selections.</Text>;
+}
+
 function LoadingView() {
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">Connecting…</Text>
-      <Text color="white">Loading local controller state and encrypted Workspace metadata.</Text>
+      <Text bold color="cyan">Loading local state…</Text>
+      <Text color="white">Reading local agent, account, Provider, MCP, Skills, Prompt, and Preset metadata.</Text>
       <Text color="gray">No local or remote configuration is being changed.</Text>
     </Box>
   );
@@ -209,26 +266,39 @@ function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
   const workspace = snapshot.workspace;
   const connection = workspace || snapshot.workspaceConnection;
-  const cloud = workspacePresentation(workspace, snapshot.workspaceError);
+  const cloud = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
+  const accounts = accountSummary(snapshot);
   if (!report) {
     return (
       <Box flexDirection="column">
         <ErrorText value={snapshot?.doctorError || "Diagnostics unavailable"} />
-        <Row label="Workspace" value={workspace ? "connected" : cloud.status} kind={cloud.kind} />
+        <Row label="Workspace" value={cloud.status} kind={cloud.kind} />
         {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
       </Box>
     );
   }
   return (
     <Box flexDirection="column">
-      <SummaryRow name="Provider" summary={componentSummary("provider", report.provider)} />
+      {target === "codex" && (
+        <SummaryRow name="Identity" summary={componentSummary("identity", report.provider)} />
+      )}
+      {target === "codex" && (
+        <Row label="Saved accounts" value={accounts.value} kind={accounts.kind} />
+      )}
+      <SummaryRow name="Inference" summary={componentSummary("inference", report.provider)} />
       <SummaryRow name="MCP" summary={componentSummary("mcp", report.mcp)} />
       <SummaryRow name="Skills" summary={componentSummary("skills", report.skills)} />
       <SummaryRow name="Prompts" summary={componentSummary("prompts", report.prompt)} />
       <Row label="Snippets" value={`${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local`} />
       <Row label="Preset" value={`${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`} kind={report.preset?.drift ? "bad" : "muted"} />
       <Row label="Secrets" value={snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete"} kind={snapshot.doctor?.secrets?.ok ? "good" : "bad"} />
-      <Row label="Remotes" value={`${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available`} />
+      <Row
+        label="Remotes"
+        value={snapshot.workspaceLoading
+          ? "checking in background"
+          : `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available`}
+        kind={snapshot.workspaceLoading ? "warn" : "value"}
+      />
       <Row label="Workspace" value={workspace ? `${workspace.latest?.version || "empty"} · ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status} kind={cloud.kind} />
       {workspace && <Row
         label="Provider backup"
@@ -247,6 +317,7 @@ function Agents({ snapshot, selected }) {
   if (agents.length === 0) return <ErrorText value={snapshot.agentsError || snapshot.doctorError || "No agent status"} />;
   const safeIndex = clampSelection(selected, agents.length);
   const current = agents[safeIndex];
+  const accounts = accountSummary(snapshot);
   return (
     <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 88 ? "column" : "row"}>
       <Box flexDirection="column" minWidth={24}>
@@ -259,19 +330,85 @@ function Agents({ snapshot, selected }) {
       </Box>
       <Box flexDirection="column">
         <Text bold>{current.label || current.client}</Text>
-        <SummaryRow name="Provider" summary={componentSummary("provider", { ok: true, data: current })} />
+        {current.client === "codex" && (
+          <SummaryRow name="Identity" summary={componentSummary("identity", { ok: true, data: current })} />
+        )}
+        {current.client === "codex" && (
+          <Row label="Saved accounts" value={accounts.value} kind={accounts.kind} />
+        )}
+        <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: current })} />
         <Row label="CLI" value={current.cli_installed ? current.cli_version || "installed" : "not installed"} kind={current.cli_installed ? "good" : "bad"} />
         {targetReport(snapshot, current.client) && <Row label="Preset" value={targetReport(snapshot, current.client)?.preset?.name || "none"} kind={targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted"} />}
         <Text color="gray">
-          <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall owned config
+          <Text color="cyan" bold>c/p/Enter</Text> unified Providers · <Text color="red" bold>x</Text> uninstall owned config
         </Text>
       </Box>
     </Box>
   );
 }
 
-function ProvidersView({ snapshot, surface, selected, target }) {
-  const entries = providerEntries(surface.local, surface.cloud);
+function AccountsView({ snapshot, selected }) {
+  const entries = accountEntries(snapshot);
+  const safeIndex = clampSelection(selected, entries.length);
+  const visible = selectionWindow(entries, safeIndex, 10);
+  const current = entries[safeIndex] || null;
+  const active = snapshot.accounts?.active || {};
+  return (
+    <Box flexDirection="column">
+      <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 88 ? "column" : "row"}>
+        <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={30}>
+          <Text color="gray">
+            Saved accounts {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total}
+          </Text>
+          {visible.items.map(({ item, index }) => (
+            <Box key={item.name} gap={1}>
+              <Text color={index === safeIndex ? "white" : "gray"} bold={index === safeIndex}>
+                {index === safeIndex ? "›" : " "}
+              </Text>
+              <Text color={item.current ? "green" : index === safeIndex ? "yellow" : "white"} bold={index === safeIndex || item.current}>
+                {item.name}
+              </Text>
+              {item.current && <Text color="green">● current</Text>}
+            </Box>
+          ))}
+          {entries.length === 0 && <Text color="gray">(no saved official accounts)</Text>}
+        </Box>
+        <Box borderStyle="single" borderColor={current?.current ? "green" : "yellow"} paddingX={1} flexDirection="column" flexGrow={1}>
+          <Text bold color="yellow">{current?.name || "Codex official accounts"}</Text>
+          <Row
+            label="Live login"
+            value={active.saved_as || (active.official_login ? "unsaved official account" : active.status || "not logged in")}
+            kind={active.official_login ? active.saved_as ? "good" : "warn" : "muted"}
+          />
+          {current ? (
+            <>
+              <Row label="State" value={current.current ? "active" : "saved"} kind={current.current ? "good" : "local"} />
+              <Row label="Saved" value={current.savedAt ? new Date(current.savedAt).toLocaleString() : "unknown"} />
+              <Row label="Credential" value={current.credentialPrivate ? "owner-only snapshot" : "unsafe permissions"} kind={current.credentialPrivate ? "good" : "bad"} />
+              <Text color="gray">
+                <Text color="yellow" bold>a/Enter</Text> switch or refresh · <Text color="red" bold>x</Text> delete non-current snapshot
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text color="gray">Save the current ChatGPT login with an explicit local label:</Text>
+              <Text color="cyan">agentctl account save primary --yes</Text>
+            </>
+          )}
+        </Box>
+      </Box>
+      <Row label="Store" value={displayPath(snapshot.accounts?.store)} kind="local" />
+      <Text color="gray">Account switching changes only auth.json; the selected inference Provider and Model remain unchanged.</Text>
+      <ErrorText value={snapshot.accountsError} />
+    </Box>
+  );
+}
+
+function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
+  const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
+  const entries = showIncompatible
+    ? allEntries
+    : providerEntries(surface.local, surface.cloud);
   const safeIndex = clampSelection(selected, entries.length);
   const visible = selectionWindow(entries, safeIndex, 10);
   const current = entries[safeIndex] || null;
@@ -281,13 +418,18 @@ function ProvidersView({ snapshot, surface, selected, target }) {
   const pricing = dashboard.pricing || {};
   const proxy = dashboard.proxy || {};
   const remote = snapshot.workspace?.agent || {};
-  const localCount = entries.filter((entry) => entry.source === "local").length;
-  const cloudCount = entries.filter((entry) => entry.source === "cloud").length;
+  const runtime = Array.isArray(snapshot.agents)
+    ? snapshot.agents.find((agent) => agent.client === target) || null
+    : null;
+  const hiddenCount = allEntries.length - providerEntries(surface.local, surface.cloud).length;
+  const backedUpCount = allEntries.filter((entry) => entry.syncStatus === "backed-up").length;
+  const conflictCount = allEntries.filter((entry) => entry.syncStatus === "conflict").length;
   const stateKind = !current?.enabled
     ? "muted"
     : current?.ready
       ? "good"
-      : current?.compatible ? "warn" : "bad";
+      : current?.nativeAuthPresent ? "local"
+        : current?.compatible ? "warn" : "bad";
   const proxyKind = proxy.status === "running"
     ? "good"
     : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
@@ -300,49 +442,122 @@ function ProvidersView({ snapshot, surface, selected, target }) {
         ))}
         <Text color="gray">t cycle</Text>
       </Box>
+      {runtime && (
+        <Box flexDirection="column" marginBottom={1}>
+          {target === "codex" && (
+            <SummaryRow name="Identity" summary={componentSummary("identity", { ok: true, data: runtime })} />
+          )}
+          <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: runtime })} />
+        </Box>
+      )}
       <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 98 ? "column" : "row"}>
         <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={34}>
           <Text color="gray">
-            Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} · {localCount} local / {cloudCount} cloud
+            Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} visible · {allEntries.length} total · {backedUpCount} backed up{conflictCount > 0 ? ` · ${conflictCount} conflict` : ""}
           </Text>
           {visible.items.map(({ item, index }) => (
             <Box key={item.key} gap={1}>
               <Text color={index === safeIndex ? "white" : "gray"} bold={index === safeIndex}>
                 {index === safeIndex ? "›" : " "}
               </Text>
-              <Text color={COLORS[item.source]} bold>{item.source === "cloud" ? "W" : "L"}</Text>
+              <Text color={COLORS[providerStorageKind(item)]} bold>{providerStorageMark(item).padEnd(3)}</Text>
               <Text color={index === safeIndex ? "magenta" : "white"} bold={index === safeIndex}>
                 {item.name}
               </Text>
               {item.applied && <Text color="green">●</Text>}
-              {!item.enabled && <Text color="gray">disabled</Text>}
+              {!item.applied && item.nativeSelected && <Text color="cyan">◇</Text>}
+              {item.nativeAuthPresent && <Text color="cyan">native auth</Text>}
+              {(!item.enabled || !item.compatible) && <Text color="gray">incompatible</Text>}
             </Box>
           ))}
           {entries.length === 0 && !surface.loading && <Text color="gray">(no Provider profiles)</Text>}
+          {hiddenCount > 0 && (
+            <Text color="gray">
+              {showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden · i show`}
+            </Text>
+          )}
         </Box>
-        <Box borderStyle="single" borderColor={current ? COLORS[current.source] : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
+        <Box borderStyle="single" borderColor={current ? COLORS[providerStorageKind(current)] : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
           <Box gap={1}>
             <Text color="gray">Selected</Text>
-            {current && <SourceBadge source={current.source} />}
+            {current && <ProviderSourceBadge entry={current} />}
           </Box>
           <Text bold color="magenta">{current?.name || "none"}</Text>
           {current ? (
             <>
               <Row label="Target" value={`${targetLabel(target)} · ${current.platform || dashboard.platform || "unknown"}`} kind={target} />
-              <Row label="State" value={!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"} kind={stateKind} />
+              <Row label="State" value={current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")} kind={stateKind} />
+              <Row
+                label="Backup state"
+                value={providerSyncDetail(current)}
+                kind={providerStorageKind(current)}
+              />
+              {current.sources.includes("builtin") && current.syncStatus !== "builtin-only" && (
+                <Row label="Catalog origin" value="agentctl built-in template" kind="builtin" />
+              )}
               <Row label="Protocol" value={current.protocol || "unknown"} />
               <Row label="Endpoint" value={current.endpoint || "unknown"} />
               <Row label="Model" value={`${current.requestedModel || "unknown"} → ${current.outboundModel || "unknown"}`} />
               <Row
-                label="Secret"
+                label="Compaction"
+                value={current.compactionLabel || "Local · upstream unverified"}
+                kind={current.compactionMode === "remote_native" || current.compactionMode === "messages_native"
+                  ? "good"
+                  : current.compactionPolicy === "local" ? "local" : "muted"}
+              />
+              <Row
+                label="Context"
+                value={current.contextLabel || "Client default"}
+                kind={current.contextWindowTokens !== null || current.autoCompactTokens !== null
+                  ? "good"
+                  : "muted"}
+              />
+              {current.modelsAvailable.length > 0 && (
+                <Row label="Model choices" value={current.modelsAvailable.join(", ")} />
+              )}
+              <Row
+                label="Provider Secret"
                 value={current.authMode === "none"
                   ? "not required"
                   : `${current.secretReference || "missing reference"} · ${current.secretPresent ? "present" : "missing"}`}
                 kind={current.authMode === "none" || current.secretPresent ? "good" : "warn"}
               />
-              <Row label="Applied" value={current.applied ? "current on this device" : "not current"} kind={current.applied ? "good" : "muted"} />
+              {current.nativeAuthPresent && (
+                <Row
+                  label="Native client auth"
+                  value={`OpenCode · ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""} · available outside agentctl`}
+                  kind="local"
+                />
+              )}
+              {current.nativeSelected && (
+                <Row
+                  label="Native selection"
+                  value={current.nativeSelectedModel || "selected by OpenCode"}
+                  kind="local"
+                />
+              )}
+              {current.officialIdentityPolicy === "preserve" && (
+                <Row
+                  label="Official Identity"
+                  value="preserve current ChatGPT login · auth.json untouched"
+                  kind="good"
+                />
+              )}
+              <Row
+                label="Applied"
+                value={current.applied
+                  ? "current under agentctl"
+                  : current.nativeSelected ? "current in OpenCode · external" : "not current under agentctl"}
+                kind={current.applied ? "good" : current.nativeSelected ? "local" : "muted"}
+              />
               {current.description && <Row label="About" value={current.description} />}
               {current.issue && <Row label="Blocked by" value={current.issue} kind="bad" />}
+              {!current.secretPresent && current.secretReference && (
+                <Text color="cyan">agentctl provider use {current.name} --target {target} --secret-file ./key --yes</Text>
+              )}
+              {current.nativeAuthPresent && !current.secretPresent && (
+                <Text color="gray">Native auth is usable by OpenCode, but is not yet managed or backed up by agentctl.</Text>
+              )}
             </>
           ) : (
             <Text color="gray">Initialize locally or back up a Provider bundle to Workspace.</Text>
@@ -368,14 +583,21 @@ function ProvidersView({ snapshot, surface, selected, target }) {
           kind={proxyKind}
         />
       </Box>
-      {surface.loading && <Text color="gray">◌ Loading local and encrypted Workspace Provider catalogs…</Text>}
+      {surface.loading && <Text color="gray">◌ Loading remaining local or encrypted Workspace Provider data…</Text>}
+      {!snapshot.workspace && snapshot.workspaceLoading && (
+        <Text color="yellow">Workspace Providers are connecting in the background; local profiles remain usable.</Text>
+      )}
       <ErrorText value={surface.localError} />
       <ErrorText value={surface.cloudError} />
       {(dashboard.errors || []).map((error) => <ErrorText key={error} value={error} />)}
       <Text color="gray">
-        [/] select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="green" bold>u</Text> upload local · <Text color="blue" bold>d</Text> download/merge
+        [/] select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="yellow" bold>i</Text> incompatible
       </Text>
-      <Text color="gray">Secret values remain hidden; applying writes only the selected client target.</Text>
+      <Text color="gray">
+        <Text color="green" bold>u</Text> keep Local → Workspace · <Text color="blue" bold>d</Text> keep Workspace → Local
+      </Text>
+      <Text color="gray">B template · L local · W Workspace-only · L+W backed up · L≠W conflict</Text>
+      <Text color="gray">One row per Provider. Secret values remain hidden.</Text>
     </Box>
   );
 }
@@ -466,7 +688,7 @@ function McpView({ snapshot, target, catalog, selected }) {
       ))}
       {snapshot.workspace
         ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="mcp" />
-        : <Text color="gray">Connect a Workspace to browse remote selections.</Text>}
+        : <WorkspaceCatalogFallback snapshot={snapshot} />}
     </Box>
   );
 }
@@ -505,7 +727,7 @@ function PromptView({ snapshot, target, catalog, selected }) {
       ))}
       {snapshot.workspace
         ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="prompts" />
-        : <Text color="gray">Connect a Workspace to browse remote selections.</Text>}
+        : <WorkspaceCatalogFallback snapshot={snapshot} />}
       <Text color="gray">
         <Text color="green" bold>v</Text> view active local Prompt · <Text color="cyan" bold>V</Text> view selected Workspace Prompt
       </Text>
@@ -573,6 +795,9 @@ function SnippetView({ snapshot, catalog, selected }) {
         </Box>
       </Box>
       {catalog.loading && <Text color="gray">Decrypting the Workspace Snippets catalog in memory…</Text>}
+      {!snapshot.workspace && snapshot.workspaceLoading && (
+        <Text color="yellow">Workspace Snippets are connecting in the background; local Snippets are ready.</Text>
+      )}
       <ErrorText value={catalog.error} />
       <ErrorText value={snapshot.snippetsError} />
       <Text color="gray">
@@ -600,7 +825,7 @@ function ComponentView({ snapshot, target, component, catalog, selected }) {
       <ErrorText value={!check?.ok ? check?.summary || check?.error || snapshot.doctorError : ""} />
       {snapshot.workspace
         ? <CloudCatalog catalog={catalog} selected={selected} target={target} component={component} />
-        : <Text color="gray">Connect a Workspace to browse remote selections.</Text>}
+        : <WorkspaceCatalogFallback snapshot={snapshot} />}
     </Box>
   );
 }
@@ -646,7 +871,7 @@ function Cloud({ snapshot }) {
   }
   const workspace = snapshot.workspace;
   const connection = snapshot.workspaceConnection;
-  const presentation = workspacePresentation(workspace, snapshot.workspaceError);
+  const presentation = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
   if (!workspace) {
     return (
       <Box flexDirection="column">
@@ -668,9 +893,14 @@ function Cloud({ snapshot }) {
   }
   return (
     <Box flexDirection="column">
-      <Text bold color="green">{presentation.heading}</Text>
-      <Row label="Status" value={presentation.status} kind="good" />
+      <Text bold color={COLORS[presentation.kind]}>{presentation.heading}</Text>
+      <Row label="Status" value={presentation.status} kind={presentation.kind} />
       <Row label="Endpoint" value={workspace.endpoint} />
+      {snapshot.workspaceLastConnectedAt && (
+        <Row label="Last connected" value={new Date(snapshot.workspaceLastConnectedAt).toLocaleString()} />
+      )}
+      {presentation.state !== "ready" && <Text color={COLORS[presentation.kind]}>{presentation.description}</Text>}
+      {presentation.diagnostic && <Row label="Diagnostic" value={presentation.diagnostic} kind="warn" />}
       <Row label="Version" value={workspace.latest?.version || "none"} />
       <Row label="Format" value={workspace.migration_pending
         ? `schema ${workspace.remote_schema} · compatible in memory`
@@ -703,9 +933,10 @@ function Help() {
       <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers) · r refresh · q quit</Text>
       <Text>[ / ] or Up/Down  select previous / next item</Text>
       <Text>
-        Agents: <Text color="cyan" bold>c/Enter</Text> configure or install · <Text color="cyan" bold>p</Text> providers · <Text color="red" bold>x</Text> uninstall
+        Agents: <Text color="cyan" bold>c/p/Enter</Text> open unified Providers · <Text color="red" bold>x</Text> uninstall
       </Text>
-      <Text>Providers: [/] select · p plan · a apply · u upload · d download/merge</Text>
+      <Text>Accounts: [/] select · a/Enter switch or refresh · x delete non-current snapshot</Text>
+      <Text>Providers: [/] select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
       <Text>Prompts: v view active local · V view selected Workspace · [/] scroll preview</Text>
       <Text>Snippets: [/] select · c copy local · p inspect cloud pull · a pull</Text>
@@ -725,7 +956,7 @@ function App({ initialSection, controller, onLaunch }) {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(0);
-  const [componentSelected, setComponentSelected] = useState({ providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [componentSelected, setComponentSelected] = useState({ accounts: 0, providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
   const [catalogs, setCatalogs] = useState({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
@@ -736,6 +967,7 @@ function App({ initialSection, controller, onLaunch }) {
     local: [],
     cloud: [],
     dashboard: null,
+    target: "codex",
     loading: false,
     localError: "",
     cloudError: "",
@@ -745,22 +977,50 @@ function App({ initialSection, controller, onLaunch }) {
   const [lastDetail, setLastDetail] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showIncompatibleProviders, setShowIncompatibleProviders] = useState(false);
   const [promptPreview, setPromptPreview] = useState(null);
   const [promptPreviewOffset, setPromptPreviewOffset] = useState(0);
+  const refreshSequence = useRef(0);
 
   const refresh = useCallback(async (quiet = false) => {
+    const sequence = refreshSequence.current + 1;
+    refreshSequence.current = sequence;
     setLoading(true);
     if (!quiet) setMessage("Refreshing diagnostics…");
     try {
-      const next = await controller.snapshot();
-      setSnapshot(next);
-      setSelected((value) => clampSelection(value, presetEntries(next).length));
-      setSelectedAgent((value) => clampSelection(value, Array.isArray(next.agents) ? next.agents.length : 0));
-      setMessage(`Updated ${new Date(next.updatedAt).toLocaleTimeString()}`);
+      const local = typeof controller.localSnapshot === "function"
+        ? await controller.localSnapshot()
+        : await controller.snapshot();
+      if (refreshSequence.current !== sequence) return;
+      setSnapshot(local);
+      setSelected((value) => clampSelection(value, presetEntries(local).length));
+      setSelectedAgent((value) => clampSelection(value, Array.isArray(local.agents) ? local.agents.length : 0));
+      setComponentSelected((value) => ({
+        ...value,
+        accounts: clampSelection(value.accounts, accountEntries(local).length)
+      }));
+      setLoading(false);
+      setMessage(local.workspaceLoading
+        ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} · Workspace ${local.workspace ? "refreshing" : "connecting"}…`
+        : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
+      if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
+        void controller.hydrateSnapshot(local).then((next) => {
+          if (refreshSequence.current !== sequence) return;
+          setSnapshot(next);
+          setSelected((value) => clampSelection(value, presetEntries(next).length));
+          const cloud = workspacePresentation(next.workspace, next.workspaceError, false);
+          setMessage(`${cloud.status} · local state remains ready`);
+        }).catch((error) => {
+          if (refreshSequence.current !== sequence) return;
+          setSnapshot((value) => value ? { ...value, workspaceLoading: false } : value);
+          setMessage(`Local ready · Workspace refresh failed: ${error.message}`);
+        });
+      }
     } catch (error) {
+      if (refreshSequence.current !== sequence) return;
       setMessage(`Refresh failed: ${error.message}`);
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === sequence) setLoading(false);
     }
   }, [controller]);
 
@@ -808,12 +1068,50 @@ function App({ initialSection, controller, onLaunch }) {
     const key = `${snapshot.updatedAt}:${workspaceStoreId || "local"}:${snapshot.workspace?.latest?.version || "none"}:${providerTarget}`;
     let cancelled = false;
     setProviderSurface((value) => ({
-      ...value,
+      local: value.target === providerTarget ? value.local : [],
+      cloud: [],
+      dashboard: value.target === providerTarget ? value.dashboard : null,
+      target: providerTarget,
       loading: true,
       localError: "",
       cloudError: "",
       key
     }));
+    let localItems = providerSurface.target === providerTarget ? providerSurface.local : [];
+    let cloudItems = [];
+    let dashboard = providerSurface.target === providerTarget ? providerSurface.dashboard : null;
+    let localError = "";
+    let cloudError = "";
+    let localDone = false;
+    let cloudDone = false;
+    let current = null;
+    const projectCloud = (items) => items.map((profile) => ({
+      ...profile,
+      applied: current?.profile === profile.name &&
+        current.platform === profile.platform &&
+        current.protocol === profile.protocol &&
+        current.endpoint === profile.endpoint &&
+        current.requested_model === profile.requested_model &&
+        current.outbound_model === profile.outbound_model &&
+        current.compaction_upstream === profile.compaction_upstream &&
+        current.compaction_policy === profile.compaction_policy &&
+        current.compaction_mode === profile.compaction_mode &&
+        current.context_window_tokens === profile.context_window_tokens &&
+        current.auto_compact_tokens === profile.auto_compact_tokens
+    }));
+    const publish = () => {
+      if (cancelled) return;
+      setProviderSurface({
+        local: localItems,
+        cloud: cloudItems,
+        dashboard,
+        target: providerTarget,
+        loading: !localDone || !cloudDone,
+        localError,
+        cloudError,
+        key
+      });
+    };
     const local = Promise.resolve()
       .then(() => controller.providerDashboard(providerTarget))
       .then((data) => ({ data, error: "" }))
@@ -821,33 +1119,20 @@ function App({ initialSection, controller, onLaunch }) {
     const cloud = workspaceStoreId
       ? controller.remoteCatalog("providers", providerTarget)
       : Promise.resolve({ ok: true, items: [], error: "" });
-    void Promise.all([local, cloud]).then(([localResult, cloudResult]) => {
-      if (cancelled) return;
-      const localItems = localResult.data?.profiles || [];
-      const current = localResult.data?.status?.current?.[providerTarget];
-      const cloudItems = (cloudResult.items || []).map((profile) => ({
-        ...profile,
-        applied: current?.profile === profile.name &&
-          current.platform === profile.platform &&
-          current.protocol === profile.protocol &&
-          current.endpoint === profile.endpoint &&
-          current.requested_model === profile.requested_model &&
-          current.outbound_model === profile.outbound_model
-      }));
-      setProviderSurface({
-        local: localItems,
-        cloud: cloudItems,
-        dashboard: localResult.data,
-        loading: false,
-        localError: localResult.error,
-        cloudError: cloudResult.error,
-        key
-      });
-      const entries = providerEntries(localItems, cloudItems);
-      setComponentSelected((value) => ({
-        ...value,
-        providers: clampSelection(value.providers, entries.length)
-      }));
+    void local.then((result) => {
+      localDone = true;
+      dashboard = result.data;
+      localItems = result.data?.profiles || [];
+      current = result.data?.status?.current?.[providerTarget] || null;
+      cloudItems = projectCloud(cloudItems);
+      localError = result.error;
+      publish();
+    });
+    void cloud.then((result) => {
+      cloudDone = true;
+      cloudItems = projectCloud(result.items || []);
+      cloudError = result.error;
+      publish();
     });
     return () => { cancelled = true; };
   }, [controller, providerTarget, section, snapshot, workspaceStoreId]);
@@ -857,7 +1142,20 @@ function App({ initialSection, controller, onLaunch }) {
     ? snapshot.agents[selectedAgent]?.client || ""
     : "";
   const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
-  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud);
+  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud, {
+    includeIncompatible: showIncompatibleProviders
+  });
+  useEffect(() => {
+    setComponentSelected((value) => {
+      const providers = clampSelection(value.providers, mergedProviders.length);
+      return providers === value.providers ? value : { ...value, providers };
+    });
+  }, [mergedProviders.length]);
+  const savedAccounts = accountEntries(snapshot);
+  const selectedAccount = savedAccounts[
+    clampSelection(componentSelected.accounts, savedAccounts.length)
+  ] || null;
+  const selectedAccountName = selectedAccount?.name || "";
   const selectedProvider = mergedProviders[
     clampSelection(componentSelected.providers, mergedProviders.length)
   ] || null;
@@ -902,20 +1200,20 @@ function App({ initialSection, controller, onLaunch }) {
 
   const executeAction = useCallback(async (action) => {
     setConfirm(null);
-    if (action === "agent-configure") {
-      try {
-        onLaunch(controller.interactiveCommand(selectedAgentId));
-        exit();
-      } catch (error) {
-        setMessage(`Failed: ${error.message}`);
-      }
+    if (action === "agent-provider") {
+      setProviderTarget(selectedAgentId);
+      setComponentSelected((value) => ({ ...value, providers: 0 }));
+      setSection("providers");
+      setMessage(`Unified Providers opened for ${targetLabel(selectedAgentId)}.`);
       return;
     }
     setBusy(true);
     const providerAction = action.startsWith("provider-");
+    const accountAction = action.startsWith("account-");
     const actionTarget = providerAction ? providerTarget : target;
     const selection = action.startsWith("agent-")
       ? selectedAgentId
+      : accountAction ? selectedAccountName
       : providerAction ? selectedProviderName
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
@@ -925,7 +1223,9 @@ function App({ initialSection, controller, onLaunch }) {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: providerAction
+        selection: accountAction
+          ? selectedAccountName
+          : providerAction
           ? selectedProviderName
           : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction
@@ -941,7 +1241,7 @@ function App({ initialSection, controller, onLaunch }) {
     } finally {
       setBusy(false);
     }
-  }, [controller, exit, onLaunch, providerTarget, refresh, selectedAgentId, selectedLocalSnippet,
+  }, [controller, providerTarget, refresh, selectedAccountName, selectedAgentId, selectedLocalSnippet,
     selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
     snapshot?.presetSource, target]);
 
@@ -982,7 +1282,16 @@ function App({ initialSection, controller, onLaunch }) {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
         return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS));
       }
+      if (section === "accounts") return;
       return setTarget((value) => otherTarget(value));
+    }
+    if (section === "providers" && (input === "i" || input === "I")) {
+      setComponentSelected((value) => ({ ...value, providers: 0 }));
+      setShowIncompatibleProviders(!showIncompatibleProviders);
+      setMessage(showIncompatibleProviders
+        ? "Incompatible Providers hidden."
+        : "Showing incompatible Providers for inspection.");
+      return;
     }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
@@ -990,6 +1299,12 @@ function App({ initialSection, controller, onLaunch }) {
       return setSelectedAgent((value) => clampSelection(
         value + delta, Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
       ));
+    }
+    if (section === "accounts" && delta !== 0) {
+      return setComponentSelected((value) => ({
+        ...value,
+        accounts: clampSelection(value.accounts + delta, savedAccounts.length)
+      }));
     }
     if (section === "presets" && delta !== 0) {
       return setSelected((value) => clampSelection(value + delta, presetEntries(snapshot).length));
@@ -1016,6 +1331,14 @@ function App({ initialSection, controller, onLaunch }) {
       setMessage("No agent is selected.");
       return;
     }
+    if (action.startsWith("account-") && !selectedAccountName) {
+      setMessage("No saved Codex official account is selected.");
+      return;
+    }
+    if (action === "account-delete" && selectedAccount?.current) {
+      setMessage("The current account cannot be deleted; switch to another saved account first.");
+      return;
+    }
     if ((action === "provider-plan" || action === "provider-apply") && !selectedProviderName) {
       setMessage("No local or Workspace Provider profile is selected.");
       return;
@@ -1023,6 +1346,16 @@ function App({ initialSection, controller, onLaunch }) {
     if ((action === "provider-sync-push" || action === "provider-sync-pull") &&
         !snapshot?.workspaceConnection?.configured) {
       setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
+      return;
+    }
+    if (action === "provider-sync-push" && !selectedProvider?.sources?.includes("local")) {
+      setMessage(selectedProvider?.syncStatus === "builtin-only"
+        ? "Apply the built-in Provider once to materialize it locally before uploading it."
+        : "The selected Provider has no local copy to upload.");
+      return;
+    }
+    if (action === "provider-sync-pull" && !selectedProvider?.sources?.includes("cloud")) {
+      setMessage("The selected Provider has no Workspace copy to download.");
       return;
     }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
@@ -1039,8 +1372,10 @@ function App({ initialSection, controller, onLaunch }) {
     }
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
+      const accountAction = action.startsWith("account-");
       const selection = action.startsWith("agent-")
         ? selectedAgentId
+        : accountAction ? selectedAccountName
         : providerAction ? selectedProviderName
         : action === "snippet-copy" ? selectedLocalSnippet
           : action.includes("-") ? selectedRemote : selectedPreset;
@@ -1057,12 +1392,14 @@ function App({ initialSection, controller, onLaunch }) {
   if (snapshot) {
     content = <Overview snapshot={snapshot} target={target} />;
     if (section === "agents") content = <Agents snapshot={snapshot} selected={selectedAgent} />;
+    if (section === "accounts") content = <AccountsView snapshot={snapshot} selected={componentSelected.accounts} />;
     if (section === "providers") content = (
       <ProvidersView
         snapshot={snapshot}
         surface={providerSurface}
         selected={componentSelected.providers}
         target={providerTarget}
+        showIncompatible={showIncompatibleProviders}
       />
     );
     if (section === "mcp") content = <McpView snapshot={snapshot} target={target} catalog={catalogs.mcp} selected={componentSelected.mcp} />;
@@ -1076,12 +1413,13 @@ function App({ initialSection, controller, onLaunch }) {
   }
 
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
-  const activeTarget = section === "providers" ? providerTarget : target;
+  const activeTarget = section === "providers" ? providerTarget : section === "accounts" ? "codex" : target;
   const panelTitle = promptPreview
     ? `Prompts · ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview`
     : ["mcp", "prompts"].includes(section)
     ? `${sectionLabel} · Claude Code vs Codex`
     : section === "providers" ? `Providers · ${targetLabel(providerTarget)}`
+    : section === "accounts" ? "Accounts · Codex official Identity"
     : section === "snippets" ? "Snippets · Shared library"
       : ["overview", "skills", "prompts", "presets"].includes(section)
       ? `${sectionLabel} · ${targetLabel(target)}`
@@ -1092,9 +1430,9 @@ function App({ initialSection, controller, onLaunch }) {
       <Box justifyContent="space-between">
         <Text bold color="cyan">script-toolbox / agents</Text>
         <Box gap={1}>
-          <Text color="gray">{section === "snippets" ? "shared library" : "active target"}</Text>
+          <Text color="gray">{section === "snippets" ? "shared library" : section === "accounts" ? "identity target" : "active target"}</Text>
           {section !== "snippets" && <TargetBadge target={activeTarget} selected />}
-          {section !== "snippets" && <Text color="gray">t switch</Text>}
+          {!(["snippets", "accounts"].includes(section)) && <Text color="gray">t switch</Text>}
         </Box>
       </Box>
       <Box gap={1} marginBottom={1} flexWrap="wrap">
@@ -1125,7 +1463,7 @@ function App({ initialSection, controller, onLaunch }) {
       ) : (
         <Box marginTop={1} justifyContent="space-between">
           <Text color={message.startsWith("Failed") ? "red" : "gray"} wrap="truncate-end">{loading || busy ? "◌ " : ""}{message}</Text>
-          <Text color="gray">? help · {section === "snippets" ? "" : "t target · "}r refresh · q quit</Text>
+          <Text color="gray">? help · {(["snippets", "accounts"].includes(section)) ? "" : "t target · "}r refresh · q quit</Text>
         </Box>
       )}
     </Box>

@@ -21,29 +21,20 @@ header. The script writes exactly one credential field, never both.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/setup.sh | bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/claude-code/mcp.sh | bash
+./agent/install-commands.sh --yes
+agentctl provider list --target claude
+agentctl provider use anthropic-api --target claude \
+  --secret-file /secure/anthropic-api-key --yes
 ```
 
-The first command remains interactive even in a pipe because it reads answers
-from `/dev/tty`.
-
-From a clone, use the shared controller from the repository root:
-
-```bash
-./agent/agentctl/agentctl setup claude
-./agent/claude-code/mcp.sh
-```
-
-The Raw URL above and `agent/claude-code/setup.sh` remain supported
-compatibility entrypoints.
+`agent/claude-code/setup.sh` is the private renderer used by `provider use`.
 
 ## Status-line preset
 
-Provider setup now installs the managed status-line preset when
-`~/.claude/settings.json` has no existing `statusLine`. Existing external
-commands are preserved without claiming ownership; pass `--no-statusline` to
-skip the preset explicitly. The renderer needs Python 3 and shows the current
+Provider switching leaves the independent status-line setting untouched.
+Install or repair the managed preset explicitly with
+`agentctl statusline install --yes`; existing external commands are preserved
+unless explicitly adopted with `--force`. The renderer needs Python 3 and shows the current
 directory, Git branch/dirty/upstream state, Claude session line changes, a
 10-cell context bar, token usage, and the model ID or proxy alias.
 
@@ -123,38 +114,45 @@ Both Promptctl ownership models remain independent of `uninstall.sh`.
 ## Automation and custom providers
 
 ```bash
-./agent/agentctl/agentctl providers claude
+agentctl provider list --target claude
+agentctl provider plan deepseek --target claude
+agentctl provider use deepseek --target claude \
+  --model deepseek-v4-pro --secret-file /secure/deepseek-api-key --yes
+agentctl provider use openrouter --target claude \
+  --secret-file /secure/openrouter-api-key --yes
 
-DEEPSEEK_API_KEY=... \
-  ./agent/agentctl/agentctl setup claude \
-    --provider deepseek --model deepseek-v4-pro
-
-OPENROUTER_API_KEY=sk-or-... \
-  ./agent/agentctl/agentctl setup claude --provider openrouter
-
-./agent/agentctl/agentctl setup claude --provider custom \
+agentctl provider create work-gateway \
+  --protocol anthropic_messages \
   --base-url https://gateway.example.com/anthropic \
-  --models-url https://gateway.example.com/v1/models \
-  --model my-model --key-env MY_API_KEY --auth-mode auth-token
-
-# Preview without a key, validation request, install, or file change.
-./agent/agentctl/agentctl setup claude \
-  --provider anthropic --model claude-sonnet-4-6 --dry-run
-
-# Provider-only setup without the default status-line preset.
-./agent/agentctl/agentctl setup claude \
-  --provider anthropic --model claude-sonnet-4-6 --no-statusline
-
-# For automation, prefer a mode-0600 single-line file over --key.
-./agent/agentctl/agentctl setup claude \
-  --provider anthropic --model claude-sonnet-4-6 \
-  --key-file /secure/anthropic-api-key
+  --model my-model --auth-mode bearer --secret work_gateway_key --yes
+agentctl provider use work-gateway --target claude \
+  --secret-file /secure/work-gateway-key --skip-validate --yes
 ```
 
-`--region china|global` is retained as a MiniMax compatibility shortcut.
-Use `--skip-validate` when a custom gateway does not implement a models
-endpoint. `--key-file` refuses symlinks, group/other-readable files, empty
-files, and multi-line values.
+## Model context and auto-compact
+
+Provider schema 2 stores the verified model maximum separately from the
+client-side compact trigger. The MiniMax M3 built-ins resolve to 1,000,000
+tokens with auto-compact at 500,000:
+
+```bash
+agentctl provider use minimax-cn --target claude \
+  --context-window-tokens 1000000 \
+  --auto-compact-tokens 500000 --yes
+```
+
+The Claude renderer writes `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
+`autoCompactWindow`. Passing `auto` for either CLI value releases that field
+back to Claude Code or restores the exact value that existed before agentctl
+took ownership. Ownership is recorded separately in
+`~/.claude/.script-toolbox-provider-context.json`; it contains only setting
+metadata, is mode `0600`, and participates in transactional provider rollback.
+An external edit to an actively managed value blocks replacement until it is
+reviewed and explicitly forced.
+
+`--secret-file` refuses symlinks, group/other-readable files, empty files, and
+multi-line values. Custom profiles skip an unknown models endpoint by default;
+`--skip-validate` makes that policy explicit.
 
 Shell-level `ANTHROPIC_*` exports take precedence over `settings.json`. During
 interactive setup the script offers to back up each affected shell startup file
@@ -196,7 +194,8 @@ GITHUB_PERSONAL_ACCESS_TOKEN=github_pat... \
 
 The full `uninstall.sh` also invokes the status-line manager when its ownership
 state exists. The provider-only `agentctl uninstall claude` intentionally leaves
-both MCP and status-line state untouched.
+both MCP and status-line state untouched, while restoring any context values
+captured by the Provider renderer.
 
 Claude Code installation tries Anthropic's native installer first and falls
 back to `npm install -g @anthropic-ai/claude-code`.

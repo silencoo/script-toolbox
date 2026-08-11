@@ -128,9 +128,9 @@ function validateConfig(value) {
   exactKeys(value, [
     "schema", "kind", "instance_id", "created_at", "profile", "target",
     "platform", "protocol", "route", "backends", "retry", "circuit",
-    "retention", "listen", "timeouts", "limits", "pricing", "paths"
+    "compaction", "retention", "listen", "timeouts", "limits", "pricing", "paths"
   ], "proxy config");
-  if (value.schema !== 3 || value.kind !== CONFIG_KIND ||
+  if (value.schema !== 4 || value.kind !== CONFIG_KIND ||
       typeof value.instance_id !== "string" ||
       !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
       typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at))) {
@@ -140,6 +140,15 @@ function validateConfig(value) {
   validateTarget(value.target);
   validatePlatform(value.platform);
   validateProtocol(value.protocol);
+  exactKeys(value.compaction, ["mode", "label", "responses_compact"], "proxy compaction");
+  if (!["client_local", "remote_native", "messages_native"].includes(value.compaction.mode) ||
+      typeof value.compaction.label !== "string" || value.compaction.label.length < 1 ||
+      value.compaction.label.length > 100 ||
+      typeof value.compaction.responses_compact !== "boolean" ||
+      (value.compaction.responses_compact &&
+       (value.protocol !== "openai_responses" || value.compaction.mode !== "remote_native"))) {
+    throw new ProxyDaemonError("proxy compaction configuration is invalid");
+  }
   if (value.route !== null &&
       (typeof value.route !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.route) ||
        value.route.length > 64)) {
@@ -372,7 +381,7 @@ function clientToken(request) {
   return "";
 }
 
-function allowedRoute(protocol, method, pathname) {
+function allowedRoute(protocol, method, pathname, { responsesCompact = false } = {}) {
   if (method === "GET" && pathname === "/v1/models") return true;
   if (protocol === "anthropic_messages") {
     return method === "POST" && [
@@ -380,7 +389,8 @@ function allowedRoute(protocol, method, pathname) {
     ].includes(pathname);
   }
   if (protocol === "openai_responses") {
-    return method === "POST" && pathname === "/v1/responses";
+    return method === "POST" && (pathname === "/v1/responses" ||
+      (responsesCompact && pathname === "/v1/responses/compact"));
   }
   if (protocol === "openai_chat") {
     return method === "POST" && pathname === "/v1/chat/completions";
@@ -421,7 +431,7 @@ function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefi
     if (value !== undefined) headers[lower] = value;
   }
   headers["accept-encoding"] = "identity";
-  headers["user-agent"] = "agentproxyd/3";
+  headers["user-agent"] = "agentproxyd/4";
   if (Number.isSafeInteger(bodyLength)) headers["content-length"] = String(bodyLength);
   if (backend.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
   if (backend.auth.mode === "x-api-key") headers["x-api-key"] = secret;
@@ -456,7 +466,7 @@ function sendJson(response, status, body) {
 function validateState(value, instanceId = "") {
   exactKeys(value, [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config", "route", "backend_profiles"
+    "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
   ], "proxy state");
   if (value.schema !== 1 || value.kind !== STATE_KIND ||
       (instanceId && value.instance_id !== instanceId) ||
@@ -464,7 +474,10 @@ function validateState(value, instanceId = "") {
       (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
       (value.backend_profiles !== undefined &&
        (!Array.isArray(value.backend_profiles) ||
-        value.backend_profiles.some((profile) => typeof profile !== "string")))) {
+        value.backend_profiles.some((profile) => typeof profile !== "string"))) ||
+      !plainObject(value.compaction) ||
+      typeof value.compaction.responses_compact !== "boolean" ||
+      !["client_local", "remote_native", "messages_native"].includes(value.compaction.mode)) {
     throw new ProxyDaemonError("proxy state is invalid");
   }
   for (const profile of value.backend_profiles || []) validateProfileName(profile);
@@ -925,6 +938,7 @@ async function proxyRequest(request, response, context) {
       circuits: circuitStates,
       target: config.target,
       protocol: config.protocol,
+      compaction: config.compaction,
       pricing_catalog_version: pricing?.version || null,
       pricing_model_source: config.pricing.model_source
     });
@@ -957,7 +971,9 @@ async function proxyRequest(request, response, context) {
     request.resume();
     return;
   }
-  if (!allowedRoute(config.protocol, request.method || "", localUrl.pathname)) {
+  if (!allowedRoute(config.protocol, request.method || "", localUrl.pathname, {
+    responsesCompact: config.compaction.responses_compact
+  })) {
     sendJson(response, 404, { error: "route_not_available_for_proxy_protocol" });
     finishMetadata(404, "route_rejected");
     request.resume();
@@ -1215,6 +1231,7 @@ async function run(configPath) {
     profile: config.profile,
     target: config.target,
     protocol: config.protocol,
+    compaction: config.compaction,
     route: config.route,
     backend_profiles: config.backends.map((backend) => backend.profile),
     config: configPath

@@ -150,6 +150,46 @@ ui_read() {
     builtin read -r -p "$(ui_text "$english_prompt" "$chinese_prompt")" "$variable_name"
 }
 
+ui_read_edit() {
+    local variable_name="$1" english_prompt="$2" chinese_prompt="$3"
+    builtin read -r -e -p "$(ui_text "$english_prompt" "$chinese_prompt")" "$variable_name"
+}
+
+ui_read_array_edit() {
+    local variable_name="$1" english_prompt="$2" chinese_prompt="$3"
+    builtin read -r -e -a "$variable_name" -p "$(ui_text "$english_prompt" "$chinese_prompt")"
+}
+
+# Keep operational messages on the same language path as menus and prompts.
+# These wrappers also make it harder for a newly added action to accidentally
+# bypass TOOLKIT_LANG by calling a log function with a Chinese-only string.
+ui_log_info() {
+    log_info "$(ui_text "$1" "$2")"
+}
+
+ui_log_success() {
+    log_success "$(ui_text "$1" "$2")"
+}
+
+ui_log_warning() {
+    log_warning "$(ui_text "$1" "$2")"
+}
+
+ui_log_error() {
+    log_error "$(ui_text "$1" "$2")"
+}
+
+ui_log_separator() {
+    local level="${1:-info}"
+    local separator
+    separator="$(ui_text "----------------------------------------" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")"
+    if [ "$level" = "warning" ]; then
+        log_warning "$separator"
+    else
+        log_info "$separator"
+    fi
+}
+
 # --- 日志函数 ---
 ensure_log_file() {
     if [ "$LOG_READY" = true ]; then
@@ -166,7 +206,7 @@ ensure_log_file() {
     umask 077
     if ! : >> "$LOG_FILE"; then
         umask "$old_umask"
-        printf '%s\n' "无法创建日志文件: $LOG_FILE" >&2
+        printf '%s\n' "$(ui_text "Unable to create log file: $LOG_FILE" "无法创建日志文件: $LOG_FILE")" >&2
         return 1
     fi
     chmod 600 "$LOG_FILE" 2>/dev/null || true
@@ -238,14 +278,17 @@ effective_system_timezone() {
 
 configure_system_timezone() {
     if [ -z "$SYSTEM_TIMEZONE" ]; then
-        log_info "SYSTEM_TIMEZONE 未设置，保留系统当前时区: $(effective_system_timezone)"
+        ui_log_info \
+            "SYSTEM_TIMEZONE is not set; keeping the current timezone: $(effective_system_timezone)" \
+            "SYSTEM_TIMEZONE 未设置，保留系统当前时区: $(effective_system_timezone)"
         return 0
     fi
     if ! timezone_name_is_valid "$SYSTEM_TIMEZONE"; then
-        log_error "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
+        ui_log_error "Invalid SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE" "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
         return 1
     fi
-    run_command "设置时区为 $SYSTEM_TIMEZONE" timedatectl set-timezone "$SYSTEM_TIMEZONE"
+    run_command "$(ui_text "Set timezone to $SYSTEM_TIMEZONE" "设置时区为 $SYSTEM_TIMEZONE")" \
+        timedatectl set-timezone "$SYSTEM_TIMEZONE"
 }
 
 validate_runtime_modes() {
@@ -253,66 +296,78 @@ validate_runtime_modes() {
     case "$EXTERNAL_TRUST_MODE" in
         strict|standard|permissive) ;;
         *)
-            log_error "无效的 EXTERNAL_TRUST_MODE: $EXTERNAL_TRUST_MODE"
+            ui_log_error "Invalid EXTERNAL_TRUST_MODE: $EXTERNAL_TRUST_MODE" "无效的 EXTERNAL_TRUST_MODE: $EXTERNAL_TRUST_MODE"
             return 1
             ;;
     esac
     case "$ACTION_ROLLBACK_MODE" in
         auto|prompt|always|never) ;;
         *)
-            log_error "无效的 ACTION_ROLLBACK_MODE: $ACTION_ROLLBACK_MODE"
+            ui_log_error "Invalid ACTION_ROLLBACK_MODE: $ACTION_ROLLBACK_MODE" "无效的 ACTION_ROLLBACK_MODE: $ACTION_ROLLBACK_MODE"
             return 1
             ;;
     esac
     case "$APT_SOURCE_RECOVERY" in
         prompt|auto-known|never) ;;
         *)
-            log_error "无效的 APT_SOURCE_RECOVERY: $APT_SOURCE_RECOVERY"
+            ui_log_error "Invalid APT_SOURCE_RECOVERY: $APT_SOURCE_RECOVERY" "无效的 APT_SOURCE_RECOVERY: $APT_SOURCE_RECOVERY"
             return 1
             ;;
     esac
     case "$ROLLBACK_ENABLED" in
         true|false) ;;
         *)
-            log_error "无效的 ROLLBACK_ENABLED: $ROLLBACK_ENABLED（应为 true/false）"
+            ui_log_error \
+                "Invalid ROLLBACK_ENABLED: $ROLLBACK_ENABLED (expected true/false)" \
+                "无效的 ROLLBACK_ENABLED: ${ROLLBACK_ENABLED}（应为 true/false）"
             return 1
             ;;
     esac
     case "$RESOURCE_CHECK_STRICT" in
         0|1) ;;
         *)
-            log_error "无效的 RESOURCE_CHECK_STRICT: $RESOURCE_CHECK_STRICT（应为 0/1）"
+            ui_log_error \
+                "Invalid RESOURCE_CHECK_STRICT: $RESOURCE_CHECK_STRICT (expected 0/1)" \
+                "无效的 RESOURCE_CHECK_STRICT: ${RESOURCE_CHECK_STRICT}（应为 0/1）"
             return 1
             ;;
     esac
     case "$NETWORK_DIAGNOSTIC_ONLY" in
         0|1) ;;
         *)
-            log_error "无效的 NETWORK_DIAGNOSTIC_ONLY: $NETWORK_DIAGNOSTIC_ONLY（应为 0/1）"
+            ui_log_error \
+                "Invalid NETWORK_DIAGNOSTIC_ONLY: $NETWORK_DIAGNOSTIC_ONLY (expected 0/1)" \
+                "无效的 NETWORK_DIAGNOSTIC_ONLY: ${NETWORK_DIAGNOSTIC_ONLY}（应为 0/1）"
             return 1
             ;;
     esac
     case "$SYSTEM_OVERVIEW_ONLY" in
         0|1) ;;
         *)
-            log_error "无效的 SYSTEM_OVERVIEW_ONLY: $SYSTEM_OVERVIEW_ONLY（应为 0/1）"
+            ui_log_error \
+                "Invalid SYSTEM_OVERVIEW_ONLY: $SYSTEM_OVERVIEW_ONLY (expected 0/1)" \
+                "无效的 SYSTEM_OVERVIEW_ONLY: ${SYSTEM_OVERVIEW_ONLY}（应为 0/1）"
             return 1
             ;;
     esac
     if [ "$NETWORK_DIAGNOSTIC_ONLY" = "1" ] && [ "$SYSTEM_OVERVIEW_ONLY" = "1" ]; then
-        log_error "NETWORK_DIAGNOSTIC_ONLY 与 SYSTEM_OVERVIEW_ONLY 不能同时启用"
+        ui_log_error \
+            "NETWORK_DIAGNOSTIC_ONLY and SYSTEM_OVERVIEW_ONLY cannot both be enabled" \
+            "NETWORK_DIAGNOSTIC_ONLY 与 SYSTEM_OVERVIEW_ONLY 不能同时启用"
         return 1
     fi
     if [[ ! "$NETWORK_DIAGNOSTIC_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
-        log_error "无效的 NETWORK_DIAGNOSTIC_HOST: $NETWORK_DIAGNOSTIC_HOST"
+        ui_log_error "Invalid NETWORK_DIAGNOSTIC_HOST: $NETWORK_DIAGNOSTIC_HOST" "无效的 NETWORK_DIAGNOSTIC_HOST: $NETWORK_DIAGNOSTIC_HOST"
         return 1
     fi
     if [ -n "$SYSTEM_TIMEZONE" ] && ! timezone_name_is_valid "$SYSTEM_TIMEZONE"; then
-        log_error "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
+        ui_log_error "Invalid SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE" "无效的 SYSTEM_TIMEZONE: $SYSTEM_TIMEZONE"
         return 1
     fi
     if [ -n "$SWAP_SIZE_MB" ] && { [[ ! "$SWAP_SIZE_MB" =~ ^[0-9]+$ ]] || [ "$SWAP_SIZE_MB" -lt 512 ]; }; then
-        log_error "无效的 SWAP_SIZE_MB: ${SWAP_SIZE_MB}（最小 512MB）"
+        ui_log_error \
+            "Invalid SWAP_SIZE_MB: ${SWAP_SIZE_MB} (minimum: 512 MB)" \
+            "无效的 SWAP_SIZE_MB: ${SWAP_SIZE_MB}（最小 512MB）"
         return 1
     fi
 }
@@ -327,7 +382,9 @@ register_temp_file() {
             TEMP_FILES+=("$file")
             ;;
         *)
-            log_warning "拒绝登记非临时路径用于自动清理: $file"
+            ui_log_warning \
+                "Refusing to register a non-temporary path for automatic cleanup: $file" \
+                "拒绝登记非临时路径用于自动清理: $file"
             ;;
     esac
 }
@@ -357,7 +414,9 @@ run_command() {
         return 0
     else
         local rc=$?
-        log_error "$description 失败 (退出码: $rc)"
+        ui_log_error \
+            "$description failed (exit code: $rc)" \
+            "$description 失败 (退出码: $rc)"
         return "$rc"
     fi
 }
@@ -437,19 +496,29 @@ external_trust_advice() {
     local trust_level="$1"
     case "$trust_level" in
         official)
-            printf '官方或项目主发布源，优先使用固定版本与校验文件。'
+            ui_text \
+                'Official or primary project release source; prefer pinned versions and checksum files.' \
+                '官方或项目主发布源，优先使用固定版本与校验文件。'
             ;;
         service)
-            printf '外部查询服务，只用于读取信息；若在隐私敏感环境中请跳过。'
+            ui_text \
+                'External lookup service used only to read information; skip it in privacy-sensitive environments.' \
+                '外部查询服务，只用于读取信息；若在隐私敏感环境中请跳过。'
             ;;
         mirror)
-            printf '第三方镜像源，可提升速度；生产环境建议确认维护方与同步策略。'
+            ui_text \
+                'Third-party mirror that may improve speed; verify its operator and synchronization policy for production use.' \
+                '第三方镜像源，可提升速度；生产环境建议确认维护方与同步策略。'
             ;;
         remote-script)
-            printf '远程脚本源，脚本会先下载、记录 SHA256 并二次确认后执行。'
+            ui_text \
+                'Remote-script source; the script will download it, record its SHA256, and request another confirmation before execution.' \
+                '远程脚本源，脚本会先下载、记录 SHA256 并二次确认后执行。'
             ;;
         *)
-            printf '未知来源，建议手动审阅 URL、脚本内容和 SHA256 后再继续。'
+            ui_text \
+                'Unknown source; manually review the URL, script contents, and SHA256 before continuing.' \
+                '未知来源，建议手动审阅 URL、脚本内容和 SHA256 后再继续。'
             ;;
     esac
 }
@@ -490,14 +559,14 @@ fetch_file() {
     local dest_dir dest_base tmp
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 下载 $description -> $dest"
+        ui_log_info "[DRY RUN] Would download $description -> $dest" "[DRY RUN] 下载 $description -> $dest"
         return 0
     fi
 
     dest_dir="$(dirname "$dest")"
     dest_base="$(basename "$dest")"
     if [ ! -d "$dest_dir" ]; then
-        log_error "下载目标目录不存在: $dest_dir"
+        ui_log_error "Download destination directory does not exist: $dest_dir" "下载目标目录不存在: $dest_dir"
         return 1
     fi
     tmp="$(mktemp "$dest_dir/.${dest_base}.part.XXXXXX")" || return 1
@@ -506,13 +575,13 @@ fetch_file() {
     if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 \
         --speed-time 30 --speed-limit 1024 --proto '=https' --tlsv1.2 -o "$tmp" "$url"; then
         rm -f -- "$tmp"
-        log_error "下载失败: $description"
+        ui_log_error "Download failed: $description" "下载失败: $description"
         return 1
     fi
     chmod 600 "$tmp"
     if ! mv -f -- "$tmp" "$dest"; then
         rm -f -- "$tmp"
-        log_error "无法安装下载文件: $dest"
+        ui_log_error "Unable to install downloaded file: $dest" "无法安装下载文件: $dest"
         return 1
     fi
 }
@@ -536,19 +605,19 @@ download_and_verify_sha256() {
         return 1
     fi
     if [[ ! "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
-        log_error "$description 缺少有效的固定 SHA256"
+        ui_log_error "$description is missing a valid pinned SHA256" "$description 缺少有效的固定 SHA256"
         return 1
     fi
     fetch_file "$url" "$dest" "$description" || return 1
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 校验 $description 的固定 SHA256"
+        ui_log_info "[DRY RUN] Would verify the pinned SHA256 for $description" "[DRY RUN] 校验 $description 的固定 SHA256"
         return 0
     fi
     local actual_sha
     actual_sha="$(sha256sum "$dest" | awk '{print $1}')"
     if [ "$actual_sha" != "${expected_sha,,}" ]; then
         rm -f -- "$dest"
-        log_error "$description SHA256 不匹配"
+        ui_log_error "$description SHA256 mismatch" "$description SHA256 不匹配"
         return 1
     fi
 }
@@ -559,29 +628,32 @@ download_and_verify_checksum_url() {
     case "$algorithm" in
         sha256) pattern='^[[:xdigit:]]{64}$' ;;
         sha512) pattern='^[[:xdigit:]]{128}$' ;;
-        *) log_error "不支持的摘要算法: $algorithm"; return 1 ;;
+        *) ui_log_error "Unsupported checksum algorithm: $algorithm" "不支持的摘要算法: $algorithm"; return 1 ;;
     esac
     confirm_external_resource "$url" "$description" || return 1
-    fetch_file "$checksum_url" "$checksum_file" "$description 摘要" || return 1
+    fetch_file "$checksum_url" "$checksum_file" \
+        "$(ui_text "$description checksum" "$description 摘要")" || return 1
     fetch_file "$url" "$dest" "$description" || { rm -f -- "$checksum_file"; return 1; }
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 使用 $algorithm 校验 $description"
+        ui_log_info \
+            "[DRY RUN] Would verify $description with $algorithm" \
+            "[DRY RUN] 使用 $algorithm 校验 $description"
         return 0
     fi
     expected="$(awk 'NR == 1 {print tolower($1)}' "$checksum_file")"
     if ! [[ "$expected" =~ $pattern ]]; then
         rm -f -- "$dest" "$checksum_file"
-        log_error "$description 摘要文件格式无效"
+        ui_log_error "$description checksum file has an invalid format" "$description 摘要文件格式无效"
         return 1
     fi
     actual="$("${algorithm}sum" "$dest" | awk '{print tolower($1)}')"
     rm -f -- "$checksum_file"
     if [ "$actual" != "$expected" ]; then
         rm -f -- "$dest"
-        log_error "$description $algorithm 校验失败"
+        ui_log_error "$description $algorithm verification failed" "$description $algorithm 校验失败"
         return 1
     fi
-    log_success "$description $algorithm 校验通过"
+    ui_log_success "$description passed $algorithm verification" "$description $algorithm 校验通过"
 }
 
 download_go_release() {
@@ -589,15 +661,19 @@ download_go_release() {
     local metadata_url="https://go.dev/dl/?mode=json&include=all" metadata expected url
     metadata="$(mktemp /tmp/init-go-metadata.XXXXXX.json)" || return 1
     register_temp_file "$metadata"
-    fetch_file "$metadata_url" "$metadata" "Go 发布元数据" || return 1
+    fetch_file "$metadata_url" "$metadata" "$(ui_text "Go release metadata" "Go 发布元数据")" || return 1
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 从 Go 官方发布元数据读取 $filename 的 SHA256"
+        ui_log_info \
+            "[DRY RUN] Would read the SHA256 for $filename from official Go release metadata" \
+            "[DRY RUN] 从 Go 官方发布元数据读取 $filename 的 SHA256"
         return 0
     fi
     expected="$(jq -r --arg filename "$filename" \
         '.[] | .files[] | select(.filename == $filename) | .sha256' "$metadata" | head -n 1)"
     [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || {
-        log_error "Go 官方元数据中没有找到 $filename 的 SHA256"
+        ui_log_error \
+            "The SHA256 for $filename was not found in official Go metadata" \
+            "Go 官方元数据中没有找到 $filename 的 SHA256"
         return 1
     }
     url="https://go.dev/dl/$filename"
@@ -636,15 +712,25 @@ confirm_remote_script_execution() {
     if [ "$NON_INTERACTIVE" = "1" ]; then
         if [ "$ALLOW_EXTERNAL" = "1" ] && [ "$ALLOW_REMOTE_EXEC" = "1" ]; then
             if ! external_trust_allows_url "$url" && [ "$ALLOW_DANGEROUS" != "1" ]; then
-                log_warning "[非交互] 远程脚本被外部信任策略拒绝: $url"
-                log_warning "如确需越过当前策略，请显式设置 ALLOW_DANGEROUS=1"
+                ui_log_warning \
+                    "[non-interactive] Remote script rejected by the external trust policy: $url" \
+                    "[非交互] 远程脚本被外部信任策略拒绝: $url"
+                ui_log_warning \
+                    "To override the current policy, explicitly set ALLOW_DANGEROUS=1" \
+                    "如确需越过当前策略，请显式设置 ALLOW_DANGEROUS=1"
                 return 1
             fi
-            log_warning "[非交互] 已允许执行远程脚本: $url"
+            ui_log_warning \
+                "[non-interactive] Remote-script execution allowed: $url" \
+                "[非交互] 已允许执行远程脚本: $url"
             return 0
         fi
-        log_warning "[非交互] 已拒绝执行远程脚本: $url"
-        log_warning "如确需执行，请同时设置 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1"
+        ui_log_warning \
+            "[non-interactive] Remote-script execution denied: $url" \
+            "[非交互] 已拒绝执行远程脚本: $url"
+        ui_log_warning \
+            "To execute it, set both ALLOW_EXTERNAL=1 and ALLOW_REMOTE_EXEC=1" \
+            "如确需执行，请同时设置 ALLOW_EXTERNAL=1 ALLOW_REMOTE_EXEC=1"
         return 1
     fi
 
@@ -652,8 +738,11 @@ confirm_remote_script_execution() {
         return 1
     fi
 
-    confirm_dangerous_action "执行远程脚本: $description" \
-        "脚本将先下载到私有临时文件，校验/记录 SHA256 后再执行。请确认来源可信。"
+    confirm_dangerous_action \
+        "$(ui_text "Execute remote script: $description" "执行远程脚本: $description")" \
+        "$(ui_text \
+            "The script will first be downloaded to a private temporary file, then its SHA256 will be verified or recorded before execution. Confirm that you trust the source." \
+            "脚本将先下载到私有临时文件，校验/记录 SHA256 后再执行。请确认来源可信。")"
 }
 
 download_remote_script_with_policy() {
@@ -662,7 +751,7 @@ download_remote_script_with_policy() {
 
     case "$pin_policy" in
         required|allow-unverified) ;;
-        *) log_error "未知远程脚本摘要策略: $pin_policy"; return 1 ;;
+        *) ui_log_error "Unknown remote-script checksum policy: $pin_policy" "未知远程脚本摘要策略: $pin_policy"; return 1 ;;
     esac
 
     if ! confirm_remote_script_execution "$url" "$description"; then
@@ -672,21 +761,31 @@ download_remote_script_with_policy() {
     expected_sha="$(remote_script_expected_sha256 "$url" 2>/dev/null || true)"
     if [ -z "$expected_sha" ]; then
         if [ "$pin_policy" = "required" ]; then
-            log_error "该调用点要求固定 SHA256，已拒绝远程脚本: $url"
-            log_error "请通过 REMOTE_SCRIPT_SHA256 或 root-only 的 $REMOTE_SCRIPT_CHECKSUM_FILE 提供可信摘要"
+            ui_log_error \
+                "This call site requires a pinned SHA256; remote script rejected: $url" \
+                "该调用点要求固定 SHA256，已拒绝远程脚本: $url"
+            ui_log_error \
+                "Provide a trusted checksum through REMOTE_SCRIPT_SHA256 or the root-only file $REMOTE_SCRIPT_CHECKSUM_FILE" \
+                "请通过 REMOTE_SCRIPT_SHA256 或 root-only 的 $REMOTE_SCRIPT_CHECKSUM_FILE 提供可信摘要"
             return 1
         fi
         if [ "$NON_INTERACTIVE" = "1" ]; then
             if [ "$ALLOW_UNVERIFIED_REMOTE" != "1" ]; then
-                log_error "非交互执行未固定摘要的远程脚本需要 ALLOW_UNVERIFIED_REMOTE=1: $url"
+                ui_log_error \
+                    "Non-interactive execution of an unpinned remote script requires ALLOW_UNVERIFIED_REMOTE=1: $url" \
+                    "非交互执行未固定摘要的远程脚本需要 ALLOW_UNVERIFIED_REMOTE=1: $url"
                 return 1
             fi
             if [ "$ALLOW_DANGEROUS" != "1" ]; then
-                log_error "非交互执行未固定摘要的远程脚本还需要 ALLOW_DANGEROUS=1"
+                ui_log_error \
+                    "Non-interactive execution of an unpinned remote script also requires ALLOW_DANGEROUS=1" \
+                    "非交互执行未固定摘要的远程脚本还需要 ALLOW_DANGEROUS=1"
                 return 1
             fi
         fi
-        log_warning "正在执行代码中显式标注、但未固定摘要的远程脚本"
+        ui_log_warning \
+            "Executing a remote script explicitly marked in the code as having no pinned checksum" \
+            "正在执行代码中显式标注、但未固定摘要的远程脚本"
     fi
 
     if ! fetch_file "$url" "$dest" "$description"; then
@@ -694,7 +793,9 @@ download_remote_script_with_policy() {
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过远程脚本权限设置: $dest"
+        ui_log_info \
+            "[DRY RUN] Would skip setting remote-script permissions: $dest" \
+            "[DRY RUN] 跳过远程脚本权限设置: $dest"
         return 0
     fi
 
@@ -702,16 +803,16 @@ download_remote_script_with_policy() {
     script_sha="$(sha256sum "$dest" 2>/dev/null | awk '{print tolower($1)}')"
     if [[ ! "$script_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
         rm -f -- "$dest"
-        log_error "无法计算远程脚本 SHA256: $description"
+        ui_log_error "Unable to calculate remote-script SHA256: $description" "无法计算远程脚本 SHA256: $description"
         return 1
     fi
     if [ -n "$expected_sha" ] && [ "$script_sha" != "$expected_sha" ]; then
         rm -f -- "$dest"
-        log_error "远程脚本 SHA256 不匹配: $description"
+        ui_log_error "Remote-script SHA256 mismatch: $description" "远程脚本 SHA256 不匹配: $description"
         return 1
     fi
-    log_warning "远程脚本已下载: $dest"
-    log_warning "远程脚本 SHA256: $script_sha"
+    ui_log_warning "Remote script downloaded: $dest" "远程脚本已下载: $dest"
+    ui_log_warning "Remote-script SHA256: $script_sha" "远程脚本 SHA256: $script_sha"
 }
 
 download_remote_script() {
@@ -728,7 +829,9 @@ run_remote_script_with_policy() {
     local script_path status=0
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 执行远程脚本: ${description}（实际下载和执行均已阻止）"
+        ui_log_info \
+            "[DRY RUN] Would execute remote script: ${description} (download and execution blocked)" \
+            "[DRY RUN] 执行远程脚本: ${description}（实际下载和执行均已阻止）"
         return 0
     fi
 
@@ -743,7 +846,9 @@ run_remote_script_with_policy() {
     else
         status=$?
     fi
-    log_error "执行 $description 失败 (退出码: $status)"
+    ui_log_error \
+        "Failed to execute $description (exit code: $status)" \
+        "执行 $description 失败 (退出码: $status)"
     return "$status"
 }
 
@@ -762,11 +867,13 @@ run_remote_script_as_user_with_policy_interpreter() {
 
     case "$interpreter" in
         bash|sh) ;;
-        *) log_error "不支持的远程脚本解释器: $interpreter"; return 1 ;;
+        *) ui_log_error "Unsupported remote-script interpreter: $interpreter" "不支持的远程脚本解释器: $interpreter"; return 1 ;;
     esac
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 以用户 $target_user 使用 $interpreter 执行远程脚本: ${description}（实际下载和执行均已阻止）"
+        ui_log_info \
+            "[DRY RUN] Would execute remote script as $target_user with $interpreter: ${description} (download and execution blocked)" \
+            "[DRY RUN] 以用户 $target_user 使用 $interpreter 执行远程脚本: ${description}（实际下载和执行均已阻止）"
         return 0
     fi
 
@@ -793,7 +900,9 @@ run_remote_script_as_user_with_policy_interpreter() {
             status=$?
         fi
     fi
-    log_error "以用户 $target_user 执行 $description 失败 (退出码: $status)"
+    ui_log_error \
+        "Failed to execute $description as $target_user (exit code: $status)" \
+        "以用户 $target_user 执行 $description 失败 (退出码: $status)"
     return "$status"
 }
 
@@ -866,18 +975,22 @@ validate_systemd_duration_value() {
 }
 
 atomic_install_file() {
-    local target="$1" candidate="$2" description="${3:-配置文件}" mode="${4:-preserve}"
+    local target="$1" candidate="$2" description="${3:-$(ui_text "configuration file" "配置文件")}" mode="${4:-preserve}"
     local owner="${5:-preserve}" group="${6:-preserve}" validator="${7:-validate_noop_candidate}"
     local target_exists=false target_mode target_uid target_gid backup_recorded=false
 
     if [ "$DRY_RUN" = "1" ]; then
         rm -f -- "$candidate" 2>/dev/null || true
-        log_info "[DRY RUN] 原子写入 $target ($description)"
+        ui_log_info \
+            "[DRY RUN] Would atomically write $target ($description)" \
+            "[DRY RUN] 原子写入 $target ($description)"
         return 0
     fi
     if ! "$validator" "$candidate" "$target"; then
         rm -f -- "$candidate"
-        log_error "$description 校验失败，未修改 $target"
+        ui_log_error \
+            "$description validation failed; $target was not changed" \
+            "$description 校验失败，未修改 $target"
         return 1
     fi
 
@@ -899,13 +1012,13 @@ atomic_install_file() {
         return 1
     fi
     if [ -d "$target" ]; then
-        log_error "目标路径意外为目录: $target"
+        ui_log_error "Target path is unexpectedly a directory: $target" "目标路径意外为目录: $target"
         rm -f -- "$candidate"
         [ "$backup_recorded" = true ] && discard_last_operation
         return 1
     fi
     if ! mv -f -- "$candidate" "$target"; then
-        log_error "原子替换失败: $target"
+        ui_log_error "Atomic replacement failed: $target" "原子替换失败: $target"
         rm -f -- "$candidate"
         [ "$backup_recorded" = true ] && discard_last_operation
         return 1
@@ -913,17 +1026,19 @@ atomic_install_file() {
     if [ "$target_exists" = false ]; then
         record_created_file "$target" "$description"
     fi
-    log_info "已原子写入: $target"
+    ui_log_info "Atomically wrote: $target" "已原子写入: $target"
 }
 
 write_file_atomic() {
-    local target="$1" description="${2:-配置文件}" mode="${3:-preserve}"
+    local target="$1" description="${2:-$(ui_text "configuration file" "配置文件")}" mode="${3:-preserve}"
     local owner="${4:-preserve}" group="${5:-preserve}" validator="${6:-validate_noop_candidate}"
     local target_dir target_base candidate
 
     if [ "$DRY_RUN" = "1" ]; then
         cat > /dev/null
-        log_info "[DRY RUN] 原子写入 $target ($description)"
+        ui_log_info \
+            "[DRY RUN] Would atomically write $target ($description)" \
+            "[DRY RUN] 原子写入 $target ($description)"
         return 0
     fi
     target_dir="$(dirname "$target")"
@@ -947,7 +1062,7 @@ write_directory_transaction_journal() {
     local target="$1" old="$2" staged="$3" journal tmp
     case "$DIR_TRANSACTION_DIR" in
         /*) ;;
-        *) log_error "DIR_TRANSACTION_DIR 必须是绝对路径"; return 1 ;;
+        *) ui_log_error "DIR_TRANSACTION_DIR must be an absolute path" "DIR_TRANSACTION_DIR 必须是绝对路径"; return 1 ;;
     esac
     mkdir -p "$DIR_TRANSACTION_DIR" || return 1
     chmod 700 "$DIR_TRANSACTION_DIR" 2>/dev/null || true
@@ -974,37 +1089,50 @@ recover_directory_transaction_journal() {
 
     case "$target:$old:$staged" in
         /*:/*:/*) ;;
-        *) log_error "目录事务日志格式无效，已保留: $journal"; return 1 ;;
+        *) ui_log_error \
+            "Invalid directory-transaction journal format; journal retained: $journal" \
+            "目录事务日志格式无效，已保留: $journal"; return 1 ;;
     esac
-    [ "$target" != "/" ] || { log_error "拒绝恢复根目录事务: $journal"; return 1; }
+    [ "$target" != "/" ] || {
+        ui_log_error "Refusing to recover a root-directory transaction: $journal" "拒绝恢复根目录事务: $journal"
+        return 1
+    }
 
     if [ -e "$target" ]; then
         # live target 存在：事务已完成，或尚未开始移动；隐藏目录均可清理。
         [ -e "$old" ] && rm -rf -- "$old"
         [ -e "$staged" ] && rm -rf -- "$staged"
         rm -f -- "$journal"
-        log_warning "已清理完成或未开始的目录事务: $target"
+        ui_log_warning \
+            "Cleaned a completed or unstarted directory transaction: $target" \
+            "已清理完成或未开始的目录事务: $target"
         return 0
     fi
     if [ -e "$old" ]; then
         if mv -T -- "$old" "$target"; then
             [ -e "$staged" ] && rm -rf -- "$staged"
             rm -f -- "$journal"
-            log_warning "已从事务日志恢复目录: $target"
+            ui_log_warning \
+                "Recovered directory from transaction journal: $target" \
+                "已从事务日志恢复目录: $target"
             return 0
         fi
-        log_error "目录事务恢复失败: $target"
+        ui_log_error "Directory-transaction recovery failed: $target" "目录事务恢复失败: $target"
         return 1
     fi
     if [ -e "$staged" ]; then
         # old 意外丢失时，暂存目录是完整准备好的新版本；优先恢复 live 路径。
         if mv -T -- "$staged" "$target"; then
             rm -f -- "$journal"
-            log_warning "旧目录缺失，已将完整暂存目录提升为 live target: $target"
+        ui_log_warning \
+            "Previous directory missing; promoted the complete staged directory to the live target: $target" \
+            "旧目录缺失，已将完整暂存目录提升为 live target: $target"
             return 0
         fi
     fi
-    log_error "目录事务无法自动恢复，已保留日志: $journal"
+    ui_log_error \
+        "Directory transaction could not be recovered automatically; journal retained: $journal" \
+        "目录事务无法自动恢复，已保留日志: $journal"
     return 1
 }
 
@@ -1051,12 +1179,17 @@ PY_RENAMEAT2
 }
 
 replace_directory_transactional() {
-    local target="$1" staged="$2" description="${3:-目录安装}"
+    local target="$1" staged="$2" description="${3:-$(ui_text "directory installation" "目录安装")}"
     local parent base prepared old journal=""
 
-    [ -d "$staged" ] || { log_error "$description 的暂存目录不存在: $staged"; return 1; }
+    [ -d "$staged" ] || {
+        ui_log_error "$description staging directory does not exist: $staged" "$description 的暂存目录不存在: $staged"
+        return 1
+    }
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 事务式替换目录 $target ($description)"
+        ui_log_info \
+            "[DRY RUN] Would replace directory transactionally: $target ($description)" \
+            "[DRY RUN] 事务式替换目录 $target ($description)"
         return 0
     fi
 
@@ -1064,7 +1197,7 @@ replace_directory_transactional() {
     base="$(basename "$target")"
     mkdir -p "$parent" || return 1
     if [ -e "$target" ] && [ ! -d "$target" ]; then
-        log_error "目录安装目标不是目录: $target"
+        ui_log_error "Directory installation target is not a directory: $target" "目录安装目标不是目录: $target"
         return 1
     fi
 
@@ -1073,7 +1206,7 @@ replace_directory_transactional() {
     rmdir "$prepared" || return 1
     if ! mv -T -- "$staged" "$prepared"; then
         rm -rf -- "$prepared"
-        log_error "$description 无法准备到目标文件系统"
+        ui_log_error "$description could not be staged on the target filesystem" "$description 无法准备到目标文件系统"
         return 1
     fi
 
@@ -1082,14 +1215,17 @@ replace_directory_transactional() {
             rm -rf -- "$prepared"
             return 1
         fi
-        log_info "$description 已安装到 $target"
+        ui_log_info "$description installed at $target" "$description 已安装到 $target"
         return 0
     fi
 
     # Linux/文件系统支持时，交换两个目录名，live target 在整个过程始终存在。
     if atomic_exchange_paths "$target" "$prepared"; then
-        rm -rf -- "$prepared" || log_warning "旧目录清理失败: $prepared"
-        log_info "$description 已通过原子目录交换安装到 $target"
+        rm -rf -- "$prepared" || \
+            ui_log_warning "Failed to clean up previous directory: $prepared" "旧目录清理失败: $prepared"
+        ui_log_info \
+            "$description installed at $target through an atomic directory exchange" \
+            "$description 已通过原子目录交换安装到 $target"
         return 0
     fi
 
@@ -1113,20 +1249,22 @@ replace_directory_transactional() {
         return 1
     fi
 
-    rm -rf -- "$old" || log_warning "旧目录清理失败: $old"
+    rm -rf -- "$old" || ui_log_warning "Failed to clean up previous directory: $old" "旧目录清理失败: $old"
     rm -f -- "$journal"
     sync -f "$parent" 2>/dev/null || true
-    log_info "$description 已通过可恢复事务安装到 $target"
+    ui_log_info \
+        "$description installed at $target through a recoverable transaction" \
+        "$description 已通过可恢复事务安装到 $target"
 }
 
 # --- 文件块写入（支持更新/追加） ---
 ensure_block_in_file() {
     local file="$1" marker_start="$2" marker_end="$3" content="$4"
-    local description="${5:-配置块}" validator="${6:-validate_noop_candidate}"
+    local description="${5:-$(ui_text "configuration block" "配置块")}" validator="${6:-validate_noop_candidate}"
     local target_dir candidate
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 写入配置块到 $file"
+        ui_log_info "[DRY RUN] Would write a configuration block to $file" "[DRY RUN] 写入配置块到 $file"
         return 0
     fi
     target_dir="$(dirname "$file")"
@@ -1149,7 +1287,7 @@ preview_rollback() {
     if [ ${#OPERATION_TARGETS[@]} -eq 0 ]; then
         return 0
     fi
-    log_warning "回滚预览 (展示前 5 行差异):"
+    ui_log_warning "Rollback preview (first five diff lines):" "回滚预览 (展示前 5 行差异):"
     for (( idx=0; idx<${#OPERATION_TARGETS[@]}; idx++ )); do
         target="${OPERATION_TARGETS[$idx]}"
         backup="${OPERATION_BACKUPS[$idx]}"
@@ -1158,7 +1296,7 @@ preview_rollback() {
             log_warning "----- $target -----"
             diff -u "$backup" "$target" | head -n 5 || true
         elif [ "$operation_type" = remove ]; then
-            log_warning "将删除本次新建文件: $target"
+            ui_log_warning "Will remove file created by this run: $target" "将删除本次新建文件: $target"
         fi
     done
 }
@@ -1208,13 +1346,13 @@ execute_with_progress() {
     # wait 位于 if 条件中，本身不受 errexit 提前终止；这里显式保存子进程状态。
     if wait "$pid"; then
         ACTIVE_CHILD_PID=""
-        printf '\r%b\n' "${GREEN}${message} ✓${PLAIN}"
+        printf '\r%b\n' "${GREEN}${message} $(ui_text "[OK]" "✓")${PLAIN}"
         return 0
     else
         status=$?
     fi
     ACTIVE_CHILD_PID=""
-    printf '\r%b\n' "${RED}${message} ✗${PLAIN}" >&2
+    printf '\r%b\n' "${RED}${message} $(ui_text "[FAILED]" "✗")${PLAIN}" >&2
     printf '%b\n' "${RED}$(ui_text "Command failed; recent log output:" "执行失败，错误日志:")${PLAIN}" >&2
     printf '%s\n' '----------------------------------------' >&2
     tail -n 10 "$LOG_FILE" >&2 || true
@@ -1245,13 +1383,13 @@ execute_with_progress_argv() {
     show_progress "$pid" "$message"
     if wait "$pid"; then
         ACTIVE_CHILD_PID=""
-        printf '\r%b\n' "${GREEN}${message} ✓${PLAIN}"
+        printf '\r%b\n' "${GREEN}${message} $(ui_text "[OK]" "✓")${PLAIN}"
         return 0
     else
         rc=$?
     fi
     ACTIVE_CHILD_PID=""
-    printf '\r%b\n' "${RED}${message} ✗${PLAIN}" >&2
+    printf '\r%b\n' "${RED}${message} $(ui_text "[FAILED]" "✗")${PLAIN}" >&2
     tail -n 10 "$LOG_FILE" >&2 || true
     return "$rc"
 }
@@ -1265,10 +1403,14 @@ confirm_action() {
 
     if [ "$NON_INTERACTIVE" = "1" ]; then
         if [ "$default" = "y" ]; then
-            log_info "[非交互] ${message} 默认: Y"
+            ui_log_info \
+                "[non-interactive] ${message} default: Y" \
+                "[非交互] ${message} 默认: Y"
             return 0
         fi
-        log_info "[非交互] ${message} 默认: N"
+        ui_log_info \
+            "[non-interactive] ${message} default: N" \
+            "[非交互] ${message} 默认: N"
         return 1
     fi
 
@@ -1307,10 +1449,14 @@ confirm_dangerous_action() {
     local message=$2
     if [ "$NON_INTERACTIVE" = "1" ]; then
         if [ "$ALLOW_DANGEROUS" = "1" ]; then
-            log_warning "[非交互] 已允许危险操作: $action"
+            ui_log_warning \
+                "[non-interactive] Dangerous operation allowed: $action" \
+                "[非交互] 已允许危险操作: $action"
             return 0
         fi
-        log_warning "[非交互] 已拒绝危险操作: $action"
+        ui_log_warning \
+            "[non-interactive] Dangerous operation denied: $action" \
+            "[非交互] 已拒绝危险操作: $action"
         return 1
     fi
     printf '%b\n' ""
@@ -1349,45 +1495,69 @@ confirm_external_resource() {
     if [ "$NON_INTERACTIVE" = "1" ]; then
         if [ "$ALLOW_EXTERNAL" = "1" ]; then
             if ! external_trust_allows_url "$url" && [ "$ALLOW_DANGEROUS" != "1" ]; then
-                log_warning "[非交互] 外部资源被信任策略拒绝: $url (trust=$trust_level mode=$EXTERNAL_TRUST_MODE)"
-                log_warning "如确需允许未知/远程脚本来源，请设置 EXTERNAL_TRUST_MODE=permissive 或 ALLOW_DANGEROUS=1"
+                ui_log_warning \
+                    "[non-interactive] External resource rejected by trust policy: $url (trust=$trust_level mode=$EXTERNAL_TRUST_MODE)" \
+                    "[非交互] 外部资源被信任策略拒绝: $url (trust=$trust_level mode=$EXTERNAL_TRUST_MODE)"
+                ui_log_warning \
+                    "To allow unknown or remote-script sources, set EXTERNAL_TRUST_MODE=permissive or ALLOW_DANGEROUS=1" \
+                    "如确需允许未知/远程脚本来源，请设置 EXTERNAL_TRUST_MODE=permissive 或 ALLOW_DANGEROUS=1"
                 return 1
             fi
-            log_info "[非交互] 已允许访问外部资源: $url"
+            ui_log_info \
+                "[non-interactive] External-resource access allowed: $url" \
+                "[非交互] 已允许访问外部资源: $url"
             return 0
         fi
-        log_warning "[非交互] 已拒绝访问外部资源: $url"
+        ui_log_warning \
+            "[non-interactive] External-resource access denied: $url" \
+            "[非交互] 已拒绝访问外部资源: $url"
         return 1
     fi
 
     if ! external_trust_allows_url "$url"; then
-        log_warning "外部资源未通过当前信任策略: trust=$trust_level mode=$EXTERNAL_TRUST_MODE"
-        if ! confirm_dangerous_action "访问未受信任外部资源" "来源: ${url}；建议先手动审阅来源与校验方式。"; then
+        ui_log_warning \
+            "External resource did not pass the current trust policy: trust=$trust_level mode=$EXTERNAL_TRUST_MODE" \
+            "外部资源未通过当前信任策略: trust=$trust_level mode=$EXTERNAL_TRUST_MODE"
+        if ! confirm_dangerous_action \
+            "$(ui_text "Access untrusted external resource" "访问未受信任外部资源")" \
+            "$(ui_text \
+                "Source: ${url}; manually review the source and verification method first." \
+                "来源: ${url}；建议先手动审阅来源与校验方式。")"; then
             return 1
         fi
     fi
     
     printf '%b\n' ""
-    printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
-    printf '%b\n' "${RED}║  ⚠️  警告: 正在访问外部资源              ║${PLAIN}"
-    printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
-    printf '%b\n' "${YELLOW}说明: ${description}${PLAIN}"
-    printf '%b\n' "${YELLOW}地址: ${CYAN}${url}${PLAIN}"
-    printf '%b\n' "${YELLOW}信任级别: ${trust_level} (${EXTERNAL_TRUST_MODE})${PLAIN}"
-    printf '%b\n' "${YELLOW}建议: ${trust_advice}${PLAIN}"
+    if [ "$TOOLKIT_EFFECTIVE_LANG" = "zh" ]; then
+        printf '%b\n' "${RED}╔════════════════════════════════════════╗${PLAIN}"
+        printf '%b\n' "${RED}║  ⚠️  警告: 正在访问外部资源              ║${PLAIN}"
+        printf '%b\n' "${RED}╚════════════════════════════════════════╝${PLAIN}"
+    else
+        printf '%b\n' "${RED}+----------------------------------------+${PLAIN}"
+        printf '%b\n' "${RED}|  WARNING: EXTERNAL RESOURCE ACCESS     |${PLAIN}"
+        printf '%b\n' "${RED}+----------------------------------------+${PLAIN}"
+    fi
+    printf '%b\n' "${YELLOW}$(ui_text "Description" "说明"): ${description}${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "URL" "地址"): ${CYAN}${url}${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Trust level" "信任级别"): ${trust_level} (${EXTERNAL_TRUST_MODE})${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Advice" "建议"): ${trust_advice}${PLAIN}"
     printf '%b\n' ""
-    printf '%b\n' "此操作将从外部服务器下载脚本或配置。"
-    printf '%b\n' "请仔细检查 URL 是否为您信任的来源。"
+    printf '%b\n' "$(ui_text \
+        "This operation will download a script or configuration from an external server." \
+        "此操作将从外部服务器下载脚本或配置。")"
+    printf '%b\n' "$(ui_text \
+        "Check carefully that you trust the URL." \
+        "请仔细检查 URL 是否为您信任的来源。")"
     printf '%b\n' ""
     
-    read -r -p "确认继续访问? [y/N]: " confirm
+    ui_read confirm "Continue with external access? [y/N]: " "确认继续访问? [y/N]: "
     case "$confirm" in
         y|Y|yes|YES)
-            log_info "用户已确认访问: $url"
+            ui_log_info "User confirmed access: $url" "用户已确认访问: $url"
             return 0
             ;;
         *)
-            log_warning "用户取消了外部资源访问: $url"
+            ui_log_warning "User cancelled external-resource access: $url" "用户取消了外部资源访问: $url"
             return 1
             ;;
     esac
@@ -1397,13 +1567,17 @@ confirm_external_resource() {
 acquire_script_lock() {
     [ "$DRY_RUN" = "1" ] && return 0
     command -v flock > /dev/null 2>&1 || {
-        log_warning "系统缺少 flock，无法阻止 init.sh 并发执行"
+        ui_log_warning \
+            "flock is unavailable; concurrent init.sh runs cannot be prevented" \
+            "系统缺少 flock，无法阻止 init.sh 并发执行"
         return 0
     }
     mkdir -p "$(dirname "$SCRIPT_LOCK_FILE")" || return 1
     exec 9>"$SCRIPT_LOCK_FILE"
     if ! flock -n 9; then
-        log_error "检测到另一个 init.sh 实例正在运行: $SCRIPT_LOCK_FILE"
+        ui_log_error \
+            "Another init.sh instance is already running: $SCRIPT_LOCK_FILE" \
+            "检测到另一个 init.sh 实例正在运行: $SCRIPT_LOCK_FILE"
         return 1
     fi
 }
@@ -1440,25 +1614,39 @@ quarantine_known_ookla_apt_sources() {
     done < <(known_ookla_apt_source_files)
 
     if [ "${#candidates[@]}" -eq 0 ]; then
-        log_warning "APT 日志指向失效的 Ookla Packagecloud 源，但未找到独立的官方 source 文件"
-        log_warning "请检查: grep -RIn 'packagecloud.io/ookla/speedtest-cli' /etc/apt/sources.list /etc/apt/sources.list.d"
+        ui_log_warning \
+            "The APT log points to a broken Ookla Packagecloud source, but no dedicated official source file was found" \
+            "APT 日志指向失效的 Ookla Packagecloud 源，但未找到独立的官方 source 文件"
+        ui_log_warning \
+            "Check: grep -RIn 'packagecloud.io/ookla/speedtest-cli' /etc/apt/sources.list /etc/apt/sources.list.d" \
+            "请检查: grep -RIn 'packagecloud.io/ookla/speedtest-cli' /etc/apt/sources.list /etc/apt/sources.list.d"
         return 1
     fi
 
     case "$APT_SOURCE_RECOVERY" in
         never)
-            log_warning "APT_SOURCE_RECOVERY=never：未修改失效的 Ookla source"
+            ui_log_warning \
+                "APT_SOURCE_RECOVERY=never: the broken Ookla source was not changed" \
+                "APT_SOURCE_RECOVERY=never：未修改失效的 Ookla source"
             return 1
             ;;
         prompt)
             if [ "$NON_INTERACTIVE" = "1" ]; then
-                log_warning "非交互模式不会自动禁用第三方源；确认后可设置 APT_SOURCE_RECOVERY=auto-known 重试"
+                ui_log_warning \
+                    "Non-interactive mode will not disable a third-party source automatically; after review, set APT_SOURCE_RECOVERY=auto-known to retry" \
+                    "非交互模式不会自动禁用第三方源；确认后可设置 APT_SOURCE_RECOVERY=auto-known 重试"
                 return 1
             fi
-            printf '%b\n' "${YELLOW}检测到 Ookla Packagecloud 返回 402/签名错误，正在阻断所有 apt 操作。${PLAIN}"
-            printf '%s\n' "将备份并临时隔离以下独立 source 文件；不会卸载 speedtest："
+            printf '%b\n' "${YELLOW}$(ui_text \
+                "Ookla Packagecloud returned a 402/signature error and is blocking all apt operations." \
+                "检测到 Ookla Packagecloud 返回 402/签名错误，正在阻断所有 apt 操作。")${PLAIN}"
+            printf '%s\n' "$(ui_text \
+                "The dedicated source files below will be backed up and quarantined temporarily; speedtest will not be uninstalled:" \
+                "将备份并临时隔离以下独立 source 文件；不会卸载 speedtest：")"
             printf '  %s\n' "${candidates[@]}"
-            confirm_action "是否隔离该失效源并重试 apt update?" "n" || return 1
+            confirm_action "$(ui_text \
+                "Quarantine the broken source and retry apt update?" \
+                "是否隔离该失效源并重试 apt update?")" "n" || return 1
             ;;
         auto-known) ;;
     esac
@@ -1470,17 +1658,27 @@ quarantine_known_ookla_apt_sources() {
         # later apt invocation while preserving the source for rollback.
         disabled="${file}.disabled-by-init-${timestamp}-$$.save"
         [ ! -e "$disabled" ] && [ ! -L "$disabled" ] || {
-            log_error "APT source 隔离目标已存在: $disabled"
+            ui_log_error \
+                "APT source quarantine target already exists: $disabled" \
+                "APT source 隔离目标已存在: $disabled"
             return 1
         }
-        create_backup "$file" "隔离失效 Ookla APT source" > /dev/null || return 1
+        create_backup "$file" "$(ui_text \
+            "Quarantine broken Ookla APT source" \
+            "隔离失效 Ookla APT source")" > /dev/null || return 1
         if [ "$DRY_RUN" = "1" ]; then
-            log_info "[DRY RUN] 将隔离 $file -> $disabled"
+            ui_log_info \
+                "[DRY RUN] Would quarantine $file -> $disabled" \
+                "[DRY RUN] 将隔离 $file -> $disabled"
             continue
         fi
         mv -- "$file" "$disabled" || return 1
-        record_created_file "$disabled" "隔离后的 Ookla APT source"
-        log_warning "已隔离失效源: $file -> $disabled"
+        record_created_file "$disabled" "$(ui_text \
+            "Quarantined Ookla APT source" \
+            "隔离后的 Ookla APT source")"
+        ui_log_warning \
+            "Quarantined broken source: $file -> $disabled" \
+            "已隔离失效源: $file -> $disabled"
         moved=1
     done
     [ "$DRY_RUN" = "1" ] || [ "$moved" -eq 1 ]
@@ -1489,30 +1687,36 @@ quarantine_known_ookla_apt_sources() {
 update_apt_once() {
     local log_start=1 retry_start=1
     if [ "$APT_UPDATED" = false ]; then
-        log_info "更新软件包列表..."
+        ui_log_info "Updating package lists..." "更新软件包列表..."
         ensure_log_file || return 1
         log_start=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || printf '0') + 1 ))
-        if execute_with_progress_argv "更新软件包列表" \
+        if execute_with_progress_argv "$(ui_text "Updating package lists" "更新软件包列表")" \
             apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 update; then
             APT_UPDATED=true
-            log_success "软件包列表更新完成"
+            ui_log_success "Package lists updated" "软件包列表更新完成"
         else
             APT_UPDATED=false
             if apt_update_log_has_known_ookla_failure "$log_start" &&
                quarantine_known_ookla_apt_sources; then
-                log_info "重试更新软件包列表..."
+                ui_log_info "Retrying package-list update..." "重试更新软件包列表..."
                 retry_start=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || printf '0') + 1 ))
-                if execute_with_progress_argv "重试更新软件包列表" \
+                if execute_with_progress_argv "$(ui_text "Retrying package-list update" "重试更新软件包列表")" \
                     apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 update; then
                     APT_UPDATED=true
-                    log_success "隔离失效第三方源后，软件包列表更新完成"
+                    ui_log_success \
+                        "Package lists updated after quarantining the broken third-party source" \
+                        "隔离失效第三方源后，软件包列表更新完成"
                     return 0
                 fi
                 if apt_update_log_has_known_ookla_failure "$retry_start"; then
-                    log_warning "仍检测到 Ookla source；请检查其他 APT source 文件"
+                    ui_log_warning \
+                        "An Ookla source is still present; check the other APT source files" \
+                        "仍检测到 Ookla source；请检查其他 APT source 文件"
                 fi
             fi
-            log_error "软件包列表更新失败；本次安装已中止，可稍后重试"
+            ui_log_error \
+                "Unable to update package lists; this installation has stopped and can be retried later" \
+                "软件包列表更新失败；本次安装已中止，可稍后重试"
             return 1
         fi
     fi
@@ -1532,11 +1736,13 @@ verify_installation() {
     local expected_output=${3:-""}
     local version_flag=${4:-"--version"}
     
-    log_info "验证 $runtime 安装..."
+    ui_log_info "Verifying $runtime installation..." "验证 $runtime 安装..."
     
     # 检查命令是否存在
     if ! command -v "$command" > /dev/null 2>&1; then
-        log_error "$runtime 安装验证失败: 命令 '$command' 不存在"
+        ui_log_error \
+            "$runtime installation verification failed: command '$command' does not exist" \
+            "$runtime 安装验证失败: 命令 '$command' 不存在"
         return 1
     fi
     
@@ -1545,15 +1751,17 @@ verify_installation() {
         local actual_output
         actual_output=$("$command" "$version_flag" 2>&1 | head -1)
         if [[ "$actual_output" != *"$expected_output"* ]] && [[ "$expected_output" != "any" ]]; then
-            log_warning "版本可能不匹配: 期望包含 '$expected_output', 实际: '$actual_output'"
+            ui_log_warning \
+                "Version may not match: expected '$expected_output', actual: '$actual_output'" \
+                "版本可能不匹配: 期望包含 '$expected_output', 实际: '$actual_output'"
             # 不返回错误，因为版本可能略有不同
         else
-            log_success "$runtime 版本验证通过: $actual_output"
+            ui_log_success "$runtime version verified: $actual_output" "$runtime 版本验证通过: $actual_output"
         fi
     else
         local version_output
         version_output=$("$command" "$version_flag" 2>&1 | head -1)
-        log_success "$runtime 安装验证通过: $version_output"
+        ui_log_success "$runtime installation verified: $version_output" "$runtime 安装验证通过: $version_output"
     fi
     
     return 0
@@ -1568,30 +1776,32 @@ install_packages_batch() {
     update_apt_once || return 1
     
     # 检查哪些包未安装
-    log_info "检查已安装的包..."
+    ui_log_info "Checking installed packages..." "检查已安装的包..."
     for package in "${packages[@]}"; do
         # 处理包名（可能包含版本号）
         local pkg_name="${package%%=*}"
         if ! dpkg-query -W -f='${Status}' "$pkg_name" 2>/dev/null | grep -q "install ok installed"; then
             to_install+=("$package")
         else
-            log_info "已安装: $pkg_name"
+            ui_log_info "Already installed: $pkg_name" "已安装: $pkg_name"
         fi
     done
     
     # 批量安装
     if [ ${#to_install[@]} -gt 0 ]; then
-        log_info "批量安装 ${#to_install[@]} 个包..."
-        if execute_with_progress_argv "安装软件包" \
+        ui_log_info \
+            "Installing ${#to_install[@]} packages..." \
+            "批量安装 ${#to_install[@]} 个包..."
+        if execute_with_progress_argv "$(ui_text "Installing packages" "安装软件包")" \
             apt-get -o DPkg::Lock::Timeout=120 -y install "${to_install[@]}"; then
-            log_success "软件包安装完成"
+            ui_log_success "Package installation completed" "软件包安装完成"
             return 0
         else
-            log_error "部分软件包安装失败"
+            ui_log_error "Some packages failed to install" "部分软件包安装失败"
             return 1
         fi
     else
-        log_info "所有包已安装"
+        ui_log_info "All packages are already installed" "所有包已安装"
         return 0
     fi
 }
@@ -1608,9 +1818,9 @@ record_operation() {
 }
 
 record_created_file() {
-    local target_file="$1" description="${2:-新建文件}"
+    local target_file="$1" description="${2:-$(ui_text "new file" "新建文件")}"
     record_operation remove "$target_file" "" "$description"
-    log_info "已记录本次新建文件: $target_file"
+    ui_log_info "Recorded newly created file: $target_file" "已记录本次新建文件: $target_file"
 }
 
 rollback_operation_at() {
@@ -1619,10 +1829,15 @@ rollback_operation_at() {
     target_file="${OPERATION_TARGETS[$idx]}"
     backup_file="${OPERATION_BACKUPS[$idx]}"
     description="${OPERATION_DESCRIPTIONS[$idx]}"
-    log_info "回滚: $target_file${description:+ ($description)}"
+    ui_log_info \
+        "Rolling back: $target_file${description:+ ($description)}" \
+        "回滚: $target_file${description:+ ($description)}"
     case "$operation_type" in
         restore)
-            [ -f "$backup_file" ] || { log_error "备份不存在: $backup_file"; return 1; }
+            [ -f "$backup_file" ] || {
+                ui_log_error "Backup does not exist: $backup_file" "备份不存在: $backup_file"
+                return 1
+            }
             mkdir -p "$(dirname "$target_file")" || return 1
             cp -a -- "$backup_file" "$target_file"
             ;;
@@ -1630,7 +1845,7 @@ rollback_operation_at() {
             rm -f -- "$target_file"
             ;;
         *)
-            log_error "未知回滚类型: $operation_type"
+            ui_log_error "Unknown rollback type: $operation_type" "未知回滚类型: $operation_type"
             return 1
             ;;
     esac
@@ -1698,41 +1913,45 @@ rollback_operations_from() {
         fi
     done
 
-    log_info "文件回滚结果: 成功 $rollback_count，失败 $failure_count"
+    ui_log_info \
+        "File rollback results: $rollback_count succeeded, $failure_count failed" \
+        "文件回滚结果: 成功 ${rollback_count}，失败 $failure_count"
     [ "$failure_count" -eq 0 ]
 }
 
 # --- 回滚函数 ---
 rollback() {
     if [ "${#OPERATION_TARGETS[@]}" -eq 0 ]; then
-        log_warning "没有可回滚的操作"
+        ui_log_warning "There are no operations to roll back" "没有可回滚的操作"
         return 0
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过回滚操作"
+        ui_log_info "[DRY RUN] Would skip rollback operations" "[DRY RUN] 跳过回滚操作"
         return 0
     fi
 
-    log_warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_warning "开始回滚操作..."
-    log_warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_warning "即将回滚以下操作:"
+    ui_log_separator warning
+    ui_log_warning "Starting rollback..." "开始回滚操作..."
+    ui_log_separator warning
+    ui_log_warning "The following operations will be rolled back:" "即将回滚以下操作:"
     local idx
     for (( idx=0; idx<${#OPERATION_TARGETS[@]}; idx++ )); do
         log_warning "  - ${OPERATION_TARGETS[$idx]} (${OPERATION_TYPES[$idx]})"
     done
     preview_rollback
-    if ! confirm_action "确认继续回滚?" "n"; then
-        log_warning "已取消回滚"
+    if ! confirm_action "$(ui_text "Continue with rollback?" "确认继续回滚?")" "n"; then
+        ui_log_warning "Rollback cancelled" "已取消回滚"
         return 1
     fi
 
     if rollback_operations_from 0; then
-        log_success "回滚完成"
+        ui_log_success "Rollback completed" "回滚完成"
         return 0
     fi
-    log_error "部分文件回滚失败；失败项已保留在回滚账本中"
+    ui_log_error \
+        "Some files could not be rolled back; failed entries remain in the rollback ledger" \
+        "部分文件回滚失败；失败项已保留在回滚账本中"
     return 1
 }
 
@@ -1847,32 +2066,32 @@ network_fetch_public_ip() {
 network_family_status() {
     local addresses="$1" default_route="$2" route_probe="$3" public_ip="$4"
     if [ -n "$public_ip" ]; then
-        printf '%s' '正常'
+        ui_text 'healthy' '正常'
     elif [ -z "$addresses" ] && [ -z "$default_route" ]; then
-        printf '%s' '未配置'
+        ui_text 'not configured' '未配置'
     elif [ -z "$addresses" ]; then
-        printf '%s' '有默认路由但没有全局地址'
+        ui_text 'default route present but no global address' '有默认路由但没有全局地址'
     elif [ -z "$default_route" ]; then
-        printf '%s' '有全局地址但缺少默认路由'
+        ui_text 'global address present but default route missing' '有全局地址但缺少默认路由'
     elif [ -z "$route_probe" ] || [[ "$route_probe" =~ [Uu]nreachable|prohibit|blackhole ]]; then
-        printf '%s' '默认路由存在但无法选路'
+        ui_text 'default route present but route selection failed' '默认路由存在但无法选路'
     else
-        printf '%s' '路由存在但出口失败'
+        ui_text 'route present but public egress failed' '路由存在但出口失败'
     fi
 }
 
 network_print_family() {
     local label="$1" addresses="$2" default_route="$3" route_probe="$4" public_ip="$5" status="$6"
     local status_color="$RED"
-    [ "$status" = "正常" ] && status_color="$GREEN"
-    [ "$status" = "未配置" ] && status_color="$YELLOW"
+    [ "$status" = "$(ui_text 'healthy' '正常')" ] && status_color="$GREEN"
+    [ "$status" = "$(ui_text 'not configured' '未配置')" ] && status_color="$YELLOW"
 
     printf '%b\n' "${BOLD}${label}${PLAIN}"
-    printf '  %-12s %s\n' '本地全局地址:' "${addresses:-N/A}"
-    printf '  %-12s %s\n' '默认路由:' "${default_route:-N/A}"
-    printf '  %-12s %s\n' '实际选路:' "${route_probe:-N/A}"
-    printf '  %-12s %s\n' '公网出口:' "${public_ip:-N/A}"
-    printf '%b\n' "  状态:       ${status_color}${status}${PLAIN}"
+    printf '  %-22s %s\n' "$(ui_text 'Global addresses:' '本地全局地址:')" "${addresses:-N/A}"
+    printf '  %-22s %s\n' "$(ui_text 'Default route:' '默认路由:')" "${default_route:-N/A}"
+    printf '  %-22s %s\n' "$(ui_text 'Selected route:' '实际选路:')" "${route_probe:-N/A}"
+    printf '  %-22s %s\n' "$(ui_text 'Public egress:' '公网出口:')" "${public_ip:-N/A}"
+    printf '%b\n' "  $(ui_text 'Status:' '状态:') ${status_color}${status}${PLAIN}"
 }
 
 check_network() {
@@ -1886,7 +2105,9 @@ check_network() {
         "1.1.1.1|Cloudflare DNS"
     )
 
-    log_info "=== 出口 IP / 双栈网络诊断（只读） ==="
+    ui_log_info \
+        "=== Public IP / dual-stack network diagnostics (read-only) ===" \
+        "=== 出口 IP / 双栈网络诊断（只读） ==="
     v4_addresses="$(network_global_addresses 4 || true)"
     v6_addresses="$(network_global_addresses 6 || true)"
     v4_default="$(network_default_route 4 || true)"
@@ -1905,27 +2126,37 @@ check_network() {
     dns_a="$(network_dns_records 4 "$NETWORK_DIAGNOSTIC_HOST")"
     dns_aaaa="$(network_dns_records 6 "$NETWORK_DIAGNOSTIC_HOST")"
     resolvers="$(network_resolvers || true)"
-    printf '\n%s\n' "DNS 检查 (${NETWORK_DIAGNOSTIC_HOST}):"
-    printf '  %-12s %s\n' '解析器:' "${resolvers:-N/A}"
+    printf '\n%s\n' "$(ui_text "DNS check (${NETWORK_DIAGNOSTIC_HOST}):" "DNS 检查 (${NETWORK_DIAGNOSTIC_HOST}):")"
+    printf '  %-12s %s\n' "$(ui_text 'Resolvers:' '解析器:')" "${resolvers:-N/A}"
     printf '  %-12s %s\n' 'A:' "${dns_a:-N/A}"
     printf '  %-12s %s\n' 'AAAA:' "${dns_aaaa:-N/A}"
 
     if [ -n "$dns_aaaa" ] && [ -z "$ipv6" ]; then
         if [ -n "$v6_addresses" ] && [ -n "$v6_default" ]; then
-            log_warning "DNS 返回 AAAA，但 IPv6 看似已配置却无法访问公网；优先检查 IPv6 网关和上游路由"
+            ui_log_warning \
+                "DNS returned AAAA records, but configured IPv6 cannot reach the public network; check the IPv6 gateway and upstream route first" \
+                "DNS 返回 AAAA，但 IPv6 看似已配置却无法访问公网；优先检查 IPv6 网关和上游路由"
         else
-            log_warning "DNS 返回 AAAA，但本机没有完整可用的 IPv6；部分程序可能先尝试 IPv6 再回退"
+            ui_log_warning \
+                "DNS returned AAAA records, but this host has no fully usable IPv6; some programs may try IPv6 before falling back" \
+                "DNS 返回 AAAA，但本机没有完整可用的 IPv6；部分程序可能先尝试 IPv6 再回退"
         fi
     fi
     if [ -z "$dns_a" ] && [ -n "$dns_aaaa" ] && [ -z "$ipv6" ]; then
-        log_error "测试域名仅解析到 AAAA，而 IPv6 出口不可用"
+        ui_log_error \
+            "The test hostname resolves only to AAAA records, but IPv6 egress is unavailable" \
+            "测试域名仅解析到 AAAA，而 IPv6 出口不可用"
     fi
     if [ -z "$ipv6" ] && [[ "$resolvers" == *:* ]]; then
-        log_warning "检测到 IPv6 DNS 解析器，但 IPv6 公网出口不可用；请确认该解析器在当前链路上确实可达"
+        ui_log_warning \
+            "An IPv6 DNS resolver was detected, but IPv6 public egress is unavailable; confirm that the resolver is reachable over the current link" \
+            "检测到 IPv6 DNS 解析器，但 IPv6 公网出口不可用；请确认该解析器在当前链路上确实可达"
     fi
 
-    printf '\n%s\n' '应用层自动选路测试:'
-    printf '%-18s %-10s %-8s %-10s\n' '目标' '状态' '出口' '延迟'
+    printf '\n%s\n' "$(ui_text 'Application-layer automatic route selection:' '应用层自动选路测试:')"
+    printf '%-18s %-10s %-8s %-10s\n' \
+        "$(ui_text 'Target' '目标')" "$(ui_text 'Status' '状态')" \
+        "$(ui_text 'Egress' '出口')" "$(ui_text 'Latency' '延迟')"
     for target in "${targets[@]}"; do
         IFS='|' read -r url name <<< "$target"
         result="$(curl --noproxy '*' -o /dev/null -sS -w '%{http_code} %{time_total} %{remote_ip}' \
@@ -1959,7 +2190,7 @@ check_network() {
 
 # --- 一键完整机器概览 ---
 overview_section() {
-    printf '\n%b\n' "${CYAN}── $1 ──${PLAIN}"
+    printf '\n%b\n' "${CYAN}$(ui_text "-- $1 --" "── $1 ──")${PLAIN}"
 }
 
 overview_os_pretty_name() {
@@ -2010,37 +2241,37 @@ overview_service_status_text() {
     local active_text enabled_text
 
     case "$load_state" in
-        not-found|"") printf '%s' '未安装'; return 0 ;;
+        not-found|"") ui_text 'not installed' '未安装'; return 0 ;;
         loaded) ;;
-        *) printf 'unit 加载异常（%s）' "$load_state"; return 0 ;;
+        *) printf '%s' "$(ui_text "unit load error ($load_state)" "unit 加载异常（${load_state}）")"; return 0 ;;
     esac
 
     case "$active" in
-        active) active_text='运行中' ;;
-        inactive) active_text='已停止' ;;
-        failed) active_text='启动失败' ;;
-        activating) active_text='启动中' ;;
-        deactivating) active_text='停止中' ;;
-        reloading) active_text='重载中' ;;
-        *) active_text="状态未知（${active:-unknown}）" ;;
+        active) active_text="$(ui_text 'running' '运行中')" ;;
+        inactive) active_text="$(ui_text 'stopped' '已停止')" ;;
+        failed) active_text="$(ui_text 'failed' '启动失败')" ;;
+        activating) active_text="$(ui_text 'starting' '启动中')" ;;
+        deactivating) active_text="$(ui_text 'stopping' '停止中')" ;;
+        reloading) active_text="$(ui_text 'reloading' '重载中')" ;;
+        *) active_text="$(ui_text "unknown state (${active:-unknown})" "状态未知（${active:-unknown}）")" ;;
     esac
     case "$enabled" in
-        enabled) enabled_text='开机启动已启用' ;;
-        disabled) enabled_text='开机启动未启用' ;;
-        static) enabled_text='静态 unit' ;;
-        masked) enabled_text='已屏蔽' ;;
-        generated) enabled_text='动态生成' ;;
-        indirect) enabled_text='间接启用' ;;
-        alias) enabled_text='别名 unit' ;;
-        *) enabled_text="启动策略=${enabled:-unknown}" ;;
+        enabled) enabled_text="$(ui_text 'enabled at boot' '开机启动已启用')" ;;
+        disabled) enabled_text="$(ui_text 'not enabled at boot' '开机启动未启用')" ;;
+        static) enabled_text="$(ui_text 'static unit' '静态 unit')" ;;
+        masked) enabled_text="$(ui_text 'masked' '已屏蔽')" ;;
+        generated) enabled_text="$(ui_text 'generated' '动态生成')" ;;
+        indirect) enabled_text="$(ui_text 'indirectly enabled' '间接启用')" ;;
+        alias) enabled_text="$(ui_text 'unit alias' '别名 unit')" ;;
+        *) enabled_text="$(ui_text "enablement=${enabled:-unknown}" "启动策略=${enabled:-unknown}")" ;;
     esac
-    printf '%s，%s' "$active_text" "$enabled_text"
+    printf '%s' "$(ui_text "${active_text}, ${enabled_text}" "${active_text}，${enabled_text}")"
 }
 
 overview_service_status() {
     local label="$1" unit="$2" load_state="" active="" enabled=""
     if ! command -v systemctl > /dev/null 2>&1; then
-        overview_field "$label" 'systemd 不可用'
+        overview_field "$label" "$(ui_text 'systemd unavailable' 'systemd 不可用')"
         return 0
     fi
     load_state="$(systemd_unit_load_state "$unit")"
@@ -2054,17 +2285,17 @@ overview_service_status() {
 overview_ssh_auth_summary() {
     local pubkey="$1" password="$2" keyboard="$3"
     if [[ ! "$pubkey" =~ ^(yes|no)$ ]] || [[ ! "$password" =~ ^(yes|no)$ ]] || [[ ! "$keyboard" =~ ^(yes|no)$ ]]; then
-        printf '%s' '无法完整读取 SSH 有效配置'
+        ui_text 'Unable to read the complete effective SSH configuration' '无法完整读取 SSH 有效配置'
         return 0
     fi
     if [ "$pubkey" = "yes" ] && { [ "$password" = "yes" ] || [ "$keyboard" = "yes" ]; }; then
-        printf '%s' '公钥和密码/交互式认证均允许'
+        ui_text 'Public-key and password/interactive authentication are both allowed' '公钥和密码/交互式认证均允许'
     elif [ "$pubkey" = "yes" ]; then
-        printf '%s' '仅公钥认证'
+        ui_text 'Public-key authentication only' '仅公钥认证'
     elif [ "$password" = "yes" ] || [ "$keyboard" = "yes" ]; then
-        printf '%s' '仅密码/交互式认证'
+        ui_text 'Password/interactive authentication only' '仅密码/交互式认证'
     else
-        printf '%s' '未检测到可用的常规认证方式'
+        ui_text 'No usable conventional authentication method detected' '未检测到可用的常规认证方式'
     fi
 }
 
@@ -2090,7 +2321,7 @@ overview_optimization_files() {
             joined="$joined$path"
         fi
     done
-    printf '%s' "${joined:-未检测到本脚本的优化配置}"
+    printf '%s' "${joined:-$(ui_text 'No toolkit optimization configuration detected' '未检测到本脚本的优化配置')}"
 }
 
 action_system_overview() {
@@ -2102,9 +2333,10 @@ action_system_overview() {
     local v4_addresses="" v6_addresses="" v4_default="" v6_default=""
     local v4_probe="" v6_probe="" ipv4="" ipv6="" v4_status="" v6_status=""
     local dns_a="" dns_aaaa="" resolvers="" ufw_status="N/A" ssh_listeners=""
-    local network_warning="无"
+    local network_warning
+    network_warning="$(ui_text 'none' '无')"
 
-    log_info "=== 一键完整机器概览（只读） ==="
+    ui_log_info "=== Complete system overview (read-only) ===" "=== 一键完整机器概览（只读） ==="
     os_name="$(overview_os_pretty_name /etc/os-release 2>/dev/null || true)"
     host_name="$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf 'N/A')"
     timezone="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
@@ -2114,16 +2346,16 @@ action_system_overview() {
         virtualization="$(systemd-detect-virt 2>/dev/null || printf 'none')"
     fi
 
-    overview_section '系统与时间'
-    overview_field '主机名' "$host_name"
-    overview_field '操作系统' "$os_name"
+    overview_section "$(ui_text 'System and time' '系统与时间')"
+    overview_field "$(ui_text 'Hostname' '主机名')" "$host_name"
+    overview_field "$(ui_text 'Operating system' '操作系统')" "$os_name"
     overview_field 'Kernel / Architecture' "$(uname -r 2>/dev/null || printf 'N/A') / $(uname -m 2>/dev/null || printf 'N/A')"
-    overview_field '虚拟化' "$virtualization"
-    overview_field '运行时间' "$(uptime -p 2>/dev/null || uptime 2>/dev/null || printf 'N/A')"
-    overview_field '本地时间' "$(date '+%Y-%m-%d %H:%M:%S %Z (%z)' 2>/dev/null || printf 'N/A')"
-    overview_field 'UTC 时间' "$(date -u '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || printf 'N/A')"
-    overview_field '系统时区' "${timezone:-N/A}"
-    overview_field 'NTP 已同步' "${ntp_sync:-N/A}"
+    overview_field "$(ui_text 'Virtualization' '虚拟化')" "$virtualization"
+    overview_field "$(ui_text 'Uptime' '运行时间')" "$(uptime -p 2>/dev/null || uptime 2>/dev/null || printf 'N/A')"
+    overview_field "$(ui_text 'Local time' '本地时间')" "$(date '+%Y-%m-%d %H:%M:%S %Z (%z)' 2>/dev/null || printf 'N/A')"
+    overview_field "$(ui_text 'UTC time' 'UTC 时间')" "$(date -u '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || printf 'N/A')"
+    overview_field "$(ui_text 'System timezone' '系统时区')" "${timezone:-N/A}"
+    overview_field "$(ui_text 'NTP synchronized' 'NTP 已同步')" "${ntp_sync:-N/A}"
 
     if command -v lscpu > /dev/null 2>&1; then
         cpu_model="$(lscpu 2>/dev/null | awk -F: '/^Model name:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')"
@@ -2138,15 +2370,15 @@ action_system_overview() {
     fi
     root_storage="$(df -hT / 2>/dev/null | awk 'NR == 2 { printf "%s total, %s used, %s available (%s), fs=%s", $3, $4, $5, $6, $2 }')"
 
-    overview_section 'CPU / 内存 / 存储'
-    overview_field 'CPU 型号' "${cpu_model:-N/A}"
-    overview_field 'CPU 逻辑核心' "$cpu_cores"
+    overview_section "$(ui_text 'CPU / memory / storage' 'CPU / 内存 / 存储')"
+    overview_field "$(ui_text 'CPU model' 'CPU 型号')" "${cpu_model:-N/A}"
+    overview_field "$(ui_text 'Logical CPU cores' 'CPU 逻辑核心')" "$cpu_cores"
     overview_field 'Load Average' "$load_average"
     overview_field 'RAM' "$memory"
     overview_field 'Swap' "$swap"
-    overview_field '根文件系统' "$root_storage"
+    overview_field "$(ui_text 'Root filesystem' '根文件系统')" "$root_storage"
     if command -v lsblk > /dev/null 2>&1; then
-        printf '  块设备:\n'
+        printf '  %s\n' "$(ui_text 'Block devices:' '块设备:')"
         lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT 2>/dev/null | sed 's/^/    /' || true
     fi
 
@@ -2164,9 +2396,9 @@ action_system_overview() {
         ssh_methods="$(overview_ssh_value "$ssh_effective" authenticationmethods)"
     fi
 
-    overview_section 'SSH / 安全访问'
-    overview_field 'SSH 端口' "${ssh_port:-N/A}"
-    overview_field '认证概况' "$(overview_ssh_auth_summary "$ssh_pubkey" "$ssh_password" "$ssh_keyboard")"
+    overview_section "$(ui_text 'SSH / secure access' 'SSH / 安全访问')"
+    overview_field "$(ui_text 'SSH port' 'SSH 端口')" "${ssh_port:-N/A}"
+    overview_field "$(ui_text 'Authentication summary' '认证概况')" "$(overview_ssh_auth_summary "$ssh_pubkey" "$ssh_password" "$ssh_keyboard")"
     overview_field 'PubkeyAuthentication' "${ssh_pubkey:-N/A}"
     overview_field 'PasswordAuthentication' "${ssh_password:-N/A}"
     overview_field 'KbdInteractiveAuthentication' "${ssh_keyboard:-N/A}"
@@ -2175,7 +2407,7 @@ action_system_overview() {
     if command -v ss > /dev/null 2>&1; then
         ssh_listeners="$(ss -ltnp 2>/dev/null | awk '/sshd/ { print $4 }' | sort -u | network_join_lines)"
     fi
-    overview_field 'SSH 实际监听' "${ssh_listeners:-N/A}"
+    overview_field "$(ui_text 'SSH listeners' 'SSH 实际监听')" "${ssh_listeners:-N/A}"
     if command -v ufw > /dev/null 2>&1; then
         ufw_status="$(ufw status 2>/dev/null | awk 'NF { print; exit }' || true)"
     fi
@@ -2195,40 +2427,44 @@ action_system_overview() {
     dns_aaaa="$(network_dns_records 6 "$NETWORK_DIAGNOSTIC_HOST")"
     resolvers="$(network_resolvers || true)"
 
-    overview_section '网络 / DNS / 内核优化'
-    overview_field 'IPv4 状态 / 出口' "$v4_status / ${ipv4:-N/A}"
-    overview_field 'IPv4 本地地址' "${v4_addresses:-N/A}"
-    overview_field 'IPv4 默认路由' "${v4_default:-N/A}"
-    overview_field 'IPv6 状态 / 出口' "$v6_status / ${ipv6:-N/A}"
-    overview_field 'IPv6 本地地址' "${v6_addresses:-N/A}"
-    overview_field 'IPv6 默认路由' "${v6_default:-N/A}"
-    overview_field 'DNS 解析器' "${resolvers:-N/A}"
+    overview_section "$(ui_text 'Network / DNS / kernel tuning' '网络 / DNS / 内核优化')"
+    overview_field "$(ui_text 'IPv4 status / egress' 'IPv4 状态 / 出口')" "$v4_status / ${ipv4:-N/A}"
+    overview_field "$(ui_text 'IPv4 local addresses' 'IPv4 本地地址')" "${v4_addresses:-N/A}"
+    overview_field "$(ui_text 'IPv4 default route' 'IPv4 默认路由')" "${v4_default:-N/A}"
+    overview_field "$(ui_text 'IPv6 status / egress' 'IPv6 状态 / 出口')" "$v6_status / ${ipv6:-N/A}"
+    overview_field "$(ui_text 'IPv6 local addresses' 'IPv6 本地地址')" "${v6_addresses:-N/A}"
+    overview_field "$(ui_text 'IPv6 default route' 'IPv6 默认路由')" "${v6_default:-N/A}"
+    overview_field "$(ui_text 'DNS resolvers' 'DNS 解析器')" "${resolvers:-N/A}"
     overview_field "${NETWORK_DIAGNOSTIC_HOST} A" "${dns_a:-N/A}"
     overview_field "${NETWORK_DIAGNOSTIC_HOST} AAAA" "${dns_aaaa:-N/A}"
     if [ -z "$ipv6" ] && [ -n "$v6_addresses" ] && [ -n "$v6_default" ]; then
-        network_warning="IPv6 有地址和默认路由，但公网出口失败"
+        network_warning="$(ui_text \
+            'IPv6 has an address and default route, but public egress failed' \
+            'IPv6 有地址和默认路由，但公网出口失败')"
     elif [ -z "$ipv6" ] && [ -n "$dns_aaaa" ]; then
-        network_warning="DNS 返回 AAAA，但本机没有可用 IPv6 出口"
+        network_warning="$(ui_text \
+            'DNS returned AAAA records, but this host has no usable IPv6 egress' \
+            'DNS 返回 AAAA，但本机没有可用 IPv6 出口')"
     fi
-    overview_field '双栈告警' "$network_warning"
-    overview_field 'TCP 拥塞控制' "$(overview_sysctl_value net.ipv4.tcp_congestion_control)"
-    overview_field '可用拥塞控制' "$(overview_sysctl_value net.ipv4.tcp_available_congestion_control)"
-    overview_field '默认 qdisc' "$(overview_sysctl_value net.core.default_qdisc)"
+    overview_field "$(ui_text 'Dual-stack warning' '双栈告警')" "$network_warning"
+    overview_field "$(ui_text 'TCP congestion control' 'TCP 拥塞控制')" "$(overview_sysctl_value net.ipv4.tcp_congestion_control)"
+    overview_field "$(ui_text 'Available congestion control' '可用拥塞控制')" "$(overview_sysctl_value net.ipv4.tcp_available_congestion_control)"
+    overview_field "$(ui_text 'Default qdisc' '默认 qdisc')" "$(overview_sysctl_value net.core.default_qdisc)"
     overview_field 'TCP Fast Open' "$(overview_sysctl_value net.ipv4.tcp_fastopen)"
     overview_field 'TCP MTU probing' "$(overview_sysctl_value net.ipv4.tcp_mtu_probing)"
     overview_field 'somaxconn' "$(overview_sysctl_value net.core.somaxconn)"
     overview_field 'IPv4 forwarding' "$(overview_sysctl_value net.ipv4.ip_forward)"
-    overview_field '脚本优化配置' "$(overview_optimization_files)"
+    overview_field "$(ui_text 'Toolkit optimization files' '脚本优化配置')" "$(overview_optimization_files)"
 
-    overview_section '核心服务'
+    overview_section "$(ui_text 'Core services' '核心服务')"
     overview_service_status 'SSH' 'ssh.service'
     overview_service_status 'Fail2ban' 'fail2ban.service'
     overview_service_status 'Docker' 'docker.service'
-    overview_service_status '自动安全更新' 'unattended-upgrades.service'
+    overview_service_status "$(ui_text 'Automatic security updates' '自动安全更新')" 'unattended-upgrades.service'
     overview_service_status 'Nginx' 'nginx.service'
     overview_service_status 'Caddy' 'caddy.service'
 
-    overview_section 'Runtime / 工具版本（当前 PATH）'
+    overview_section "$(ui_text 'Runtime / tool versions (current PATH)' 'Runtime / 工具版本（当前 PATH）')"
     overview_command_version 'Node.js' node --version
     overview_command_version 'npm' npm --version
     overview_command_version 'Python' python3 --version
@@ -2246,7 +2482,9 @@ action_system_overview() {
         overview_field 'Docker Compose' 'not installed'
     fi
 
-    printf '\n%b\n' "${GREEN}概览完成。未显示 authorized_keys 内容、密码或其他凭据。${PLAIN}"
+    printf '\n%b\n' "${GREEN}$(ui_text \
+        'Overview complete. authorized_keys contents, passwords, and other credentials were not displayed.' \
+        '概览完成。未显示 authorized_keys 内容、密码或其他凭据。')${PLAIN}"
 }
 
 # --- 配置验证函数 ---
@@ -2255,65 +2493,69 @@ validate_config() {
     local config_type=$2
     
     if [ ! -f "$config_file" ]; then
-        log_error "配置文件不存在: $config_file"
+        ui_log_error "Configuration file does not exist: $config_file" "配置文件不存在: $config_file"
         return 1
     fi
     
     case "$config_type" in
         ssh)
-            log_info "验证 SSH 配置..."
+            ui_log_info "Validating SSH configuration..." "验证 SSH 配置..."
             if sshd -t -f "$config_file" 2>/dev/null; then
-                log_success "SSH 配置验证通过"
+                ui_log_success "SSH configuration is valid" "SSH 配置验证通过"
                 return 0
             else
-                log_error "SSH 配置验证失败"
+                ui_log_error "SSH configuration validation failed" "SSH 配置验证失败"
                 sshd -t -f "$config_file" 2>&1 | head -5
                 return 1
             fi
             ;;
         nginx)
-            log_info "验证 Nginx 配置..."
+            ui_log_info "Validating Nginx configuration..." "验证 Nginx 配置..."
             if command -v nginx > /dev/null 2>&1; then
                 if nginx -t -c "$config_file" 2>/dev/null; then
-                    log_success "Nginx 配置验证通过"
+                    ui_log_success "Nginx configuration is valid" "Nginx 配置验证通过"
                     return 0
                 else
-                    log_error "Nginx 配置验证失败"
+                    ui_log_error "Nginx configuration validation failed" "Nginx 配置验证失败"
                     nginx -t -c "$config_file" 2>&1 | head -5
                     return 1
                 fi
             else
-                log_warning "Nginx 未安装，跳过配置验证"
+                ui_log_warning "Nginx is not installed; skipping configuration validation" "Nginx 未安装，跳过配置验证"
                 return 0
             fi
             ;;
         docker)
-            log_info "验证 Docker 配置..."
+            ui_log_info "Validating Docker configuration..." "验证 Docker 配置..."
             if command -v docker > /dev/null 2>&1; then
                 if docker info > /dev/null 2>&1; then
-                    log_success "Docker 配置验证通过"
+                    ui_log_success "Docker configuration is valid" "Docker 配置验证通过"
                     return 0
                 else
-                    log_error "Docker 配置验证失败"
+                    ui_log_error "Docker configuration validation failed" "Docker 配置验证失败"
                     return 1
                 fi
             else
-                log_warning "Docker 未安装，跳过配置验证"
+                ui_log_warning "Docker is not installed; skipping configuration validation" "Docker 未安装，跳过配置验证"
                 return 0
             fi
             ;;
         sysctl)
-            log_info "验证 sysctl 配置..."
+            ui_log_info "Validating sysctl configuration..." "验证 sysctl 配置..."
             if sysctl -p "$config_file" > /dev/null 2>&1; then
-                log_success "sysctl 配置验证通过"
+                ui_log_success "sysctl configuration is valid" "sysctl 配置验证通过"
                 return 0
             else
-                log_warning "sysctl 配置验证有警告（可能包含未知参数）"
+                ui_log_warning \
+                    "sysctl configuration validation produced warnings (it may contain unknown parameters)" \
+                    "sysctl 配置验证有警告（可能包含未知参数）"
                 return 0  # sysctl 警告不影响使用
             fi
             ;;
         *)
-            log_warning "未知的配置类型: ${config_type}，跳过验证"
+            ui_log_warning \
+                "Unknown configuration type: ${config_type}; skipping validation" \
+                "未知的配置类型: ${config_type}，跳过验证"
             return 0
             ;;
     esac
@@ -2324,34 +2566,40 @@ check_system_resources() {
     local min_disk_gb=5 min_memory_mb=512 warnings=0
     local available_disk available_memory cpu_cores
 
-    log_info "检查系统资源..."
+    ui_log_info "Checking system resources..." "检查系统资源..."
     available_disk="$(df -BG / 2>/dev/null | awk 'NR==2 {gsub(/G/, "", $4); print $4}' || printf '0')"
     available_disk="${available_disk:-0}"
     if [[ "$available_disk" =~ ^[0-9]+$ ]] && [ "$available_disk" -lt "$min_disk_gb" ]; then
-        log_error "磁盘空间不足: 建议至少 ${min_disk_gb}GB，当前可用 ${available_disk}GB"
+        ui_log_error \
+            "Insufficient disk space: at least ${min_disk_gb} GB recommended, ${available_disk} GB available" \
+            "磁盘空间不足: 建议至少 ${min_disk_gb}GB，当前可用 ${available_disk}GB"
         warnings=$((warnings + 1))
     else
-        log_success "磁盘空间: ${available_disk}GB 可用"
+        ui_log_success "Disk space: ${available_disk} GB available" "磁盘空间: ${available_disk}GB 可用"
     fi
 
     available_memory="$(free -m 2>/dev/null | awk 'NR==2 {print $7}' || printf '0')"
     available_memory="${available_memory:-0}"
     if [[ "$available_memory" =~ ^[0-9]+$ ]] && [ "$available_memory" -lt "$min_memory_mb" ]; then
-        log_warning "可用内存较少: 建议至少 ${min_memory_mb}MB，当前可用 ${available_memory}MB"
+        ui_log_warning \
+            "Low available memory: at least ${min_memory_mb} MB recommended, ${available_memory} MB available" \
+            "可用内存较少: 建议至少 ${min_memory_mb}MB，当前可用 ${available_memory}MB"
         warnings=$((warnings + 1))
     else
-        log_success "内存: ${available_memory}MB 可用"
+        ui_log_success "Memory: ${available_memory} MB available" "内存: ${available_memory}MB 可用"
     fi
 
     cpu_cores="$(nproc 2>/dev/null || printf '1')"
     if [[ "$cpu_cores" =~ ^[0-9]+$ ]] && [ "$cpu_cores" -lt 2 ]; then
-        log_warning "CPU 核心数较少: 当前 $cpu_cores 核，某些编译操作可能较慢"
+        ui_log_warning \
+            "Low CPU core count: $cpu_cores core(s); some compilation tasks may be slow" \
+            "CPU 核心数较少: 当前 $cpu_cores 核，某些编译操作可能较慢"
     else
-        log_success "CPU: ${cpu_cores:-unknown} 核心"
+        ui_log_success "CPU: ${cpu_cores:-unknown} core(s)" "CPU: ${cpu_cores:-unknown} 核心"
     fi
 
     if [ "$warnings" -gt 0 ]; then
-        log_warning "发现 $warnings 个资源告警"
+        ui_log_warning "$warnings resource warning(s) found" "发现 $warnings 个资源告警"
         [ "$RESOURCE_CHECK_STRICT" = "1" ] && return 1
     fi
     return 0
@@ -2360,25 +2608,31 @@ check_system_resources() {
 # --- 基础检查 ---
 check_root() {
     if [ $EUID -ne 0 ]; then
-        printf '%b\n' "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}"
-        printf '%b\n' "${YELLOW}请使用 sudo 运行: sudo $0${PLAIN}"
+        printf '%b\n' "${RED}$(ui_text \
+            "Error: this script must be run as root!" \
+            "错误: 必须使用 root 用户运行此脚本！")${PLAIN}"
+        printf '%b\n' "${YELLOW}$(ui_text \
+            "Run it with sudo: sudo $0" \
+            "请使用 sudo 运行: sudo $0")${PLAIN}"
         exit 1
     fi
 }
 
 check_os() {
     if [ ! -f /etc/os-release ]; then
-        error_exit "无法检测操作系统类型"
+        error_exit "$(ui_text "Unable to detect the operating system" "无法检测操作系统类型")"
     fi
     source /etc/os-release
     OS_ID="$ID"
     OS_VERSION="$VERSION_ID"
     
     if [[ "$OS_ID" != "debian" && "$OS_ID" != "ubuntu" ]]; then
-        error_exit "此脚本仅支持 Debian 和 Ubuntu 系统"
+        error_exit "$(ui_text \
+            "This script supports Debian and Ubuntu only" \
+            "此脚本仅支持 Debian 和 Ubuntu 系统")"
     fi
     
-    log_info "检测到系统: $OS_ID $OS_VERSION"
+    ui_log_info "Detected system: $OS_ID $OS_VERSION" "检测到系统: $OS_ID $OS_VERSION"
 }
 
 # --- 备份管理 ---
@@ -2389,12 +2643,12 @@ create_backup() {
 
     LAST_BACKUP_FILE=""
     if [ ! -f "$file" ]; then
-        log_warning "备份跳过，文件不存在: $file" >&2
+        ui_log_warning "Backup skipped; file does not exist: $file" "备份跳过，文件不存在: $file" >&2
         return 0
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 备份 $file" >&2
+        ui_log_info "[DRY RUN] Would back up $file" "[DRY RUN] 备份 $file" >&2
         return 0
     fi
 
@@ -2409,7 +2663,7 @@ create_backup() {
         return 1
     fi
     LAST_BACKUP_FILE="$backup_path"
-    log_info "已备份: $file -> $backup_path" >&2
+    ui_log_info "Backed up: $file -> $backup_path" "已备份: $file -> $backup_path" >&2
     record_operation restore "$file" "$backup_path" "$description" >&2
     prune_backups_for_file "$file" "$path_hash"
     printf '%s\n' "$backup_path"
@@ -2434,7 +2688,9 @@ validate_port() {
     fi
     # 检查是否为保留端口
     if [ "$port" -lt 1024 ] && [ "$port" != 22 ]; then
-        log_warning "端口 $port 是特权端口，需要 root 权限"
+        ui_log_warning \
+            "Port $port is privileged and requires root access" \
+            "端口 $port 是特权端口，需要 root 权限"
     fi
     return 0
 }
@@ -2452,26 +2708,32 @@ check_service() {
 }
 
 systemd_daemon_reload() {
-    run_command "重新加载 systemd unit" systemctl daemon-reload
+    run_command "$(ui_text "Reload systemd units" "重新加载 systemd unit")" systemctl daemon-reload
 }
 
 enable_and_restart_service() {
     local service_name="$1"
     systemd_daemon_reload || return 1
-    run_command "启用 $service_name" systemctl enable "$service_name" || return 1
-    run_command "重启 $service_name" systemctl restart "$service_name" || return 1
+    run_command "$(ui_text "Enable $service_name" "启用 $service_name")" \
+        systemctl enable "$service_name" || return 1
+    run_command "$(ui_text "Restart $service_name" "重启 $service_name")" \
+        systemctl restart "$service_name" || return 1
     if [ "$DRY_RUN" != "1" ] && ! systemctl is-active --quiet "$service_name"; then
-        log_error "$service_name 未进入 active 状态"
+        ui_log_error "$service_name did not become active" "$service_name 未进入 active 状态"
         return 1
     fi
 }
 
 # --- 模块: 换源 (增强版) ---
 function action_change_mirrors() {
-    log_info "正在备份原配置并更换为阿里云源..."
+    ui_log_info \
+        "Backing up the current configuration and switching to Alibaba Cloud mirrors..." \
+        "正在备份原配置并更换为阿里云源..."
     
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将重写 /etc/apt/sources.list"
+        ui_log_info \
+            "[DRY RUN] Would rewrite /etc/apt/sources.list" \
+            "[DRY RUN] 将重写 /etc/apt/sources.list"
         return 0
     fi
     
@@ -2483,7 +2745,9 @@ function action_change_mirrors() {
     if [ "$ID" == "debian" ]; then
         # Debian 源配置
         local codename=$(lsb_release -cs)
-        write_file_atomic /etc/apt/sources.list "APT Debian 镜像源" 644 0 0 << EOF || return 1
+        write_file_atomic /etc/apt/sources.list \
+            "$(ui_text "APT Debian mirrors" "APT Debian 镜像源")" \
+            644 0 0 << EOF || return 1
 deb https://mirrors.aliyun.com/debian/ $codename main contrib non-free
 deb https://mirrors.aliyun.com/debian/ $codename-updates main contrib non-free
 deb https://mirrors.aliyun.com/debian-security/ $codename-security main contrib non-free
@@ -2491,22 +2755,24 @@ EOF
     elif [ "$ID" == "ubuntu" ]; then
         # Ubuntu 源配置
         local codename=$(lsb_release -cs)
-        write_file_atomic /etc/apt/sources.list "APT Ubuntu 镜像源" 644 0 0 << EOF || return 1
+        write_file_atomic /etc/apt/sources.list \
+            "$(ui_text "APT Ubuntu mirrors" "APT Ubuntu 镜像源")" \
+            644 0 0 << EOF || return 1
 deb https://mirrors.aliyun.com/ubuntu/ $codename main restricted universe multiverse
 deb https://mirrors.aliyun.com/ubuntu/ $codename-updates main restricted universe multiverse
 deb https://mirrors.aliyun.com/ubuntu/ $codename-security main restricted universe multiverse
 deb https://mirrors.aliyun.com/ubuntu/ $codename-backports main restricted universe multiverse
 EOF
     else
-        error_exit "不支持的操作系统: $ID"
+        error_exit "$(ui_text "Unsupported operating system: $ID" "不支持的操作系统: $ID")"
     fi
     
-    log_success "换源完成 (架构: $arch)"
+    ui_log_success "Mirror switch completed (architecture: $arch)" "换源完成 (架构: $arch)"
 }
 
 # --- 模块: 安装基础工具 (增强版) ---
 function action_install_essentials() {
-    log_info "安装运维必备工具..."
+    ui_log_info "Installing essential operations tools..." "安装运维必备工具..."
     export DEBIAN_FRONTEND=noninteractive
     
     # 更新包列表（统一管理）
@@ -2523,10 +2789,14 @@ function action_install_essentials() {
     install_packages_batch "${packages[@]}" || return 1
 
     # 单独尝试安装 software-properties-common (可能在某些极简系统上缺失)
-    log_info "尝试安装 software-properties-common..."
-    execute_with_progress_argv "安装 software-properties-common" \
+    ui_log_info "Trying to install software-properties-common..." "尝试安装 software-properties-common..."
+    execute_with_progress_argv "$(ui_text \
+        "Installing software-properties-common" \
+        "安装 software-properties-common")" \
         apt-get -o DPkg::Lock::Timeout=120 -y install software-properties-common || \
-        log_warning "software-properties-common 安装失败 (非关键错误)"
+        ui_log_warning \
+            "software-properties-common failed to install (non-critical)" \
+            "software-properties-common 安装失败 (非关键错误)"
     
     
     # 仅在 SYSTEM_TIMEZONE 显式设置时修改系统时区。
@@ -2534,23 +2804,29 @@ function action_install_essentials() {
     
     # 时间同步（优先使用 systemd-timesyncd）
     if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
-        run_command "启用 systemd-timesyncd" systemctl enable systemd-timesyncd || return 1
-        run_command "重启 systemd-timesyncd" systemctl restart systemd-timesyncd || return 1
+        run_command "$(ui_text "Enable systemd-timesyncd" "启用 systemd-timesyncd")" \
+            systemctl enable systemd-timesyncd || return 1
+        run_command "$(ui_text "Restart systemd-timesyncd" "重启 systemd-timesyncd")" \
+            systemctl restart systemd-timesyncd || return 1
     else
         if command -v ntpdate > /dev/null 2>&1; then
-            run_command "同步系统时间" ntpdate pool.ntp.org || log_warning "时间同步失败"
+            run_command "$(ui_text "Synchronize system time" "同步系统时间")" \
+                ntpdate pool.ntp.org || \
+                ui_log_warning "Time synchronization failed" "时间同步失败"
         fi
     fi
     
-    log_success "基础环境安装完毕"
+    ui_log_success "Essential environment installation completed" "基础环境安装完毕"
 }
 
 # --- 模块: 系统优化 (增强版) ---
 function action_optimize_system() {
-    log_info "系统内核优化..."
+    ui_log_info "Optimizing the system kernel..." "系统内核优化..."
     
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将重写 /etc/sysctl.conf 并应用 sysctl -p"
+        ui_log_info \
+            "[DRY RUN] Would rewrite /etc/sysctl.conf and apply sysctl -p" \
+            "[DRY RUN] 将重写 /etc/sysctl.conf 并应用 sysctl -p"
         return 0
     fi
     
@@ -2558,20 +2834,22 @@ function action_optimize_system() {
     local bbr_available=false
     if modprobe tcp_bbr 2>/dev/null; then
         bbr_available=true
-        log_info "检测到 BBR 支持"
+        ui_log_info "BBR support detected" "检测到 BBR 支持"
     else
-        log_warning "当前内核不支持 BBR，将使用其他拥塞控制算法"
+        ui_log_warning \
+            "The current kernel does not support BBR; another congestion-control algorithm will be used" \
+            "当前内核不支持 BBR，将使用其他拥塞控制算法"
     fi
     
     # 生成优化的 sysctl 配置
     local congestion_control="cubic"
     [ "$bbr_available" = true ] && congestion_control="bbr"
-    write_file_atomic /etc/sysctl.d/99-init-optimization.conf "系统内核优化配置" 644 0 0 << EOF || return 1
-# 文件系统优化
+    write_file_atomic /etc/sysctl.d/99-init-optimization.conf "$(ui_text "system kernel optimization configuration" "系统内核优化配置")" 644 0 0 << EOF || return 1
+# Filesystem optimization
 fs.file-max = 1000000
 fs.inotify.max_user_watches = 524288
 
-# 网络优化
+# Network optimization
 net.core.default_qdisc = fq
 net.core.somaxconn = 65535
 net.core.netdev_max_backlog = 262144
@@ -2583,18 +2861,18 @@ net.ipv4.tcp_keepalive_time = 1200
 net.ipv4.tcp_max_tw_buckets = 5000
 net.ipv4.ip_local_port_range = 10000 65000
 
-# 拥塞控制
+# Congestion control
 net.ipv4.tcp_congestion_control = $congestion_control
 
-# 内存优化
+# Memory optimization
 vm.swappiness = 10
 vm.overcommit_memory = 1
 
-# 路由转发
+# IP forwarding
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.forwarding = 1
 
-# 安全设置
+# Security settings
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1
 net.ipv4.conf.all.accept_redirects = 0
@@ -2603,7 +2881,8 @@ net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.send_redirects = 0
 EOF
     
-    run_command "应用 sysctl 配置" sysctl --system || log_warning "部分 sysctl 参数应用失败"
+    run_command "$(ui_text "Apply sysctl configuration" "应用 sysctl 配置")" sysctl --system || \
+        ui_log_warning "Some sysctl parameters could not be applied" "部分 sysctl 参数应用失败"
     
     # limits 配置
     local limits_block="* soft nofile 65535
@@ -2626,41 +2905,51 @@ alias df='df -h'
 alias du='du -h'"
     ensure_block_in_file "$HOME/.bashrc" "### INIT.SH ALIASES BEGIN" "### INIT.SH ALIASES END" "$alias_block"
     
-    log_success "系统内核优化完成"
+    ui_log_success "System kernel optimization completed" "系统内核优化完成"
 }
 
 # --- 模块: 防火墙配置 (新增) ---
 function action_configure_firewall() {
-    log_info "配置防火墙 (UFW)..."
+    ui_log_info "Configuring the firewall (UFW)..." "配置防火墙 (UFW)..."
     
     if ! command -v ufw > /dev/null 2>&1; then
-        log_warning "UFW 未安装，跳过防火墙配置"
+        ui_log_warning "UFW is not installed; skipping firewall configuration" "UFW 未安装，跳过防火墙配置"
         return 1
     fi
     
     local ssh_port allow_web
     ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
     ssh_port="${ssh_port:-22}"
-    validate_port "$ssh_port" || { log_error "无法确定有效 SSH 端口"; return 1; }
+    validate_port "$ssh_port" || {
+        ui_log_error "Unable to determine a valid SSH port" "无法确定有效 SSH 端口"
+        return 1
+    }
 
-    run_command "设置 UFW 默认入站策略" ufw default deny incoming || return 1
-    run_command "设置 UFW 默认出站策略" ufw default allow outgoing || return 1
-    run_command "允许 SSH 端口 $ssh_port" ufw allow "$ssh_port/tcp" comment SSH || return 1
-    log_info "已允许 SSH 端口: $ssh_port"
+    run_command "$(ui_text "Set the default UFW inbound policy" "设置 UFW 默认入站策略")" \
+        ufw default deny incoming || return 1
+    run_command "$(ui_text "Set the default UFW outbound policy" "设置 UFW 默认出站策略")" \
+        ufw default allow outgoing || return 1
+    run_command "$(ui_text "Allow SSH port $ssh_port" "允许 SSH 端口 $ssh_port")" \
+        ufw allow "$ssh_port/tcp" comment SSH || return 1
+    ui_log_info "Allowed SSH port: $ssh_port" "已允许 SSH 端口: $ssh_port"
     
     # 询问是否允许常用端口
-    read -r -p "是否允许 HTTP(80) 和 HTTPS(443) 端口? [y/n]: " allow_web
+    ui_read allow_web \
+        "Allow HTTP (80) and HTTPS (443) ports? [y/N]: " \
+        "是否允许 HTTP(80) 和 HTTPS(443) 端口? [y/N]: "
     case "$allow_web" in
         y|Y|yes|YES)
-            run_command "允许 HTTP 端口" ufw allow 80/tcp comment HTTP || return 1
-            run_command "允许 HTTPS 端口" ufw allow 443/tcp comment HTTPS || return 1
-            log_success "已允许 HTTP/HTTPS 端口"
+            run_command "$(ui_text "Allow the HTTP port" "允许 HTTP 端口")" \
+                ufw allow 80/tcp comment HTTP || return 1
+            run_command "$(ui_text "Allow the HTTPS port" "允许 HTTPS 端口")" \
+                ufw allow 443/tcp comment HTTPS || return 1
+            ui_log_success "Allowed HTTP/HTTPS ports" "已允许 HTTP/HTTPS 端口"
             ;;
     esac
     
     # 启用防火墙
-    run_command "启用 UFW" ufw --force enable || return 1
-    log_success "防火墙已启用"
+    run_command "$(ui_text "Enable UFW" "启用 UFW")" ufw --force enable || return 1
+    ui_log_success "Firewall enabled" "防火墙已启用"
     
     # 显示状态
     [ "$DRY_RUN" = "1" ] || ufw status numbered
@@ -2668,14 +2957,14 @@ function action_configure_firewall() {
 
 # --- 模块: Fail2ban 配置 (新增) ---
 function action_configure_fail2ban() {
-    log_info "配置 Fail2ban..."
+    ui_log_info "Configuring Fail2ban..." "配置 Fail2ban..."
     
     if ! command -v fail2ban-client > /dev/null 2>&1; then
-        log_info "Fail2ban 未安装，正在安装..."
+        ui_log_info "Fail2ban is not installed; installing it..." "Fail2ban 未安装，正在安装..."
         install_packages_batch "fail2ban"
         
         if ! command -v fail2ban-client > /dev/null 2>&1; then
-             log_error "Fail2ban 安装失败"
+             ui_log_error "Fail2ban installation failed" "Fail2ban 安装失败"
              return 1
         fi
     fi
@@ -2684,7 +2973,9 @@ function action_configure_fail2ban() {
     local ssh_port
     ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
     ssh_port="${ssh_port:-22}"
-    log_info "Fail2ban detecting SSH port: $ssh_port"
+    ui_log_info \
+        "Fail2ban detected SSH port: $ssh_port" \
+        "Fail2ban 检测到 SSH 端口: $ssh_port"
 
     # 创建本地配置
     write_file_atomic /etc/fail2ban/jail.d/sshd.local "Fail2ban SSH jail" 644 0 0 << EOF || return 1
@@ -2698,28 +2989,34 @@ findtime = 600
 EOF
     
     if enable_and_restart_service fail2ban; then
-        log_success "Fail2ban 配置完成并已启动"
+        ui_log_success "Fail2ban configured and started" "Fail2ban 配置完成并已启动"
     else
-        log_error "Fail2ban 启动失败"
+        ui_log_error "Fail2ban failed to start" "Fail2ban 启动失败"
         return 1
     fi
 }
 
 # --- 模块: 自动更新配置 (新增) ---
 function action_configure_auto_updates() {
-    log_info "配置自动安全更新..."
+    ui_log_info "Configuring automatic security updates..." "配置自动安全更新..."
     
     if ! command -v unattended-upgrades > /dev/null 2>&1; then
-        log_warning "unattended-upgrades 未安装，跳过配置"
+        ui_log_warning \
+            "unattended-upgrades is not installed; skipping configuration" \
+            "unattended-upgrades 未安装，跳过配置"
         return
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 /etc/apt/apt.conf.d/50unattended-upgrades 和 /etc/apt/apt.conf.d/20auto-upgrades"
+        ui_log_info \
+            "[DRY RUN] Would write /etc/apt/apt.conf.d/50unattended-upgrades and /etc/apt/apt.conf.d/20auto-upgrades" \
+            "[DRY RUN] 将写入 /etc/apt/apt.conf.d/50unattended-upgrades 和 /etc/apt/apt.conf.d/20auto-upgrades"
         return 0
     fi
     
-    write_file_atomic /etc/apt/apt.conf.d/50unattended-upgrades "unattended-upgrades 安全来源" 644 0 0 << 'EOF' || return 1
+    write_file_atomic /etc/apt/apt.conf.d/50unattended-upgrades \
+        "$(ui_text "unattended-upgrades security origins" "unattended-upgrades 安全来源")" \
+        644 0 0 << 'EOF' || return 1
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}-security";
     "${distro_id}ESMApps:${distro_codename}-apps-security";
@@ -2732,19 +3029,21 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF
     
-    write_file_atomic /etc/apt/apt.conf.d/20auto-upgrades "APT 自动更新周期" 644 0 0 << 'EOF' || return 1
+    write_file_atomic /etc/apt/apt.conf.d/20auto-upgrades \
+        "$(ui_text "APT automatic-update schedule" "APT 自动更新周期")" \
+        644 0 0 << 'EOF' || return 1
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
     
-    log_success "自动安全更新已配置"
+    ui_log_success "Automatic security updates configured" "自动安全更新已配置"
 }
 
 # --- 模块: Swap 配置 (新增) ---
 function action_configure_swap() {
-    log_info "配置 Swap 交换空间..."
+    ui_log_info "Configuring swap space..." "配置 Swap 交换空间..."
     if [ "$DRY_RUN" = "1" ]; then
         dry_run_action_plan action_configure_swap
         return 0
@@ -2755,8 +3054,12 @@ function action_configure_swap() {
     local swap_size=$(free -m | grep Swap | awk '{print $2}')
     
     if [ -n "$existing_swap" ] && [ "$swap_size" -gt 0 ]; then
-        log_info "检测到现有 Swap: $existing_swap (大小: ${swap_size}MB)"
-        log_warning "为避免中断现有工作负载，脚本不会自动关闭或替换已启用的 Swap"
+        ui_log_info \
+            "Existing swap detected: $existing_swap (size: ${swap_size} MB)" \
+            "检测到现有 Swap: $existing_swap (大小: ${swap_size}MB)"
+        ui_log_warning \
+            "To avoid interrupting the current workload, the toolkit will not disable or replace active swap automatically" \
+            "为避免中断现有工作负载，脚本不会自动关闭或替换已启用的 Swap"
         return 0
     fi
     
@@ -2775,45 +3078,58 @@ function action_configure_swap() {
         recommended_swap=4096  # 4GB (最大推荐)
     fi
     
-    log_info "系统内存: ${mem_total}MB"
-    log_info "推荐 Swap 大小: ${recommended_swap}MB"
+    ui_log_info "System memory: ${mem_total} MB" "系统内存: ${mem_total}MB"
+    ui_log_info "Recommended swap size: ${recommended_swap} MB" "推荐 Swap 大小: ${recommended_swap}MB"
     
     local swap_input=""
     if [ "$NON_INTERACTIVE" = "1" ]; then
         swap_input="$SWAP_SIZE_MB"
         if [ -n "$swap_input" ]; then
-            log_info "[非交互] 使用 SWAP_SIZE_MB=${swap_input}MB"
+            ui_log_info \
+                "[non-interactive] Using SWAP_SIZE_MB=${swap_input} MB" \
+                "[非交互] 使用 SWAP_SIZE_MB=${swap_input}MB"
         else
-            log_info "[非交互] SWAP_SIZE_MB 未设置，使用推荐值 ${recommended_swap}MB"
+            ui_log_info \
+                "[non-interactive] SWAP_SIZE_MB is not set; using the recommended ${recommended_swap} MB" \
+                "[非交互] SWAP_SIZE_MB 未设置，使用推荐值 ${recommended_swap}MB"
         fi
     else
-        read -r -p "请输入 Swap 大小 (MB，留空使用推荐值 ${recommended_swap}MB): " swap_input
+        ui_read swap_input \
+            "Swap size in MB [recommended: ${recommended_swap}; Enter to accept]: " \
+            "请输入 Swap 大小 (MB，留空使用推荐值 ${recommended_swap}MB): "
     fi
     
     local swap_size_mb=${swap_input:-$recommended_swap}
     
     # 验证输入
     if [[ ! "$swap_size_mb" =~ ^[0-9]+$ ]] || [ "$swap_size_mb" -lt 512 ]; then
-        log_error "Swap 大小无效，最小 512MB"
+        ui_log_error "Invalid swap size; minimum is 512 MB" "Swap 大小无效，最小 512MB"
         return 1
     fi
 
     if [ "$swap_size_mb" -gt 16384 ]; then
-        log_warning "Swap 大小超过 16GB，可能不必要"
+        ui_log_warning "Swap size exceeds 16 GB and may be unnecessary" "Swap 大小超过 16GB，可能不必要"
     fi
     
     # 检查磁盘空间
     local available_space=$(df -m / | tail -1 | awk '{print $4}')
     if [ "$available_space" -lt "$swap_size_mb" ]; then
-        log_error "磁盘空间不足！可用: ${available_space}MB，需要: ${swap_size_mb}MB"
+        ui_log_error \
+            "Insufficient disk space: ${available_space} MB available, ${swap_size_mb} MB required" \
+            "磁盘空间不足！可用: ${available_space}MB，需要: ${swap_size_mb}MB"
         return 1
     fi
     
     # 创建 Swap 文件
     local swap_file="/swapfile" swap_candidate="/swapfile.init.$$" old_swap=""
-    [ ! -e "$swap_candidate" ] || { log_error "临时 Swap 文件已存在: $swap_candidate"; return 1; }
+    [ ! -e "$swap_candidate" ] || {
+        ui_log_error "Temporary swap file already exists: $swap_candidate" "临时 Swap 文件已存在: $swap_candidate"
+        return 1
+    }
     
-    log_info "创建 ${swap_size_mb}MB Swap 文件（这可能需要几分钟）..."
+    ui_log_info \
+        "Creating a ${swap_size_mb} MB swap file (this may take a few minutes)..." \
+        "创建 ${swap_size_mb}MB Swap 文件（这可能需要几分钟）..."
     
     if ! dd if=/dev/zero of="$swap_candidate" bs=1M count="$swap_size_mb" status=progress; then
         rm -f -- "$swap_candidate"
@@ -2822,10 +3138,10 @@ function action_configure_swap() {
     chmod 600 "$swap_candidate" || { rm -f -- "$swap_candidate"; return 1; }
     
     # 格式化为 Swap
-    log_info "格式化 Swap 文件..."
+    ui_log_info "Formatting swap file..." "格式化 Swap 文件..."
     ensure_log_file || return 1
     mkswap "$swap_candidate" >> "$LOG_FILE" 2>&1 || {
-        log_error "Swap 格式化失败"
+        ui_log_error "Swap formatting failed" "Swap 格式化失败"
         rm -f -- "$swap_candidate"
         return 1
     }
@@ -2839,7 +3155,7 @@ function action_configure_swap() {
         return 1
     }
     if ! swapon "$swap_file"; then
-        log_error "启用 Swap 失败"
+        ui_log_error "Failed to enable swap" "启用 Swap 失败"
         rm -f -- "$swap_file"
         if [ -n "$old_swap" ]; then
             mv -- "$old_swap" "$swap_file"
@@ -2852,49 +3168,50 @@ function action_configure_swap() {
     # 添加到 /etc/fstab（如果不存在）
     if ! grep -q "$swap_file" /etc/fstab 2>/dev/null; then
         ensure_block_in_file /etc/fstab "### INIT.SH SWAP BEGIN" "### INIT.SH SWAP END" \
-            "$swap_file none swap sw 0 0" "Swap fstab 配置" || return 1
-        log_success "已添加到 /etc/fstab，开机自动挂载"
+            "$swap_file none swap sw 0 0" "$(ui_text "Swap fstab configuration" "Swap fstab 配置")" || return 1
+        ui_log_success "Added to /etc/fstab for activation at boot" "已添加到 /etc/fstab，开机自动挂载"
     fi
     
     # 设置 swappiness（如果未设置）
     write_file_atomic /etc/sysctl.d/99-init-swap.conf "Swap swappiness" 644 0 0 <<'EOF' || return 1
 vm.swappiness = 10
 EOF
-    run_command "应用 vm.swappiness=10" sysctl -w vm.swappiness=10 || return 1
+    run_command "$(ui_text "Apply vm.swappiness=10" "应用 vm.swappiness=10")" \
+        sysctl -w vm.swappiness=10 || return 1
     
     # 验证
     local final_swap=$(free -m | grep Swap | awk '{print $2}')
     if [ "$final_swap" -gt 0 ]; then
-        log_success "Swap 配置完成！当前 Swap: ${final_swap}MB"
-        log_info "Swap 文件位置: $swap_file"
+        ui_log_success "Swap configured; current swap: ${final_swap} MB" "Swap 配置完成！当前 Swap: ${final_swap}MB"
+        ui_log_info "Swap file: $swap_file" "Swap 文件位置: $swap_file"
     else
-        log_error "Swap 配置失败"
+        ui_log_error "Swap configuration failed" "Swap 配置失败"
         return 1
     fi
 }
 
 # --- 模块: Docker 安装 (新增) ---
 function action_install_docker() {
-    log_info "安装 Docker 和 Docker Compose..."
+    ui_log_info "Installing Docker and Docker Compose..." "安装 Docker 和 Docker Compose..."
     
     # 检查是否已安装
     if command -v docker > /dev/null 2>&1; then
         local docker_version=$(docker --version)
-        log_info "检测到已安装 Docker: $docker_version"
-        read -r -p "是否重新安装 Docker? [y/n]: " reinstall
+        ui_log_info "Existing Docker installation detected: $docker_version" "检测到已安装 Docker: $docker_version"
+        ui_read reinstall "Reinstall Docker? [y/N]: " "是否重新安装 Docker? [y/N]: "
         case "$reinstall" in
             y|Y|yes|YES)
-                log_info "卸载现有 Docker..."
-                execute_with_progress_argv "卸载旧 Docker 包" \
+                ui_log_info "Removing the existing Docker installation..." "卸载现有 Docker..."
+                execute_with_progress_argv "$(ui_text "Removing old Docker packages" "卸载旧 Docker 包")" \
                     apt-get -o DPkg::Lock::Timeout=120 -y remove docker docker-engine docker.io containerd runc || return 1
                 ;;
             *)
                 # 检查 Docker Compose
                 if ! command -v docker-compose > /dev/null 2>&1 && ! docker compose version > /dev/null 2>&1; then
-                    log_info "安装 Docker Compose..."
+                ui_log_info "Installing Docker Compose..." "安装 Docker Compose..."
                     install_docker_compose
                 else
-                    log_success "Docker 和 Docker Compose 已安装"
+                ui_log_success "Docker and Docker Compose are already installed" "Docker 和 Docker Compose 已安装"
                     return 0
                 fi
                 return 0
@@ -2903,17 +3220,18 @@ function action_install_docker() {
     fi
     
     # 安装依赖
-    log_info "安装 Docker 依赖包..."
+    ui_log_info "Installing Docker dependencies..." "安装 Docker 依赖包..."
     install_packages_batch "ca-certificates" "curl" "gnupg" "lsb-release" || return 1
     
     # 添加 Docker 官方 GPG 密钥
-    log_info "添加 Docker 官方 GPG 密钥..."
-    run_command "创建 APT keyring 目录" install -m 0755 -d /etc/apt/keyrings || return 1
+    ui_log_info "Adding the official Docker GPG key..." "添加 Docker 官方 GPG 密钥..."
+    run_command "$(ui_text "Create APT keyring directory" "创建 APT keyring 目录")" \
+        install -m 0755 -d /etc/apt/keyrings || return 1
     local docker_gpg_url="https://download.docker.com/linux/${OS_ID}/gpg"
     local docker_gpg_tmp="/tmp/docker.gpg.asc"
-    if download_file "$docker_gpg_url" "$docker_gpg_tmp" "Docker GPG 密钥"; then
+    if download_file "$docker_gpg_url" "$docker_gpg_tmp" "$(ui_text "Docker GPG key" "Docker GPG 密钥")"; then
         if ! verify_gpg_fingerprint "$docker_gpg_tmp" "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"; then
-            log_error "Docker GPG 密钥指纹不匹配"
+        ui_log_error "Docker GPG key fingerprint mismatch" "Docker GPG 密钥指纹不匹配"
             return 1
         fi
         local docker_gpg_candidate
@@ -2922,12 +3240,12 @@ function action_install_docker() {
         atomic_install_file /etc/apt/keyrings/docker.gpg "$docker_gpg_candidate" \
             "Docker APT GPG key" 644 0 0 || return 1
     else
-        log_warning "已跳过 Docker GPG 密钥下载"
+        ui_log_warning "Docker GPG key download skipped" "已跳过 Docker GPG 密钥下载"
         return 1
     fi
     
     # 添加 Docker 仓库
-    log_info "添加 Docker 仓库..."
+    ui_log_info "Adding the Docker repository..." "添加 Docker 仓库..."
     local arch=$(dpkg --print-architecture)
     local codename=$(lsb_release -cs)
     if [ "$codename" == "trixie" ] || [ "$codename" == "sid" ]; then
@@ -2940,25 +3258,25 @@ deb [arch=$arch signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.
 EOF
     
     # 安装 Docker Engine
-    log_info "安装 Docker Engine..."
+    ui_log_info "Installing Docker Engine..." "安装 Docker Engine..."
     APT_UPDATED=false
     update_apt_once || return 1
-    if ! execute_with_progress_argv "安装 Docker Engine" \
+    if ! execute_with_progress_argv "$(ui_text "Installing Docker Engine" "安装 Docker Engine")" \
         apt-get -o DPkg::Lock::Timeout=120 -y install \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
-        log_error "Docker 安装失败"
+        ui_log_error "Docker installation failed" "Docker 安装失败"
         return 1
     fi
     
     # 启动 Docker
-    log_info "启动 Docker 服务..."
-    run_command "启用 Docker" systemctl enable docker || return 1
-    run_command "启动 Docker" systemctl start docker || return 1
+    ui_log_info "Starting the Docker service..." "启动 Docker 服务..."
+    run_command "$(ui_text "Enable Docker" "启用 Docker")" systemctl enable docker || return 1
+    run_command "$(ui_text "Start Docker" "启动 Docker")" systemctl start docker || return 1
     
     if check_service docker; then
-        log_success "Docker 服务已启动"
+        ui_log_success "Docker service started" "Docker 服务已启动"
     else
-        log_error "Docker 服务启动失败"
+        ui_log_error "Docker service failed to start" "Docker 服务启动失败"
         return 1
     fi
     
@@ -2966,7 +3284,9 @@ EOF
     install_docker_compose || return 1
     
     # 配置 Docker（可选）
-    read -r -p "是否配置 Docker（添加当前用户到 docker 组，配置镜像加速）? [y/n]: " config_docker
+    ui_read config_docker \
+        "Configure Docker (add the current user to the docker group and configure mirrors)? [y/N]: " \
+        "是否配置 Docker（添加当前用户到 docker 组，配置镜像加速）? [y/N]: "
     case "$config_docker" in
         y|Y|yes|YES)
             configure_docker || return 1
@@ -2976,16 +3296,18 @@ EOF
     # 验证安装
     if docker --version > /dev/null 2>&1; then
         local docker_ver=$(docker --version)
-        log_success "Docker 安装完成: $docker_ver"
+        ui_log_success "Docker installation completed: $docker_ver" "Docker 安装完成: $docker_ver"
         
         # 测试运行
         if docker run --rm hello-world > /dev/null 2>&1; then
-            log_success "Docker 测试运行成功"
+            ui_log_success "Docker test container ran successfully" "Docker 测试运行成功"
         else
-            log_warning "Docker 测试运行失败，但安装已完成"
+            ui_log_warning \
+                "Docker test container failed, but installation completed" \
+                "Docker 测试运行失败，但安装已完成"
         fi
     else
-        log_error "Docker 安装验证失败"
+        ui_log_error "Docker installation verification failed" "Docker 安装验证失败"
         return 1
     fi
 }
@@ -2994,35 +3316,43 @@ EOF
 function install_docker_compose() {
     # 检查是否已有 Compose V2 (plugin)
     if docker compose version > /dev/null 2>&1; then
-        log_info "检测到 Docker Compose V2 (插件版本)"
+        ui_log_info "Docker Compose V2 detected (plugin version)" "检测到 Docker Compose V2 (插件版本)"
         return 0
     fi
     
     # 检查是否已有独立版本
     if command -v docker-compose > /dev/null 2>&1; then
-        log_info "检测到 Docker Compose (独立版本)"
+        ui_log_info "Docker Compose detected (standalone version)" "检测到 Docker Compose (独立版本)"
         return 0
     fi
     
-    log_error "未检测到 Docker Compose V2 插件；为避免未固定二进制下载，不再自动安装独立版本"
-    log_error "请检查 docker-compose-plugin 包是否安装成功"
+    ui_log_error \
+        "Docker Compose V2 plugin was not detected; the standalone version will not be downloaded automatically because its binary is not pinned" \
+        "未检测到 Docker Compose V2 插件；为避免未固定二进制下载，不再自动安装独立版本"
+    ui_log_error \
+        "Check whether the docker-compose-plugin package installed successfully" \
+        "请检查 docker-compose-plugin 包是否安装成功"
     return 1
 }
 
 # --- Docker 配置函数 ---
 function configure_docker() {
-    log_info "配置 Docker..."
+    ui_log_info "Configuring Docker..." "配置 Docker..."
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 /etc/docker/daemon.json 并重启 Docker"
+        ui_log_info \
+            "[DRY RUN] Would write /etc/docker/daemon.json and restart Docker" \
+            "[DRY RUN] 将写入 /etc/docker/daemon.json 并重启 Docker"
         return 0
     fi
     
     # 配置镜像加速（国内服务器）
-    read -r -p "是否配置 Docker 镜像加速（推荐国内服务器）? [y/n]: " use_mirror
+    ui_read use_mirror \
+        "Configure Docker registry mirrors (recommended for servers in China)? [y/N]: " \
+        "是否配置 Docker 镜像加速（推荐国内服务器）? [y/N]: "
     case "$use_mirror" in
         y|Y|yes|YES)
-            log_info "配置 Docker 镜像加速..."
-            write_file_atomic /etc/docker/daemon.json "Docker daemon 配置" 644 0 0 \
+            ui_log_info "Configuring Docker registry mirrors..." "配置 Docker 镜像加速..."
+            write_file_atomic /etc/docker/daemon.json "$(ui_text "Docker daemon configuration" "Docker daemon 配置")" 644 0 0 \
                 validate_json_candidate << 'EOF' || return 1
 {
   "registry-mirrors": [
@@ -3041,7 +3371,7 @@ EOF
             ;;
         *)
             # 仅配置日志
-            write_file_atomic /etc/docker/daemon.json "Docker daemon 配置" 644 0 0 \
+            write_file_atomic /etc/docker/daemon.json "$(ui_text "Docker daemon configuration" "Docker daemon 配置")" 644 0 0 \
                 validate_json_candidate << 'EOF' || return 1
 {
   "log-driver": "json-file",
@@ -3057,16 +3387,18 @@ EOF
     
     # 验证并重启 Docker
     if ! systemd_daemon_reload || ! systemctl restart docker || ! check_service docker; then
-        log_error "Docker 配置应用失败，正在恢复上一份配置"
+        ui_log_error \
+            "Failed to apply Docker configuration; restoring the previous configuration" \
+            "Docker 配置应用失败，正在恢复上一份配置"
         rollback_last_operation || true
         systemctl restart docker 2>/dev/null || true
         return 1
     fi
-    log_success "Docker 配置完成并已重启"
+    ui_log_success "Docker configured and restarted" "Docker 配置完成并已重启"
     
     # 显示配置信息
     if [ -f /etc/docker/daemon.json ]; then
-        log_info "Docker 配置内容:"
+        ui_log_info "Docker configuration:" "Docker 配置内容:"
         cat /etc/docker/daemon.json | jq . 2>/dev/null || cat /etc/docker/daemon.json
     fi
 }
@@ -3137,19 +3469,23 @@ function determine_target_user() {
         local target_home
         target_home="$(get_user_home "$target_user")"
         printf '%b\n' ""
-        log_info "检测到当前用户: $target_user"
+        ui_log_info "Detected current user: $target_user" "检测到当前用户: $target_user"
         # 询问是否安装到该用户目录
-        if confirm_action "是否将用户级安装/配置写入到用户 $target_user 的目录下? (推荐用于开发)" "y"; then
+        if confirm_action "$(ui_text \
+            "Write user-level installations and configuration to $target_user's home directory? (recommended for development)" \
+            "是否将用户级安装/配置写入到用户 $target_user 的目录下? (推荐用于开发)")" "y"; then
              INSTALL_USER="$target_user"
              INSTALL_HOME="$target_home"
-             log_info "将安装到用户: $INSTALL_USER ($INSTALL_HOME)"
+             ui_log_info \
+                 "User-level installation target: $INSTALL_USER ($INSTALL_HOME)" \
+                 "将安装到用户: $INSTALL_USER ($INSTALL_HOME)"
              return
         fi
     fi
 
     INSTALL_USER="root"
     INSTALL_HOME="/root"
-    log_info "将安装到用户: root (/root)"
+    ui_log_info "User-level installation target: root (/root)" "将安装到用户: root (/root)"
 }
 
 function run_as_user() {
@@ -3190,42 +3526,50 @@ set_user_login_shell_to_zsh() {
     local user="$1" zsh_shell current_shell actual_shell
 
     if ! getent passwd "$user" > /dev/null 2>&1; then
-        log_error "终端配置目标用户不存在: $user"
+        ui_log_error "Terminal configuration target user does not exist: $user" "终端配置目标用户不存在: $user"
         return 1
     fi
     if ! zsh_shell="$(resolve_zsh_login_shell)"; then
-        log_error "未找到同时可执行且已登记在 $LOGIN_SHELLS_FILE 的 Zsh"
+        ui_log_error \
+            "No executable Zsh registered in $LOGIN_SHELLS_FILE was found" \
+            "未找到同时可执行且已登记在 $LOGIN_SHELLS_FILE 的 Zsh"
         return 1
     fi
 
     current_shell="$(get_user_login_shell "$user")"
     if login_shell_matches "$current_shell" "$zsh_shell"; then
-        log_info "默认登录 Shell 已是 Zsh: $user -> $current_shell"
+        ui_log_info "Default login shell is already Zsh: $user -> $current_shell" "默认登录 Shell 已是 Zsh: $user -> $current_shell"
         return 0
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将默认登录 Shell 设置为: $user -> $zsh_shell"
+        ui_log_info \
+            "[DRY RUN] Would set the default login shell: $user -> $zsh_shell" \
+            "[DRY RUN] 将默认登录 Shell 设置为: $user -> $zsh_shell"
         return 0
     fi
 
     if command -v usermod > /dev/null 2>&1; then
         if ! usermod --shell "$zsh_shell" "$user"; then
-            log_error "usermod 无法修改 $user 的登录 Shell"
+            ui_log_error "usermod could not change the login shell for $user" "usermod 无法修改 $user 的登录 Shell"
             return 1
         fi
     elif ! chsh -s "$zsh_shell" "$user"; then
-        log_error "chsh 无法修改 $user 的登录 Shell"
+        ui_log_error "chsh could not change the login shell for $user" "chsh 无法修改 $user 的登录 Shell"
         return 1
     fi
 
     actual_shell="$(get_user_login_shell "$user")"
     if ! login_shell_matches "$actual_shell" "$zsh_shell"; then
-        log_error "登录 Shell 验证失败: $user 当前仍为 ${actual_shell:-未知}，期望 $zsh_shell"
+        ui_log_error \
+            "Login-shell verification failed: $user still has ${actual_shell:-unknown}; expected $zsh_shell" \
+            "登录 Shell 验证失败: $user 当前仍为 ${actual_shell:-未知}，期望 $zsh_shell"
         return 1
     fi
 
-    log_success "默认登录 Shell 已设置并验证: $user -> $actual_shell"
+    ui_log_success \
+        "Default login shell set and verified: $user -> $actual_shell" \
+        "默认登录 Shell 已设置并验证: $user -> $actual_shell"
 }
 
 terminal_user_command_path() {
@@ -3309,7 +3653,7 @@ function install_runtime() {
             install_dotnet "$version" "$manager"
             ;;
         *)
-            log_error "不支持的 Runtime: $runtime"
+            ui_log_error "Unsupported runtime: $runtime" "不支持的 Runtime: $runtime"
             return 1
             ;;
     esac
@@ -3385,7 +3729,7 @@ function install_nodejs() {
     # 确定安装用户
     determine_target_user
     
-    log_info "安装 Node.js (使用 $manager, 用户: $INSTALL_USER)..."
+    ui_log_info "Installing Node.js (manager: $manager, user: $INSTALL_USER)..." "安装 Node.js (使用 $manager, 用户: $INSTALL_USER)..."
     
     # 检查是否已安装
     local is_installed=false
@@ -3399,10 +3743,10 @@ function install_nodejs() {
              current_version=$(sudo -u "$INSTALL_USER" bash -c "export NVM_DIR=\"$INSTALL_HOME/.nvm\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; node -v" 2>/dev/null)
         fi
         
-        log_info "检测到已安装 Node.js: $current_version"
-        log_info "检测到已安装 Node.js: $current_version"
-        if confirm_action "是否重新安装 Node.js?" "n"; then
-            log_info "卸载现有 Node.js..."
+        ui_log_info "Existing Node.js installation detected: $current_version" "检测到已安装 Node.js: $current_version"
+        ui_log_info "Existing Node.js installation detected: $current_version" "检测到已安装 Node.js: $current_version"
+        if confirm_action "$(ui_text "Reinstall Node.js?" "是否重新安装 Node.js?")" "n"; then
+            ui_log_info "Removing the existing Node.js installation..." "卸载现有 Node.js..."
             
             # NVM uninstall
             local uninstall_cmd="export NVM_DIR=\"$INSTALL_HOME/.nvm\"; if [ -s \"\$NVM_DIR/nvm.sh\" ]; then source \"\$NVM_DIR/nvm.sh\"; nvm uninstall node; fi"
@@ -3411,14 +3755,14 @@ function install_nodejs() {
             # Apt remove (failsafe)
             apt-get remove -y nodejs npm 2>/dev/null || true
         else
-            printf '%b\n' "${YELLOW}使用默认值: n (取消重装)${PLAIN}"
-            log_info "保持现有 Node.js 安装"
+            printf '%b\n' "${YELLOW}$(ui_text 'Using default: n (cancel reinstall)' '使用默认值: n (取消重装)')${PLAIN}"
+            ui_log_info "Keeping the existing Node.js installation" "保持现有 Node.js 安装"
             return 0
         fi
     fi
     
     # 安装依赖 (需要 Root 权限)
-    log_info "安装 Node.js 依赖包..."
+    ui_log_info "Installing Node.js dependencies..." "安装 Node.js 依赖包..."
     update_apt_once
     install_packages_batch "curl" "wget" "git" "build-essential"
     
@@ -3427,24 +3771,25 @@ function install_nodejs() {
     local check_nvm_cmd="[ -s \"$nvm_dir/nvm.sh\" ]"
     
     if run_as_user "$check_nvm_cmd"; then
-        log_info "检测到已安装 NVM"
+        ui_log_info "Existing NVM installation detected" "检测到已安装 NVM"
     else
-        log_info "安装 NVM..."
+        ui_log_info "Installing NVM..." "安装 NVM..."
         local nvm_version="v0.40.4"
         local nvm_repo="https://github.com/nvm-sh/nvm.git"
         local install_nvm_cmd
         install_nvm_cmd=$(shell_join git clone --depth 1 --branch "$nvm_version" "$nvm_repo" "$nvm_dir")
         
-        if confirm_external_resource "$nvm_repo" "克隆 NVM 官方仓库 (${nvm_version})"; then
+        if confirm_external_resource "$nvm_repo" \
+            "$(ui_text "Clone the official NVM repository (${nvm_version})" "克隆 NVM 官方仓库 (${nvm_version})")"; then
             if [ "$DRY_RUN" = "1" ]; then
-                log_info "[DRY RUN] 跳过 NVM 安装"
+                ui_log_info "[DRY RUN] Would skip NVM installation" "[DRY RUN] 跳过 NVM 安装"
                 return 0
             fi
             if run_as_user "$install_nvm_cmd" >> "$LOG_FILE" 2>&1; then
-                log_success "NVM 安装脚本执行成功"
+                ui_log_success "NVM installer completed successfully" "NVM 安装脚本执行成功"
             
             # 手动配置 NVM 环境到 Shell 配置文件 (解决 .bashrc 不更新的问题)
-            log_info "正在配置 NVM 环境变量..."
+            ui_log_info "Configuring NVM environment variables..." "正在配置 NVM 环境变量..."
             
             # 定义 NVM 配置内容
             local nvm_config="
@@ -3462,11 +3807,11 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
             local bashrc_file="$INSTALL_HOME/.bashrc"
             local config_added=false
             
-            log_info "检查 .bashrc 文件: $bashrc_file"
+            ui_log_info "Checking .bashrc file: $bashrc_file" "检查 .bashrc 文件: $bashrc_file"
             
             # 确保 .bashrc 存在
             if [ ! -f "$bashrc_file" ]; then
-                log_info ".bashrc 不存在，正在创建..."
+                ui_log_info ".bashrc does not exist; creating it..." ".bashrc 不存在，正在创建..."
                 if [ "$INSTALL_USER" == "root" ]; then
                     touch "$bashrc_file"
                 else
@@ -3474,9 +3819,9 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                     chown "$INSTALL_USER:$INSTALL_USER" "$bashrc_file" 2>/dev/null || true
                 fi
                 chmod 644 "$bashrc_file" 2>/dev/null || true
-                log_success "已创建 .bashrc"
+                ui_log_success "Created .bashrc" "已创建 .bashrc"
             else
-                log_info ".bashrc 已存在"
+                ui_log_info ".bashrc already exists" ".bashrc 已存在"
             fi
             
             # 检查并写入 .bashrc
@@ -3487,7 +3832,9 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                 # 只有当文件存在时才写入 (bashrc 已在前面自动创建)
                 if [ -f "$target_file" ]; then
                     if ! grep -q "NVM_DIR" "$target_file"; then
-                         log_info "正在向 $(basename "$target_file") 添加 NVM 配置..."
+                         ui_log_info \
+                             "Adding NVM configuration to $(basename "$target_file")..." \
+                             "正在向 $(basename "$target_file") 添加 NVM 配置..."
                          if [ "$INSTALL_USER" == "root" ]; then
                              cat "$tmp_nvm_config" >> "$target_file"
                          else
@@ -3495,17 +3842,21 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                              chown "$INSTALL_USER:$INSTALL_USER" "$target_file" 2>/dev/null || true
                          fi
                          chmod 644 "$target_file" 2>/dev/null || true
-                         log_success "已添加 NVM 配置到 $(basename "$target_file")"
+                         ui_log_success \
+                             "Added NVM configuration to $(basename "$target_file")" \
+                             "已添加 NVM 配置到 $(basename "$target_file")"
                          config_added=true
                     else
-                         log_info "$(basename "$target_file") 中已存在 NVM 配置"
+                         ui_log_info \
+                             "NVM configuration already exists in $(basename "$target_file")" \
+                             "$(basename "$target_file") 中已存在 NVM 配置"
                          config_added=true
                     fi
                 fi
             done
             
             if [ "$config_added" = false ]; then
-                log_error "NVM 配置未能写入任何文件"
+                ui_log_error "NVM configuration was not written to any file" "NVM 配置未能写入任何文件"
             fi
             
             # 如果 .bashrc 配置成功，不再写入其他文件
@@ -3520,7 +3871,7 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                         chown "$INSTALL_USER:$INSTALL_USER" "$zshrc_file" 2>/dev/null || true
                     fi
                     chmod 644 "$zshrc_file" 2>/dev/null || true
-                    log_success "已添加 NVM 配置到 .zshrc"
+                    ui_log_success "Added NVM configuration to .zshrc" "已添加 NVM 配置到 .zshrc"
                 fi
             fi
             rm -f "$tmp_nvm_config"
@@ -3530,35 +3881,39 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                  # 尝试 source 一下再检查 (模拟加载)
                  local check_again="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; command -v nvm >/dev/null"
                  if ! run_as_user "$check_again"; then
-                    log_error "NVM 安装后无法检测到，请手动检查 $nvm_dir"
+                    ui_log_error \
+                        "NVM could not be detected after installation; inspect $nvm_dir manually" \
+                        "NVM 安装后无法检测到，请手动检查 $nvm_dir"
                     return 1
                  fi
             fi
-            log_success "NVM 安装及配置完成"
+            ui_log_success "NVM installation and configuration completed" "NVM 安装及配置完成"
             else
-                log_error "NVM 安装失败"
+                ui_log_error "NVM installation failed" "NVM 安装失败"
                 return 1
             fi
         else
-            log_warning "已跳过 NVM 安装"
+            ui_log_warning "NVM installation skipped" "已跳过 NVM 安装"
             return 1
         fi
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 /etc/fail2ban/jail.d/sshd.local 并重启 fail2ban"
+        ui_log_info \
+            "[DRY RUN] Would write /etc/fail2ban/jail.d/sshd.local and restart fail2ban" \
+            "[DRY RUN] 将写入 /etc/fail2ban/jail.d/sshd.local 并重启 fail2ban"
         return 0
     fi
     
     # 版本选择
     if [ -z "$version" ] || [ "$version" == "lts/*" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}Node.js 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[lts]${PLAIN} 最新 LTS 版本 (推荐)"
-        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新版本"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' "${YELLOW}$(ui_text 'Node.js version:' 'Node.js 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[lts]${PLAIN} $(ui_text 'Latest LTS (recommended)' '最新 LTS 版本 (推荐)')"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} $(ui_text 'Latest release' '最新版本')"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version' '自定义版本')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [lts/latest/custom]: " version_choice
+        ui_read version_choice "Choose a version [lts/latest/custom]: " "请选择版本 [lts/latest/custom]: "
         
         case "$version_choice" in
             lts|LTS)
@@ -3568,11 +3923,15 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
                 version="node"
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 18.20.0): " custom_version
+                ui_read custom_version \
+                    "Version number (for example, 18.20.0): " \
+                    "请输入版本号 (例如: 18.20.0): "
                 if [[ "$custom_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$custom_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
                     version="v${custom_version}"
                 else
-                    log_warning "版本格式无效 (示例: 18.20.0)，将使用 LTS 版本"
+                    ui_log_warning \
+                        "Invalid version format (example: 18.20.0); using the LTS release" \
+                        "版本格式无效 (示例: 18.20.0)，将使用 LTS 版本"
                     version="lts/*"
                 fi
                 ;;
@@ -3583,7 +3942,7 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
     fi
     
     # 安装 Node.js
-    log_info "正在安装 Node.js ${version}..."
+    ui_log_info "Installing Node.js ${version}..." "正在安装 Node.js ${version}..."
     
     local node_install_cmd="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; nvm install \"$version\"; nvm alias default \"$version\"; nvm use default"
     
@@ -3599,35 +3958,41 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
         fi
         
         if [ -n "$installed_node" ]; then
-            log_success "Node.js 安装完成: $installed_node"
+            ui_log_success "Node.js installation completed: $installed_node" "Node.js 安装完成: $installed_node"
             
             # 配置 npm
-            if confirm_action "是否配置 npm（镜像源、全局工具）?" "y"; then
-                log_info "配置 npm..."
+            if confirm_action "$(ui_text \
+                "Configure npm (registry mirror and global tools)?" \
+                "是否配置 npm（镜像源、全局工具）?")" "y"; then
+                ui_log_info "Configuring npm..." "配置 npm..."
                 
                 local nvm_env="export NVM_DIR=\"$nvm_dir\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"; nvm use default >/dev/null"
                 
                 # 配置镜像源
-                if confirm_action "是否配置 npm 镜像源 (使用 npmmirror)?" "y"; then
+                if confirm_action "$(ui_text \
+                    "Configure the npm registry mirror (npmmirror)?" \
+                    "是否配置 npm 镜像源 (使用 npmmirror)?")" "y"; then
                     run_as_user "$nvm_env; npm config set registry https://registry.npmmirror.com"
-                    log_success "已设置 npm 镜像源: npmmirror"
+                    ui_log_success "npm registry set to npmmirror" "已设置 npm 镜像源: npmmirror"
                 fi
                 
                 # 安装全局工具
-                if confirm_action "是否安装常用全局工具 (yarn, pnpm, pm2)?" "y"; then
-                    log_info "安装全局工具..."
+                if confirm_action "$(ui_text \
+                    "Install common global tools (yarn, pnpm, pm2)?" \
+                    "是否安装常用全局工具 (yarn, pnpm, pm2)?")" "y"; then
+                    ui_log_info "Installing global tools..." "安装全局工具..."
                     run_as_user "$nvm_env; npm install -g yarn pnpm pm2"
-                    log_success "全局工具安装完成"
+                    ui_log_success "Global tool installation completed" "全局工具安装完成"
                 fi
             fi
             
             show_nvm_usage
         else
-            log_error "Node.js 安装验证失败"
+            ui_log_error "Node.js installation verification failed" "Node.js 安装验证失败"
             return 1
         fi
     else
-        log_error "Node.js 安装失败"
+        ui_log_error "Node.js installation failed" "Node.js 安装失败"
         return 1
     fi
 }
@@ -3637,16 +4002,18 @@ export NVM_DIR=\"$INSTALL_HOME/.nvm\"
 # --- NVM 使用说明 ---
 function show_nvm_usage() {
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "NVM 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看已安装版本:${PLAIN} nvm list"
-    printf '%b\n' "  ${GREEN}安装其他版本:${PLAIN} nvm install <version>"
-    printf '%b\n' "  ${GREEN}切换版本:${PLAIN} nvm use <version>"
-    printf '%b\n' "  ${GREEN}设置默认版本:${PLAIN} nvm alias default <version>"
-    printf '%b\n' "  ${GREEN}查看所有可用版本:${PLAIN} nvm list-remote"
+    ui_log_separator
+    ui_log_info "NVM usage:" "NVM 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'List installed versions:' '查看已安装版本:')${PLAIN} nvm list"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Install another version:' '安装其他版本:')${PLAIN} nvm install <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Switch versions:' '切换版本:')${PLAIN} nvm use <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Set the default version:' '设置默认版本:')${PLAIN} nvm alias default <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'List all available versions:' '查看所有可用版本:')${PLAIN} nvm list-remote"
     printf '%b\n' ""
-    log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
+    ui_log_warning \
+        "Note: in a new terminal, run 'source ~/.bashrc' or log in again" \
+        "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
 # ==============================================================
@@ -3661,7 +4028,7 @@ function install_python() {
     # 确定安装用户
     determine_target_user
     
-    log_info "安装 Python (使用 $manager, 用户: $INSTALL_USER)..."
+    ui_log_info "Installing Python (manager: $manager, user: $INSTALL_USER)..." "安装 Python (使用 $manager, 用户: $INSTALL_USER)..."
     
     # 检查是否已安装
     local is_installed=false
@@ -3675,19 +4042,19 @@ function install_python() {
              current_version=$(sudo -u "$INSTALL_USER" bash -c "python3 --version" 2>/dev/null | awk '{print $2}')
         fi
         
-        log_info "检测到已安装 Python: $current_version"
-        log_info "检测到已安装 Python: $current_version"
-        if confirm_action "是否重新安装 Python?" "n"; then
-            log_info "卸载现有 Python..."
+        ui_log_info "Existing Python installation detected: $current_version" "检测到已安装 Python: $current_version"
+        ui_log_info "Existing Python installation detected: $current_version" "检测到已安装 Python: $current_version"
+        if confirm_action "$(ui_text "Reinstall Python?" "是否重新安装 Python?")" "n"; then
+            ui_log_info "Removing the existing Python installation..." "卸载现有 Python..."
             run_as_user "rm -rf \"$INSTALL_HOME/.pyenv\""
         else
-            log_info "保持现有 Python 安装"
+            ui_log_info "Keeping the existing Python installation" "保持现有 Python 安装"
             return 0
         fi
     fi
     
     # 安装依赖
-    log_info "安装 Python 编译依赖..."
+    ui_log_info "Installing Python build dependencies..." "安装 Python 编译依赖..."
     update_apt_once
     install_packages_batch "make" "build-essential" "libssl-dev" "zlib1g-dev" \
         "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "curl" "llvm" \
@@ -3699,25 +4066,25 @@ function install_python() {
     local check_pyenv_cmd="[ -d \"$pyenv_dir\" ]"
 
     if run_as_user "$check_pyenv_cmd"; then
-        log_info "检测到已安装 pyenv"
+        ui_log_info "Existing pyenv installation detected" "检测到已安装 pyenv"
     else
-        log_info "安装 pyenv..."
+        ui_log_info "Installing pyenv..." "安装 pyenv..."
         local pyenv_repo="https://github.com/pyenv/pyenv.git"
         local install_pyenv_cmd
         install_pyenv_cmd=$(shell_join git clone --depth 1 "$pyenv_repo" "$pyenv_dir")
-        if confirm_external_resource "$pyenv_repo" "克隆 pyenv 官方仓库"; then
+        if confirm_external_resource "$pyenv_repo" "$(ui_text "Clone the official pyenv repository" "克隆 pyenv 官方仓库")"; then
             if [ "$DRY_RUN" = "1" ]; then
-                log_info "[DRY RUN] 跳过 pyenv 安装"
+                ui_log_info "[DRY RUN] Would skip pyenv installation" "[DRY RUN] 跳过 pyenv 安装"
                 return 0
             fi
             if run_as_user "$install_pyenv_cmd" >> "$LOG_FILE" 2>&1; then
-                 log_success "pyenv 安装成功"
+                ui_log_success "pyenv installed successfully" "pyenv 安装成功"
             else
-                 log_error "pyenv 安装失败"
+                ui_log_error "pyenv installation failed" "pyenv 安装失败"
                  return 1
             fi
         else
-            log_warning "已跳过 pyenv 安装"
+            ui_log_warning "pyenv installation skipped" "已跳过 pyenv 安装"
             return 1
         fi
         
@@ -3727,7 +4094,7 @@ function install_python() {
 export PATH=\"\$PYENV_ROOT/bin:\$PATH\"
 eval \"\$(pyenv init -)\""
         ensure_block_in_file "$bashrc_file" "### INIT.SH PYENV BEGIN" "### INIT.SH PYENV END" "$pyenv_block"
-        log_success "pyenv 已添加到 $bashrc_file"
+        ui_log_success "pyenv added to $bashrc_file" "pyenv 已添加到 $bashrc_file"
     fi
     
     # Env setup for subsequent commands
@@ -3736,24 +4103,28 @@ eval \"\$(pyenv init -)\""
     # 版本选择
     if [ -z "$version" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}Python 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[3.11]${PLAIN} Python 3.11 (推荐)"
-        printf '%b\n' "${GREEN}[3.12]${PLAIN} Python 3.12 (最新)"
+        printf '%b\n' "${YELLOW}$(ui_text 'Python version:' 'Python 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[3.11]${PLAIN} Python 3.11 ($(ui_text 'recommended' '推荐'))"
+        printf '%b\n' "${GREEN}[3.12]${PLAIN} Python 3.12 ($(ui_text 'latest' '最新'))"
         printf '%b\n' "${GREEN}[3.10]${PLAIN} Python 3.10"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version' '自定义版本')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [3.11/3.12/3.10/custom]: " version_choice
+        ui_read version_choice \
+            "Choose a version [3.11/3.12/3.10/custom]: " \
+            "请选择版本 [3.11/3.12/3.10/custom]: "
         
         case "$version_choice" in
             3.11|3.12|3.10)
                 version="$version_choice"
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 3.9.18): " custom_version
+                ui_read custom_version \
+                    "Version number (for example, 3.9.18): " \
+                    "请输入版本号 (例如: 3.9.18): "
                 if [[ "$custom_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
                     version="$custom_version"
                 else
-                    log_warning "版本格式无效，使用 3.11"
+                    ui_log_warning "Invalid version format; using 3.11" "版本格式无效，使用 3.11"
                     version="3.11"
                 fi
                 ;;
@@ -3764,7 +4135,9 @@ eval \"\$(pyenv init -)\""
     fi
     
     # 安装 Python
-    log_info "正在安装 Python ${version}（这可能需要 10-20 分钟）..."
+        ui_log_info \
+            "Installing Python ${version} (this may take 10-20 minutes)..." \
+            "正在安装 Python ${version}（这可能需要 10-20 分钟）..."
     
     local install_python_cmd="$env_setup; pyenv install \"$version\"; pyenv global \"$version\""
     
@@ -3780,17 +4153,21 @@ eval \"\$(pyenv init -)\""
         fi
         
         if [ -n "$installed_python" ]; then
-            log_success "Python 安装完成: $installed_python"
+            ui_log_success "Python installation completed: $installed_python" "Python 安装完成: $installed_python"
             
             # 配置 pip
-            read -r -p "是否配置 pip（镜像源、升级 pip）? [y/n]: " config_pip
+            ui_read config_pip \
+                "Configure pip (registry mirror and pip upgrade)? [y/N]: " \
+                "是否配置 pip（镜像源、升级 pip）? [y/N]: "
             case "$config_pip" in
                 y|Y|yes|YES)
-                    log_info "配置 pip..."
+                    ui_log_info "Configuring pip..." "配置 pip..."
                     local pip_cmd="$env_setup; python3 -m pip install --upgrade pip"
                     run_as_user "$pip_cmd" >> "$LOG_FILE" 2>&1
                     
-                    read -r -p "是否使用国内 pip 镜像源（推荐国内服务器）? [y/n]: " use_mirror
+                    ui_read use_mirror \
+                        "Use a China-based pip mirror (recommended for servers in China)? [y/N]: " \
+                        "是否使用国内 pip 镜像源（推荐国内服务器）? [y/N]: "
                     case "$use_mirror" in
                         y|Y|yes|YES)
                              local pip_conf_dir="$INSTALL_HOME/.pip"
@@ -3803,7 +4180,7 @@ index-url = https://pypi.tuna.tsinghua.edu.cn/simple
 trusted-host = pypi.tuna.tsinghua.edu.cn"
                              
                              if [ "$DRY_RUN" = "1" ]; then
-                                 log_info "[DRY RUN] 写入 pip 配置: $pip_conf_file"
+                            ui_log_info "[DRY RUN] Would write pip configuration: $pip_conf_file" "[DRY RUN] 写入 pip 配置: $pip_conf_file"
                              else
                                  if [ "$INSTALL_USER" == "root" ]; then
                                      echo "$pip_content" > "$pip_conf_file"
@@ -3811,7 +4188,7 @@ trusted-host = pypi.tuna.tsinghua.edu.cn"
                                      echo "$pip_content" | sudo -u "$INSTALL_USER" tee "$pip_conf_file" > /dev/null
                                  fi
                              fi
-                             log_success "已设置 pip 镜像源: 清华大学镜像"
+                        ui_log_success "pip mirror set to Tsinghua University" "已设置 pip 镜像源: 清华大学镜像"
                              ;;
                     esac
                     ;;
@@ -3819,11 +4196,11 @@ trusted-host = pypi.tuna.tsinghua.edu.cn"
             
             show_pyenv_usage
         else
-            log_error "Python 安装验证失败"
+                ui_log_error "Python installation verification failed" "Python 安装验证失败"
             return 1
         fi
     else
-        log_error "Python 安装失败"
+            ui_log_error "Python installation failed" "Python 安装失败"
         return 1
     fi
 }
@@ -3833,16 +4210,18 @@ trusted-host = pypi.tuna.tsinghua.edu.cn"
 # --- pyenv 使用说明 ---
 function show_pyenv_usage() {
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "pyenv 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看已安装版本:${PLAIN} pyenv versions"
-    printf '%b\n' "  ${GREEN}安装其他版本:${PLAIN} pyenv install <version>"
-    printf '%b\n' "  ${GREEN}设置全局版本:${PLAIN} pyenv global <version>"
-    printf '%b\n' "  ${GREEN}设置本地版本:${PLAIN} pyenv local <version>"
-    printf '%b\n' "  ${GREEN}查看所有可用版本:${PLAIN} pyenv install --list"
+    ui_log_separator
+    ui_log_info "pyenv usage:" "pyenv 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'List installed versions:' '查看已安装版本:')${PLAIN} pyenv versions"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Install another version:' '安装其他版本:')${PLAIN} pyenv install <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Set the global version:' '设置全局版本:')${PLAIN} pyenv global <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Set the local version:' '设置本地版本:')${PLAIN} pyenv local <version>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'List all available versions:' '查看所有可用版本:')${PLAIN} pyenv install --list"
     printf '%b\n' ""
-    log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
+    ui_log_warning \
+        "Note: in a new terminal, run 'source ~/.bashrc' or log in again" \
+        "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
 # ==============================================================
@@ -3854,19 +4233,21 @@ function install_go() {
     local version=${1:-""}
     local manager=${2:-"official"}
     
-    log_info "安装 Go (使用官方二进制包)..."
+    ui_log_info "Installing Go from the official binary archive..." "安装 Go (使用官方二进制包)..."
     install_packages_batch curl jq tar || return 1
     
     # 检查是否已安装
     if check_runtime_installed "go"; then
         local current_version=$(get_runtime_version "go")
-        log_info "检测到已安装 Go: $current_version"
-        if ! confirm_action "是否重新安装 Go?" "n"; then
-            log_info "保持现有 Go 安装"
+        ui_log_info "Existing Go installation detected: $current_version" "检测到已安装 Go: $current_version"
+        if ! confirm_action "$(ui_text "Reinstall Go?" "是否重新安装 Go?")" "n"; then
+            ui_log_info "Keeping the existing Go installation" "保持现有 Go 安装"
             return 0
         fi
         
-        log_info "新版本完成下载、校验和解压后才会替换现有 Go"
+        ui_log_info \
+            "The existing Go installation will be replaced only after the new release is downloaded, verified, and extracted" \
+            "新版本完成下载、校验和解压后才会替换现有 Go"
     fi
     
     # 检测系统架构
@@ -3883,45 +4264,53 @@ function install_go() {
             go_arch="armv6l"
             ;;
         *)
-            log_error "不支持的架构: $arch"
+            ui_log_error "Unsupported architecture: $arch" "不支持的架构: $arch"
             return 1
             ;;
     esac
     
-    log_info "检测到系统架构: $arch (Go: $go_arch)"
+    ui_log_info "Detected system architecture: $arch (Go: $go_arch)" "检测到系统架构: $arch (Go: $go_arch)"
     
     # 版本选择
     if [ -z "$version" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}Go 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新稳定版本 (推荐)"
+        printf '%b\n' "${YELLOW}$(ui_text 'Go version:' 'Go 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} $(ui_text 'Latest stable release (recommended)' '最新稳定版本 (推荐)')"
         printf '%b\n' "${GREEN}[1.21]${PLAIN} Go 1.21"
         printf '%b\n' "${GREEN}[1.22]${PLAIN} Go 1.22"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本 (例如: 1.21.5)"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version (for example, 1.21.5)' '自定义版本 (例如: 1.21.5)')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [latest/1.21/1.22/custom]: " version_choice
+        ui_read version_choice \
+            "Choose a version [latest/1.21/1.22/custom]: " \
+            "请选择版本 [latest/1.21/1.22/custom]: "
         
         case "$version_choice" in
             latest|LATEST)
                 # 获取最新稳定版本
-                log_info "查询最新 Go 版本..."
+                ui_log_info "Looking up the latest Go version..." "查询最新 Go 版本..."
                 local go_version_url="https://go.dev/VERSION?m=text"
-                if confirm_external_resource "$go_version_url" "查询最新 Go 版本"; then
+            if confirm_external_resource "$go_version_url" "$(ui_text "Query the latest Go version" "查询最新 Go 版本")"; then
                     if [ "$DRY_RUN" = "1" ]; then
-                        log_info "[DRY RUN] 跳过在线版本查询，使用默认版本 go1.22.0"
+                    ui_log_info \
+                        "[DRY RUN] Would skip the online version lookup and use go1.22.0" \
+                        "[DRY RUN] 跳过在线版本查询，使用默认版本 go1.22.0"
                         version="go1.22.0"
                     else
                         version=$(curl -s "$go_version_url" 2>/dev/null | head -1)
                         if [ -z "$version" ] || [[ "$version" != go* ]]; then
-                            log_warning "无法获取最新版本，使用默认版本 go1.22.0"
+                        ui_log_warning \
+                            "Unable to retrieve the latest version; using go1.22.0" \
+                            "无法获取最新版本，使用默认版本 go1.22.0"
                             version="go1.22.0"
                         fi
                     fi
                 else
-                    log_warning "已跳过在线版本查询，使用默认版本 go1.22.0"
+                    ui_log_warning \
+                        "Online version lookup skipped; using go1.22.0" \
+                        "已跳过在线版本查询，使用默认版本 go1.22.0"
                     version="go1.22.0"
                 fi
-                log_info "将安装: $version"
+                ui_log_info "Will install: $version" "将安装: $version"
                 ;;
             1.21)
                 version="go1.21.13"  # 1.21 系列最新
@@ -3930,16 +4319,18 @@ function install_go() {
                 version="go1.22.0"   # 1.22 系列最新
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 1.21.5): " custom_version
+                ui_read custom_version \
+                    "Version number (for example, 1.21.5): " \
+                    "请输入版本号 (例如: 1.21.5): "
                 if [[ "$custom_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
                     version="go${custom_version}"
                 else
-                    log_warning "版本格式无效，使用默认版本 go1.22.0"
+                    ui_log_warning "Invalid version format; using go1.22.0" "版本格式无效，使用默认版本 go1.22.0"
                     version="go1.22.0"
                 fi
                 ;;
             *)
-                log_warning "无效选择，使用默认版本 go1.22.0"
+                ui_log_warning "Invalid choice; using go1.22.0" "无效选择，使用默认版本 go1.22.0"
                 version="go1.22.0"
                 ;;
         esac
@@ -3949,7 +4340,7 @@ function install_go() {
         fi
     fi
     
-    log_info "准备安装 Go 版本: $version"
+    ui_log_info "Preparing to install Go version: $version" "准备安装 Go 版本: $version"
     
     # 下载 Go
     local go_filename="${version}.linux-${go_arch}.tar.gz"
@@ -3957,38 +4348,38 @@ function install_go() {
     local download_dir="/tmp"
     local go_tarball="${download_dir}/go-${version}.tar.gz"
     
-    log_info "下载 Go (这可能需要几分钟)..."
-    log_info "下载地址: $go_url"
+    ui_log_info "Downloading Go (this may take a few minutes)..." "下载 Go (这可能需要几分钟)..."
+    ui_log_info "Download URL: $go_url" "下载地址: $go_url"
     
     if ! download_go_release "$go_filename" "$go_tarball" "Go ${version}"; then
-        log_error "Go 下载失败，请检查网络连接"
+        ui_log_error "Go download failed; check the network connection" "Go 下载失败，请检查网络连接"
         return 1
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 Go 解压与安装"
+        ui_log_info "[DRY RUN] Would skip Go extraction and installation" "[DRY RUN] 跳过 Go 解压与安装"
         return 0
     fi
     
     # 检查文件是否下载成功
     if [ ! -f "$go_tarball" ] || [ ! -s "$go_tarball" ]; then
-        log_error "Go 下载文件无效"
+        ui_log_error "Downloaded Go archive is invalid" "Go 下载文件无效"
         return 1
     fi
     
-    log_success "Go 下载完成"
+    ui_log_success "Go download completed" "Go 下载完成"
     
     local go_stage
     go_stage="$(mktemp -d /tmp/init-go.XXXXXX)" || return 1
     register_temp_file "$go_stage"
-    log_info "在私有目录解压 Go..."
+    ui_log_info "Extracting Go in a private directory..." "在私有目录解压 Go..."
     if ! tar -C "$go_stage" -xzf "$go_tarball"; then
-        log_error "Go 解压失败"
+        ui_log_error "Go extraction failed" "Go 解压失败"
         rm -f "$go_tarball"
         return 1
     fi
     if [ ! -x "$go_stage/go/bin/go" ]; then
-        log_error "Go 归档结构无效"
+        ui_log_error "Go archive structure is invalid" "Go 归档结构无效"
         return 1
     fi
     replace_directory_transactional /usr/local/go "$go_stage/go" "Go ${version}" || return 1
@@ -3997,7 +4388,7 @@ function install_go() {
     rm -f -- "$go_tarball"
     
     # 配置环境变量
-    log_info "配置 Go 环境变量..."
+    ui_log_info "Configuring Go environment variables..." "配置 Go 环境变量..."
     
     # 检查 ~/.bashrc 和 ~/.zshrc 并配置
     local go_config_content="
@@ -4009,7 +4400,7 @@ export PATH=\$GOROOT/bin:\$PATH
     
     for rc_file in "${shell_configs[@]}"; do
         ensure_block_in_file "$rc_file" "### INIT.SH GO BEGIN" "### INIT.SH GO END" "$go_config_content"
-        log_success "Go 环境变量已写入 $rc_file"
+    ui_log_success "Go environment variables written to $rc_file" "Go 环境变量已写入 $rc_file"
     done
     
     # 设置当前会话的环境变量
@@ -4019,10 +4410,12 @@ export PATH=\$GOROOT/bin:\$PATH
     # 验证安装
     if verify_installation "Go" "go" "$version"; then
         local installed_go=$(go version)
-        log_success "Go 安装完成: $installed_go"
+        ui_log_success "Go installation completed: $installed_go" "Go 安装完成: $installed_go"
         
         # 配置 Go（可选）
-        read -r -p "是否配置 Go（GOPROXY、GOPATH、常用工具）? [y/n]: " config_go
+        ui_read config_go \
+            "Configure Go (GOPROXY, GOPATH, and common tools)? [y/N]: " \
+            "是否配置 Go（GOPROXY、GOPATH、常用工具）? [y/N]: "
         case "$config_go" in
             y|Y|yes|YES)
                 configure_go
@@ -4031,34 +4424,38 @@ export PATH=\$GOROOT/bin:\$PATH
         
         show_go_usage
     else
-        log_error "Go 安装验证失败，请检查环境变量"
+        ui_log_error \
+            "Go installation verification failed; check the environment variables" \
+            "Go 安装验证失败，请检查环境变量"
         return 1
     fi
 }
 
 # --- Go 配置函数 ---
 function configure_go() {
-    log_info "配置 Go..."
+    ui_log_info "Configuring Go..." "配置 Go..."
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 Go 配置"
+        ui_log_info "[DRY RUN] Would skip Go configuration" "[DRY RUN] 跳过 Go 配置"
         return 0
     fi
     
     # 配置 GOPROXY（国内镜像）
-    read -r -p "是否配置 Go 代理（推荐国内服务器）? [y/n]: " use_proxy
+    ui_read use_proxy \
+        "Configure a Go proxy (recommended for servers in China)? [y/N]: " \
+        "是否配置 Go 代理（推荐国内服务器）? [y/N]: "
     case "$use_proxy" in
         y|Y|yes|YES)
-            log_info "配置 Go 代理..."
+            ui_log_info "Configuring the Go proxy..." "配置 Go 代理..."
             go env -w GOPROXY=https://goproxy.cn,direct
-            log_success "已设置 Go 代理: https://goproxy.cn"
+            ui_log_success "Go proxy set to https://goproxy.cn" "已设置 Go 代理: https://goproxy.cn"
             ;;
     esac
     
     # 配置 GOPATH（可选，Go 1.11+ 使用 modules，GOPATH 不是必须的）
-    read -r -p "是否配置 GOPATH（留空使用默认 ~/go）? [y/n]: " config_gopath
+    ui_read config_gopath "Configure GOPATH (default: ~/go)? [y/N]: " "是否配置 GOPATH（留空使用默认 ~/go）? [y/N]: "
     case "$config_gopath" in
         y|Y|yes|YES)
-            read -r -p "请输入 GOPATH 路径 (留空使用 ~/go): " gopath_path
+            ui_read gopath_path "GOPATH [default: ~/go]: " "请输入 GOPATH 路径 (留空使用 ~/go): "
             if [ -z "$gopath_path" ]; then
                 gopath_path="$HOME/go"
             fi
@@ -4070,79 +4467,93 @@ function configure_go() {
                 ensure_block_in_file "$HOME/.bashrc" "### INIT.SH GOPATH BEGIN" "### INIT.SH GOPATH END" "export PATH=\$GOPATH/bin:\$PATH"
             fi
             
-            log_success "已设置 GOPATH: $gopath_path"
+            ui_log_success "GOPATH set to: $gopath_path" "已设置 GOPATH: $gopath_path"
             ;;
     esac
     
     # 配置 Go 私有模块（可选）
-    read -r -p "是否配置 Go 私有模块（GitLab/GitHub Enterprise）? [y/n]: " config_private
+    ui_read config_private \
+        "Configure private Go modules (GitLab/GitHub Enterprise)? [y/N]: " \
+        "是否配置 Go 私有模块（GitLab/GitHub Enterprise）? [y/N]: "
     case "$config_private" in
         y|Y|yes|YES)
-            read -r -p "请输入私有模块域名 (例如: gitlab.com,github.com): " private_domain
+            ui_read private_domain \
+                "Private module domains (for example, gitlab.com,github.com): " \
+                "请输入私有模块域名 (例如: gitlab.com,github.com): "
             if [ -n "$private_domain" ]; then
                 go env -w GOPRIVATE="$private_domain"
-                log_success "已设置私有模块: $private_domain"
+                ui_log_success "Private modules configured: $private_domain" "已设置私有模块: $private_domain"
             fi
             ;;
     esac
     
     # 安装常用工具（可选）
-    read -r -p "是否安装常用 Go 工具? [y/n]: " install_tools
+    ui_read install_tools "Install common Go tools? [y/N]: " "是否安装常用 Go 工具? [y/N]: "
     case "$install_tools" in
         y|Y|yes|YES)
-            log_info "安装常用 Go 工具..."
+            ui_log_info "Installing common Go tools..." "安装常用 Go 工具..."
             
             # gopls (Go 语言服务器)
-            read -r -p "安装 gopls (Go 语言服务器)? [y/n]: " install_gopls
+            ui_read install_gopls \
+                "Install gopls (Go language server)? [y/N]: " \
+                "安装 gopls (Go 语言服务器)? [y/N]: "
             case "$install_gopls" in
                 y|Y|yes|YES)
                     go install golang.org/x/tools/gopls@latest >> "$LOG_FILE" 2>&1 && \
-                        log_success "gopls 安装完成" || log_warning "gopls 安装失败"
+                        ui_log_success "gopls installation completed" "gopls 安装完成" || \
+                        ui_log_warning "gopls installation failed" "gopls 安装失败"
                     ;;
             esac
             
             # golangci-lint (代码检查工具)
-            read -r -p "安装 golangci-lint (代码检查工具)? [y/n]: " install_lint
+            ui_read install_lint \
+                "Install golangci-lint (linter)? [y/N]: " \
+                "安装 golangci-lint (代码检查工具)? [y/N]: "
             case "$install_lint" in
                 y|Y|yes|YES)
-                    run_cmd "安装 golangci-lint" "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest >> \"$LOG_FILE\" 2>&1" && \
-                        log_success "golangci-lint 安装完成" || log_warning "golangci-lint 安装失败"
+                    run_cmd "$(ui_text "Install golangci-lint" "安装 golangci-lint")" \
+                        "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest >> \"$LOG_FILE\" 2>&1" && \
+                        ui_log_success "golangci-lint installation completed" "golangci-lint 安装完成" || \
+                        ui_log_warning "golangci-lint installation failed" "golangci-lint 安装失败"
                     ;;
             esac
             
             # air (热重载工具)
-            read -r -p "安装 air (热重载工具)? [y/n]: " install_air
+            ui_read install_air "Install air (live reload tool)? [y/N]: " "安装 air (热重载工具)? [y/N]: "
             case "$install_air" in
                 y|Y|yes|YES)
                     go install github.com/cosmtrek/air@latest >> "$LOG_FILE" 2>&1 && \
-                        log_success "air 安装完成" || log_warning "air 安装失败"
+                        ui_log_success "air installation completed" "air 安装完成" || \
+                        ui_log_warning "air installation failed" "air 安装失败"
                     ;;
             esac
             ;;
     esac
     
     # 显示配置
-    log_info "当前 Go 配置:"
+    ui_log_info "Current Go configuration:" "当前 Go 配置:"
     go env | grep -E "GOROOT|GOPATH|GOPROXY|GOPRIVATE" || go env
     
-    log_success "Go 配置完成"
+    ui_log_success "Go configuration completed" "Go 配置完成"
 }
 
 # --- Go 使用说明 ---
 function show_go_usage() {
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Go 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} go version"
-    printf '%b\n' "  ${GREEN}查看环境变量:${PLAIN} go env"
-    printf '%b\n' "  ${GREEN}初始化模块:${PLAIN} go mod init <module-name>"
-    printf '%b\n' "  ${GREEN}下载依赖:${PLAIN} go mod download"
-    printf '%b\n' "  ${GREEN}构建项目:${PLAIN} go build"
-    printf '%b\n' "  ${GREEN}运行项目:${PLAIN} go run main.go"
-    printf '%b\n' "  ${GREEN}安装工具:${PLAIN} go install <package>@latest"
+    ui_log_separator
+    ui_log_info "Go usage:" "Go 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show version:' '查看版本:')${PLAIN} go version"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show environment:' '查看环境变量:')${PLAIN} go env"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Initialize a module:' '初始化模块:')${PLAIN} go mod init <module-name>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Download dependencies:' '下载依赖:')${PLAIN} go mod download"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Build project:' '构建项目:')${PLAIN} go build"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Run project:' '运行项目:')${PLAIN} go run main.go"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Install a tool:' '安装工具:')${PLAIN} go install <package>@latest"
     printf '%b\n' ""
-    log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
+    ui_log_warning \
+        "Note: in a new terminal, run 'source ~/.bashrc' or log in again" \
+        "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
 # ==============================================================
@@ -4154,20 +4565,22 @@ function install_php() {
     local version=${1:-""}
     local manager=${2:-"ppa"}
     
-    log_info "安装 PHP (使用 ondrej PPA)..."
+    ui_log_info "Installing PHP from the Ondrej PPA..." "安装 PHP (使用 ondrej PPA)..."
     
     # 检查是否已安装
     if check_runtime_installed "php"; then
         local current_version=$(get_runtime_version "php")
-        log_info "检测到已安装 PHP: $current_version"
-        if ! confirm_action "是否重新安装 PHP?" "n"; then
-            log_info "保持现有 PHP 安装"
+        ui_log_info "Existing PHP installation detected: $current_version" "检测到已安装 PHP: $current_version"
+        if ! confirm_action "$(ui_text "Reinstall PHP?" "是否重新安装 PHP?")" "n"; then
+            ui_log_info "Keeping the existing PHP installation" "保持现有 PHP 安装"
             return 0
         fi
         
         # 危险操作确认
-        if confirm_dangerous_action "卸载 PHP" "这将删除所有已安装的 PHP 版本和扩展"; then
-            log_info "卸载现有 PHP..."
+        if confirm_dangerous_action \
+            "$(ui_text "Uninstall PHP" "卸载 PHP")" \
+            "$(ui_text "This will remove all installed PHP versions and extensions" "这将删除所有已安装的 PHP 版本和扩展")"; then
+            ui_log_info "Removing the existing PHP installation..." "卸载现有 PHP..."
             apt-get remove -y 'php*' 2>/dev/null || true
         else
             return 0
@@ -4175,14 +4588,14 @@ function install_php() {
     fi
     
     # 安装依赖
-    log_info "安装 PHP 依赖包..."
+    ui_log_info "Installing PHP dependencies..." "安装 PHP 依赖包..."
     update_apt_once
     install_packages_batch "software-properties-common" "apt-transport-https" "lsb-release" "ca-certificates"
     
     # 添加 ondrej PPA
-    log_info "添加 ondrej PHP PPA..."
+    ui_log_info "Adding the Ondrej PHP PPA..." "添加 ondrej PHP PPA..."
     if ! add-apt-repository -y ppa:ondrej/php >> "$LOG_FILE" 2>&1; then
-        log_error "添加 PPA 失败"
+        ui_log_error "Failed to add the PPA" "添加 PPA 失败"
         return 1
     fi
     
@@ -4193,25 +4606,27 @@ function install_php() {
     # 版本选择
     if [ -z "$version" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}PHP 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[8.2]${PLAIN} PHP 8.2 (推荐)"
+        printf '%b\n' "${YELLOW}$(ui_text 'PHP version:' 'PHP 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[8.2]${PLAIN} PHP 8.2 ($(ui_text 'recommended' '推荐'))"
         printf '%b\n' "${GREEN}[8.1]${PLAIN} PHP 8.1"
         printf '%b\n' "${GREEN}[8.0]${PLAIN} PHP 8.0"
-        printf '%b\n' "${GREEN}[7.4]${PLAIN} PHP 7.4 (旧版)"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' "${GREEN}[7.4]${PLAIN} PHP 7.4 ($(ui_text 'legacy' '旧版'))"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version' '自定义版本')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [8.2/8.1/8.0/7.4/custom]: " version_choice
+        ui_read version_choice \
+            "Choose a version [8.2/8.1/8.0/7.4/custom]: " \
+            "请选择版本 [8.2/8.1/8.0/7.4/custom]: "
         
         case "$version_choice" in
             8.2|8.1|8.0|7.4)
                 version="$version_choice"
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 8.3): " custom_version
+                ui_read custom_version "Version number (for example, 8.3): " "请输入版本号 (例如: 8.3): "
                 if [[ "$custom_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
                     version="$custom_version"
                 else
-                    log_warning "版本格式无效，使用 8.2"
+                    ui_log_warning "Invalid version format; using 8.2" "版本格式无效，使用 8.2"
                     version="8.2"
                 fi
                 ;;
@@ -4221,7 +4636,7 @@ function install_php() {
         esac
     fi
     
-    log_info "准备安装 PHP $version..."
+    ui_log_info "Preparing to install PHP $version..." "准备安装 PHP $version..."
     
     # 安装 PHP 核心和常用扩展
     local php_packages=(
@@ -4239,16 +4654,18 @@ function install_php() {
         "php${version}-opcache"
     )
     
-    log_info "安装 PHP $version 及常用扩展..."
+    ui_log_info "Installing PHP $version and common extensions..." "安装 PHP $version 及常用扩展..."
     install_packages_batch "${php_packages[@]}"
     
     # 验证安装
     if verify_installation "PHP" "php" "$version"; then
         local installed_php=$(php --version | head -1)
-        log_success "PHP 安装完成: $installed_php"
+        ui_log_success "PHP installation completed: $installed_php" "PHP 安装完成: $installed_php"
         
         # 配置 PHP（可选）
-        read -r -p "是否配置 PHP（时区、内存限制、Composer）? [y/n]: " config_php
+        ui_read config_php \
+            "Configure PHP (timezone, memory limit, and Composer)? [y/N]: " \
+            "是否配置 PHP（时区、内存限制、Composer）? [y/N]: "
         case "$config_php" in
             y|Y|yes|YES)
                 configure_php "$version"
@@ -4257,7 +4674,7 @@ function install_php() {
         
         show_php_usage "$version"
     else
-        log_error "PHP 安装验证失败"
+        ui_log_error "PHP installation verification failed" "PHP 安装验证失败"
         return 1
     fi
 }
@@ -4267,10 +4684,10 @@ function configure_php() {
     local version=$1
     local php_timezone
     
-    log_info "配置 PHP $version..."
+    ui_log_info "Configuring PHP $version..." "配置 PHP $version..."
     php_timezone="$(effective_system_timezone)"
     if ! timezone_name_is_valid "$php_timezone"; then
-        log_error "无法确定有效的 PHP 时区: $php_timezone"
+        ui_log_error "Unable to determine a valid PHP timezone: $php_timezone" "无法确定有效的 PHP 时区: $php_timezone"
         return 1
     fi
     
@@ -4279,23 +4696,25 @@ function configure_php() {
     local php_fpm_ini="/etc/php/${version}/fpm/php.ini"
     
     if [ -f "$php_ini" ]; then
-        create_backup "$php_ini" "PHP CLI 配置" >/dev/null
+        create_backup "$php_ini" "$(ui_text "PHP CLI configuration" "PHP CLI 配置")" >/dev/null
         sed -i "s#^[;[:space:]]*date.timezone[[:space:]]*=.*#date.timezone = ${php_timezone}#" "$php_ini"
-        log_success "已设置时区: $php_timezone"
+        ui_log_success "Timezone set to: $php_timezone" "已设置时区: $php_timezone"
     fi
     
     if [ -f "$php_fpm_ini" ]; then
-        create_backup "$php_fpm_ini" "PHP-FPM 配置" >/dev/null
+        create_backup "$php_fpm_ini" "$(ui_text "PHP-FPM configuration" "PHP-FPM 配置")" >/dev/null
         sed -i "s#^[;[:space:]]*date.timezone[[:space:]]*=.*#date.timezone = ${php_timezone}#" "$php_fpm_ini"
     fi
     
     # 配置内存限制
-    read -r -p "是否调整 PHP 内存限制 (默认 128M)? [y/n]: " config_memory
+    ui_read config_memory "Adjust the PHP memory limit (default: 128M)? [y/N]: " "是否调整 PHP 内存限制 (默认 128M)? [y/N]: "
     case "$config_memory" in
         y|Y|yes|YES)
-            read -r -p "请输入内存限制 (例如: 256M, 512M): " memory_limit
+            ui_read memory_limit \
+                "Memory limit (for example, 256M or 512M): " \
+                "请输入内存限制 (例如: 256M, 512M): "
             if [[ ! "$memory_limit" =~ ^[1-9][0-9]*[KMG]$ ]]; then
-                log_warning "内存限制格式无效，应类似 256M、1G"
+                ui_log_warning "Invalid memory-limit format; use a value such as 256M or 1G" "内存限制格式无效，应类似 256M、1G"
                 return 1
             fi
             if [ -n "$memory_limit" ]; then
@@ -4305,48 +4724,50 @@ function configure_php() {
                 if [ -f "$php_fpm_ini" ]; then
                     sed -i "s/memory_limit = .*/memory_limit = $memory_limit/" "$php_fpm_ini"
                 fi
-                log_success "已设置内存限制: $memory_limit"
+            ui_log_success "Memory limit set to: $memory_limit" "已设置内存限制: $memory_limit"
             fi
             ;;
     esac
     
     # 安装 Composer
-    read -r -p "是否安装 Composer (PHP 包管理器)? [y/n]: " install_composer
+    ui_read install_composer \
+        "Install Composer (PHP package manager)? [y/N]: " \
+        "是否安装 Composer (PHP 包管理器)? [y/N]: "
     case "$install_composer" in
         y|Y|yes|YES)
             install_composer_tool
             ;;
     esac
     
-    log_success "PHP 配置完成"
+    ui_log_success "PHP configuration completed" "PHP 配置完成"
 }
 
 # --- Composer 安装 ---
 function install_composer_tool() {
-    log_info "安装 Composer..."
+    ui_log_info "Installing Composer..." "安装 Composer..."
     
     if command -v composer > /dev/null 2>&1; then
-        log_info "检测到已安装 Composer"
+        ui_log_info "Existing Composer installation detected" "检测到已安装 Composer"
         return 0
     fi
     
     # 下载 Composer 安装脚本
     local composer_setup="/tmp/composer-setup.php"
     local composer_url="https://getcomposer.org/installer"
-    if ! download_file "$composer_url" "$composer_setup" "Composer 安装脚本"; then
-        log_error "Composer 下载失败"
+    if ! download_file "$composer_url" "$composer_setup" "$(ui_text "Composer installer" "Composer 安装脚本")"; then
+        ui_log_error "Composer download failed" "Composer 下载失败"
         return 1
     fi
     
     # 验证安装脚本
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 Composer 安装"
+        ui_log_info "[DRY RUN] Would skip Composer installation" "[DRY RUN] 跳过 Composer 安装"
         return 0
     fi
     local composer_sig="/tmp/composer-setup.sig"
     local composer_sig_url="https://composer.github.io/installer.sig"
-    if ! download_file "$composer_sig_url" "$composer_sig" "Composer 安装签名"; then
-        log_error "Composer 签名下载失败"
+    if ! download_file "$composer_sig_url" "$composer_sig" "$(ui_text "Composer installer signature" "Composer 安装签名")"; then
+        ui_log_error "Composer signature download failed" "Composer 签名下载失败"
         return 1
     fi
     local expected_signature
@@ -4354,14 +4775,14 @@ function install_composer_tool() {
     local actual_signature=$(php -r "echo hash_file('sha384', '$composer_setup');")
     
     if [ "$expected_signature" != "$actual_signature" ]; then
-        log_error "Composer 安装脚本签名验证失败"
+        ui_log_error "Composer installer signature verification failed" "Composer 安装脚本签名验证失败"
         rm -f "$composer_setup" "$composer_sig"
         return 1
     fi
     
     # 安装 Composer
     php "$composer_setup" --install-dir=/usr/local/bin --filename=composer >> "$LOG_FILE" 2>&1 || {
-        log_error "Composer 安装失败"
+        ui_log_error "Composer installation failed" "Composer 安装失败"
         rm -f "$composer_setup" "$composer_sig"
         return 1
     }
@@ -4369,19 +4790,21 @@ function install_composer_tool() {
     rm -f "$composer_setup" "$composer_sig"
     
     # 配置 Composer 镜像（可选）
-    read -r -p "是否配置 Composer 国内镜像（推荐国内服务器）? [y/n]: " use_mirror
+    ui_read use_mirror \
+        "Configure a China-based Composer mirror (recommended for servers in China)? [y/N]: " \
+        "是否配置 Composer 国内镜像（推荐国内服务器）? [y/N]: "
     case "$use_mirror" in
         y|Y|yes|YES)
             composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
-            log_success "已设置 Composer 镜像: 阿里云"
+            ui_log_success "Composer mirror set to Alibaba Cloud" "已设置 Composer 镜像: 阿里云"
             ;;
     esac
     
     if command -v composer > /dev/null 2>&1; then
         local composer_version=$(composer --version)
-        log_success "Composer 安装完成: $composer_version"
+        ui_log_success "Composer installation completed: $composer_version" "Composer 安装完成: $composer_version"
     else
-        log_error "Composer 安装验证失败"
+        ui_log_error "Composer installation verification failed" "Composer 安装验证失败"
         return 1
     fi
 }
@@ -4390,20 +4813,20 @@ function install_composer_tool() {
 function show_php_usage() {
     local version=$1
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "PHP 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} php -v"
-    printf '%b\n' "  ${GREEN}查看已安装扩展:${PLAIN} php -m"
-    printf '%b\n' "  ${GREEN}查看 PHP 配置:${PLAIN} php -i"
-    printf '%b\n' "  ${GREEN}PHP-FPM 配置文件:${PLAIN} /etc/php/${version}/fpm/php.ini"
-    printf '%b\n' "  ${GREEN}CLI 配置文件:${PLAIN} /etc/php/${version}/cli/php.ini"
-    printf '%b\n' "  ${GREEN}启动 PHP-FPM:${PLAIN} systemctl start php${version}-fpm"
-    printf '%b\n' "  ${GREEN}安装扩展:${PLAIN} apt-get install php${version}-<extension>"
+    ui_log_separator
+    ui_log_info "PHP usage:" "PHP 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show version:' '查看版本:')${PLAIN} php -v"
+    printf '%b\n' "  ${GREEN}$(ui_text 'List installed extensions:' '查看已安装扩展:')${PLAIN} php -m"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show PHP configuration:' '查看 PHP 配置:')${PLAIN} php -i"
+    printf '%b\n' "  ${GREEN}$(ui_text 'PHP-FPM configuration:' 'PHP-FPM 配置文件:')${PLAIN} /etc/php/${version}/fpm/php.ini"
+    printf '%b\n' "  ${GREEN}$(ui_text 'CLI configuration:' 'CLI 配置文件:')${PLAIN} /etc/php/${version}/cli/php.ini"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Start PHP-FPM:' '启动 PHP-FPM:')${PLAIN} systemctl start php${version}-fpm"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Install an extension:' '安装扩展:')${PLAIN} apt-get install php${version}-<extension>"
     printf '%b\n' ""
     if command -v composer > /dev/null 2>&1; then
-        printf '%b\n' "  ${GREEN}Composer 版本:${PLAIN} composer --version"
-        printf '%b\n' "  ${GREEN}创建项目:${PLAIN} composer create-project <package>"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Composer version:' 'Composer 版本:')${PLAIN} composer --version"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Create a project:' '创建项目:')${PLAIN} composer create-project <package>"
         printf '%b\n' ""
     fi
 }
@@ -4417,20 +4840,22 @@ function install_java() {
     local version=${1:-""}
     local manager=${2:-"adoptium"}
     
-    log_info "安装 Java (使用 Adoptium Temurin)..."
+    ui_log_info "Installing Java (Adoptium Temurin)..." "安装 Java (使用 Adoptium Temurin)..."
     
     # 检查是否已安装
     if check_runtime_installed "java"; then
         local current_version=$(get_runtime_version "java")
-        log_info "检测到已安装 Java: $current_version"
-        if ! confirm_action "是否重新安装 Java?" "n"; then
-            log_info "保持现有 Java 安装"
+        ui_log_info "Existing Java installation detected: $current_version" "检测到已安装 Java: $current_version"
+        if ! confirm_action "$(ui_text "Reinstall Java?" "是否重新安装 Java?")" "n"; then
+            ui_log_info "Keeping the existing Java installation" "保持现有 Java 安装"
             return 0
         fi
         
         # 危险操作确认
-        if confirm_dangerous_action "卸载 Java" "这将删除所有已安装的 Java 版本"; then
-            log_info "卸载现有 Java..."
+        if confirm_dangerous_action \
+            "$(ui_text "Uninstall Java" "卸载 Java")" \
+            "$(ui_text "This will remove all installed Java versions" "这将删除所有已安装的 Java 版本")"; then
+            ui_log_info "Removing the existing Java installation..." "卸载现有 Java..."
             apt-get remove -y 'openjdk-*' 2>/dev/null || true
             if [ -d "/usr/lib/jvm" ]; then
                 rm -rf /usr/lib/jvm/*
@@ -4441,21 +4866,21 @@ function install_java() {
     fi
     
     # 安装依赖
-    log_info "安装 Java 依赖包..."
+    ui_log_info "Installing Java dependencies..." "安装 Java 依赖包..."
     update_apt_once
     install_packages_batch "wget" "apt-transport-https" "ca-certificates" "gnupg"
     
     # 添加 Adoptium GPG 密钥
-    log_info "添加 Adoptium GPG 密钥..."
+    ui_log_info "Adding the Adoptium GPG key..." "添加 Adoptium GPG 密钥..."
     mkdir -p /etc/apt/keyrings
     local adoptium_key_url="https://packages.adoptium.net/artifactory/api/gpg/key/public"
-    if ! download_file "$adoptium_key_url" "/etc/apt/keyrings/adoptium.asc" "Adoptium GPG 密钥"; then
-        log_error "Adoptium GPG 密钥下载失败"
+    if ! download_file "$adoptium_key_url" "/etc/apt/keyrings/adoptium.asc" "$(ui_text "Adoptium GPG key" "Adoptium GPG 密钥")"; then
+        ui_log_error "Adoptium GPG key download failed" "Adoptium GPG 密钥下载失败"
         return 1
     fi
     
     # 添加 Adoptium 仓库
-    log_info "添加 Adoptium 仓库..."
+    ui_log_info "Adding the Adoptium repository..." "添加 Adoptium 仓库..."
     echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | \
         tee /etc/apt/sources.list.d/adoptium.list >> "$LOG_FILE" 2>&1
     
@@ -4466,25 +4891,25 @@ function install_java() {
     # 版本选择
     if [ -z "$version" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}Java 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[17]${PLAIN} Java 17 LTS (推荐)"
-        printf '%b\n' "${GREEN}[21]${PLAIN} Java 21 LTS (最新)"
+        printf '%b\n' "${YELLOW}$(ui_text 'Java version:' 'Java 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[17]${PLAIN} Java 17 LTS ($(ui_text 'recommended' '推荐'))"
+        printf '%b\n' "${GREEN}[21]${PLAIN} Java 21 LTS ($(ui_text 'latest' '最新'))"
         printf '%b\n' "${GREEN}[11]${PLAIN} Java 11 LTS"
         printf '%b\n' "${GREEN}[8]${PLAIN} Java 8"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version' '自定义版本')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [17/21/11/8/custom]: " version_choice
+        ui_read version_choice "Choose a version [17/21/11/8/custom]: " "请选择版本 [17/21/11/8/custom]: "
         
         case "$version_choice" in
             17|21|11|8)
                 version="$version_choice"
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 20): " custom_version
+                ui_read custom_version "Version number (for example, 20): " "请输入版本号 (例如: 20): "
                 if [[ "$custom_version" =~ ^[0-9]+$ ]]; then
                     version="$custom_version"
                 else
-                    log_warning "版本格式无效，使用 17"
+                    ui_log_warning "Invalid version format; using 17" "版本格式无效，使用 17"
                     version="17"
                 fi
                 ;;
@@ -4494,13 +4919,13 @@ function install_java() {
         esac
     fi
     
-    log_info "准备安装 Java $version..."
+    ui_log_info "Preparing to install Java $version..." "准备安装 Java $version..."
     
     # 安装 Java
     local java_package="temurin-${version}-jdk"
-    log_info "安装 $java_package..."
+    ui_log_info "Installing $java_package..." "安装 $java_package..."
     
-    if execute_with_progress "安装 Java $version" "apt-get install -y $java_package"; then
+    if execute_with_progress "$(ui_text "Installing Java $version" "安装 Java $version")" "apt-get install -y $java_package"; then
         # 设置 JAVA_HOME
         local java_home=$(update-alternatives --list java 2>/dev/null | head -1 | sed 's|/bin/java||')
         if [ -z "$java_home" ]; then
@@ -4511,7 +4936,7 @@ function install_java() {
         local java_block="export JAVA_HOME=${java_home}
 export PATH=\$JAVA_HOME/bin:\$PATH"
         ensure_block_in_file "$HOME/.bashrc" "### INIT.SH JAVA BEGIN" "### INIT.SH JAVA END" "$java_block"
-        log_success "Java 环境变量已添加到 ~/.bashrc"
+        ui_log_success "Java environment variables added to ~/.bashrc" "Java 环境变量已添加到 ~/.bashrc"
         
         export JAVA_HOME="$java_home"
         export PATH="$JAVA_HOME/bin:$PATH"
@@ -4519,10 +4944,12 @@ export PATH=\$JAVA_HOME/bin:\$PATH"
         # 验证安装
         if verify_installation "Java" "java" "$version"; then
             local installed_java=$(java -version 2>&1 | head -1)
-            log_success "Java 安装完成: $installed_java"
+            ui_log_success "Java installation completed: $installed_java" "Java 安装完成: $installed_java"
             
             # 配置 Java（可选）
-            read -r -p "是否配置 Java（Maven、Gradle）? [y/n]: " config_java
+            ui_read config_java \
+                "Configure Java (Maven and Gradle)? [y/N]: " \
+                "是否配置 Java（Maven、Gradle）? [y/N]: "
             case "$config_java" in
                 y|Y|yes|YES)
                     configure_java
@@ -4531,21 +4958,21 @@ export PATH=\$JAVA_HOME/bin:\$PATH"
             
             show_java_usage
         else
-            log_error "Java 安装验证失败"
+            ui_log_error "Java installation verification failed" "Java 安装验证失败"
             return 1
         fi
     else
-        log_error "Java 安装失败"
+        ui_log_error "Java installation failed" "Java 安装失败"
         return 1
     fi
 }
 
 # --- Java 配置函数 ---
 function configure_java() {
-    log_info "配置 Java..."
+    ui_log_info "Configuring Java..." "配置 Java..."
     
     # 安装 Maven
-    read -r -p "是否安装 Maven? [y/n]: " install_maven
+    ui_read install_maven "Install Maven? [y/N]: " "是否安装 Maven? [y/N]: "
     case "$install_maven" in
         y|Y|yes|YES)
             install_maven_tool
@@ -4553,22 +4980,22 @@ function configure_java() {
     esac
     
     # 安装 Gradle
-    read -r -p "是否安装 Gradle? [y/n]: " install_gradle
+    ui_read install_gradle "Install Gradle? [y/N]: " "是否安装 Gradle? [y/N]: "
     case "$install_gradle" in
         y|Y|yes|YES)
             install_gradle_tool
             ;;
     esac
     
-    log_success "Java 配置完成"
+    ui_log_success "Java configuration completed" "Java 配置完成"
 }
 
 # --- Maven 安装 ---
 function install_maven_tool() {
-    log_info "安装 Maven..."
+    ui_log_info "Installing Maven..." "安装 Maven..."
     
     if command -v mvn > /dev/null 2>&1; then
-        log_info "检测到已安装 Maven"
+        ui_log_info "Existing Maven installation detected" "检测到已安装 Maven"
         return 0
     fi
     
@@ -4578,13 +5005,13 @@ function install_maven_tool() {
     local maven_dir="/opt/maven"
     local maven_tar="/tmp/maven.tar.gz"
     
-    log_info "下载 Maven ${maven_version}..."
+    ui_log_info "Downloading Maven ${maven_version}..." "下载 Maven ${maven_version}..."
     if ! download_and_verify_checksum_url "$maven_url" "$maven_sha_url" sha512 "$maven_tar" "Maven ${maven_version}"; then
-        log_error "Maven 下载失败"
+        ui_log_error "Maven download failed" "Maven 下载失败"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 Maven 解压与安装"
+        ui_log_info "[DRY RUN] Would skip Maven extraction and installation" "[DRY RUN] 跳过 Maven 解压与安装"
         return 0
     fi
     
@@ -4593,7 +5020,10 @@ function install_maven_tool() {
     register_temp_file "$maven_stage"
     mkdir -p "$maven_stage/maven"
     tar -xzf "$maven_tar" -C "$maven_stage/maven" --strip-components=1 || return 1
-    [ -x "$maven_stage/maven/bin/mvn" ] || { log_error "Maven 归档结构无效"; return 1; }
+    [ -x "$maven_stage/maven/bin/mvn" ] || {
+        ui_log_error "Maven archive structure is invalid" "Maven 归档结构无效"
+        return 1
+    }
     replace_directory_transactional "$maven_dir" "$maven_stage/maven" "Maven ${maven_version}" || return 1
     rm -f -- "$maven_tar"
     
@@ -4607,19 +5037,19 @@ export PATH=\$MAVEN_HOME/bin:\$PATH"
     
     if command -v mvn > /dev/null 2>&1; then
         local maven_ver=$(mvn --version | head -1)
-        log_success "Maven 安装完成: $maven_ver"
+        ui_log_success "Maven installation completed: $maven_ver" "Maven 安装完成: $maven_ver"
     else
-        log_error "Maven 安装验证失败"
+        ui_log_error "Maven installation verification failed" "Maven 安装验证失败"
         return 1
     fi
 }
 
 # --- Gradle 安装 ---
 function install_gradle_tool() {
-    log_info "安装 Gradle..."
+    ui_log_info "Installing Gradle..." "安装 Gradle..."
     
     if command -v gradle > /dev/null 2>&1; then
-        log_info "检测到已安装 Gradle"
+        ui_log_info "Existing Gradle installation detected" "检测到已安装 Gradle"
         return 0
     fi
     
@@ -4629,14 +5059,14 @@ function install_gradle_tool() {
     local gradle_dir="/opt/gradle"
     local gradle_zip="/tmp/gradle.zip"
     
-    log_info "下载 Gradle ${gradle_version}..."
+    ui_log_info "Downloading Gradle ${gradle_version}..." "下载 Gradle ${gradle_version}..."
     install_packages_batch unzip || return 1
     if ! download_and_verify_checksum_url "$gradle_url" "$gradle_sha_url" sha256 "$gradle_zip" "Gradle ${gradle_version}"; then
-        log_error "Gradle 下载失败"
+        ui_log_error "Gradle download failed" "Gradle 下载失败"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 Gradle 解压与安装"
+        ui_log_info "[DRY RUN] Would skip Gradle extraction and installation" "[DRY RUN] 跳过 Gradle 解压与安装"
         return 0
     fi
     
@@ -4644,7 +5074,10 @@ function install_gradle_tool() {
     gradle_stage="$(mktemp -d /tmp/init-gradle.XXXXXX)" || return 1
     register_temp_file "$gradle_stage"
     unzip -q "$gradle_zip" -d "$gradle_stage" || return 1
-    [ -x "$gradle_stage/gradle-${gradle_version}/bin/gradle" ] || { log_error "Gradle 归档结构无效"; return 1; }
+    [ -x "$gradle_stage/gradle-${gradle_version}/bin/gradle" ] || {
+        ui_log_error "Gradle archive structure is invalid" "Gradle 归档结构无效"
+        return 1
+    }
     mkdir -p "$gradle_dir"
     replace_directory_transactional "$gradle_dir/gradle" "$gradle_stage/gradle-${gradle_version}" \
         "Gradle ${gradle_version}" || return 1
@@ -4660,9 +5093,9 @@ export PATH=\$GRADLE_HOME/bin:\$PATH"
     
     if command -v gradle > /dev/null 2>&1; then
         local gradle_ver=$(gradle --version | head -1)
-        log_success "Gradle 安装完成: $gradle_ver"
+        ui_log_success "Gradle installation completed: $gradle_ver" "Gradle 安装完成: $gradle_ver"
     else
-        log_error "Gradle 安装验证失败"
+        ui_log_error "Gradle installation verification failed" "Gradle 安装验证失败"
         return 1
     fi
 }
@@ -4670,26 +5103,28 @@ export PATH=\$GRADLE_HOME/bin:\$PATH"
 # --- Java 使用说明 ---
 function show_java_usage() {
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Java 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} java -version"
-    printf '%b\n' "  ${GREEN}查看编译器版本:${PLAIN} javac -version"
-    printf '%b\n' "  ${GREEN}查看 JAVA_HOME:${PLAIN} echo \$JAVA_HOME"
-    printf '%b\n' "  ${GREEN}编译 Java 文件:${PLAIN} javac Main.java"
-    printf '%b\n' "  ${GREEN}运行 Java 程序:${PLAIN} java Main"
+    ui_log_separator
+    ui_log_info "Java usage:" "Java 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show version:' '查看版本:')${PLAIN} java -version"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show compiler version:' '查看编译器版本:')${PLAIN} javac -version"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show JAVA_HOME:' '查看 JAVA_HOME:')${PLAIN} echo \$JAVA_HOME"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Compile a Java file:' '编译 Java 文件:')${PLAIN} javac Main.java"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Run a Java program:' '运行 Java 程序:')${PLAIN} java Main"
     printf '%b\n' ""
     if command -v mvn > /dev/null 2>&1; then
-        printf '%b\n' "  ${GREEN}Maven 版本:${PLAIN} mvn --version"
-        printf '%b\n' "  ${GREEN}创建 Maven 项目:${PLAIN} mvn archetype:generate"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Maven version:' 'Maven 版本:')${PLAIN} mvn --version"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Create a Maven project:' '创建 Maven 项目:')${PLAIN} mvn archetype:generate"
         printf '%b\n' ""
     fi
     if command -v gradle > /dev/null 2>&1; then
-        printf '%b\n' "  ${GREEN}Gradle 版本:${PLAIN} gradle --version"
-        printf '%b\n' "  ${GREEN}初始化 Gradle 项目:${PLAIN} gradle init"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Gradle version:' 'Gradle 版本:')${PLAIN} gradle --version"
+        printf '%b\n' "  ${GREEN}$(ui_text 'Initialize a Gradle project:' '初始化 Gradle 项目:')${PLAIN} gradle init"
         printf '%b\n' ""
     fi
-    log_warning "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
+    ui_log_warning \
+        "Note: in a new terminal, run 'source ~/.bashrc' or log in again" \
+        "注意: 新开终端需要运行 'source ~/.bashrc' 或重新登录"
 }
 
 # ==============================================================
@@ -4701,20 +5136,22 @@ function install_dotnet() {
     local version=${1:-""}
     local manager=${2:-"official"}
     
-    log_info "安装 .NET (使用官方安装脚本)..."
+    ui_log_info "Installing .NET from the official repository..." "安装 .NET (使用官方安装脚本)..."
     
     # 检查是否已安装
     if check_runtime_installed "dotnet"; then
         local current_version=$(get_runtime_version "dotnet")
-        log_info "检测到已安装 .NET: $current_version"
-        if ! confirm_action "是否重新安装 .NET?" "n"; then
-            log_info "保持现有 .NET 安装"
+        ui_log_info "Existing .NET installation detected: $current_version" "检测到已安装 .NET: $current_version"
+        if ! confirm_action "$(ui_text "Reinstall .NET?" "是否重新安装 .NET?")" "n"; then
+            ui_log_info "Keeping the existing .NET installation" "保持现有 .NET 安装"
             return 0
         fi
         
         # 危险操作确认
-        if confirm_dangerous_action "卸载 .NET" "这将删除所有已安装的 .NET SDK 和运行时"; then
-            log_info "卸载现有 .NET..."
+        if confirm_dangerous_action \
+            "$(ui_text "Uninstall .NET" "卸载 .NET")" \
+            "$(ui_text "This will remove all installed .NET SDKs and runtimes" "这将删除所有已安装的 .NET SDK 和运行时")"; then
+            ui_log_info "Removing the existing .NET installation..." "卸载现有 .NET..."
             apt-get remove -y 'dotnet*' 2>/dev/null || true
             rm -rf /usr/share/dotnet
             rm -rf /etc/dotnet
@@ -4724,21 +5161,23 @@ function install_dotnet() {
     fi
     
     # 安装依赖
-    log_info "安装 .NET 依赖包..."
+    ui_log_info "Installing .NET dependencies..." "安装 .NET 依赖包..."
     update_apt_once
     install_packages_batch "wget" "apt-transport-https"
     
     # 版本选择
     if [ -z "$version" ]; then
         printf '%b\n' ""
-        printf '%b\n' "${YELLOW}.NET 版本选择:${PLAIN}"
-        printf '%b\n' "${GREEN}[8.0]${PLAIN} .NET 8.0 (最新 LTS)"
+        printf '%b\n' "${YELLOW}$(ui_text '.NET version:' '.NET 版本选择:')${PLAIN}"
+        printf '%b\n' "${GREEN}[8.0]${PLAIN} .NET 8.0 ($(ui_text 'latest LTS' '最新 LTS'))"
         printf '%b\n' "${GREEN}[7.0]${PLAIN} .NET 7.0"
         printf '%b\n' "${GREEN}[6.0]${PLAIN} .NET 6.0 LTS"
-        printf '%b\n' "${GREEN}[latest]${PLAIN} 最新版本"
-        printf '%b\n' "${GREEN}[custom]${PLAIN} 自定义版本"
+        printf '%b\n' "${GREEN}[latest]${PLAIN} $(ui_text 'Latest release' '最新版本')"
+        printf '%b\n' "${GREEN}[custom]${PLAIN} $(ui_text 'Custom version' '自定义版本')"
         printf '%b\n' ""
-        read -r -p "请选择版本 [8.0/7.0/6.0/latest/custom]: " version_choice
+        ui_read version_choice \
+            "Choose a version [8.0/7.0/6.0/latest/custom]: " \
+            "请选择版本 [8.0/7.0/6.0/latest/custom]: "
         
         case "$version_choice" in
             8.0|7.0|6.0)
@@ -4748,11 +5187,11 @@ function install_dotnet() {
                 version="8.0"  # 默认最新 LTS
                 ;;
             custom|CUSTOM)
-                read -r -p "请输入版本号 (例如: 8.0): " custom_version
+                ui_read custom_version "Version number (for example, 8.0): " "请输入版本号 (例如: 8.0): "
                 if [[ "$custom_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
                     version="$custom_version"
                 else
-                    log_warning "版本格式无效，使用 8.0"
+                    ui_log_warning "Invalid version format; using 8.0" "版本格式无效，使用 8.0"
                     version="8.0"
                 fi
                 ;;
@@ -4762,14 +5201,14 @@ function install_dotnet() {
         esac
     fi
     
-    log_info "准备安装 .NET $version..."
+    ui_log_info "Preparing to install .NET $version..." "准备安装 .NET $version..."
     
     # 添加 Microsoft 仓库
-    log_info "添加 Microsoft 仓库..."
+    ui_log_info "Adding the Microsoft repository..." "添加 Microsoft 仓库..."
     local microsoft_repo_pkg="/tmp/packages-microsoft-prod.deb"
     local microsoft_repo_url="https://packages.microsoft.com/config/${OS_ID}/$(lsb_release -rs)/packages-microsoft-prod.deb"
-    if ! download_file "$microsoft_repo_url" "$microsoft_repo_pkg" "Microsoft apt 仓库配置包"; then
-        log_error "下载 Microsoft 仓库配置失败"
+    if ! download_file "$microsoft_repo_url" "$microsoft_repo_pkg" "$(ui_text "Microsoft apt repository package" "Microsoft apt 仓库配置包")"; then
+        ui_log_error "Failed to download Microsoft repository configuration" "下载 Microsoft 仓库配置失败"
         return 1
     fi
     
@@ -4778,15 +5217,16 @@ function install_dotnet() {
     update_apt_once
     
     # 安装 .NET SDK
-    log_info "安装 .NET SDK $version..."
-    if execute_with_progress "安装 .NET SDK $version" "apt-get install -y dotnet-sdk-${version}"; then
+    ui_log_info "Installing .NET SDK $version..." "安装 .NET SDK $version..."
+    if execute_with_progress "$(ui_text "Installing .NET SDK $version" "安装 .NET SDK $version")" \
+        "apt-get install -y dotnet-sdk-${version}"; then
         # 验证安装
         if verify_installation ".NET" "dotnet" "$version"; then
             local installed_dotnet=$(dotnet --version)
-            log_success ".NET 安装完成: $installed_dotnet"
+            ui_log_success ".NET installation completed: $installed_dotnet" ".NET 安装完成: $installed_dotnet"
             
             # 配置 .NET（可选）
-            read -r -p "是否配置 .NET（NuGet 源）? [y/n]: " config_dotnet
+            ui_read config_dotnet "Configure .NET NuGet sources? [y/N]: " "是否配置 .NET（NuGet 源）? [y/N]: "
             case "$config_dotnet" in
                 y|Y|yes|YES)
                     configure_dotnet
@@ -4795,50 +5235,52 @@ function install_dotnet() {
             
             show_dotnet_usage
         else
-            log_error ".NET 安装验证失败"
+            ui_log_error ".NET installation verification failed" ".NET 安装验证失败"
             return 1
         fi
     else
-        log_error ".NET 安装失败"
+        ui_log_error ".NET installation failed" ".NET 安装失败"
         return 1
     fi
 }
 
 # --- .NET 配置函数 ---
 function configure_dotnet() {
-    log_info "配置 .NET..."
+    ui_log_info "Configuring .NET..." "配置 .NET..."
     
     # 配置 NuGet 源（可选）
-    read -r -p "是否配置 NuGet 国内镜像（推荐国内服务器）? [y/n]: " use_mirror
+    ui_read use_mirror \
+        "Configure a China-based NuGet mirror (recommended for servers in China)? [y/N]: " \
+        "是否配置 NuGet 国内镜像（推荐国内服务器）? [y/N]: "
     case "$use_mirror" in
         y|Y|yes|YES)
-            log_info "配置 NuGet 镜像..."
+            ui_log_info "Configuring a NuGet mirror..." "配置 NuGet 镜像..."
             dotnet nuget add source https://nuget.cdn.azure.cn/v3/index.json -n azure-china >> "$LOG_FILE" 2>&1
-            log_success "已添加 NuGet 镜像: Azure China"
+            ui_log_success "NuGet mirror added: Azure China" "已添加 NuGet 镜像: Azure China"
             ;;
     esac
     
     # 显示已配置的源
-    log_info "当前 NuGet 源:"
+    ui_log_info "Current NuGet sources:" "当前 NuGet 源:"
     dotnet nuget list source
     
-    log_success ".NET 配置完成"
+    ui_log_success ".NET configuration completed" ".NET 配置完成"
 }
 
 # --- .NET 使用说明 ---
 function show_dotnet_usage() {
     printf '%b\n' ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info ".NET 使用说明:"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf '%b\n' "  ${GREEN}查看版本:${PLAIN} dotnet --version"
-    printf '%b\n' "  ${GREEN}查看已安装 SDK:${PLAIN} dotnet --list-sdks"
-    printf '%b\n' "  ${GREEN}查看已安装运行时:${PLAIN} dotnet --list-runtimes"
-    printf '%b\n' "  ${GREEN}创建新项目:${PLAIN} dotnet new <template>"
-    printf '%b\n' "  ${GREEN}构建项目:${PLAIN} dotnet build"
-    printf '%b\n' "  ${GREEN}运行项目:${PLAIN} dotnet run"
-    printf '%b\n' "  ${GREEN}发布项目:${PLAIN} dotnet publish"
-    printf '%b\n' "  ${GREEN}安装 NuGet 包:${PLAIN} dotnet add package <package>"
+    ui_log_separator
+    ui_log_info ".NET usage:" ".NET 使用说明:"
+    ui_log_separator
+    printf '%b\n' "  ${GREEN}$(ui_text 'Show version:' '查看版本:')${PLAIN} dotnet --version"
+    printf '%b\n' "  ${GREEN}$(ui_text 'List installed SDKs:' '查看已安装 SDK:')${PLAIN} dotnet --list-sdks"
+    printf '%b\n' "  ${GREEN}$(ui_text 'List installed runtimes:' '查看已安装运行时:')${PLAIN} dotnet --list-runtimes"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Create a project:' '创建新项目:')${PLAIN} dotnet new <template>"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Build project:' '构建项目:')${PLAIN} dotnet build"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Run project:' '运行项目:')${PLAIN} dotnet run"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Publish project:' '发布项目:')${PLAIN} dotnet publish"
+    printf '%b\n' "  ${GREEN}$(ui_text 'Install a NuGet package:' '安装 NuGet 包:')${PLAIN} dotnet add package <package>"
     printf '%b\n' ""
 }
 
@@ -4913,27 +5355,27 @@ function install_runtime_batch() {
     done
     
     if [ ${#runtimes[@]} -eq 0 ]; then
-        log_warning "未选择任何 Runtime"
+        ui_log_warning "No runtime selected" "未选择任何 Runtime"
         return
     fi
     
     printf '%b\n' ""
-    log_info "将安装以下 Runtime: ${runtimes[*]}"
+    ui_log_info "The following runtimes will be installed: ${runtimes[*]}" "将安装以下 Runtime: ${runtimes[*]}"
     ui_read confirm "Proceed with installation? [y/n]: " "确认安装? [y/n]: "
     case "$confirm" in
         y|Y|yes|YES)
             for runtime in "${runtimes[@]}"; do
                 printf '%b\n' ""
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                ui_log_separator
                 if ! invoke_action install_runtime "$runtime"; then
-                    log_warning "Runtime 安装失败或被取消: $runtime"
+            ui_log_warning "Runtime installation failed or was cancelled: $runtime" "Runtime 安装失败或被取消: $runtime"
                 fi
                 printf '%b\n' ""
             done
-            log_success "批量安装完成！"
+            ui_log_success "Batch installation completed!" "批量安装完成！"
             ;;
         *)
-            log_info "已取消"
+            ui_log_info "Cancelled" "已取消"
             ;;
     esac
 }
@@ -4952,7 +5394,9 @@ validate_authorized_keys_candidate() {
     local candidate="$1" line trimmed tmp valid_count=0
     [ -s "$candidate" ] || return 1
     command -v ssh-keygen > /dev/null 2>&1 || {
-        log_error "缺少 ssh-keygen，无法校验 authorized_keys"
+        ui_log_error \
+            "ssh-keygen is missing; cannot validate authorized_keys" \
+            "缺少 ssh-keygen，无法校验 authorized_keys"
         return 1
     }
     tmp="$(mktemp /tmp/init-authorized-key.XXXXXX)" || return 1
@@ -4992,17 +5436,23 @@ authorized_keys_is_usable_for_user() {
     home_mode="$(stat -c '%a' "$target_home" 2>/dev/null)" || return 1
 
     if [ "$key_uid" -ne "$uid" ] || [ "$dir_uid" -ne "$uid" ]; then
-        log_warning "$target_user 的 .ssh/authorized_keys 所有者不正确"
+        ui_log_warning \
+            "$target_user has the wrong owner for .ssh/authorized_keys" \
+            "$target_user 的 .ssh/authorized_keys 所有者不正确"
         return 1
     fi
     if [ "$home_uid" -ne "$uid" ] && [ "$home_uid" -ne 0 ]; then
-        log_warning "$target_user 的主目录所有者既不是该用户也不是 root"
+        ui_log_warning \
+            "$target_user's home directory is owned by neither that user nor root" \
+            "$target_user 的主目录所有者既不是该用户也不是 root"
         return 1
     fi
     if [ $((8#$key_mode & 022)) -ne 0 ] || \
        [ $((8#$dir_mode & 022)) -ne 0 ] || \
        [ $((8#$home_mode & 022)) -ne 0 ]; then
-        log_warning "$target_user 的主目录、.ssh 或 authorized_keys 可被组/其他用户写入"
+        ui_log_warning \
+            "$target_user's home directory, .ssh, or authorized_keys is writable by the group or other users" \
+            "$target_user 的主目录、.ssh 或 authorized_keys 可被组/其他用户写入"
         return 1
     fi
 }
@@ -5013,7 +5463,10 @@ install_authorized_key() {
     read -r key_type key_blob _ <<< "$public_key"
     case "$key_type" in
         ssh-ed25519|ssh-rsa|ecdsa-sha2-*) ;;
-        *) log_error "不支持或无效的 SSH 公钥类型"; return 1 ;;
+        *)
+            ui_log_error "Unsupported or invalid SSH public-key type" "不支持或无效的 SSH 公钥类型"
+            return 1
+            ;;
     esac
     [ -n "$key_blob" ] || return 1
 
@@ -5021,9 +5474,12 @@ install_authorized_key() {
     key_file="$ssh_dir/authorized_keys"
     uid="$(id -u "$target_user")" || return 1
     gid="$(id -g "$target_user")" || return 1
-    run_command "创建 $target_user 的 SSH 目录" install -d -m 700 -o "$uid" -g "$gid" "$ssh_dir" || return 1
+    run_command "$(ui_text \
+        "Create the SSH directory for $target_user" \
+        "创建 $target_user 的 SSH 目录")" \
+        install -d -m 700 -o "$uid" -g "$gid" "$ssh_dir" || return 1
     if [ -f "$key_file" ] && awk -v type="$key_type" -v blob="$key_blob" '$1 == type && $2 == blob {found=1} END {exit !found}' "$key_file"; then
-        log_info "SSH 公钥已存在，跳过追加"
+        ui_log_info "SSH public key already exists; skipping append" "SSH 公钥已存在，跳过追加"
         return 0
     fi
     candidate="$(mktemp "$ssh_dir/.authorized_keys.init.XXXXXX")" || return 1
@@ -5037,12 +5493,14 @@ validate_ssh_key_target_user() {
     local uid target_home login_shell
 
     if ! id "$target_user" > /dev/null 2>&1; then
-        log_error "SSH 密钥目标用户不存在: $target_user"
+        ui_log_error "SSH key target user does not exist: $target_user" "SSH 密钥目标用户不存在: $target_user"
         return 1
     fi
     uid="$(id -u "$target_user")" || return 1
     if [ "$require_non_root" = true ] && [ "$uid" -eq 0 ]; then
-        log_error "普通用户选项不能使用 UID 0 账户: $target_user"
+        ui_log_error \
+            "The non-root user option cannot use a UID 0 account: $target_user" \
+            "普通用户选项不能使用 UID 0 账户: $target_user"
         return 1
     fi
 
@@ -5050,19 +5508,25 @@ validate_ssh_key_target_user() {
     case "$target_home" in
         /*) ;;
         *)
-            log_error "用户 $target_user 的主目录不是绝对路径: $target_home"
+            ui_log_error \
+                "The home directory for $target_user is not an absolute path: $target_home" \
+                "用户 $target_user 的主目录不是绝对路径: $target_home"
             return 1
             ;;
     esac
     if [ "$target_home" = "/" ] || [ ! -d "$target_home" ]; then
-        log_error "用户 $target_user 的主目录不可用于 SSH 密钥: $target_home"
+        ui_log_error \
+            "The home directory for $target_user cannot be used for SSH keys: $target_home" \
+            "用户 $target_user 的主目录不可用于 SSH 密钥: $target_home"
         return 1
     fi
 
     login_shell="$(getent passwd "$target_user" 2>/dev/null | cut -d: -f7 || true)"
     case "$login_shell" in
         */nologin|*/false)
-            log_error "用户 $target_user 使用不可登录 Shell: $login_shell"
+            ui_log_error \
+                "$target_user uses a non-login shell: $login_shell" \
+                "用户 $target_user 使用不可登录 Shell: $login_shell"
             return 1
             ;;
     esac
@@ -5084,7 +5548,9 @@ select_ssh_key_target() {
 
     if [ -z "$target_spec" ] && [ "$NON_INTERACTIVE" = "1" ]; then
         target_spec="root"
-        log_info "[非交互] SSH 密钥目标默认使用 root；可通过 SSH_KEY_TARGET 覆盖"
+        ui_log_info \
+            "[non-interactive] SSH key target defaults to root; override it with SSH_KEY_TARGET" \
+            "[非交互] SSH 密钥目标默认使用 root；可通过 SSH_KEY_TARGET 覆盖"
     fi
 
     if [ -z "$target_spec" ]; then
@@ -5116,7 +5582,7 @@ select_ssh_key_target() {
                     "请输入已有普通用户名${preferred_user:+ [默认 $preferred_user]}: " || return 1
                 target_spec="${target_spec:-$preferred_user}"
                 [ -n "$target_spec" ] || {
-                    log_error "普通用户名不能为空"
+                    ui_log_error "The non-root username cannot be empty" "普通用户名不能为空"
                     return 1
                 }
                 require_non_root=true
@@ -5125,7 +5591,9 @@ select_ssh_key_target() {
                 target_spec="none"
                 ;;
             *)
-                log_error "无效的 SSH 公钥目标选项: $choice"
+                ui_log_error \
+                    "Invalid SSH public-key target option: $choice" \
+                    "无效的 SSH 公钥目标选项: $choice"
                 return 1
                 ;;
         esac
@@ -5133,7 +5601,9 @@ select_ssh_key_target() {
 
     case "${target_spec,,}" in
         none|skip)
-            log_info "已选择不处理任何用户的 authorized_keys"
+            ui_log_info \
+                "Selected not to modify authorized_keys for any user" \
+                "已选择不处理任何用户的 authorized_keys"
             return 0
             ;;
         root)
@@ -5147,7 +5617,9 @@ select_ssh_key_target() {
     validate_ssh_key_target_user "$target_spec" "$require_non_root" || return 1
     SSH_SELECTED_USER="$target_spec"
     SSH_SELECTED_HOME="$(get_user_home "$target_spec")"
-    log_info "SSH 公钥目标账户: $SSH_SELECTED_USER ($SSH_SELECTED_HOME)"
+    ui_log_info \
+        "SSH public-key target account: $SSH_SELECTED_USER ($SSH_SELECTED_HOME)" \
+        "SSH 公钥目标账户: $SSH_SELECTED_USER ($SSH_SELECTED_HOME)"
 }
 
 set_sshd_directive_in_file() {
@@ -5200,8 +5672,14 @@ function action_configure_ssh_transactional() {
         dry_run_action_plan action_configure_ssh
         return 0
     fi
-    [ -f "$config_file" ] || { log_error "SSH 配置不存在: $config_file"; return 1; }
-    command -v sshd > /dev/null 2>&1 || { log_error "未找到 sshd"; return 1; }
+    [ -f "$config_file" ] || {
+        ui_log_error "SSH configuration does not exist: $config_file" "SSH 配置不存在: $config_file"
+        return 1
+    }
+    command -v sshd > /dev/null 2>&1 || {
+        ui_log_error "sshd was not found" "未找到 sshd"
+        return 1
+    }
 
     candidate="$(mktemp "$(dirname "$config_file")/.sshd_config.init.XXXXXX")" || return 1
     cp -- "$config_file" "$candidate" || { rm -f -- "$candidate"; return 1; }
@@ -5209,19 +5687,27 @@ function action_configure_ssh_transactional() {
     current_port="${current_port:-22}"
     if [ "$NON_INTERACTIVE" = "1" ]; then
         ssh_port="$current_port"
-        log_info "[非交互] 保持当前 SSH 端口: $ssh_port"
+        ui_log_info \
+            "[non-interactive] Keeping the current SSH port: $ssh_port" \
+            "[非交互] 保持当前 SSH 端口: $ssh_port"
     else
-        read -r -p "请输入新的 SSH 端口 [当前 ${current_port}，留空保持]: " ssh_port || {
+        ui_read ssh_port \
+            "New SSH port [current: ${current_port}; Enter to keep it]: " \
+            "请输入新的 SSH 端口 [当前 ${current_port}，留空保持]: " || {
             rm -f -- "$candidate"
             return 1
         }
     fi
     ssh_port="${ssh_port:-$current_port}"
-    validate_port "$ssh_port" || { rm -f -- "$candidate"; log_error "SSH 端口无效"; return 1; }
+    validate_port "$ssh_port" || {
+        rm -f -- "$candidate"
+        ui_log_error "Invalid SSH port" "SSH 端口无效"
+        return 1
+    }
     if [ "$ssh_port" != "$current_port" ]; then
         if ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$ssh_port$"; then
             rm -f -- "$candidate"
-            log_error "端口 $ssh_port 已被占用"
+            ui_log_error "Port $ssh_port is already in use" "端口 $ssh_port 已被占用"
             return 1
         fi
         port_changed=true
@@ -5234,17 +5720,25 @@ function action_configure_ssh_transactional() {
     if [ -n "$SSH_SELECTED_USER" ]; then
         if authorized_keys_is_usable_for_user "$SSH_SELECTED_USER" "$SSH_SELECTED_HOME"; then
             has_key=true
-            log_success "检测到 $SSH_SELECTED_USER 已配置可用的 SSH 公钥"
+            ui_log_success \
+                "A usable SSH public key is configured for $SSH_SELECTED_USER" \
+                "检测到 $SSH_SELECTED_USER 已配置可用的 SSH 公钥"
         fi
         if [ "$NON_INTERACTIVE" = "1" ]; then
             user_key="$SSH_PUBLIC_KEY"
             if [ -n "$user_key" ]; then
-                log_info "[非交互] 将验证并追加 SSH_PUBLIC_KEY 到 $SSH_SELECTED_USER"
+                ui_log_info \
+                    "[non-interactive] Validating and appending SSH_PUBLIC_KEY for $SSH_SELECTED_USER" \
+                    "[非交互] 将验证并追加 SSH_PUBLIC_KEY 到 $SSH_SELECTED_USER"
             else
-                log_info "[非交互] 未提供 SSH_PUBLIC_KEY，仅检查现有 authorized_keys"
+                ui_log_info \
+                    "[non-interactive] SSH_PUBLIC_KEY was not provided; checking the existing authorized_keys only" \
+                    "[非交互] 未提供 SSH_PUBLIC_KEY，仅检查现有 authorized_keys"
             fi
         else
-            read -r -p "粘贴要追加到 $SSH_SELECTED_USER 的 SSH 公钥 [留空跳过]: " user_key || {
+            ui_read user_key \
+                "Paste an SSH public key to append for $SSH_SELECTED_USER [Enter to skip]: " \
+                "粘贴要追加到 $SSH_SELECTED_USER 的 SSH 公钥 [留空跳过]: " || {
                 rm -f -- "$candidate"
                 return 1
             }
@@ -5257,13 +5751,17 @@ function action_configure_ssh_transactional() {
             if authorized_keys_is_usable_for_user "$SSH_SELECTED_USER" "$SSH_SELECTED_HOME"; then
                 has_key=true
             else
-                log_warning "公钥已写入，但目录所有权或权限不满足安全校验"
+                ui_log_warning \
+                    "The public key was written, but directory ownership or permissions failed the security checks" \
+                    "公钥已写入，但目录所有权或权限不满足安全校验"
             fi
         fi
         if [ "$has_key" = true ] && [ "$SSH_SELECTED_USER" != "root" ] && \
            user_has_sudo_access "$SSH_SELECTED_USER"; then
             target_has_sudo=true
-            log_success "已确认 $SSH_SELECTED_USER 具备 sudo 管理权限"
+            ui_log_success \
+                "$SSH_SELECTED_USER has confirmed sudo administrative access" \
+                "已确认 $SSH_SELECTED_USER 具备 sudo 管理权限"
         fi
     fi
 
@@ -5274,7 +5772,9 @@ function action_configure_ssh_transactional() {
     if [ "$has_key" = true ]; then
         set_sshd_directive_in_file "$candidate" PubkeyAuthentication yes || { rm -f -- "$candidate"; return 1; }
         if [ "$SSH_SELECTED_USER" = "root" ]; then
-            if confirm_action "是否禁用 root 密码登录（保留 root 公钥登录）?" "y"; then
+            if confirm_action "$(ui_text \
+                "Disable root password login while keeping root public-key login?" \
+                "是否禁用 root 密码登录（保留 root 公钥登录）?")" "y"; then
                 root_login_change="prohibit-password"
                 set_sshd_directive_in_file "$candidate" PermitRootLogin prohibit-password || {
                     rm -f -- "$candidate"
@@ -5282,7 +5782,9 @@ function action_configure_ssh_transactional() {
                 }
             fi
         elif [ "$target_has_sudo" = true ]; then
-            if confirm_action "是否禁用 root SSH 登录（使用 $SSH_SELECTED_USER + sudo 管理）?" "n"; then
+            if confirm_action "$(ui_text \
+                "Disable root SSH login and administer through $SSH_SELECTED_USER + sudo?" \
+                "是否禁用 root SSH 登录（使用 $SSH_SELECTED_USER + sudo 管理）?")" "n"; then
                 root_login_change="disabled"
                 set_sshd_directive_in_file "$candidate" PermitRootLogin no || {
                     rm -f -- "$candidate"
@@ -5290,11 +5792,15 @@ function action_configure_ssh_transactional() {
                 }
             fi
         else
-            log_warning "$SSH_SELECTED_USER 没有可确认的 sudo 权限，不提供禁用 root SSH 登录选项"
+            ui_log_warning \
+                "No confirmed sudo access for $SSH_SELECTED_USER; the option to disable root SSH login will not be offered" \
+                "$SSH_SELECTED_USER 没有可确认的 sudo 权限，不提供禁用 root SSH 登录选项"
         fi
 
         if [ "$SSH_SELECTED_USER" = "root" ] || [ "$target_has_sudo" = true ]; then
-            if confirm_action "是否禁用所有 SSH 密码认证?" "n"; then
+            if confirm_action "$(ui_text \
+                "Disable all SSH password authentication?" \
+                "是否禁用所有 SSH 密码认证?")" "n"; then
                 disable_password="y"
                 set_sshd_directive_in_file "$candidate" PasswordAuthentication no || {
                     rm -f -- "$candidate"
@@ -5306,22 +5812,32 @@ function action_configure_ssh_transactional() {
                 }
             fi
         else
-            log_warning "缺少已验证的公钥管理账户，不提供禁用所有 SSH 密码认证选项"
+            ui_log_warning \
+                "No verified public-key administrator account is available; the option to disable all SSH password authentication will not be offered" \
+                "缺少已验证的公钥管理账户，不提供禁用所有 SSH 密码认证选项"
         fi
     elif [ -n "$SSH_SELECTED_USER" ]; then
-        log_warning "未检测到 $SSH_SELECTED_USER 的有效公钥，不提供禁用登录方式的选项"
+        ui_log_warning \
+            "No valid public key was found for $SSH_SELECTED_USER; login methods will not be disabled" \
+            "未检测到 $SSH_SELECTED_USER 的有效公钥，不提供禁用登录方式的选项"
     else
-        log_info "未选择 SSH 密钥目标，不修改 PubkeyAuthentication、密码认证或 root 登录策略"
+        ui_log_info \
+            "No SSH key target was selected; PubkeyAuthentication, password authentication, and the root login policy will not be changed" \
+            "未选择 SSH 密钥目标，不修改 PubkeyAuthentication、密码认证或 root 登录策略"
     fi
 
     if [ "$disable_password" = "y" ]; then
         if [ "$SSH_SELECTED_USER" != "root" ] && [ "$target_has_sudo" != true ]; then
-            log_error "安全校验失败：禁用密码认证前必须有可用的公钥管理账户"
+            ui_log_error \
+                "Security check failed: a usable public-key administrator account is required before password authentication can be disabled" \
+                "安全校验失败：禁用密码认证前必须有可用的公钥管理账户"
             rm -f -- "$candidate"
             return 1
         fi
         if [ "$SSH_SELECTED_USER" = "root" ] && [ "$root_login_change" = "disabled" ]; then
-            log_error "安全校验失败：不能同时禁用唯一公钥管理账户和密码认证"
+            ui_log_error \
+                "Security check failed: the only public-key administrator account and password authentication cannot both be disabled" \
+                "安全校验失败：不能同时禁用唯一公钥管理账户和密码认证"
             rm -f -- "$candidate"
             return 1
         fi
@@ -5333,23 +5849,34 @@ function action_configure_ssh_transactional() {
         return 1
     fi
     if [ "$port_changed" = true ] && command -v ufw > /dev/null 2>&1 && ufw status | grep -q 'Status: active'; then
-        run_command "在 UFW 中预先放行新 SSH 端口 $ssh_port" ufw allow "$ssh_port/tcp" comment SSH || return 1
+        run_command "$(ui_text \
+            "Pre-allow new SSH port $ssh_port in UFW" \
+            "在 UFW 中预先放行新 SSH 端口 $ssh_port")" \
+            ufw allow "$ssh_port/tcp" comment SSH || return 1
     fi
-    atomic_install_file "$config_file" "$candidate" "SSH 安全配置" preserve 0 0 validate_sshd_candidate || return 1
+    atomic_install_file "$config_file" "$candidate" \
+        "$(ui_text "SSH security configuration" "SSH 安全配置")" \
+        preserve 0 0 validate_sshd_candidate || return 1
 
     if ! reload_ssh_service; then
-        log_error "SSH reload 失败，正在恢复上一份配置"
+        ui_log_error \
+            "SSH reload failed; restoring the previous configuration" \
+            "SSH reload 失败，正在恢复上一份配置"
         rollback_last_operation || true
         reload_ssh_service || true
         return 1
     fi
     if ! sshd -T > /dev/null 2>&1; then
-        log_error "SSH reload 后有效配置检查失败，正在恢复"
+        ui_log_error \
+            "The effective configuration check failed after SSH reload; restoring the previous configuration" \
+            "SSH reload 后有效配置检查失败，正在恢复"
         rollback_last_operation || true
         reload_ssh_service || true
         return 1
     fi
-    log_success "SSH 配置已安全应用；端口: ${ssh_port}，密钥账户: ${SSH_SELECTED_USER:-未处理}，禁用密码: ${disable_password}，root 登录调整: $root_login_change"
+    ui_log_success \
+        "SSH configuration applied safely; port: ${ssh_port}, key account: ${SSH_SELECTED_USER:-not modified}, password authentication disabled: ${disable_password}, root login change: $root_login_change" \
+        "SSH 配置已安全应用；端口: ${ssh_port}，密钥账户: ${SSH_SELECTED_USER:-未处理}，禁用密码: ${disable_password}，root 登录调整: $root_login_change"
 }
 
 # 公开入口固定指向事务式实现。
@@ -5383,43 +5910,50 @@ function action_run_test_scripts() {
 
         case "$choice" in
             1)
-                log_info "运行 NodeQuality 节点质量检测..."
-                if confirm_action "确认运行 NodeQuality?" "y"; then
+                ui_log_info "Running the NodeQuality node-quality check..." "运行 NodeQuality 节点质量检测..."
+                if confirm_action "$(ui_text "Run NodeQuality?" "确认运行 NodeQuality?")" "y"; then
                     run_remote_script_unverified 'https://run.NodeQuality.com' \
-                        'NodeQuality 节点质量检测' || log_warning "已跳过 NodeQuality 脚本"
+                        "$(ui_text 'NodeQuality node-quality check' 'NodeQuality 节点质量检测')" || \
+                        ui_log_warning "NodeQuality script skipped" "已跳过 NodeQuality 脚本"
                 fi
                 ;;
             2)
-                log_info "运行 Yabs 性能测试..."
-                if confirm_action "确认运行 Yabs?" "y"; then
+                ui_log_info "Running the Yabs performance benchmark..." "运行 Yabs 性能测试..."
+                if confirm_action "$(ui_text "Run Yabs?" "确认运行 Yabs?")" "y"; then
                     run_remote_script_unverified 'https://yabs.sh' \
-                        'Yabs 性能测试' || log_warning "已跳过 Yabs 测试"
+                        "$(ui_text 'Yabs performance benchmark' 'Yabs 性能测试')" || \
+                        ui_log_warning "Yabs benchmark skipped" "已跳过 Yabs 测试"
                 fi
                 ;;
             3)
-                log_info "运行 RegionRestrictionCheck 流媒体解锁检测..."
-                if confirm_action "确认运行 RegionRestrictionCheck?" "y"; then
+                ui_log_info \
+                    "Running the RegionRestrictionCheck streaming-availability check..." \
+                    "运行 RegionRestrictionCheck 流媒体解锁检测..."
+                if confirm_action "$(ui_text "Run RegionRestrictionCheck?" "确认运行 RegionRestrictionCheck?")" "y"; then
                     run_remote_script_unverified 'https://check.unlock.media' \
-                        'RegionRestrictionCheck' || log_warning "已跳过 RegionRestrictionCheck"
+                        'RegionRestrictionCheck' || \
+                        ui_log_warning "RegionRestrictionCheck skipped" "已跳过 RegionRestrictionCheck"
                 fi
                 ;;
             4)
-                log_info "运行 IP质量体检脚本..."
-                if confirm_action "确认运行 IP质量体检脚本?" "y"; then
+                ui_log_info "Running the IP reputation check..." "运行 IP质量体检脚本..."
+                if confirm_action "$(ui_text "Run the IP reputation check?" "确认运行 IP质量体检脚本?")" "y"; then
                     run_remote_script_unverified 'https://Check.Place' \
-                        'IP 质量检测脚本' '-I' || log_warning "已跳过 IP 质量检测脚本"
+                        "$(ui_text 'IP reputation check' 'IP 质量检测脚本')" '-I' || \
+                        ui_log_warning "IP reputation check skipped" "已跳过 IP 质量检测脚本"
                 fi
                 ;;
             5)
-                log_info "运行融合怪测评脚本..."
-                if confirm_action "确认运行融合怪测评脚本?" "y"; then
+                ui_log_info "Running the Fusion Monster benchmark..." "运行融合怪测评脚本..."
+                if confirm_action "$(ui_text "Run the Fusion Monster benchmark?" "确认运行融合怪测评脚本?")" "y"; then
                     local script_path='/tmp/ecs.sh'
                     local ecs_url='https://gitlab.com/spiritysdx/za/-/raw/main/ecs.sh'
-                    if download_remote_script_unverified "$ecs_url" "$script_path" '融合怪测评脚本'; then
-                        bash "$script_path" || log_warning "融合怪测评脚本执行失败"
+                    if download_remote_script_unverified "$ecs_url" "$script_path" "$(ui_text 'Fusion Monster benchmark' '融合怪测评脚本')"; then
+                        bash "$script_path" || \
+                            ui_log_warning "Fusion Monster benchmark failed" "融合怪测评脚本执行失败"
                         rm -f -- "$script_path"
                     else
-                        log_warning "已跳过融合怪测评脚本"
+                        ui_log_warning "Fusion Monster benchmark skipped" "已跳过融合怪测评脚本"
                     fi
                 fi
                 ;;
@@ -5445,22 +5979,22 @@ function action_dd_reinstall() {
     # 强制确认
     ui_read confirm_dd "Type 'install' to confirm the DD reinstall (anything else cancels): " "请输入 'install' 以确认执行 DD 重装 (输入其他取消): "
     if [ "$confirm_dd" != "install" ]; then
-        log_info "操作已取消"
+        ui_log_info "Operation cancelled" "操作已取消"
         return
     fi
     
-    log_info "正在下载 DD 脚本..."
+    ui_log_info "Downloading the DD reinstall script..." "正在下载 DD 脚本..."
     local dd_script="/root/reinstall.sh"
     local dd_url="https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh"
-    if ! download_remote_script "$dd_url" "$dd_script" "DD 重装脚本"; then
-        log_error "DD 脚本下载失败，请检查网络"
+    if ! download_remote_script "$dd_url" "$dd_script" "$(ui_text "DD reinstall script" "DD 重装脚本")"; then
+        ui_log_error "DD reinstall script download failed; check the network" "DD 脚本下载失败，请检查网络"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 跳过 DD 脚本执行"
+        ui_log_info "[DRY RUN] Would skip DD reinstall script execution" "[DRY RUN] 跳过 DD 脚本执行"
         return 0
     fi
-    log_success "DD 脚本下载成功"
+    ui_log_success "DD reinstall script downloaded successfully" "DD 脚本下载成功"
     
     printf '%b\n' ""
     printf '%b\n' "${YELLOW}$(ui_text "Choose the target operating system:" "请选择重装目标系统:")${PLAIN}"
@@ -5487,41 +6021,49 @@ function action_dd_reinstall() {
         6) dd_args=(alpine) ;;
         7) dd_args=(windows 11) ;;
         8)
-            read -r -p "请输入完整参数 (例如: debian 12 --password mypassword): " custom_args
+            ui_read custom_args \
+                "Full arguments (for example, debian 12 --password mypassword): " \
+                "请输入完整参数 (例如: debian 12 --password mypassword): "
             read -r -a dd_args <<< "$custom_args"
             ;;
         0) return ;;
-        *) log_error "无效选择"; return ;;
+        *) ui_log_error "Invalid choice" "无效选择"; return ;;
     esac
 
     local cmd
     cmd=$(shell_join bash "$dd_script" "${dd_args[@]}")
     
     printf '%b\n' ""
-    printf '%b\n' "${RED}即将执行: $cmd${PLAIN}"
-    printf '%b\n' "${RED}系统将在安装开始后重启，SSH 将断开连接。${PLAIN}"
-    printf '%b\n' "${YELLOW}默认密码通常为: 123@@@ (具体请参考脚本说明)${PLAIN}"
+    printf '%b\n' "${RED}$(ui_text "About to execute: $cmd" "即将执行: $cmd")${PLAIN}"
+    printf '%b\n' "${RED}$(ui_text \
+        'The system will reboot after installation begins and the SSH connection will close.' \
+        '系统将在安装开始后重启，SSH 将断开连接。')${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text \
+        'The default password is usually 123@@@ (refer to the script documentation).' \
+        '默认密码通常为: 123@@@ (具体请参考脚本说明)')${PLAIN}"
     
-    if confirm_dangerous_action "执行 DD 重装" "系统将被重置"; then
-        log_info "开始执行 DD 重装..."
-        run_cmd "执行 DD 重装" "$cmd"
+    if confirm_dangerous_action \
+        "$(ui_text "Run DD reinstall" "执行 DD 重装")" \
+        "$(ui_text "The system will be reset" "系统将被重置")"; then
+        ui_log_info "Starting DD reinstall..." "开始执行 DD 重装..."
+        run_cmd "$(ui_text "Run DD reinstall" "执行 DD 重装")" "$cmd"
     fi
 }
 
 # --- 模块: 1Panel 安装 (新增) ---
 function action_install_1panel() {
-    log_info "安装 1Panel 面板..."
+    ui_log_info "Installing the 1Panel control panel..." "安装 1Panel 面板..."
     local url="https://resource.1panel.pro/v2/quick_start.sh"
-    printf '%b\n' "${YELLOW}脚本来源: ${url}${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text 'Script source' '脚本来源'): ${url}${PLAIN}"
     
-    if confirm_action "确认安装 1Panel?" "y"; then
-        run_remote_script "$url" "1Panel 官方安装脚本"
+    if confirm_action "$(ui_text "Install 1Panel?" "确认安装 1Panel?")" "y"; then
+        run_remote_script "$url" "$(ui_text "Official 1Panel installer" "1Panel 官方安装脚本")"
     fi
 }
 
 # --- 模块: 炫酷 MOTD (新增) ---
 function action_configure_motd() {
-    log_info "配置炫酷 MOTD (登录欢迎信息)..."
+    ui_log_info "Configuring the MOTD login banner..." "配置炫酷 MOTD (登录欢迎信息)..."
     
     # 安装必要工具
     update_apt_once
@@ -5588,7 +6130,7 @@ EOF
     # 添加到 profile (所有用户登录时显示)
     if [ -d /etc/profile.d ]; then
         echo "/usr/local/bin/cool-motd.sh" > /etc/profile.d/99-cool-motd.sh
-        log_success "MOTD 已配置 (通过 /etc/profile.d)"
+        ui_log_success "MOTD configured through /etc/profile.d" "MOTD 已配置 (通过 /etc/profile.d)"
     else
         # 备用方案：添加到 .bashrc 和 .zshrc
         local config_files=("$HOME/.bashrc" "$HOME/.zshrc")
@@ -5596,9 +6138,9 @@ EOF
             if [ -f "$rc_file" ]; then
                 if ! grep -q "cool-motd.sh" "$rc_file"; then
                     echo "/usr/local/bin/cool-motd.sh" >> "$rc_file"
-                    log_success "MOTD 已添加到 $rc_file"
+                    ui_log_success "MOTD added to $rc_file" "MOTD 已添加到 $rc_file"
                 else
-                    log_info "MOTD 已存在于 $rc_file"
+                    ui_log_info "MOTD already exists in $rc_file" "MOTD 已存在于 $rc_file"
                 fi
             fi
         done
@@ -5628,7 +6170,7 @@ save_iptables_rules() {
 check_docker_app_ip() {
     local docker_name="$1"
     echo "------------------------"
-    echo "访问地址:"
+    echo "$(ui_text "Access URL:" "访问地址:")"
     local ipv4=$(curl -s4m 5 https://api.ip.sb/ip || echo "")
     local docker_port=$(docker port "$docker_name" 2>/dev/null | head -n 1 | awk -F':' '{print $NF}')
     
@@ -5652,7 +6194,7 @@ clear_container_rules() {
     iptables -D DOCKER-USER -p udp -s "$allowed_ip" -d "$container_ip" -j ACCEPT 2>/dev/null || true
     iptables -D DOCKER-USER -p udp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT 2>/dev/null || true
     
-    echo "已清除该容器的访问规则"
+    echo "$(ui_text "Container access rules cleared" "已清除该容器的访问规则")"
     save_iptables_rules
 }
 
@@ -5671,7 +6213,7 @@ block_container_port() {
     iptables -I DOCKER-USER -p udp -s "$allowed_ip" -d "$container_ip" -j ACCEPT
     iptables -I DOCKER-USER -p udp -s 127.0.0.0/8 -d "$container_ip" -j ACCEPT
     
-    echo "已限制IP访问该服务"
+    echo "$(ui_text "IP access to this service is now restricted" "已限制IP访问该服务")"
     save_iptables_rules
 }
 
@@ -5700,10 +6242,10 @@ install_add_docker_cn() {
     country="$(detect_country_code 2>/dev/null || true)"
     if [ "$country" = "CN" ]; then
         if [ "$DRY_RUN" = "1" ]; then
-            log_info "[DRY RUN] 将写入 /etc/docker/daemon.json (国内镜像)"
+            ui_log_info "[DRY RUN] Would write /etc/docker/daemon.json (China registry mirrors)" "[DRY RUN] 将写入 /etc/docker/daemon.json (国内镜像)"
             return 0
         fi
-        write_file_atomic /etc/docker/daemon.json "Docker 国内镜像配置" 644 0 0 \
+        write_file_atomic /etc/docker/daemon.json "$(ui_text "Docker China registry mirror configuration" "Docker 国内镜像配置")" 644 0 0 \
             validate_json_candidate <<'EOF' || return 1
 {
   "registry-mirrors": [
@@ -5716,22 +6258,22 @@ install_add_docker_cn() {
   ]
 }
 EOF
-        log_info "已配置国内 Docker 镜像源"
+        ui_log_info "Docker China registry mirrors configured" "已配置国内 Docker 镜像源"
     elif [ -z "$country" ]; then
-        log_warning "无法在超时内判断国家/地区，已跳过自动写入国内 Docker 镜像"
+        ui_log_warning "Could not determine the country/region before timeout; skipped automatic China registry mirror configuration" "无法在超时内判断国家/地区，已跳过自动写入国内 Docker 镜像"
     else
-        log_info "检测到国家/地区代码 $country，不写入国内 Docker 镜像"
+        ui_log_info "Detected country/region code $country; China registry mirrors will not be configured" "检测到国家/地区代码 ${country}，不写入国内 Docker 镜像"
     fi
     enable_and_restart_service docker
 }
 
 linuxmirrors_install_docker() {
-    log_info "已改用 Docker 官方 apt 仓库安装流程"
+    ui_log_info "Using the official Docker apt repository installation workflow" "已改用 Docker 官方 apt 仓库安装流程"
     action_install_docker
 }
 
 action_install_add_docker() {
-    log_info "正在通过 Docker 官方 apt 仓库安装 Docker 环境..."
+    ui_log_info "Installing Docker from the official apt repository..." "正在通过 Docker 官方 apt 仓库安装 Docker 环境..."
     linuxmirrors_install_docker
 }
 
@@ -5743,9 +6285,9 @@ docker_tato() {
 
     if command -v docker > /dev/null; then
         printf '%b\n' "${CYAN}------------------------${PLAIN}"
-        printf '%b\n' "${GREEN}Docker 环境已安装${PLAIN}  容器: ${GREEN}$container_count${PLAIN}  镜像: ${GREEN}$image_count${PLAIN}  网络: ${GREEN}$network_count${PLAIN}  卷: ${GREEN}$volume_count${PLAIN}"
+        printf '%b\n' "${GREEN}$(ui_text "Docker is installed" "Docker 环境已安装")${PLAIN}  $(ui_text "Containers" "容器"): ${GREEN}$container_count${PLAIN}  $(ui_text "Images" "镜像"): ${GREEN}$image_count${PLAIN}  $(ui_text "Networks" "网络"): ${GREEN}$network_count${PLAIN}  $(ui_text "Volumes" "卷"): ${GREEN}$volume_count${PLAIN}"
     else
-        printf '%b\n' "${YELLOW}Docker 未安装${PLAIN}"
+        printf '%b\n' "${YELLOW}$(ui_text "Docker is not installed" "Docker 未安装")${PLAIN}"
     fi
 }
 
@@ -5769,9 +6311,9 @@ get_public_ipv4() {
 prompt_allowed_ipv4() {
     local value="" detected=""
     detected="$(get_public_ipv4 2>/dev/null || true)"
-    read -r -e -p "允许访问的来源 IPv4${detected:+ [默认 $detected]}: " value
+    ui_read_edit value "Allowed source IPv4${detected:+ [default $detected]}: " "允许访问的来源 IPv4${detected:+ [默认 $detected]}: "
     value="${value:-$detected}"
-    is_valid_ipv4 "$value" || { log_error "无效 IPv4: ${value:-empty}"; return 1; }
+    is_valid_ipv4 "$value" || { ui_log_error "Invalid IPv4 address: ${value:-empty}" "无效 IPv4: ${value:-empty}"; return 1; }
     printf '%s' "$value"
 }
 
@@ -5805,21 +6347,21 @@ submenu_docker_container() {
         case "$sub_choice" in
             1)
                 docker_args=()
-                read -r -e -a docker_args -p "请输入 docker 子命令及参数（例如 run -d --name web nginx:latest）: "
+                ui_read_array_edit docker_args "Docker subcommand and arguments (for example, run -d --name web nginx:latest): " "请输入 docker 子命令及参数（例如 run -d --name web nginx:latest）: "
                 if [ "${#docker_args[@]}" -eq 0 ]; then
-                    log_warning "命令不能为空"
-                elif confirm_dangerous_action "执行 Docker 命令" "docker $(shell_join "${docker_args[@]}")"; then
+                    ui_log_warning "The command cannot be empty" "命令不能为空"
+                elif confirm_dangerous_action "$(ui_text "Run Docker command" "执行 Docker 命令")" "docker $(shell_join "${docker_args[@]}")"; then
                     docker "${docker_args[@]}"
                 fi
                 ;;
             2|3|4|5|11|12)
-                read -r -e -p "请输入容器名或 ID: " dockername
-                [ -n "$dockername" ] || { log_warning "容器名不能为空"; menu_pause; continue; }
+                ui_read_edit dockername "Container name or ID: " "请输入容器名或 ID: "
+                [ -n "$dockername" ] || { ui_log_warning "The container name cannot be empty" "容器名不能为空"; menu_pause; continue; }
                 case "$sub_choice" in
                     2) docker start "$dockername" ;;
                     3) docker stop "$dockername" ;;
                     4)
-                        if confirm_dangerous_action "删除容器 $dockername" "将强制删除该容器"; then
+                        if confirm_dangerous_action "$(ui_text "Delete container $dockername" "删除容器 $dockername")" "$(ui_text "The container will be forcibly removed" "将强制删除该容器")"; then
                             docker rm -f "$dockername"
                         fi
                         ;;
@@ -5830,26 +6372,26 @@ submenu_docker_container() {
                 ;;
             6)
                 mapfile -t ids < <(docker ps -a -q)
-                [ "${#ids[@]}" -gt 0 ] && docker start "${ids[@]}" || log_info "没有可启动的容器"
+                [ "${#ids[@]}" -gt 0 ] && docker start "${ids[@]}" || ui_log_info "No containers are available to start" "没有可启动的容器"
                 ;;
             7)
                 mapfile -t ids < <(docker ps -q)
-                [ "${#ids[@]}" -gt 0 ] && docker stop "${ids[@]}" || log_info "没有运行中的容器"
+                [ "${#ids[@]}" -gt 0 ] && docker stop "${ids[@]}" || ui_log_info "No containers are running" "没有运行中的容器"
                 ;;
             8)
                 mapfile -t ids < <(docker ps -a -q)
                 if [ "${#ids[@]}" -eq 0 ]; then
-                    log_info "没有容器"
-                elif confirm_dangerous_action "删除全部容器" "将强制删除 ${#ids[@]} 个容器"; then
+                    ui_log_info "No containers found" "没有容器"
+                elif confirm_dangerous_action "$(ui_text "Delete all containers" "删除全部容器")" "$(ui_text "This will forcibly remove ${#ids[@]} containers" "将强制删除 ${#ids[@]} 个容器")"; then
                     docker rm -f "${ids[@]}"
                 fi
                 ;;
             9)
                 mapfile -t ids < <(docker ps -q)
-                [ "${#ids[@]}" -gt 0 ] && docker restart "${ids[@]}" || log_info "没有运行中的容器"
+                [ "${#ids[@]}" -gt 0 ] && docker restart "${ids[@]}" || ui_log_info "No containers are running" "没有运行中的容器"
                 ;;
             13)
-                printf '%-25s %-25s %-25s\n' "容器名称" "网络名称" "IP地址"
+                printf '%-25s %-25s %-25s\n' "$(ui_text "Container" "容器名称")" "$(ui_text "Network" "网络名称")" "$(ui_text "IP address" "IP地址")"
                 while IFS= read -r container_id; do
                     [ -n "$container_id" ] || continue
                     container_info="$(docker inspect --format '{{ .Name }}{{ range $network, $config := .NetworkSettings.Networks }} {{ $network }} {{ $config.IPAddress }}{{ end }}' "$container_id" 2>/dev/null || true)"
@@ -5864,7 +6406,7 @@ submenu_docker_container() {
                 ;;
             14) docker stats --no-stream ;;
             15|16)
-                read -r -e -p "请输入容器名或 ID: " docker_name
+                ui_read_edit docker_name "Container name or ID: " "请输入容器名或 ID: "
                 allowed_ip="$(prompt_allowed_ipv4)" || { menu_pause; continue; }
                 if [ "$sub_choice" = "15" ]; then
                     clear_container_rules "$docker_name" "$allowed_ip"
@@ -5900,20 +6442,20 @@ submenu_docker_image() {
         ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
             1|2)
-                read -r -e -p "请输入镜像名: " imagenames
-                [ -n "$imagenames" ] && docker pull "$imagenames" || log_warning "镜像名不能为空"
+                ui_read_edit imagenames "Image name: " "请输入镜像名: "
+                [ -n "$imagenames" ] && docker pull "$imagenames" || ui_log_warning "The image name cannot be empty" "镜像名不能为空"
                 ;;
             3)
-                read -r -e -p "请输入镜像名或 ID: " imagenames
-                if [ -n "$imagenames" ] && confirm_dangerous_action "删除镜像 $imagenames" "将强制删除该镜像"; then
+                ui_read_edit imagenames "Image name or ID: " "请输入镜像名或 ID: "
+                if [ -n "$imagenames" ] && confirm_dangerous_action "$(ui_text "Delete image $imagenames" "删除镜像 $imagenames")" "$(ui_text "The image will be forcibly removed" "将强制删除该镜像")"; then
                     docker rmi -f "$imagenames"
                 fi
                 ;;
             4)
                 mapfile -t ids < <(docker images -q | sort -u)
                 if [ "${#ids[@]}" -eq 0 ]; then
-                    log_info "没有镜像"
-                elif confirm_dangerous_action "删除全部镜像" "将强制删除 ${#ids[@]} 个镜像"; then
+                    ui_log_info "No images found" "没有镜像"
+                elif confirm_dangerous_action "$(ui_text "Delete all images" "删除全部镜像")" "$(ui_text "This will forcibly remove ${#ids[@]} images" "将强制删除 ${#ids[@]} 个镜像")"; then
                     docker rmi -f "${ids[@]}"
                 fi
                 ;;
@@ -5943,14 +6485,14 @@ submenu_docker_network() {
         ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
             1)
-                read -r -e -p "网络名: " name
-                [ -n "$name" ] && docker network create "$name" || log_warning "网络名不能为空"
+                ui_read_edit name "Network name: " "网络名: "
+                [ -n "$name" ] && docker network create "$name" || ui_log_warning "The network name cannot be empty" "网络名不能为空"
                 ;;
             2|3)
-                read -r -e -p "网络名: " net
-                read -r -e -p "容器名: " con
+                ui_read_edit net "Network name: " "网络名: "
+                ui_read_edit con "Container name: " "容器名: "
                 if [ -z "$net" ] || [ -z "$con" ]; then
-                    log_warning "网络名和容器名不能为空"
+                    ui_log_warning "The network and container names cannot be empty" "网络名和容器名不能为空"
                 elif [ "$sub_choice" = "2" ]; then
                     docker network connect "$net" "$con"
                 else
@@ -5958,8 +6500,8 @@ submenu_docker_network() {
                 fi
                 ;;
             4)
-                read -r -e -p "网络名: " net
-                if [ -n "$net" ] && confirm_dangerous_action "删除 Docker 网络 $net" "使用中的网络可能删除失败"; then
+                ui_read_edit net "Network name: " "网络名: "
+                if [ -n "$net" ] && confirm_dangerous_action "$(ui_text "Delete Docker network $net" "删除 Docker 网络 $net")" "$(ui_text "Removal may fail if the network is in use" "使用中的网络可能删除失败")"; then
                     docker network rm "$net"
                 fi
                 ;;
@@ -6037,26 +6579,26 @@ submenu_app_market() {
         case "$app_choice" in
             1)
                 local url="https://resource.1panel.pro/v2/quick_start.sh"
-                run_remote_script "$url" "1Panel 官方安装脚本"
+                run_remote_script "$url" "$(ui_text "official 1Panel installer" "1Panel 官方安装脚本")"
                 ;;
             2)
                 local url="https://www.aapanel.com/script/install_6.0_en.sh"
                 local script_path="/tmp/install_6.0_en.sh"
-                if download_remote_script "$url" "$script_path" "aaPanel 安装脚本"; then
-                    run_cmd "执行 aaPanel 安装脚本" "bash \"$script_path\" aapanel"
-                    run_cmd "清理 aaPanel 脚本" "rm -f \"$script_path\""
+                if download_remote_script "$url" "$script_path" "$(ui_text "aaPanel installer" "aaPanel 安装脚本")"; then
+                    run_cmd "$(ui_text "Run the aaPanel installer" "执行 aaPanel 安装脚本")" "bash \"$script_path\" aapanel"
+                    run_cmd "$(ui_text "Remove the aaPanel installer" "清理 aaPanel 脚本")" "rm -f \"$script_path\""
                 fi
                 ;;
             3)
                 local url="https://download.bt.cn/install/install_panel.sh"
                 local script_path="/tmp/install_panel.sh"
-                if download_remote_script "$url" "$script_path" "宝塔面板安装脚本"; then
-                    run_cmd "执行宝塔安装脚本" "bash \"$script_path\" ed8484bec"
-                    run_cmd "清理宝塔脚本" "rm -f \"$script_path\""
+                if download_remote_script "$url" "$script_path" "$(ui_text "BT Panel installer" "宝塔面板安装脚本")"; then
+                    run_cmd "$(ui_text "Run the BT Panel installer" "执行宝塔安装脚本")" "bash \"$script_path\" ed8484bec"
+                    run_cmd "$(ui_text "Remove the BT Panel installer" "清理宝塔脚本")" "rm -f \"$script_path\""
                 fi
                 ;;
             4)
-                if confirm_action "将会使用 Docker 运行 Nginx Proxy Manager (端口 81, 80, 443)，确认?" "y"; then
+                if confirm_action "$(ui_text "Run Nginx Proxy Manager with Docker on ports 81, 80, and 443?" "将会使用 Docker 运行 Nginx Proxy Manager (端口 81, 80, 443)，确认?")" "y"; then
                     install_docker_if_needed
                     mkdir -p /opt/npm
                     docker run -d \
@@ -6068,21 +6610,21 @@ submenu_app_market() {
                       -v /opt/npm/letsencrypt:/etc/letsencrypt \
                       --restart=always \
                       jc21/nginx-proxy-manager:latest
-                    log_success "NPM 已启动: http://IP:81"
+                    ui_log_success "Nginx Proxy Manager started: http://IP:81" "NPM 已启动: http://IP:81"
                 fi
                 ;;
             5)
-                if confirm_action "将会使用 Docker 运行 Portainer (端口 9000)，确认?" "y"; then
+                if confirm_action "$(ui_text "Run Portainer with Docker on port 9000?" "将会使用 Docker 运行 Portainer (端口 9000)，确认?")" "y"; then
                     install_docker_if_needed
                     docker run -d -p 9000:9000 --name=portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
-                    log_success "Portainer 已启动: http://IP:9000"
+                    ui_log_success "Portainer started: http://IP:9000" "Portainer 已启动: http://IP:9000"
                 fi
                 ;;
             6)
-                 if confirm_action "将会使用 Docker 运行 Uptime Kuma (端口 3001)，确认?" "y"; then
+                 if confirm_action "$(ui_text "Run Uptime Kuma with Docker on port 3001?" "将会使用 Docker 运行 Uptime Kuma (端口 3001)，确认?")" "y"; then
                     install_docker_if_needed
                     docker run -d --restart=always -p 3001:3001 -v uptime-kuma:/app/data --name uptime-kuma louislam/uptime-kuma:1
-                    log_success "Uptime Kuma 已启动: http://IP:3001"
+                    ui_log_success "Uptime Kuma started: http://IP:3001" "Uptime Kuma 已启动: http://IP:3001"
                  fi
                  ;;
             0) break ;;
@@ -6094,7 +6636,7 @@ submenu_app_market() {
 
 install_docker_if_needed() {
     if ! command -v docker > /dev/null; then
-        log_info "Docker 未安装，正在调起安装程序..."
+        ui_log_info "Docker is not installed; starting the installer..." "Docker 未安装，正在调起安装程序..."
         action_install_add_docker
     fi
 }
@@ -6124,10 +6666,10 @@ function action_cd2_mount_helper() {
 
     case "$mount_choice" in
         1)
-            if confirm_action "将写入 Docker systemd override 并重启 Docker，确认?" "y"; then
-                run_cmd "创建 Docker systemd override 目录" "mkdir -p /etc/systemd/system/docker.service.d"
+            if confirm_action "$(ui_text "Write a Docker systemd override and restart Docker?" "将写入 Docker systemd override 并重启 Docker，确认?")" "y"; then
+                run_cmd "$(ui_text "Create the Docker systemd override directory" "创建 Docker systemd override 目录")" "mkdir -p /etc/systemd/system/docker.service.d"
                 if [ "$DRY_RUN" = "1" ]; then
-                    log_info "[DRY RUN] 将写入 /etc/systemd/system/docker.service.d/clear_mount_propagation_flags.conf"
+                    ui_log_info "[DRY RUN] Would write /etc/systemd/system/docker.service.d/clear_mount_propagation_flags.conf" "[DRY RUN] 将写入 /etc/systemd/system/docker.service.d/clear_mount_propagation_flags.conf"
                 else
                     write_file_atomic /etc/systemd/system/docker.service.d/clear_mount_propagation_flags.conf \
                         "Docker systemd override" 644 0 0 <<'EOF' || return 1
@@ -6135,63 +6677,63 @@ function action_cd2_mount_helper() {
 MountFlags=shared
 EOF
                 fi
-                run_cmd "重新加载 systemd" "systemctl daemon-reload"
-                run_cmd "重启 Docker 服务" "systemctl restart docker.service"
-                log_success "已设置 MountFlags=shared"
+                run_cmd "$(ui_text "Reload systemd" "重新加载 systemd")" "systemctl daemon-reload"
+                run_cmd "$(ui_text "Restart Docker" "重启 Docker 服务")" "systemctl restart docker.service"
+                ui_log_success "MountFlags=shared has been configured" "已设置 MountFlags=shared"
             fi
             ;;
         2)
-            read -e -p "请输入需要共享挂载的路径 (例如云盘挂载父路径): " target_path
+            ui_read_edit target_path "Path to make a shared mount (for example, the cloud-drive mount parent): " "请输入需要共享挂载的路径 (例如云盘挂载父路径): "
             if [ -z "$target_path" ]; then
-                log_warning "路径不能为空"
+                ui_log_warning "The path cannot be empty" "路径不能为空"
                 return 1
             fi
             local mount_point
             mount_point=$(df -P "$target_path" 2>/dev/null | tail -1 | awk '{ print $6 }')
             if [ -z "$mount_point" ]; then
-                log_error "无法解析挂载点，请检查路径: $target_path"
+                ui_log_error "Could not resolve the mount point; check the path: $target_path" "无法解析挂载点，请检查路径: $target_path"
                 return 1
             fi
-            run_command "设置共享挂载" mount --make-shared "$mount_point"
-            log_warning "提示: make-shared 仅当前运行周期生效，重启后需要重新设置"
+            run_command "$(ui_text "Configure the shared mount" "设置共享挂载")" mount --make-shared "$mount_point"
+            ui_log_warning "Note: make-shared applies only until the next reboot and must then be configured again" "提示: make-shared 仅当前运行周期生效，重启后需要重新设置"
             ;;
         0) return ;;
-        *) echo "无效输入"; return ;;
+        *) echo "$(ui_text "Invalid input" "无效输入")"; return ;;
     esac
 }
 
 function action_setup_cd2_docker_compose() {
-    log_info "准备使用 Docker Compose 部署 CloudDrive2..."
+    ui_log_info "Preparing to deploy CloudDrive2 with Docker Compose..." "准备使用 Docker Compose 部署 CloudDrive2..."
     install_docker_if_needed
     install_docker_compose
     if [ ! -e /dev/fuse ]; then
-        log_warning "未检测到 /dev/fuse，CloudDrive2 可能无法正常挂载"
+        ui_log_warning "/dev/fuse was not detected; CloudDrive2 may be unable to mount correctly" "未检测到 /dev/fuse，CloudDrive2 可能无法正常挂载"
     fi
 
     local base_dir="/opt/docker/clouddrive2"
     local input=""
-    read -e -p "部署目录 (默认: $base_dir): " input
+    ui_read_edit input "Deployment directory [default: $base_dir]: " "部署目录 (默认: $base_dir): "
     if [ -n "$input" ]; then base_dir="$input"; fi
 
     local compose_file="${base_dir}/docker-compose.yml"
     if [ -f "$compose_file" ]; then
-        log_info "检测到已存在的 Compose 文件: $compose_file"
-        log_info "将跳过生成示例文件"
+        ui_log_info "Existing Compose file detected: $compose_file" "检测到已存在的 Compose 文件: $compose_file"
+        ui_log_info "Skipping example file generation" "将跳过生成示例文件"
     else
         local cloud_dir="${base_dir}/cloud"
         local config_dir="${base_dir}/config"
         local media_dir="${base_dir}/media"
 
-        read -e -p "云盘挂载目录 (默认: $cloud_dir): " input
+        ui_read_edit input "Cloud-drive mount directory [default: $cloud_dir]: " "云盘挂载目录 (默认: $cloud_dir): "
         if [ -n "$input" ]; then cloud_dir="$input"; fi
 
-        read -e -p "配置目录 (默认: $config_dir): " input
+        ui_read_edit input "Configuration directory [default: $config_dir]: " "配置目录 (默认: $config_dir): "
         if [ -n "$input" ]; then config_dir="$input"; fi
 
         local use_media=""
-        read -r -p "是否映射额外媒体目录? [y/N]: " use_media
+        builtin read -r -p "$(ui_text "Map an additional media directory? [y/N]: " "是否映射额外媒体目录? [y/N]: ")" use_media
         if [[ "$use_media" =~ ^[yY] ]]; then
-            read -e -p "媒体目录 (默认: $media_dir): " input
+            ui_read_edit input "Media directory [default: $media_dir]: " "媒体目录 (默认: $media_dir): "
             if [ -n "$input" ]; then media_dir="$input"; fi
         else
             media_dir=""
@@ -6200,21 +6742,21 @@ function action_setup_cd2_docker_compose() {
         local tz_default
         tz_default="$(effective_system_timezone)"
         local tz=""
-        read -e -p "时区 TZ (默认: $tz_default): " tz
+        ui_read_edit tz "Timezone (TZ) [default: $tz_default]: " "时区 TZ (默认: $tz_default): "
         if [ -z "$tz" ]; then tz="$tz_default"; fi
         if ! timezone_name_is_valid "$tz"; then
-            log_error "无效的 IANA 时区: $tz"
+            ui_log_error "Invalid IANA timezone: $tz" "无效的 IANA 时区: $tz"
             return 1
         fi
 
-        run_command "创建部署目录" mkdir -p "$base_dir"
-        run_command "创建 CloudDrive2 目录" mkdir -p "$cloud_dir" "$config_dir"
+        run_command "$(ui_text "Create the deployment directory" "创建部署目录")" mkdir -p "$base_dir"
+        run_command "$(ui_text "Create CloudDrive2 directories" "创建 CloudDrive2 目录")" mkdir -p "$cloud_dir" "$config_dir"
         if [ -n "$media_dir" ]; then
-            run_command "创建媒体目录" mkdir -p "$media_dir"
+            run_command "$(ui_text "Create the media directory" "创建媒体目录")" mkdir -p "$media_dir"
         fi
 
         if [ "$DRY_RUN" = "1" ]; then
-            log_info "[DRY RUN] 将写入 $compose_file"
+            ui_log_info "[DRY RUN] Would write $compose_file" "[DRY RUN] 将写入 $compose_file"
         else
             cat > "$compose_file" <<EOF
 version: "2.1"
@@ -6244,54 +6786,54 @@ EOF
 EOF
         fi
 
-        log_success "Docker Compose 示例配置已生成: $compose_file"
-        log_info "部署目录: $base_dir"
-        log_info "配置目录: $config_dir"
-        log_info "云盘挂载目录: $cloud_dir"
+        ui_log_success "Docker Compose example configuration generated: $compose_file" "Docker Compose 示例配置已生成: $compose_file"
+        ui_log_info "Deployment directory: $base_dir" "部署目录: $base_dir"
+        ui_log_info "Configuration directory: $config_dir" "配置目录: $config_dir"
+        ui_log_info "Cloud-drive mount directory: $cloud_dir" "云盘挂载目录: $cloud_dir"
         if [ -n "$media_dir" ]; then
-            log_info "媒体目录: $media_dir"
+            ui_log_info "Media directory: $media_dir" "媒体目录: $media_dir"
         fi
     fi
 
-    log_info "提示: Docker Compose 模式需要共享挂载设置 (MountFlags 或 make-shared)"
+    ui_log_info "Note: Docker Compose mode requires shared-mount configuration (MountFlags or make-shared)" "提示: Docker Compose 模式需要共享挂载设置 (MountFlags 或 make-shared)"
 
-    if confirm_action "是否现在配置挂载共享 (MountFlags/make-shared)?" "y"; then
+    if confirm_action "$(ui_text "Configure shared mounts now (MountFlags/make-shared)?" "是否现在配置挂载共享 (MountFlags/make-shared)?")" "y"; then
         action_cd2_mount_helper
     fi
 
     local compose_cmd=""
     if compose_cmd=$(cd2_get_compose_cmd); then
-        if confirm_action "是否立即启动 CloudDrive2 (docker compose up -d)?" "y"; then
-            run_cmd "启动 CloudDrive2" "$compose_cmd -f \"$compose_file\" up -d"
-            log_success "CloudDrive2 已启动"
+        if confirm_action "$(ui_text "Start CloudDrive2 now (docker compose up -d)?" "是否立即启动 CloudDrive2 (docker compose up -d)?")" "y"; then
+            run_cmd "$(ui_text "Start CloudDrive2" "启动 CloudDrive2")" "$compose_cmd -f \"$compose_file\" up -d"
+            ui_log_success "CloudDrive2 started" "CloudDrive2 已启动"
         fi
     else
-        log_warning "未检测到 Docker Compose，请先安装后再启动"
+        ui_log_warning "Docker Compose was not detected; install it before starting CloudDrive2" "未检测到 Docker Compose，请先安装后再启动"
     fi
 }
 
 function action_setup_cd2_native() {
     local script_path="${SCRIPT_DIR}/install_cd2.sh"
     if [ ! -f "$script_path" ]; then
-        log_error "未找到安装脚本: $script_path"
+        ui_log_error "Installer not found: $script_path" "未找到安装脚本: $script_path"
         return 1
     fi
 
     local base_dir="/opt"
     local input=""
-    read -e -p "安装目录 (默认: ${base_dir}，将创建 clouddrive2 目录): " input
+    ui_read_edit input "Installation directory [default: ${base_dir}; a clouddrive2 directory will be created]: " "安装目录 (默认: ${base_dir}，将创建 clouddrive2 目录): "
     if [ -n "$input" ]; then base_dir="$input"; fi
 
-    log_info "将执行原生安装脚本: $script_path"
-    printf '%b\n' "${YELLOW}说明: 该脚本会更新 apt 并从 GitHub 下载 CloudDrive2${PLAIN}"
+    ui_log_info "The native installer will be run: $script_path" "将执行原生安装脚本: $script_path"
+    printf '%b\n' "${YELLOW}$(ui_text "Note: this script updates apt and downloads CloudDrive2 from GitHub" "说明: 该脚本会更新 apt 并从 GitHub 下载 CloudDrive2")${PLAIN}"
 
-    if confirm_action "继续执行原生安装脚本?" "n"; then
-        run_command "创建安装目录" mkdir -p "$base_dir"
-        run_cmd "执行 CloudDrive2 原生安装脚本" "cd \"$base_dir\" && bash \"$script_path\""
-        log_success "原生安装脚本执行完成"
-        log_info "可使用: tmux attach -t clouddrive2 查看运行状态"
+    if confirm_action "$(ui_text "Continue with the native installer?" "继续执行原生安装脚本?")" "n"; then
+        run_command "$(ui_text "Create the installation directory" "创建安装目录")" mkdir -p "$base_dir"
+        run_cmd "$(ui_text "Run the native CloudDrive2 installer" "执行 CloudDrive2 原生安装脚本")" "cd \"$base_dir\" && bash \"$script_path\""
+        ui_log_success "Native installer completed" "原生安装脚本执行完成"
+        ui_log_info "To view its status, run: tmux attach -t clouddrive2" "可使用: tmux attach -t clouddrive2 查看运行状态"
     else
-        log_warning "已取消原生安装"
+        ui_log_warning "Native installation canceled" "已取消原生安装"
     fi
 }
 
@@ -6320,7 +6862,7 @@ function action_setup_cd2() {
 }
 
 action_show_system_info() {
-    log_info "系统信息:"
+    ui_log_info "System information:" "系统信息:"
     uname -a || true
     printf '%s\n' '--------------------------------'
     if [ -f /etc/os-release ]; then
@@ -6336,24 +6878,24 @@ action_enable_bbr() {
     local current=""
     current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
     if [ "$current" = "bbr" ]; then
-        log_info "BBR 已启用"
+        ui_log_info "BBR is already enabled" "BBR 已启用"
         return 0
     fi
     if [ "$DRY_RUN" != "1" ] && ! modprobe tcp_bbr 2>/dev/null; then
-        log_error "当前内核未提供 tcp_bbr 模块"
+        ui_log_error "The current kernel does not provide the tcp_bbr module" "当前内核未提供 tcp_bbr 模块"
         return 1
     fi
-    write_file_atomic /etc/sysctl.d/99-init-bbr.conf "BBR 拥塞控制" 644 0 0 \
+    write_file_atomic /etc/sysctl.d/99-init-bbr.conf "$(ui_text "BBR congestion control" "BBR 拥塞控制")" 644 0 0 \
         validate_nonempty_text_candidate <<'EOF' || return 1
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
-    run_command "应用 BBR sysctl 配置" sysctl --system || return 1
+    run_command "$(ui_text "Apply the BBR sysctl configuration" "应用 BBR sysctl 配置")" sysctl --system || return 1
     if [ "$DRY_RUN" != "1" ]; then
         current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
-        [ "$current" = "bbr" ] || { log_error "BBR 配置未生效"; return 1; }
+        [ "$current" = "bbr" ] || { ui_log_error "The BBR configuration did not take effect" "BBR 配置未生效"; return 1; }
     fi
-    log_success "BBR 已启用"
+    ui_log_success "BBR enabled" "BBR 已启用"
 }
 
 function action_toolbox() {
@@ -6415,25 +6957,25 @@ function action_toolbox() {
 
 # --- 模块: 服务健康检查 ---
 function action_service_health() {
-    log_info "服务健康检查..."
+    ui_log_info "Checking service health..." "服务健康检查..."
     local services=("ssh" "sshd" "ufw" "fail2ban" "docker")
-    printf "%-12s %-10s %-10s\n" "服务" "状态" "开机启动"
+    printf "%-12s %-10s %-10s\n" "$(ui_text "Service" "服务")" "$(ui_text "Status" "状态")" "$(ui_text "Startup" "开机启动")"
     for svc in "${services[@]}"; do
         local load_state="" active="inactive" enabled="disabled"
         load_state="$(systemd_unit_load_state "$svc")"
         if [ -z "$load_state" ] || [ "$load_state" = "not-found" ]; then
-            active="未安装"
+            active="$(ui_text "not installed" "未安装")"
             enabled="-"
         else
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
-                active="运行中"
+                active="$(ui_text "running" "运行中")"
             else
-                active="已停止"
+                active="$(ui_text "stopped" "已停止")"
             fi
             if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
-                enabled="已启用"
+                enabled="$(ui_text "enabled" "已启用")"
             else
-                enabled="未启用"
+                enabled="$(ui_text "disabled" "未启用")"
             fi
         fi
         printf "%-12s %-10s %-10s\n" "$svc" "$active" "$enabled"
@@ -6444,7 +6986,7 @@ function action_service_health() {
     fi
     printf '%b\n' ""
     if command -v ss > /dev/null 2>&1; then
-        log_info "监听端口:"
+        ui_log_info "Listening ports:" "监听端口:"
         ss -tulpn | head -n 30 || true
     fi
 }
@@ -6495,7 +7037,7 @@ EOF
 }
 
 function action_sysctl_presets() {
-    log_info "sysctl 性能预设..."
+    ui_log_info "sysctl performance presets..." "sysctl 性能预设..."
     printf '%b\n' "${GREEN}[1]${PLAIN} $(ui_text "Conservative (includes BBR)" "保守 (conservative，含 BBR)")"
     printf '%b\n' "${GREEN}[2]${PLAIN} $(ui_text "Standard (includes BBR)" "标准 (standard，含 BBR)")"
     printf '%b\n' "${GREEN}[3]${PLAIN} $(ui_text "Aggressive (includes BBR)" "激进 (aggressive，含 BBR)")"
@@ -6504,70 +7046,70 @@ function action_sysctl_presets() {
     local content="" current_control="" current_qdisc=""
 
     if ! content="$(sysctl_preset_content "$preset_choice")"; then
-        log_warning "无效选择"
+        ui_log_warning "Invalid selection" "无效选择"
         return 1
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将检查 tcp_bbr、写入含 fq + BBR 的 ${preset_file}，并执行 sysctl --system"
+        ui_log_info "[DRY RUN] Would check tcp_bbr, write ${preset_file} with fq + BBR, and run sysctl --system" "[DRY RUN] 将检查 tcp_bbr、写入含 fq + BBR 的 ${preset_file}，并执行 sysctl --system"
         return 0
     fi
     if ! modprobe tcp_bbr 2>/dev/null; then
-        log_error "当前内核未提供 tcp_bbr，未应用性能预设"
+        ui_log_error "The current kernel does not provide tcp_bbr; the performance preset was not applied" "当前内核未提供 tcp_bbr，未应用性能预设"
         return 1
     fi
     create_backup "$preset_file" >/dev/null
     mkdir -p /etc/sysctl.d
     printf "%s\n" "$content" > "$preset_file"
     if ! sysctl --system > /dev/null 2>&1; then
-        log_error "sysctl 应用失败"
+        ui_log_error "Failed to apply sysctl settings" "sysctl 应用失败"
         return 1
     fi
     current_control="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
     current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
     if [ "$current_control" != "bbr" ] || [ "$current_qdisc" != "fq" ]; then
-        log_error "性能预设未完全生效 (拥塞控制=${current_control:-unknown}, qdisc=${current_qdisc:-unknown})"
+        ui_log_error "The performance preset did not take full effect (congestion control=${current_control:-unknown}, qdisc=${current_qdisc:-unknown})" "性能预设未完全生效 (拥塞控制=${current_control:-unknown}, qdisc=${current_qdisc:-unknown})"
         return 1
     fi
-    log_success "sysctl 预设已应用并启用 BBR: $preset_file"
+    ui_log_success "The sysctl preset was applied and BBR was enabled: $preset_file" "sysctl 预设已应用并启用 BBR: $preset_file"
 }
 
 # --- 模块: 磁盘工具 ---
 function action_disk_tools() {
-    log_info "磁盘详细报告..."
+    ui_log_info "Detailed disk report..." "磁盘详细报告..."
     printf '%b\n' "------------------------------------------------"
-    printf '%b\n' "磁盘概览 (按容量排序):"
+    printf '%b\n' "$(ui_text "Disk overview (sorted by capacity):" "磁盘概览 (按容量排序):")"
     lsblk -dn -o NAME,SIZE,TYPE,MODEL,ROTA | awk '$3=="disk"{print $0}' | sort -k2 -h || true
     printf '%b\n' ""
 
-    printf '%b\n' "文件系统与挂载:"
+    printf '%b\n' "$(ui_text "Filesystems and mounts:" "文件系统与挂载:")"
     lsblk -f || true
     printf '%b\n' ""
     df -h || true
     printf '%b\n' ""
 
-    if confirm_action "是否收集 IO 统计? (需要 sysstat)" "y"; then
+    if confirm_action "$(ui_text "Collect I/O statistics? (requires sysstat)" "是否收集 IO 统计? (需要 sysstat)")" "y"; then
         if ! command -v iostat > /dev/null 2>&1; then
-            log_info "安装 sysstat..."
+            ui_log_info "Installing sysstat..." "安装 sysstat..."
             update_apt_once
             install_packages_batch "sysstat"
         fi
         if [ "$DRY_RUN" = "1" ]; then
-            log_info "[DRY RUN] 将执行 iostat -dx 1 3"
+            ui_log_info "[DRY RUN] Would run iostat -dx 1 3" "[DRY RUN] 将执行 iostat -dx 1 3"
         else
             iostat -dx 1 3 || true
         fi
         printf '%b\n' ""
     fi
 
-    if confirm_action "是否收集 SMART/NVMe 统计? (smartctl/nvme-cli)" "y"; then
+    if confirm_action "$(ui_text "Collect SMART/NVMe statistics? (smartctl/nvme-cli)" "是否收集 SMART/NVMe 统计? (smartctl/nvme-cli)")" "y"; then
         if ! command -v smartctl > /dev/null 2>&1; then
-            log_info "安装 smartmontools..."
+            ui_log_info "Installing smartmontools..." "安装 smartmontools..."
             update_apt_once
             install_packages_batch "smartmontools"
         fi
         if ! command -v nvme > /dev/null 2>&1; then
-            log_info "安装 nvme-cli..."
+            ui_log_info "Installing nvme-cli..." "安装 nvme-cli..."
             update_apt_once
             install_packages_batch "nvme-cli"
         fi
@@ -6598,11 +7140,11 @@ function action_disk_tools() {
     fi
 
     if command -v fstrim > /dev/null 2>&1; then
-        if confirm_action "是否执行 fstrim (SSD Trim)?" "n"; then
+        if confirm_action "$(ui_text "Run fstrim (SSD Trim)?" "是否执行 fstrim (SSD Trim)?")" "n"; then
             if [ "$DRY_RUN" = "1" ]; then
-                log_info "[DRY RUN] 将执行 fstrim -av"
+                ui_log_info "[DRY RUN] Would run fstrim -av" "[DRY RUN] 将执行 fstrim -av"
             else
-                fstrim -av || log_warning "fstrim 执行失败"
+                fstrim -av || ui_log_warning "fstrim failed" "fstrim 执行失败"
             fi
         fi
     fi
@@ -6610,7 +7152,7 @@ function action_disk_tools() {
 
 # --- 模块: 备份/恢复 (restic/borg) ---
 install_backup_tools() {
-    log_info "安装备份工具 (restic/borgbackup)..."
+    ui_log_info "Installing backup tools (restic/borgbackup)..." "安装备份工具 (restic/borgbackup)..."
     update_apt_once
     install_packages_batch "restic" "borgbackup" "openssl"
 }
@@ -6640,57 +7182,57 @@ configure_restic_local_backup() {
     case "$backend_choice" in
         1)
             backend="local"
-            read -r -p "Restic 仓库路径 [默认 /backup/restic]: " repo
+            builtin read -r -p "$(ui_text "Restic repository path [default: /backup/restic]: " "Restic 仓库路径 [默认 /backup/restic]: ")" repo
             repo="${repo:-/backup/restic}"
             ;;
         2)
             backend="sftp"
-            read -r -p "SFTP 仓库 (例如 user@example.com:/srv/restic): " repo
+            builtin read -r -p "$(ui_text "SFTP repository (for example, user@example.com:/srv/restic): " "SFTP 仓库 (例如 user@example.com:/srv/restic): ")" repo
             repo="sftp:${repo}"
             ;;
         3)
             backend="s3"
             local s3_endpoint s3_bucket s3_path
-            read -r -p "S3 endpoint (例如 s3.amazonaws.com 或 minio.example.com): " s3_endpoint
-            read -r -p "S3 bucket: " s3_bucket
-            read -r -p "S3 路径 [默认 init-backup]: " s3_path
+            builtin read -r -p "$(ui_text "S3 endpoint (for example, s3.amazonaws.com or minio.example.com): " "S3 endpoint (例如 s3.amazonaws.com 或 minio.example.com): ")" s3_endpoint
+            builtin read -r -p "S3 bucket: " s3_bucket
+            builtin read -r -p "$(ui_text "S3 path [default: init-backup]: " "S3 路径 [默认 init-backup]: ")" s3_path
             s3_path="${s3_path:-init-backup}"
-            read -r -p "AWS_ACCESS_KEY_ID: " aws_access_key
-            read -r -s -p "AWS_SECRET_ACCESS_KEY: " aws_secret_key
+            builtin read -r -p "AWS_ACCESS_KEY_ID: " aws_access_key
+            builtin read -r -s -p "AWS_SECRET_ACCESS_KEY: " aws_secret_key
             echo
             repo="s3:${s3_endpoint}/${s3_bucket}/${s3_path}"
             ;;
         4)
             backend="b2"
             local b2_bucket b2_path
-            read -r -p "B2 bucket: " b2_bucket
-            read -r -p "B2 路径 [默认 init-backup]: " b2_path
+            builtin read -r -p "B2 bucket: " b2_bucket
+            builtin read -r -p "$(ui_text "B2 path [default: init-backup]: " "B2 路径 [默认 init-backup]: ")" b2_path
             b2_path="${b2_path:-init-backup}"
-            read -r -p "B2_ACCOUNT_ID: " b2_account_id
-            read -r -s -p "B2_ACCOUNT_KEY: " b2_account_key
+            builtin read -r -p "B2_ACCOUNT_ID: " b2_account_id
+            builtin read -r -s -p "B2_ACCOUNT_KEY: " b2_account_key
             echo
             repo="b2:${b2_bucket}:${b2_path}"
             ;;
         5)
             backend="custom"
-            read -r -p "Restic repository 字符串: " repo
+            builtin read -r -p "$(ui_text "Restic repository string: " "Restic repository 字符串: ")" repo
             ;;
         *)
-            log_warning "无效选择"
+            ui_log_warning "Invalid selection" "无效选择"
             return 1
             ;;
     esac
 
     if [ -z "$repo" ] || [[ "$repo" == "sftp:" ]]; then
-        log_warning "Restic 仓库不能为空"
+        ui_log_warning "The restic repository cannot be empty" "Restic 仓库不能为空"
         return 1
     fi
 
-    read -r -p "备份路径（空格分隔，默认 /etc /root /home）: " default_paths
+    builtin read -r -p "$(ui_text "Backup paths (space-separated) [default: /etc /root /home]: " "备份路径（空格分隔，默认 /etc /root /home）: ")" default_paths
     default_paths="${default_paths:-/etc /root /home}"
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将配置 restic 仓库 ($backend): $repo"
+        ui_log_info "[DRY RUN] Would configure the restic repository ($backend): $repo" "[DRY RUN] 将配置 restic 仓库 ($backend): $repo"
         return 0
     fi
 
@@ -6702,11 +7244,11 @@ configure_restic_local_backup() {
 
     if [ ! -f "$password_file" ]; then
         local password=""
-        read -r -s -p "Restic 密码（留空自动生成）: " password
+        builtin read -r -s -p "$(ui_text "Restic password (leave empty to generate one): " "Restic 密码（留空自动生成）: ")" password
         echo
         if [ -z "$password" ]; then
             password="$(openssl rand -base64 32 2>/dev/null || date +%s%N)"
-            log_warning "已自动生成 restic 密码，保存在 $password_file"
+            ui_log_warning "A restic password was generated and saved to $password_file" "已自动生成 restic 密码，保存在 $password_file"
         fi
         printf "%s\n" "$password" > "$password_file"
         chmod 600 "$password_file"
@@ -6749,14 +7291,14 @@ EOF
     local need_init=true
     if restic -r "$repo" snapshots > /dev/null 2>&1; then
         need_init=false
-        log_info "检测到现有 restic 仓库，跳过初始化"
+        ui_log_info "Existing restic repository detected; skipping initialization" "检测到现有 restic 仓库，跳过初始化"
     elif [ "$backend" = "local" ] && [ -f "$repo/config" ]; then
-        log_error "本地 restic 仓库已存在但无法读取，请检查密码或仓库状态: $repo"
+        ui_log_error "The local restic repository exists but cannot be read; check the password and repository status: $repo" "本地 restic 仓库已存在但无法读取，请检查密码或仓库状态: $repo"
         return 1
     fi
     if [ "$need_init" = true ]; then
         if ! restic -r "$repo" init >> "$LOG_FILE" 2>&1; then
-            log_error "Restic 仓库初始化失败"
+            ui_log_error "Failed to initialize the restic repository" "Restic 仓库初始化失败"
             return 1
         fi
     fi
@@ -6813,34 +7355,34 @@ EOF
 
     systemd_daemon_reload || return 1
     if ! systemctl enable --now init-restic-backup.timer; then
-        log_error "Restic 备份定时器启用失败"
+        ui_log_error "Failed to enable the restic backup timer" "Restic 备份定时器启用失败"
         return 1
     fi
-    log_success "Restic 备份已配置 ($backend)，每天 03:30 附近执行"
-    log_info "手动备份: systemctl start init-restic-backup.service"
-    log_info "查看日志: tail -n 100 /var/log/init-restic-backup.log"
+    ui_log_success "Restic backup configured ($backend); it will run daily around 03:30" "Restic 备份已配置 ($backend)，每天 03:30 附近执行"
+    ui_log_info "Run manually: systemctl start init-restic-backup.service" "手动备份: systemctl start init-restic-backup.service"
+    ui_log_info "View logs: tail -n 100 /var/log/init-restic-backup.log" "查看日志: tail -n 100 /var/log/init-restic-backup.log"
 }
 
 run_restic_backup_now() {
     if [ ! -x /usr/local/sbin/init-restic-backup ]; then
-        log_warning "尚未配置 restic 备份，请先配置本地 restic 备份"
+        ui_log_warning "Restic backup has not been configured; configure it first" "尚未配置 restic 备份，请先配置本地 restic 备份"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将执行 /usr/local/sbin/init-restic-backup"
+        ui_log_info "[DRY RUN] Would run /usr/local/sbin/init-restic-backup" "[DRY RUN] 将执行 /usr/local/sbin/init-restic-backup"
         return 0
     fi
     if ! /usr/local/sbin/init-restic-backup; then
-        log_error "备份执行失败，请查看 /var/log/init-restic-backup.log"
+        ui_log_error "Backup failed; see /var/log/init-restic-backup.log" "备份执行失败，请查看 /var/log/init-restic-backup.log"
         return 1
     fi
-    log_success "备份执行完成"
+    ui_log_success "Backup completed" "备份执行完成"
 }
 
 list_restic_snapshots() {
     local env_file="/root/.config/init-script/restic.env"
     if [ ! -f "$env_file" ]; then
-        log_warning "尚未配置 restic 备份"
+        ui_log_warning "Restic backup has not been configured" "尚未配置 restic 备份"
         return 1
     fi
     set -a
@@ -6854,7 +7396,7 @@ preview_restic_snapshot() {
     local env_file="/root/.config/init-script/restic.env"
     local snapshot
     if [ ! -f "$env_file" ]; then
-        log_warning "尚未配置 restic 备份"
+        ui_log_warning "Restic backup has not been configured" "尚未配置 restic 备份"
         return 1
     fi
     set -a
@@ -6862,16 +7404,16 @@ preview_restic_snapshot() {
     source "$env_file"
     set +a
     restic snapshots || true
-    read -r -p "要预览的 snapshot ID [默认 latest]: " snapshot
+    builtin read -r -p "$(ui_text "Snapshot ID to preview [default: latest]: " "要预览的 snapshot ID [默认 latest]: ")" snapshot
     snapshot="${snapshot:-latest}"
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] restic stats $snapshot && restic ls $snapshot"
         return 0
     fi
-    log_info "快照统计:"
+    ui_log_info "Snapshot statistics:" "快照统计:"
     restic stats "$snapshot" || true
     printf '%b\n' ""
-    log_info "快照文件预览 (前 200 行):"
+    ui_log_info "Snapshot file preview (first 200 lines):" "快照文件预览 (前 200 行):"
     restic ls "$snapshot" | sed -n '1,200p' || true
 }
 
@@ -6879,7 +7421,7 @@ restore_restic_snapshot() {
     local env_file="/root/.config/init-script/restic.env"
     local snapshot target
     if [ ! -f "$env_file" ]; then
-        log_warning "尚未配置 restic 备份"
+        ui_log_warning "Restic backup has not been configured" "尚未配置 restic 备份"
         return 1
     fi
     set -a
@@ -6887,17 +7429,17 @@ restore_restic_snapshot() {
     source "$env_file"
     set +a
     restic snapshots || true
-    read -r -p "要恢复的 snapshot ID [默认 latest]: " snapshot
+    builtin read -r -p "$(ui_text "Snapshot ID to restore [default: latest]: " "要恢复的 snapshot ID [默认 latest]: ")" snapshot
     snapshot="${snapshot:-latest}"
-    if confirm_action "是否先预览该快照内容?" "y"; then
-        log_info "快照统计:"
+    if confirm_action "$(ui_text "Preview this snapshot first?" "是否先预览该快照内容?")" "y"; then
+        ui_log_info "Snapshot statistics:" "快照统计:"
         restic stats "$snapshot" || true
         printf '%b\n' ""
-        log_info "快照文件预览 (前 200 行):"
+        ui_log_info "Snapshot file preview (first 200 lines):" "快照文件预览 (前 200 行):"
         restic ls "$snapshot" | sed -n '1,200p' || true
         printf '%b\n' ""
     fi
-    read -r -p "恢复目标目录 [默认 /restore/restic]: " target
+    builtin read -r -p "$(ui_text "Restore destination [default: /restore/restic]: " "恢复目标目录 [默认 /restore/restic]: ")" target
     target="${target:-/restore/restic}"
     if [ "$DRY_RUN" = "1" ]; then
         log_info "[DRY RUN] restic restore $snapshot --target $target"
@@ -6905,10 +7447,10 @@ restore_restic_snapshot() {
     fi
     mkdir -p "$target"
     if ! restic restore "$snapshot" --target "$target"; then
-        log_error "恢复失败"
+        ui_log_error "Restore failed" "恢复失败"
         return 1
     fi
-    log_success "恢复完成: $target"
+    ui_log_success "Restore completed: $target" "恢复完成: $target"
 }
 
 run_restic_restore_drill() {
@@ -6917,7 +7459,7 @@ run_restic_restore_drill() {
     local include_args=()
 
     if [ ! -f "$env_file" ]; then
-        log_warning "尚未配置 restic 备份"
+        ui_log_warning "Restic backup has not been configured" "尚未配置 restic 备份"
         return 1
     fi
 
@@ -6927,14 +7469,14 @@ run_restic_restore_drill() {
     set +a
 
     restic snapshots || true
-    read -r -p "演练 snapshot ID [默认 latest]: " snapshot
+    builtin read -r -p "$(ui_text "Drill snapshot ID [default: latest]: " "演练 snapshot ID [默认 latest]: ")" snapshot
     snapshot="${snapshot:-latest}"
-    read -r -p "演练检查路径（空格分隔，默认 /etc/hostname /etc/ssh/sshd_config）: " drill_paths
+    builtin read -r -p "$(ui_text "Paths to check in the drill (space-separated) [default: /etc/hostname /etc/ssh/sshd_config]: " "演练检查路径（空格分隔，默认 /etc/hostname /etc/ssh/sshd_config）: ")" drill_paths
     drill_paths="${drill_paths:-/etc/hostname /etc/ssh/sshd_config}"
-    read -r -p "演练恢复目录 [默认 /var/tmp/init-restic-drill]: " drill_dir
+    builtin read -r -p "$(ui_text "Drill restore directory [default: /var/tmp/init-restic-drill]: " "演练恢复目录 [默认 /var/tmp/init-restic-drill]: ")" drill_dir
     drill_dir="${drill_dir:-/var/tmp/init-restic-drill}"
 
-    log_info "检查快照内关键路径..."
+    ui_log_info "Checking important paths in the snapshot..." "检查快照内关键路径..."
     for path in $drill_paths; do
         restic ls "$snapshot" "$path" > /dev/null 2>&1 && \
             printf "%-40s ${GREEN}%s${PLAIN}\n" "$path" "present" || \
@@ -6943,18 +7485,18 @@ run_restic_restore_drill() {
     done
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将恢复快照 $snapshot 的关键路径到 $drill_dir"
+        ui_log_info "[DRY RUN] Would restore important paths from snapshot $snapshot to $drill_dir" "[DRY RUN] 将恢复快照 $snapshot 的关键路径到 $drill_dir"
         return 0
     fi
 
     mkdir -p "$drill_dir"
     if ! restic restore "$snapshot" --target "$drill_dir" "${include_args[@]}"; then
-        log_error "恢复演练失败"
+        ui_log_error "Restore drill failed" "恢复演练失败"
         return 1
     fi
 
-    log_success "恢复演练完成: $drill_dir"
-    log_info "建议检查恢复目录后手动清理: rm -rf \"$drill_dir\""
+    ui_log_success "Restore drill completed: $drill_dir" "恢复演练完成: $drill_dir"
+    ui_log_info "After checking the restore directory, remove it manually with: rm -rf \"$drill_dir\"" "建议检查恢复目录后手动清理: rm -rf \"$drill_dir\""
 }
 
 function action_backup_restore() {
@@ -6990,14 +7532,14 @@ function action_backup_restore() {
 
 # --- 模块: 监控/告警基础 ---
 configure_journald_persistent() {
-    log_info "配置 journald 持久化与日志容量限制..."
+    ui_log_info "Configuring persistent journald storage and log size limits..." "配置 journald 持久化与日志容量限制..."
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 /etc/systemd/journald.conf.d/99-init.conf"
+        ui_log_info "[DRY RUN] Would write /etc/systemd/journald.conf.d/99-init.conf" "[DRY RUN] 将写入 /etc/systemd/journald.conf.d/99-init.conf"
         return 0
     fi
     mkdir -p /etc/systemd/journald.conf.d /var/log/journal
     write_file_atomic /etc/systemd/journald.conf.d/99-init.conf \
-        "journald 持久化配置" 644 0 0 <<'EOF' || return 1
+        "$(ui_text "persistent journald configuration" "journald 持久化配置")" 644 0 0 <<'EOF' || return 1
 [Journal]
 Storage=persistent
 Compress=yes
@@ -7005,26 +7547,26 @@ SystemMaxUse=1G
 RuntimeMaxUse=256M
 MaxRetentionSec=1month
 EOF
-    systemctl restart systemd-journald || log_warning "systemd-journald 重启失败"
-    log_success "journald 已配置为持久化"
+    systemctl restart systemd-journald || ui_log_warning "Failed to restart systemd-journald" "systemd-journald 重启失败"
+    ui_log_success "journald persistent storage configured" "journald 已配置为持久化"
 }
 
 install_node_exporter() {
-    log_info "安装 prometheus-node-exporter..."
+    ui_log_info "Installing prometheus-node-exporter..." "安装 prometheus-node-exporter..."
     update_apt_once
     if ! install_packages_batch "prometheus-node-exporter"; then
-        log_error "prometheus-node-exporter 安装失败"
+        ui_log_error "Failed to install prometheus-node-exporter" "prometheus-node-exporter 安装失败"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将启用 prometheus-node-exporter"
+        ui_log_info "[DRY RUN] Would enable prometheus-node-exporter" "[DRY RUN] 将启用 prometheus-node-exporter"
         return 0
     fi
     systemctl enable --now prometheus-node-exporter
-    log_success "node_exporter 已启动，默认监听 9100"
-    if command -v ufw > /dev/null 2>&1 && confirm_action "是否通过 UFW 放行 9100 端口? (建议只对监控端 IP 放行)" "n"; then
+    ui_log_success "node_exporter started and listens on port 9100 by default" "node_exporter 已启动，默认监听 9100"
+    if command -v ufw > /dev/null 2>&1 && confirm_action "$(ui_text "Allow port 9100 through UFW? (Prefer allowing only the monitoring host IP.)" "是否通过 UFW 放行 9100 端口? (建议只对监控端 IP 放行)")" "n"; then
         local cidr
-        read -r -p "允许来源 CIDR [默认 any]: " cidr
+        builtin read -r -p "$(ui_text "Allowed source CIDR [default: any]: " "允许来源 CIDR [默认 any]: ")" cidr
         if [ -n "$cidr" ]; then
             ufw allow from "$cidr" to any port 9100 proto tcp
         else
@@ -7035,13 +7577,13 @@ install_node_exporter() {
 
 install_health_check_timer() {
     local script_path="/usr/local/sbin/init-health-check"
-    log_info "安装本机健康检查定时器..."
+    ui_log_info "Installing the local health-check timer..." "安装本机健康检查定时器..."
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将创建健康检查脚本和 systemd timer"
+        ui_log_info "[DRY RUN] Would create the health-check script and systemd timer" "[DRY RUN] 将创建健康检查脚本和 systemd timer"
         return 0
     fi
 
-    write_file_atomic "$script_path" "本机健康检查 executable" 700 0 0 <<'EOF' || return 1
+    write_file_atomic "$script_path" "$(ui_text "local health-check executable" "本机健康检查 executable")" 700 0 0 <<'EOF' || return 1
 #!/bin/bash
 set -euo pipefail
 
@@ -7079,7 +7621,7 @@ if [ "$WARNINGS" -eq 0 ]; then
 fi
 EOF
     write_file_atomic /etc/systemd/system/init-health-check.service \
-        "本机健康检查 service" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
+        "$(ui_text "local health-check service" "本机健康检查 service")" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
 [Unit]
 Description=Init Script Local Health Check
 
@@ -7089,7 +7631,7 @@ ExecStart=/usr/local/sbin/init-health-check
 EOF
 
     write_file_atomic /etc/systemd/system/init-health-check.timer \
-        "本机健康检查 timer" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
+        "$(ui_text "local health-check timer" "本机健康检查 timer")" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
 [Unit]
 Description=Run Init Script Local Health Check Hourly
 
@@ -7103,15 +7645,15 @@ WantedBy=timers.target
 EOF
     systemd_daemon_reload || return 1
     if ! systemctl enable --now init-health-check.timer; then
-        log_error "健康检查定时器启用失败"
+        ui_log_error "Failed to enable the health-check timer" "健康检查定时器启用失败"
         return 1
     fi
-    log_success "健康检查定时器已启用"
-    log_info "查看日志: tail -n 100 /var/log/init-health-check.log"
+    ui_log_success "Health-check timer enabled" "健康检查定时器已启用"
+    ui_log_info "View logs: tail -n 100 /var/log/init-health-check.log" "查看日志: tail -n 100 /var/log/init-health-check.log"
 }
 
 show_monitoring_status() {
-    log_info "监控/日志状态..."
+    ui_log_info "Monitoring and logging status..." "监控/日志状态..."
     systemctl is-active systemd-journald >/dev/null 2>&1 && echo "journald: active" || echo "journald: inactive"
     systemctl is-active prometheus-node-exporter >/dev/null 2>&1 && echo "node_exporter: active" || echo "node_exporter: inactive"
     systemctl list-timers init-health-check.timer --no-pager 2>/dev/null || true
@@ -7151,20 +7693,20 @@ configure_caddy_reverse_proxy() {
     local domain upstream site_file
     update_apt_once
     if ! install_packages_batch "caddy"; then
-        log_error "Caddy 安装失败，当前系统源可能未提供 caddy，可改用 Nginx + Certbot"
+        ui_log_error "Failed to install Caddy; the configured repositories may not provide it. Try Nginx + Certbot instead." "Caddy 安装失败，当前系统源可能未提供 caddy，可改用 Nginx + Certbot"
         return 1
     fi
-    read -r -p "域名 (例如 app.example.com): " domain
-    read -r -p "后端地址 [默认 127.0.0.1:3000]: " upstream
+    builtin read -r -p "$(ui_text "Domain (for example, app.example.com): " "域名 (例如 app.example.com): ")" domain
+    builtin read -r -p "$(ui_text "Upstream address [default: 127.0.0.1:3000]: " "后端地址 [默认 127.0.0.1:3000]: ")" upstream
     upstream="${upstream:-127.0.0.1:3000}"
     if [ -z "$domain" ]; then
-        log_warning "域名不能为空"
+        ui_log_warning "The domain cannot be empty" "域名不能为空"
         return 1
     fi
     site_file="/etc/caddy/conf.d/${domain}.caddy"
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 Caddy 反代配置: $site_file"
+        ui_log_info "[DRY RUN] Would write the Caddy reverse-proxy configuration: $site_file" "[DRY RUN] 将写入 Caddy 反代配置: $site_file"
         return 0
     fi
     mkdir -p /etc/caddy/conf.d
@@ -7172,46 +7714,46 @@ configure_caddy_reverse_proxy() {
     if [ -f /etc/caddy/Caddyfile ] && ! grep -q "conf.d/\\*.caddy" /etc/caddy/Caddyfile; then
         printf "\nimport /etc/caddy/conf.d/*.caddy\n" >> /etc/caddy/Caddyfile
     fi
-    write_file_atomic "$site_file" "Caddy 反向代理站点" 644 0 0 <<EOF || return 1
+    write_file_atomic "$site_file" "$(ui_text "Caddy reverse-proxy site" "Caddy 反向代理站点")" 644 0 0 <<EOF || return 1
 $domain {
     encode gzip zstd
     reverse_proxy $upstream
 }
 EOF
     if ! caddy validate --config /etc/caddy/Caddyfile; then
-        log_error "Caddy 配置验证失败"
+        ui_log_error "Caddy configuration validation failed" "Caddy 配置验证失败"
         return 1
     fi
     if ! systemctl enable --now caddy; then
-        log_error "Caddy 服务启动失败"
+        ui_log_error "Failed to start the Caddy service" "Caddy 服务启动失败"
         return 1
     fi
     if ! systemctl reload caddy; then
         systemctl restart caddy || return 1
     fi
-    log_success "Caddy 反向代理已配置: https://$domain -> $upstream"
+    ui_log_success "Caddy reverse proxy configured: https://$domain -> $upstream" "Caddy 反向代理已配置: https://$domain -> $upstream"
 }
 
 configure_nginx_certbot_proxy() {
     local domain upstream site_file
     update_apt_once
     if ! install_packages_batch "nginx" "certbot" "python3-certbot-nginx"; then
-        log_error "Nginx/Certbot 安装失败"
+        ui_log_error "Failed to install Nginx/Certbot" "Nginx/Certbot 安装失败"
         return 1
     fi
-    read -r -p "域名 (例如 app.example.com): " domain
-    read -r -p "后端地址 [默认 http://127.0.0.1:3000]: " upstream
+    builtin read -r -p "$(ui_text "Domain (for example, app.example.com): " "域名 (例如 app.example.com): ")" domain
+    builtin read -r -p "$(ui_text "Upstream URL [default: http://127.0.0.1:3000]: " "后端地址 [默认 http://127.0.0.1:3000]: ")" upstream
     upstream="${upstream:-http://127.0.0.1:3000}"
     if [ -z "$domain" ]; then
-        log_warning "域名不能为空"
+        ui_log_warning "The domain cannot be empty" "域名不能为空"
         return 1
     fi
     site_file="/etc/nginx/sites-available/${domain}.conf"
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 Nginx 反代配置并可选申请证书: $site_file"
+        ui_log_info "[DRY RUN] Would write the Nginx reverse-proxy configuration and optionally request a certificate: $site_file" "[DRY RUN] 将写入 Nginx 反代配置并可选申请证书: $site_file"
         return 0
     fi
-    write_file_atomic "$site_file" "Nginx 反向代理站点" 644 0 0 <<EOF || return 1
+    write_file_atomic "$site_file" "$(ui_text "Nginx reverse-proxy site" "Nginx 反向代理站点")" 644 0 0 <<EOF || return 1
 server {
     listen 80;
     listen [::]:80;
@@ -7228,18 +7770,18 @@ server {
 EOF
     ln -sf "$site_file" "/etc/nginx/sites-enabled/${domain}.conf"
     if ! nginx -t; then
-        log_error "Nginx 配置验证失败"
+        ui_log_error "Nginx configuration validation failed" "Nginx 配置验证失败"
         return 1
     fi
     if ! systemctl enable --now nginx; then
-        log_error "Nginx 服务启动失败"
+        ui_log_error "Failed to start the Nginx service" "Nginx 服务启动失败"
         return 1
     fi
     systemctl reload nginx || systemctl restart nginx
-    if confirm_action "是否使用 certbot 申请/配置 HTTPS 证书?" "y"; then
+    if confirm_action "$(ui_text "Use certbot to request/configure an HTTPS certificate?" "是否使用 certbot 申请/配置 HTTPS 证书?")" "y"; then
         certbot --nginx -d "$domain" || return 1
     fi
-    log_success "Nginx 反向代理已配置: $domain -> $upstream"
+    ui_log_success "Nginx reverse proxy configured: $domain -> $upstream" "Nginx 反向代理已配置: $domain -> $upstream"
 }
 
 function action_reverse_proxy_cert() {
@@ -7272,28 +7814,28 @@ install_security_audit_tools() {
 run_lynis_quick_audit() {
     update_apt_once
     if ! install_packages_batch "lynis"; then
-        log_error "Lynis 安装失败"
+        ui_log_error "Failed to install Lynis" "Lynis 安装失败"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将执行 lynis audit system --quick"
+        ui_log_info "[DRY RUN] Would run lynis audit system --quick" "[DRY RUN] 将执行 lynis audit system --quick"
         return 0
     fi
     lynis audit system --quick
-    log_info "Lynis 报告通常位于 /var/log/lynis-report.dat"
+    ui_log_info "The Lynis report is usually stored at /var/log/lynis-report.dat" "Lynis 报告通常位于 /var/log/lynis-report.dat"
 }
 
 run_debsums_audit() {
     update_apt_once
     if ! install_packages_batch "debsums"; then
-        log_error "debsums 安装失败"
+        ui_log_error "Failed to install debsums" "debsums 安装失败"
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将执行 debsums -s"
+        ui_log_info "[DRY RUN] Would run debsums -s" "[DRY RUN] 将执行 debsums -s"
         return 0
     fi
-    debsums -s || log_warning "发现包文件校验差异，请审阅输出"
+    debsums -s || ui_log_warning "Package file checksum differences were found; review the output" "发现包文件校验差异，请审阅输出"
 }
 
 function action_security_audit() {
@@ -7340,17 +7882,17 @@ docker_compose_cmd() {
 
 run_docker_compose_backup_once() {
     local project_dir backup_root compose_cmd timestamp project_name backup_dir compose_file volumes
-    read -r -p "Compose 项目目录 [默认当前目录]: " project_dir
+    builtin read -r -p "$(ui_text "Compose project directory [default: current directory]: " "Compose 项目目录 [默认当前目录]: ")" project_dir
     project_dir="${project_dir:-$(pwd)}"
-    read -r -p "备份根目录 [默认 /var/backups/docker-compose]: " backup_root
+    builtin read -r -p "$(ui_text "Backup root directory [default: /var/backups/docker-compose]: " "备份根目录 [默认 /var/backups/docker-compose]: ")" backup_root
     backup_root="${backup_root:-/var/backups/docker-compose}"
 
     if [ ! -d "$project_dir" ]; then
-        log_error "项目目录不存在: $project_dir"
+        ui_log_error "Project directory does not exist: $project_dir" "项目目录不存在: $project_dir"
         return 1
     fi
     if ! compose_cmd="$(docker_compose_cmd)"; then
-        log_error "未检测到 docker compose 或 docker-compose"
+        ui_log_error "Neither docker compose nor docker-compose was detected" "未检测到 docker compose 或 docker-compose"
         return 1
     fi
 
@@ -7362,7 +7904,7 @@ run_docker_compose_backup_once() {
         fi
     done
     if [ -z "$compose_file" ]; then
-        log_error "未找到 compose.yaml / docker-compose.yml"
+        ui_log_error "No compose.yaml or docker-compose.yml file was found" "未找到 compose.yaml / docker-compose.yml"
         return 1
     fi
 
@@ -7371,7 +7913,7 @@ run_docker_compose_backup_once() {
     backup_dir="${backup_root}/${project_name}_${timestamp}"
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将备份 $project_dir 到 $backup_dir"
+        ui_log_info "[DRY RUN] Would back up $project_dir to $backup_dir" "[DRY RUN] 将备份 $project_dir 到 $backup_dir"
         return 0
     fi
 
@@ -7383,49 +7925,49 @@ run_docker_compose_backup_once() {
     volumes="$(cd "$project_dir" && $compose_cmd config --volumes 2>/dev/null || true)"
     if [ -n "$volumes" ]; then
         mkdir -p "$backup_dir/volumes"
-        if confirm_action "是否备份 Compose 命名卷? (可能需要拉取 busybox 镜像)" "y"; then
+        if confirm_action "$(ui_text "Back up named Compose volumes? (This may pull the busybox image.)" "是否备份 Compose 命名卷? (可能需要拉取 busybox 镜像)")" "y"; then
             local volume
             while IFS= read -r volume; do
                 [ -z "$volume" ] && continue
-                log_info "备份 volume: $volume"
+                ui_log_info "Backing up volume: $volume" "备份 volume: $volume"
                 docker run --rm \
                     -v "${volume}:/volume:ro" \
                     -v "${backup_dir}/volumes:/backup" \
                     busybox tar -czf "/backup/${volume}.tar.gz" -C /volume . >> "$LOG_FILE" 2>&1 || \
-                    log_warning "volume 备份失败: $volume"
+                    ui_log_warning "Failed to back up volume: $volume" "volume 备份失败: $volume"
             done <<< "$volumes"
         fi
     fi
 
-    log_success "Docker Compose 项目备份完成: $backup_dir"
+    ui_log_success "Docker Compose project backup completed: $backup_dir" "Docker Compose 项目备份完成: $backup_dir"
 }
 
 install_docker_compose_backup_timer() {
     local project_dir backup_root schedule include_volumes compose_cmd compose_file project_name timer_id
     local script_path service_path timer_path
 
-    read -r -p "Compose 项目目录 [默认当前目录]: " project_dir
+    builtin read -r -p "$(ui_text "Compose project directory [default: current directory]: " "Compose 项目目录 [默认当前目录]: ")" project_dir
     project_dir="${project_dir:-$(pwd)}"
-    read -r -p "备份根目录 [默认 /var/backups/docker-compose]: " backup_root
+    builtin read -r -p "$(ui_text "Backup root directory [default: /var/backups/docker-compose]: " "备份根目录 [默认 /var/backups/docker-compose]: ")" backup_root
     backup_root="${backup_root:-/var/backups/docker-compose}"
-    read -r -p "执行时间 (systemd OnCalendar，默认 *-*-* 04:10:00): " schedule
+    builtin read -r -p "$(ui_text "Schedule (systemd OnCalendar) [default: *-*-* 04:10:00]: " "执行时间 (systemd OnCalendar，默认 *-*-* 04:10:00): ")" schedule
     schedule="${schedule:-*-*-* 04:10:00}"
     if ! validate_systemd_calendar_value "$schedule"; then
-        log_error "无效的 systemd OnCalendar 表达式: $schedule"
+        ui_log_error "Invalid systemd OnCalendar expression: $schedule" "无效的 systemd OnCalendar 表达式: $schedule"
         return 1
     fi
-    if confirm_action "定时备份时是否包含 Compose 命名卷?" "y"; then
+    if confirm_action "$(ui_text "Include named Compose volumes in scheduled backups?" "定时备份时是否包含 Compose 命名卷?")" "y"; then
         include_volumes="1"
     else
         include_volumes="0"
     fi
 
     if [ ! -d "$project_dir" ]; then
-        log_error "项目目录不存在: $project_dir"
+        ui_log_error "Project directory does not exist: $project_dir" "项目目录不存在: $project_dir"
         return 1
     fi
     if ! compose_cmd="$(docker_compose_cmd)"; then
-        log_error "未检测到 docker compose 或 docker-compose"
+        ui_log_error "Neither docker compose nor docker-compose was detected" "未检测到 docker compose 或 docker-compose"
         return 1
     fi
 
@@ -7437,7 +7979,7 @@ install_docker_compose_backup_timer() {
         fi
     done
     if [ -z "$compose_file" ]; then
-        log_error "未找到 compose.yaml / docker-compose.yml"
+        ui_log_error "No compose.yaml or docker-compose.yml file was found" "未找到 compose.yaml / docker-compose.yml"
         return 1
     fi
 
@@ -7449,7 +7991,7 @@ install_docker_compose_backup_timer() {
     timer_path="/etc/systemd/system/init-compose-backup-${timer_id}.timer"
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将创建 Compose 备份定时器: init-compose-backup-${timer_id}.timer"
+        ui_log_info "[DRY RUN] Would create Compose backup timer: init-compose-backup-${timer_id}.timer" "[DRY RUN] 将创建 Compose 备份定时器: init-compose-backup-${timer_id}.timer"
         return 0
     fi
 
@@ -7517,12 +8059,12 @@ EOF
 
     systemd_daemon_reload || return 1
     if ! systemctl enable --now "init-compose-backup-${timer_id}.timer"; then
-        log_error "Compose 备份定时器启用失败"
+        ui_log_error "Failed to enable the Compose backup timer" "Compose 备份定时器启用失败"
         return 1
     fi
-    log_success "Compose 定时备份已启用: init-compose-backup-${timer_id}.timer"
-    log_info "手动执行: systemctl start init-compose-backup-${timer_id}.service"
-    log_info "查看日志: tail -n 100 /var/log/init-compose-backup-${timer_id}.log"
+    ui_log_success "Scheduled Compose backup enabled: init-compose-backup-${timer_id}.timer" "Compose 定时备份已启用: init-compose-backup-${timer_id}.timer"
+    ui_log_info "Run manually: systemctl start init-compose-backup-${timer_id}.service" "手动执行: systemctl start init-compose-backup-${timer_id}.service"
+    ui_log_info "View logs: tail -n 100 /var/log/init-compose-backup-${timer_id}.log" "查看日志: tail -n 100 /var/log/init-compose-backup-${timer_id}.log"
 }
 
 list_docker_compose_backup_timers() {
@@ -7534,19 +8076,19 @@ list_docker_compose_backup_timers() {
 action_docker_security_baseline() {
     local scan_dir compose_files ps_file
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              Docker 安全基线                 #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "Docker Security Baseline" "Docker 安全基线")                 #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if ! command -v docker > /dev/null 2>&1; then
-        log_warning "未检测到 docker 命令"
+        ui_log_warning "The docker command was not detected" "未检测到 docker 命令"
         return 1
     fi
 
-    printf '%b\n' "${BOLD}运行中容器风险:${PLAIN}"
+    printf '%b\n' "${BOLD}$(ui_text "Running container risks:" "运行中容器风险:")${PLAIN}"
     ps_file="$(mktemp /tmp/init-docker-ps.XXXXXX)"
     register_temp_file "$ps_file"
     if ! docker ps -q > "$ps_file" 2>/dev/null || [ ! -s "$ps_file" ]; then
-        log_info "没有运行中的容器，或 Docker daemon 不可用"
+        ui_log_info "No containers are running, or the Docker daemon is unavailable" "没有运行中的容器，或 Docker daemon 不可用"
     else
         while IFS= read -r container_id; do
             local name privileged network_mode binds ports restart_policy user risk
@@ -7573,24 +8115,24 @@ action_docker_security_baseline() {
     fi
 
     printf '%b\n' ""
-    read -r -p "扫描 Compose 文件目录 [默认当前目录]: " scan_dir
+    builtin read -r -p "$(ui_text "Directory to scan for Compose files [default: current directory]: " "扫描 Compose 文件目录 [默认当前目录]: ")" scan_dir
     scan_dir="${scan_dir:-$(pwd)}"
     if [ ! -d "$scan_dir" ]; then
-        log_warning "目录不存在: $scan_dir"
+        ui_log_warning "Directory does not exist: $scan_dir" "目录不存在: $scan_dir"
         return 0
     fi
 
-    printf '%b\n' "${BOLD}Compose 文件风险线索:${PLAIN}"
+    printf '%b\n' "${BOLD}$(ui_text "Compose file risk indicators:" "Compose 文件风险线索:")${PLAIN}"
     compose_files="$(find "$scan_dir" -maxdepth 5 -type f \( -name 'compose.yaml' -o -name 'compose.yml' -o -name 'docker-compose.yml' -o -name 'docker-compose.yaml' \) 2>/dev/null || true)"
     if [ -z "$compose_files" ]; then
-        log_info "未发现 Compose 文件"
+        ui_log_info "No Compose files found" "未发现 Compose 文件"
         return 0
     fi
     while IFS= read -r compose_file; do
         [ -z "$compose_file" ] && continue
         printf '%b\n' "${CYAN}$compose_file${PLAIN}"
         grep -nE 'privileged:[[:space:]]*true|network_mode:[[:space:]]*host|/var/run/docker.sock|^[[:space:]]*-[[:space:]]*"?[0-9]+:[0-9]+' "$compose_file" 2>/dev/null || \
-            echo "  未发现 privileged/host network/docker.sock/显式端口映射线索"
+            echo "  $(ui_text "No privileged/host network/docker.sock/explicit port mapping indicators found" "未发现 privileged/host network/docker.sock/显式端口映射线索")"
     done <<< "$compose_files"
 }
 
@@ -7598,28 +8140,28 @@ action_docker_image_update_check() {
     local images image local_id local_digests remote_summary remote_digest status
 
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              Docker 镜像更新检查             #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "Docker Image Update Check" "Docker 镜像更新检查")             #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if ! command -v docker > /dev/null 2>&1; then
-        log_warning "未检测到 docker 命令"
+        ui_log_warning "The docker command was not detected" "未检测到 docker 命令"
         return 1
     fi
 
     images="$(docker ps --format '{{.Image}}' 2>/dev/null | sort -u || true)"
     if [ -z "$images" ]; then
-        log_info "没有运行中的容器镜像，或 Docker daemon 不可用"
+        ui_log_info "No running container images were found, or the Docker daemon is unavailable" "没有运行中的容器镜像，或 Docker daemon 不可用"
         return 0
     fi
 
-    printf '%b\n' "${YELLOW}说明:${PLAIN} 此检查只读取远端 manifest 摘要，不会执行 docker pull。私有仓库可能需要先 docker login。"
+    printf '%b\n' "${YELLOW}$(ui_text "Note:" "说明:")${PLAIN} $(ui_text "This check reads only remote manifest digests and does not run docker pull. Private registries may require docker login first." "此检查只读取远端 manifest 摘要，不会执行 docker pull。私有仓库可能需要先 docker login。")"
     printf '%b\n' ""
     while IFS= read -r image; do
         [ -z "$image" ] && continue
         case "$image" in
             *@sha256:*|localhost/*|127.0.0.1:*/*)
                 printf '%b\n' "${CYAN}$image${PLAIN}"
-                echo "  跳过: digest 固定镜像或本地仓库镜像"
+                echo "  $(ui_text "Skipped: digest-pinned image or local registry image" "跳过: digest 固定镜像或本地仓库镜像")"
                 continue
                 ;;
         esac
@@ -7650,7 +8192,7 @@ action_docker_image_update_check() {
         printf "  remote-digest: %s\n" "${remote_digest:-unknown}"
         printf "  status: %s\n" "$status"
         if [ "$status" = "review" ]; then
-            echo "  建议: 在维护窗口内对对应 Compose 项目执行 docker compose pull && docker compose up -d"
+            echo "  $(ui_text "Recommendation: run docker compose pull && docker compose up -d for the relevant Compose project during a maintenance window" "建议: 在维护窗口内对对应 Compose 项目执行 docker compose pull && docker compose up -d")"
         fi
         printf '%b\n' ""
     done <<< "$images"
@@ -7708,18 +8250,18 @@ print_systemd_status() {
         printf "%-32s %s\n" "$name" \
             "$(overview_service_status_text "$load_state" "$active" "$enabled")"
     else
-        printf "%-32s %s\n" "$name" "systemd 不可用"
+        printf "%-32s %s\n" "$name" "$(ui_text "systemd unavailable" "systemd 不可用")"
     fi
 }
 
 function action_module_status_overview() {
     clear
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              模块状态总览                    #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "Module Status Overview" "模块状态总览")                    #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' ""
 
-    printf '%b\n' "${BOLD}核心命令:${PLAIN}"
+    printf '%b\n' "${BOLD}$(ui_text "Core commands:" "核心命令:")${PLAIN}"
     print_command_status "Docker" "docker"
     print_command_status "Docker Compose v1" "docker-compose"
     if docker compose version > /dev/null 2>&1; then
@@ -7739,39 +8281,39 @@ function action_module_status_overview() {
     print_command_status "unattended-upgrades" "unattended-upgrades"
     printf '%b\n' ""
 
-    printf '%b\n' "${BOLD}服务 / 定时器:${PLAIN}"
+    printf '%b\n' "${BOLD}$(ui_text "Services / timers:" "服务 / 定时器:")${PLAIN}"
     print_systemd_status "Docker" "docker.service"
-    print_systemd_status "Restic 备份定时器" "init-restic-backup.timer"
-    print_systemd_status "健康检查定时器" "init-health-check.timer"
-    print_systemd_status "维护检查定时器" "init-maintenance-check.timer"
+    print_systemd_status "$(ui_text "Restic backup timer" "Restic 备份定时器")" "init-restic-backup.timer"
+    print_systemd_status "$(ui_text "Health-check timer" "健康检查定时器")" "init-health-check.timer"
+    print_systemd_status "$(ui_text "Maintenance-check timer" "维护检查定时器")" "init-maintenance-check.timer"
     print_systemd_status "node_exporter" "prometheus-node-exporter.service"
     print_systemd_status "Caddy" "caddy.service"
     print_systemd_status "Nginx" "nginx.service"
     printf '%b\n' ""
 
     if command -v systemctl > /dev/null 2>&1; then
-        printf '%b\n' "${BOLD}Compose 备份定时器:${PLAIN}"
+        printf '%b\n' "${BOLD}$(ui_text "Compose backup timers:" "Compose 备份定时器:")${PLAIN}"
         systemctl list-timers 'init-compose-backup-*.timer' --no-pager 2>/dev/null || true
         printf '%b\n' ""
     fi
 
-    printf '%b\n' "${BOLD}配置文件:${PLAIN}"
-    [ -f /root/.config/init-script/restic.env ] && echo "restic: /root/.config/init-script/restic.env" || echo "restic: 未配置"
-    [ -f /etc/systemd/journald.conf.d/99-init.conf ] && echo "journald: 已配置持久化" || echo "journald: 未检测到 init 配置"
-    [ -f /etc/apt/apt.conf.d/52unattended-maintenance-window ] && echo "maintenance: 已配置自动更新维护窗口" || echo "maintenance: 未检测到"
-    [ -d /etc/caddy/conf.d ] && echo "caddy sites: /etc/caddy/conf.d" || echo "caddy sites: 未检测到"
-    [ -d /var/backups/docker-compose ] && echo "compose backups: /var/backups/docker-compose" || echo "compose backups: 未检测到默认目录"
+    printf '%b\n' "${BOLD}$(ui_text "Configuration files:" "配置文件:")${PLAIN}"
+    [ -f /root/.config/init-script/restic.env ] && echo "restic: /root/.config/init-script/restic.env" || echo "restic: $(ui_text "not configured" "未配置")"
+    [ -f /etc/systemd/journald.conf.d/99-init.conf ] && echo "journald: $(ui_text "persistent storage configured" "已配置持久化")" || echo "journald: $(ui_text "init configuration not detected" "未检测到 init 配置")"
+    [ -f /etc/apt/apt.conf.d/52unattended-maintenance-window ] && echo "maintenance: $(ui_text "automatic-update maintenance window configured" "已配置自动更新维护窗口")" || echo "maintenance: $(ui_text "not detected" "未检测到")"
+    [ -d /etc/caddy/conf.d ] && echo "caddy sites: /etc/caddy/conf.d" || echo "caddy sites: $(ui_text "not detected" "未检测到")"
+    [ -d /var/backups/docker-compose ] && echo "compose backups: /var/backups/docker-compose" || echo "compose backups: $(ui_text "default directory not detected" "未检测到默认目录")"
     menu_pause
 }
 
 run_script_static_self_check() {
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    log_info "执行 bash 语法检查..."
+    ui_log_info "Running the bash syntax check..." "执行 bash 语法检查..."
     bash -n "$script_path"
-    log_success "bash -n 通过"
+    ui_log_success "bash -n passed" "bash -n 通过"
 
-    log_info "检查新增模块函数..."
+    ui_log_info "Checking required module functions..." "检查新增模块函数..."
     local fn
     local required_functions=(
         action_backup_restore
@@ -7817,7 +8359,7 @@ run_script_static_self_check() {
         fi
     done
 
-    log_info "检查九个主菜单分区..."
+    ui_log_info "Checking the nine main-menu sections..." "检查九个主菜单分区..."
     local menu_fn
     local menu_functions=(
         show_quick_start_menu
@@ -7839,7 +8381,7 @@ run_script_static_self_check() {
         fi
     done
 
-    log_info "扫描直接远程脚本执行模式..."
+    ui_log_info "Scanning for direct remote-script execution patterns..." "扫描直接远程脚本执行模式..."
     local remote_pattern='curl .*\| *(bash|sh)|bash <\(|wget -O -|wget https?://|wget -q'
     local remote_hits=""
     if command -v rg > /dev/null 2>&1; then
@@ -7849,9 +8391,9 @@ run_script_static_self_check() {
     fi
     if [ -n "$remote_hits" ]; then
         printf '%s\n' "$remote_hits"
-        log_warning "发现可能的直接远程执行/下载模式，请审阅上方输出"
+        ui_log_warning "Potential direct remote execution/download patterns were found; review the output above" "发现可能的直接远程执行/下载模式，请审阅上方输出"
     else
-        log_success "未发现 curl|bash / bash <(curl) / 直接 wget URL 模式"
+        ui_log_success "No curl|bash, bash <(curl), or direct wget URL patterns found" "未发现 curl|bash / bash <(curl) / 直接 wget URL 模式"
     fi
 }
 
@@ -7859,8 +8401,8 @@ run_shellcheck_scan() {
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     if ! command -v shellcheck > /dev/null 2>&1; then
-        log_warning "ShellCheck 未安装"
-        if confirm_action "是否尝试通过 apt 安装 shellcheck?" "n"; then
+        ui_log_warning "ShellCheck is not installed" "ShellCheck 未安装"
+        if confirm_action "$(ui_text "Try to install shellcheck with apt?" "是否尝试通过 apt 安装 shellcheck?")" "n"; then
             update_apt_once
             install_packages_batch "shellcheck" || return 1
         else
@@ -7873,7 +8415,7 @@ run_shellcheck_scan() {
 run_safety_tests() {
     local test_script="$SCRIPT_DIR/tests/test_init_safety.sh"
     if [ ! -x "$test_script" ]; then
-        log_error "安全回归测试不存在或不可执行: $test_script"
+        ui_log_error "Safety regression test is missing or not executable: $test_script" "安全回归测试不存在或不可执行: $test_script"
         return 1
     fi
     "$test_script"
@@ -7938,79 +8480,79 @@ profile_modules_for_preset() {
 profile_description() {
     local profile="$1"
     case "$profile" in
-        minimal) printf '最小服务器基线：基础工具、SSH、防火墙、Fail2ban 和自动安全更新。' ;;
-        docker-host) printf 'Docker 应用主机：Docker、反代、Compose 备份、监控、备份与安全基线。' ;;
-        dev-box) printf '远程开发机：服务器安全基线、语言运行时、终端环境、网络工具、rclone 和 croc。' ;;
-        secure-server) printf '安全服务器基线：主动配置 SSH/UFW/Fail2ban/自动更新与维护窗口，并附带只读审计报告。' ;;
-        *) printf '自定义 Profile。' ;;
+        minimal) ui_text 'Minimal server baseline: essential tools, SSH, firewall, Fail2ban, and automatic security updates.' '最小服务器基线：基础工具、SSH、防火墙、Fail2ban 和自动安全更新。' ;;
+        docker-host) ui_text 'Docker application host: Docker, reverse proxy, Compose backup, monitoring, backup, and security baseline.' 'Docker 应用主机：Docker、反代、Compose 备份、监控、备份与安全基线。' ;;
+        dev-box) ui_text 'Remote development host: server security baseline, language runtimes, terminal environment, network tools, rclone, and croc.' '远程开发机：服务器安全基线、语言运行时、终端环境、网络工具、rclone 和 croc。' ;;
+        secure-server) ui_text 'Secure server baseline: actively configures SSH/UFW/Fail2ban/automatic updates and a maintenance window, with read-only audit reports.' '安全服务器基线：主动配置 SSH/UFW/Fail2ban/自动更新与维护窗口，并附带只读审计报告。' ;;
+        *) ui_text 'Custom profile.' '自定义 Profile。' ;;
     esac
 }
 
 profile_module_description() {
     local module="$1"
     case "$module" in
-        essentials) printf '安装基础工具包' ;;
-        ssh) printf 'SSH 安全配置' ;;
-        firewall) printf 'UFW 防火墙配置' ;;
-        fail2ban) printf 'Fail2ban 防暴力破解' ;;
-        auto_updates) printf 'unattended-upgrades 自动安全更新' ;;
-        swap) printf 'Swap 交换空间配置' ;;
-        docker) printf 'Docker Engine + Compose 官方 apt 安装' ;;
-        reverse_proxy) printf 'Caddy 或 Nginx+Certbot 反向代理/证书' ;;
-        compose_backup) printf 'Docker Compose 项目备份' ;;
-        monitoring) printf 'journald/node_exporter/健康检查定时器' ;;
-        backup_restore) printf 'restic/borg 备份恢复' ;;
-        security_audit) printf 'Lynis/debsums 安全审计' ;;
-        runtime) printf 'Node/Python/PHP/Java/Go/.NET Runtime 管理器' ;;
-        terminal) printf 'Zsh/Starship/Neovim/Eza 终端环境' ;;
-        network_tools) printf 'mtr/httpie/nmap 等网络工具' ;;
-        rclone) printf 'rclone 预编译二进制安装' ;;
-        croc) printf 'croc 文件传输工具' ;;
-        module_status) printf '模块状态总览' ;;
-        script_quality) printf '脚本自检 / ShellCheck' ;;
-        report) printf '生成系统变更报告' ;;
-        port_exposure) printf '端口暴露扫描' ;;
-        ssh_audit) printf 'SSH 配置审计' ;;
-        external_trust) printf '外部资源信任清单' ;;
-        maintenance_window) printf '自动更新维护窗口' ;;
-        restic_drill) printf 'restic 恢复演练' ;;
-        docker_security) printf 'Docker 安全基线检查' ;;
-        docker_image_check) printf 'Docker 镜像更新检查' ;;
-        *) printf '未知模块' ;;
+        essentials) ui_text 'Install essential tools' '安装基础工具包' ;;
+        ssh) ui_text 'Configure SSH security' 'SSH 安全配置' ;;
+        firewall) ui_text 'Configure the UFW firewall' 'UFW 防火墙配置' ;;
+        fail2ban) ui_text 'Configure Fail2ban brute-force protection' 'Fail2ban 防暴力破解' ;;
+        auto_updates) ui_text 'Configure unattended-upgrades security updates' 'unattended-upgrades 自动安全更新' ;;
+        swap) ui_text 'Configure swap space' 'Swap 交换空间配置' ;;
+        docker) ui_text 'Install Docker Engine + Compose from the official apt repository' 'Docker Engine + Compose 官方 apt 安装' ;;
+        reverse_proxy) ui_text 'Configure a Caddy or Nginx+Certbot reverse proxy/certificate' 'Caddy 或 Nginx+Certbot 反向代理/证书' ;;
+        compose_backup) ui_text 'Back up Docker Compose projects' 'Docker Compose 项目备份' ;;
+        monitoring) ui_text 'Configure journald/node_exporter/health-check timers' 'journald/node_exporter/健康检查定时器' ;;
+        backup_restore) ui_text 'Back up and restore with restic/borg' 'restic/borg 备份恢复' ;;
+        security_audit) ui_text 'Audit security with Lynis/debsums' 'Lynis/debsums 安全审计' ;;
+        runtime) ui_text 'Manage Node/Python/PHP/Java/Go/.NET runtimes' 'Node/Python/PHP/Java/Go/.NET Runtime 管理器' ;;
+        terminal) ui_text 'Configure a Zsh/Starship/Neovim/Eza terminal environment' 'Zsh/Starship/Neovim/Eza 终端环境' ;;
+        network_tools) ui_text 'Install network tools such as mtr/httpie/nmap' 'mtr/httpie/nmap 等网络工具' ;;
+        rclone) ui_text 'Install the prebuilt rclone binary' 'rclone 预编译二进制安装' ;;
+        croc) ui_text 'Install the croc file-transfer tool' 'croc 文件传输工具' ;;
+        module_status) ui_text 'Show module status' '模块状态总览' ;;
+        script_quality) ui_text 'Run script checks / ShellCheck' '脚本自检 / ShellCheck' ;;
+        report) ui_text 'Generate a system change report' '生成系统变更报告' ;;
+        port_exposure) ui_text 'Scan exposed ports' '端口暴露扫描' ;;
+        ssh_audit) ui_text 'Audit SSH configuration' 'SSH 配置审计' ;;
+        external_trust) ui_text 'Show the external-resource trust inventory' '外部资源信任清单' ;;
+        maintenance_window) ui_text 'Configure the automatic-update maintenance window' '自动更新维护窗口' ;;
+        restic_drill) ui_text 'Run a restic restore drill' 'restic 恢复演练' ;;
+        docker_security) ui_text 'Check the Docker security baseline' 'Docker 安全基线检查' ;;
+        docker_image_check) ui_text 'Check Docker image updates' 'Docker 镜像更新检查' ;;
+        *) ui_text 'Unknown module' '未知模块' ;;
     esac
 }
 
 profile_module_impact() {
     local module="$1"
     case "$module" in
-        essentials) printf 'apt 包: curl/wget/git/vim/tmux 等；仅在设置 SYSTEM_TIMEZONE 时修改系统时区。' ;;
-        ssh) printf '文件: /etc/ssh/sshd_config 与所选账户 authorized_keys；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
-        firewall) printf '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
-        fail2ban) printf '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
-        auto_updates) printf '文件: /etc/apt/apt.conf.d/20auto-upgrades, 50unattended-upgrades。' ;;
-        swap) printf '文件: /swapfile, /etc/fstab；内核参数: vm.swappiness。' ;;
-        docker) printf '仓库: download.docker.com apt；包: docker-ce/docker compose；服务: docker。' ;;
-        reverse_proxy) printf '包/服务: caddy 或 nginx+certbot；文件: /etc/caddy 或 /etc/nginx。' ;;
-        compose_backup) printf '文件: /usr/local/sbin/init-compose-backup-*；timer: init-compose-backup-*.timer。' ;;
-        monitoring) printf '文件: journald 配置、健康检查脚本；服务/timer: node_exporter/init-health-check。' ;;
-        backup_restore) printf '工具: restic/borg；文件: /root/.config/init-script/restic.env；timer: init-restic-backup。' ;;
-        security_audit) printf '包: lynis/debsums；输出: /var/log/lynis-report.dat。' ;;
-        runtime) printf '按选择安装语言运行时；可能修改用户 shell 配置。' ;;
-        terminal) printf '包/工具: zsh/starship/neovim/eza；文件: ~/.zshrc, ~/.bashrc。' ;;
-        network_tools) printf 'apt 包: mtr/httpie/nmap/jq/dig 等诊断工具。' ;;
-        rclone) printf '下载 rclone 预编译包并安装到 /usr/bin/rclone。' ;;
-        croc) printf '优先 apt 安装 croc，必要时使用官方安装脚本。' ;;
-        module_status) printf '只读检查命令、服务、配置文件状态。' ;;
-        script_quality) printf '只读 bash -n/函数/菜单分区/远程执行模式扫描，可选安装 shellcheck。' ;;
-        report) printf '写入 /root/init-report-*.txt，汇总系统、端口、服务、Docker、外部资源。' ;;
-        port_exposure) printf '只读 ss/ufw/docker/Nginx/Caddy 端口暴露检查。' ;;
-        ssh_audit) printf '只读 sshd -T、authorized_keys 权限和 UFW SSH 端口匹配检查。' ;;
-        external_trust) printf '只读扫描脚本中的 URL，并按 official/mirror/service/remote-script/unknown 分类。' ;;
-        maintenance_window) printf '文件: apt-daily-upgrade.timer override 和 unattended maintenance 配置。' ;;
-        restic_drill) printf '从 restic snapshot 恢复关键路径到 /var/tmp/init-restic-drill。' ;;
-        docker_security) printf '只读 docker inspect 与 Compose 文件风险线索扫描。' ;;
-        docker_image_check) printf '只读检查运行中容器镜像的本地摘要与远端 manifest 摘要。' ;;
-        *) printf '未知影响，请先审阅模块。' ;;
+        essentials) ui_text 'apt packages: curl/wget/git/vim/tmux, etc.; changes the system timezone only when SYSTEM_TIMEZONE is set.' 'apt 包: curl/wget/git/vim/tmux 等；仅在设置 SYSTEM_TIMEZONE 时修改系统时区。' ;;
+        ssh) ui_text 'Files: /etc/ssh/sshd_config and the selected account authorized_keys; service: ssh/sshd; may change the SSH port or login methods.' '文件: /etc/ssh/sshd_config 与所选账户 authorized_keys；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
+        firewall) ui_text 'Service: ufw; rules: SSH port and common inbound policy.' '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
+        fail2ban) ui_text 'File: /etc/fail2ban/jail.d/sshd.local; service: fail2ban.' '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
+        auto_updates) ui_text 'Files: /etc/apt/apt.conf.d/20auto-upgrades and 50unattended-upgrades.' '文件: /etc/apt/apt.conf.d/20auto-upgrades, 50unattended-upgrades。' ;;
+        swap) ui_text 'Files: /swapfile and /etc/fstab; kernel setting: vm.swappiness.' '文件: /swapfile, /etc/fstab；内核参数: vm.swappiness。' ;;
+        docker) ui_text 'Repository: download.docker.com apt; packages: docker-ce/docker compose; service: docker.' '仓库: download.docker.com apt；包: docker-ce/docker compose；服务: docker。' ;;
+        reverse_proxy) ui_text 'Packages/services: caddy or nginx+certbot; files: /etc/caddy or /etc/nginx.' '包/服务: caddy 或 nginx+certbot；文件: /etc/caddy 或 /etc/nginx。' ;;
+        compose_backup) ui_text 'Files: /usr/local/sbin/init-compose-backup-*; timers: init-compose-backup-*.timer.' '文件: /usr/local/sbin/init-compose-backup-*；timer: init-compose-backup-*.timer。' ;;
+        monitoring) ui_text 'Files: journald configuration and health-check script; service/timer: node_exporter/init-health-check.' '文件: journald 配置、健康检查脚本；服务/timer: node_exporter/init-health-check。' ;;
+        backup_restore) ui_text 'Tools: restic/borg; file: /root/.config/init-script/restic.env; timer: init-restic-backup.' '工具: restic/borg；文件: /root/.config/init-script/restic.env；timer: init-restic-backup。' ;;
+        security_audit) ui_text 'Packages: lynis/debsums; output: /var/log/lynis-report.dat.' '包: lynis/debsums；输出: /var/log/lynis-report.dat。' ;;
+        runtime) ui_text 'Installs selected language runtimes and may modify user shell configuration.' '按选择安装语言运行时；可能修改用户 shell 配置。' ;;
+        terminal) ui_text 'Packages/tools: zsh/starship/neovim/eza; files: ~/.zshrc and ~/.bashrc.' '包/工具: zsh/starship/neovim/eza；文件: ~/.zshrc, ~/.bashrc。' ;;
+        network_tools) ui_text 'apt packages: diagnostic tools such as mtr/httpie/nmap/jq/dig.' 'apt 包: mtr/httpie/nmap/jq/dig 等诊断工具。' ;;
+        rclone) ui_text 'Downloads the prebuilt rclone archive and installs it to /usr/bin/rclone.' '下载 rclone 预编译包并安装到 /usr/bin/rclone。' ;;
+        croc) ui_text 'Tries apt first and uses the official installer if necessary.' '优先 apt 安装 croc，必要时使用官方安装脚本。' ;;
+        module_status) ui_text 'Read-only checks of command, service, and configuration-file status.' '只读检查命令、服务、配置文件状态。' ;;
+        script_quality) ui_text 'Read-only bash -n/function/menu/remote-execution scans; optionally installs shellcheck.' '只读 bash -n/函数/菜单分区/远程执行模式扫描，可选安装 shellcheck。' ;;
+        report) ui_text 'Writes /root/init-report-*.txt with system, port, service, Docker, and external-resource summaries.' '写入 /root/init-report-*.txt，汇总系统、端口、服务、Docker、外部资源。' ;;
+        port_exposure) ui_text 'Read-only ss/ufw/docker/Nginx/Caddy port-exposure checks.' '只读 ss/ufw/docker/Nginx/Caddy 端口暴露检查。' ;;
+        ssh_audit) ui_text 'Read-only sshd -T, authorized_keys permission, and UFW SSH-port matching checks.' '只读 sshd -T、authorized_keys 权限和 UFW SSH 端口匹配检查。' ;;
+        external_trust) ui_text 'Read-only scan of script URLs classified as official/mirror/service/remote-script/unknown.' '只读扫描脚本中的 URL，并按 official/mirror/service/remote-script/unknown 分类。' ;;
+        maintenance_window) ui_text 'Files: apt-daily-upgrade.timer override and unattended-maintenance configuration.' '文件: apt-daily-upgrade.timer override 和 unattended maintenance 配置。' ;;
+        restic_drill) ui_text 'Restores important paths from a restic snapshot to /var/tmp/init-restic-drill.' '从 restic snapshot 恢复关键路径到 /var/tmp/init-restic-drill。' ;;
+        docker_security) ui_text 'Read-only docker inspect and Compose-file risk-indicator scan.' '只读 docker inspect 与 Compose 文件风险线索扫描。' ;;
+        docker_image_check) ui_text 'Read-only comparison of local digests for running container images with remote manifest digests.' '只读检查运行中容器镜像的本地摘要与远端 manifest 摘要。' ;;
+        *) ui_text 'Unknown impact; review the module first.' '未知影响，请先审阅模块。' ;;
     esac
 }
 
@@ -8043,13 +8585,13 @@ validate_profile_modules() {
     for module in $modules; do
         case "$module" in
             dd_reinstall|clean_traces|action_dd_reinstall|action_clean_traces)
-                log_error "危险操作禁止加入 Profile: $module"
+                ui_log_error "Dangerous operations cannot be added to a profile: $module" "危险操作禁止加入 Profile: $module"
                 ok=1
                 continue
                 ;;
         esac
         if ! is_profile_module_known "$module"; then
-            log_warning "未知 Profile 模块: $module"
+            ui_log_warning "Unknown profile module: $module" "未知 Profile 模块: $module"
             ok=1
         fi
     done
@@ -8062,11 +8604,11 @@ show_profile_plan() {
     local idx=1 module
 
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              Profile 执行计划                #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "Profile Execution Plan" "Profile 执行计划")                #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${BOLD}Profile:${PLAIN} $profile_name"
-    printf '%b\n' "${BOLD}说明:${PLAIN} $(profile_description "$profile_name")"
-    printf '%b\n' "${BOLD}模式:${PLAIN} DRY_RUN=$DRY_RUN PLAN_ONLY=$PLAN_ONLY EXTERNAL_TRUST_MODE=$EXTERNAL_TRUST_MODE"
+    printf '%b\n' "${BOLD}$(ui_text "Description:" "说明:")${PLAIN} $(profile_description "$profile_name")"
+    printf '%b\n' "${BOLD}$(ui_text "Mode:" "模式:")${PLAIN} DRY_RUN=$DRY_RUN PLAN_ONLY=$PLAN_ONLY EXTERNAL_TRUST_MODE=$EXTERNAL_TRUST_MODE"
     printf '%b\n' ""
     for module in $modules; do
         printf "%2d. %-20s %s\n" "$idx" "$module" "$(profile_module_description "$module")"
@@ -8074,7 +8616,7 @@ show_profile_plan() {
         idx=$((idx + 1))
     done
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}提示:${PLAIN} 计划中包含交互式模块时，Apply 阶段会继续询问必要参数。"
+    printf '%b\n' "${YELLOW}$(ui_text "Note:" "提示:")${PLAIN} $(ui_text "If the plan includes interactive modules, the Apply phase will prompt for required parameters." "计划中包含交互式模块时，Apply 阶段会继续询问必要参数。")"
 }
 
 write_profile_file() {
@@ -8084,7 +8626,7 @@ write_profile_file() {
     local safe_profile_name safe_modules safe_trust_mode
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将写入 Profile 文件: $output_file"
+        ui_log_info "[DRY RUN] Would write the profile file: $output_file" "[DRY RUN] 将写入 Profile 文件: $output_file"
         return 0
     fi
 
@@ -8103,7 +8645,7 @@ write_profile_file() {
         printf 'EXTERNAL_TRUST_MODE="%s"\n' "$safe_trust_mode"
     } > "$output_file"
     chmod 600 "$output_file"
-    log_success "Profile 已导出: $output_file"
+    ui_log_success "Profile exported: $output_file" "Profile 已导出: $output_file"
 }
 
 load_profile_file() {
@@ -8113,7 +8655,7 @@ load_profile_file() {
     PROFILE_LOADED_MODULES=""
 
     if [ ! -f "$input_file" ]; then
-        log_error "Profile 文件不存在: $input_file"
+        ui_log_error "Profile file does not exist: $input_file" "Profile 文件不存在: $input_file"
         return 1
     fi
 
@@ -8138,7 +8680,7 @@ load_profile_file() {
     done < "$input_file"
 
     if [ -z "$PROFILE_LOADED_MODULES" ]; then
-        log_error "Profile 文件缺少 PROFILE_MODULES"
+        ui_log_error "The profile file does not contain PROFILE_MODULES" "Profile 文件缺少 PROFILE_MODULES"
         return 1
     fi
 }
@@ -8174,7 +8716,7 @@ run_profile_module() {
         docker_security) invoke_action action_docker_security_baseline ;;
         docker_image_check) invoke_action action_docker_image_update_check ;;
         *)
-            log_warning "未知 Profile 模块: $module"
+            ui_log_warning "Unknown profile module: $module" "未知 Profile 模块: $module"
             return 1
             ;;
     esac
@@ -8188,44 +8730,44 @@ apply_profile_modules() {
     validate_profile_modules "$modules" || return 1
     show_profile_plan "$profile_name" "$modules"
     if [ "$PLAN_ONLY" = "1" ]; then
-        log_info "PLAN_ONLY=1，仅展示计划，不执行"
+        ui_log_info "PLAN_ONLY=1; showing the plan without executing it" "PLAN_ONLY=1，仅展示计划，不执行"
         return 0
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "DRY_RUN=1，逐项展示动作计划，不调用任何模块实现"
+        ui_log_info "DRY_RUN=1; showing each action plan without invoking module implementations" "DRY_RUN=1，逐项展示动作计划，不调用任何模块实现"
         for module in $modules; do
             run_profile_module "$module" || return 1
         done
         return 0
     fi
-    if ! confirm_action "确认按上述计划执行 Profile?" "n"; then
-        log_warning "已取消 Profile 执行"
+    if ! confirm_action "$(ui_text "Apply the profile according to the plan above?" "确认按上述计划执行 Profile?")" "n"; then
+        ui_log_warning "Profile execution canceled" "已取消 Profile 执行"
         return 1
     fi
 
     for module in $modules; do
-        log_info "Profile 模块开始: $module - $(profile_module_description "$module")"
+        ui_log_info "Starting profile module: $module - $(profile_module_description "$module")" "Profile 模块开始: $module - $(profile_module_description "$module")"
         run_profile_module "$module" || status=$?
         if [ "$status" -ne 0 ]; then
-            log_warning "Profile 模块失败或被取消: $module (status=$status)"
-            if ! confirm_action "是否继续执行后续模块?" "n"; then
+            ui_log_warning "Profile module failed or was canceled: $module (status=$status)" "Profile 模块失败或被取消: $module (status=$status)"
+            if ! confirm_action "$(ui_text "Continue with the remaining modules?" "是否继续执行后续模块?")" "n"; then
                 return "$status"
             fi
             status=0
         fi
     done
-    log_success "Profile 执行完成: $profile_name"
+    ui_log_success "Profile execution completed: $profile_name" "Profile 执行完成: $profile_name"
 }
 
 choose_profile_preset() {
     local profile
-    printf '%b\n' "${GREEN}可用 Profile:${PLAIN}"
+    printf '%b\n' "${GREEN}$(ui_text "Available profiles:" "可用 Profile:")${PLAIN}"
     for profile in $(profile_presets); do
         printf "  %-14s %s\n" "$profile" "$(profile_description "$profile")"
     done
-    read -r -p "请输入 Profile 名称: " profile
+    builtin read -r -p "$(ui_text "Profile name: " "请输入 Profile 名称: ")" profile
     if ! profile_modules_for_preset "$profile" >/dev/null 2>&1; then
-        log_error "未知 Profile: $profile"
+        ui_log_error "Unknown profile: $profile" "未知 Profile: $profile"
         return 1
     fi
     PROFILE_LOADED_NAME="$profile"
@@ -8269,42 +8811,42 @@ action_profile_plan_apply() {
                 ;;
             4)
                 choose_profile_preset || { menu_pause; continue; }
-                read -r -p "导出路径 [默认 /root/init-profile-${PROFILE_LOADED_NAME}.env]: " output_file
+                builtin read -r -p "$(ui_text "Export path [default: /root/init-profile-${PROFILE_LOADED_NAME}.env]: " "导出路径 [默认 /root/init-profile-${PROFILE_LOADED_NAME}.env]: ")" output_file
                 output_file="${output_file:-/root/init-profile-${PROFILE_LOADED_NAME}.env}"
                 write_profile_file "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES" "$output_file"
                 menu_pause
                 ;;
             5)
-                read -r -p "Profile 文件路径: " input_file
+                builtin read -r -p "$(ui_text "Profile file path: " "Profile 文件路径: ")" input_file
                 load_profile_file "$input_file" || { menu_pause; continue; }
                 show_profile_plan "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"
                 menu_pause
                 ;;
             6)
-                read -r -p "Profile 文件路径: " input_file
+                builtin read -r -p "$(ui_text "Profile file path: " "Profile 文件路径: ")" input_file
                 load_profile_file "$input_file" || { menu_pause; continue; }
                 apply_profile_modules "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"
                 menu_pause
                 ;;
             7)
-                printf '%b\n' "${GREEN}可用模块:${PLAIN}"
+                printf '%b\n' "${GREEN}$(ui_text "Available modules:" "可用模块:")${PLAIN}"
                 profile_module_catalog
-                read -r -p "自定义 Profile 名称 [默认 custom]: " custom_name
+                builtin read -r -p "$(ui_text "Custom profile name [default: custom]: " "自定义 Profile 名称 [默认 custom]: ")" custom_name
                 custom_name="${custom_name:-custom}"
-                read -r -p "模块列表（空格分隔）: " custom_modules
+                builtin read -r -p "$(ui_text "Module list (space-separated): " "模块列表（空格分隔）: ")" custom_modules
                 if [ -z "$custom_modules" ]; then
-                    log_warning "模块列表不能为空"
+                    ui_log_warning "The module list cannot be empty" "模块列表不能为空"
                     menu_pause
                     continue
                 fi
                 validate_profile_modules "$custom_modules" || { menu_pause; continue; }
                 show_profile_plan "$custom_name" "$custom_modules"
-                if confirm_action "是否导出该 Profile?" "y"; then
-                    read -r -p "导出路径 [默认 /root/init-profile-${custom_name}.env]: " output_file
+                if confirm_action "$(ui_text "Export this profile?" "是否导出该 Profile?")" "y"; then
+                    builtin read -r -p "$(ui_text "Export path [default: /root/init-profile-${custom_name}.env]: " "导出路径 [默认 /root/init-profile-${custom_name}.env]: ")" output_file
                     output_file="${output_file:-/root/init-profile-${custom_name}.env}"
                     write_profile_file "$custom_name" "$custom_modules" "$output_file"
                 fi
-                if confirm_action "是否立即执行该 Profile?" "n"; then
+                if confirm_action "$(ui_text "Apply this profile now?" "是否立即执行该 Profile?")" "n"; then
                     apply_profile_modules "$custom_name" "$custom_modules"
                 fi
                 menu_pause
@@ -8331,26 +8873,26 @@ generate_system_change_report() {
     local entry
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将生成系统变更报告: $report_file"
+        ui_log_info "[DRY RUN] Would generate the system change report: $report_file" "[DRY RUN] 将生成系统变更报告: $report_file"
         return 0
     fi
 
     mkdir -p "$(dirname "$report_file")"
     {
-        printf '# init.sh 系统变更报告\n'
-        printf '生成时间: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf '脚本版本: v8.5\n'
-        printf '日志文件: %s\n' "$LOG_FILE"
+        printf '# %s\n' "$(ui_text "init.sh System Change Report" "init.sh 系统变更报告")"
+        printf '%s: %s\n' "$(ui_text "Generated" "生成时间")" "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '%s: v8.5\n' "$(ui_text "Script version" "脚本版本")"
+        printf '%s: %s\n' "$(ui_text "Log file" "日志文件")" "$LOG_FILE"
         printf 'DRY_RUN=%s NON_INTERACTIVE=%s EXTERNAL_TRUST_MODE=%s\n' "$DRY_RUN" "$NON_INTERACTIVE" "$EXTERNAL_TRUST_MODE"
 
-        report_section "系统信息"
+        report_section "$(ui_text "System Information" "系统信息")"
         [ -f /etc/os-release ] && cat /etc/os-release
         report_run uname -a
         report_run uptime
         report_run df -h
         report_run free -h
 
-        report_section "网络与端口"
+        report_section "$(ui_text "Network and Ports" "网络与端口")"
         if command -v ss > /dev/null 2>&1; then
             report_run ss -tulpen
         fi
@@ -8358,7 +8900,7 @@ generate_system_change_report() {
             report_run ufw status verbose
         fi
 
-        report_section "服务与定时器"
+        report_section "$(ui_text "Services and Timers" "服务与定时器")"
         if command -v systemctl > /dev/null 2>&1; then
             report_run systemctl list-units --type=service --state=running --no-pager
             report_run systemctl list-timers --all --no-pager
@@ -8374,12 +8916,12 @@ generate_system_change_report() {
             printf 'docker: not installed\n'
         fi
 
-        report_section "手动安装包摘要"
+        report_section "$(ui_text "Manually Installed Package Summary" "手动安装包摘要")"
         if command -v apt-mark > /dev/null 2>&1; then
             apt-mark showmanual 2>/dev/null | sed -n '1,200p'
         fi
 
-        report_section "脚本配置文件"
+        report_section "$(ui_text "Script Configuration Files" "脚本配置文件")"
         for path in \
             /root/.config/init-script/restic.env \
             /etc/systemd/journald.conf.d/99-init.conf \
@@ -8389,41 +8931,41 @@ generate_system_change_report() {
             [ -e "$path" ] && printf 'present: %s\n' "$path" || printf 'missing: %s\n' "$path"
         done
 
-        report_section "本次会话可回滚操作"
+        report_section "$(ui_text "Rollback Operations Available for This Session" "本次会话可回滚操作")"
         if [ ${#OPERATION_HISTORY[@]} -eq 0 ]; then
-            printf '无\n'
+            printf '%s\n' "$(ui_text "None" "无")"
         else
             for entry in "${OPERATION_HISTORY[@]}"; do
                 printf '%s\n' "$entry"
             done
         fi
 
-        report_section "外部资源清单"
+        report_section "$(ui_text "External Resource Inventory" "外部资源清单")"
         list_external_resource_inventory
 
-        report_section "远程脚本 SHA256 记录"
+        report_section "$(ui_text "Remote Script SHA256 Records" "远程脚本 SHA256 记录")"
         if [ -f "$LOG_FILE" ]; then
-            grep -E '远程脚本已下载|远程脚本 SHA256' "$LOG_FILE" 2>/dev/null || printf '本次日志未记录远程脚本 SHA256。\n'
+            grep -E 'Remote script downloaded|Remote script SHA256|远程脚本已下载|远程脚本 SHA256' "$LOG_FILE" 2>/dev/null || printf '%s\n' "$(ui_text "No remote script SHA256 was recorded in this log." "本次日志未记录远程脚本 SHA256。")"
         else
-            printf '日志文件不存在: %s\n' "$LOG_FILE"
+            printf '%s: %s\n' "$(ui_text "Log file does not exist" "日志文件不存在")" "$LOG_FILE"
         fi
     } > "$report_file"
     chmod 600 "$report_file"
-    log_success "系统变更报告已生成: $report_file"
+    ui_log_success "System change report generated: $report_file" "系统变更报告已生成: $report_file"
 }
 
 action_port_exposure_scan() {
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              端口暴露扫描                    #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "Port Exposure Scan" "端口暴露扫描")                    #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
 
-    printf '%b\n' "${BOLD}监听端口:${PLAIN}"
+    printf '%b\n' "${BOLD}$(ui_text "Listening ports:" "监听端口:")${PLAIN}"
     if command -v ss > /dev/null 2>&1; then
         ss -tulpen || true
     elif command -v netstat > /dev/null 2>&1; then
         netstat -tulpen || true
     else
-        log_warning "未检测到 ss/netstat"
+        ui_log_warning "Neither ss nor netstat was detected" "未检测到 ss/netstat"
     fi
 
     printf '%b\n' "\n${BOLD}UFW:${PLAIN}"
@@ -8433,21 +8975,21 @@ action_port_exposure_scan() {
         echo "ufw: missing"
     fi
 
-    printf '%b\n' "\n${BOLD}Docker 端口映射:${PLAIN}"
+    printf '%b\n' "\n${BOLD}$(ui_text "Docker port mappings:" "Docker 端口映射:")${PLAIN}"
     if command -v docker > /dev/null 2>&1; then
         docker ps --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}' || true
     else
         echo "docker: missing"
     fi
 
-    printf '%b\n' "\n${BOLD}反向代理监听线索:${PLAIN}"
-    grep -RInE 'listen[[:space:]]+[0-9]+|reverse_proxy|proxy_pass' /etc/nginx /etc/caddy 2>/dev/null || echo "未发现 Nginx/Caddy 配置线索或目录不存在"
+    printf '%b\n' "\n${BOLD}$(ui_text "Reverse-proxy listener indicators:" "反向代理监听线索:")${PLAIN}"
+    grep -RInE 'listen[[:space:]]+[0-9]+|reverse_proxy|proxy_pass' /etc/nginx /etc/caddy 2>/dev/null || echo "$(ui_text "No Nginx/Caddy configuration indicators were found, or the directories do not exist" "未发现 Nginx/Caddy 配置线索或目录不存在")"
 }
 
 action_ssh_config_audit() {
     local effective port permit_root password_auth pubkey_auth kbd_auth empty_password
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              SSH 配置审计                    #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "SSH Configuration Audit" "SSH 配置审计")                    #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
 
     if command -v sshd > /dev/null 2>&1; then
@@ -8479,16 +9021,16 @@ action_ssh_config_audit() {
     printf "%-28s %s\n" "KbdInteractiveAuthentication" "${kbd_auth:-default}"
     printf "%-28s %s\n" "PermitEmptyPasswords" "${empty_password:-default}"
 
-    printf '%b\n' "\n${BOLD}建议:${PLAIN}"
-    [ "${password_auth,,}" = "no" ] && echo "  - 密码登录已禁用" || echo "  - 建议禁用 PasswordAuthentication"
-    [ "${permit_root,,}" = "no" ] && echo "  - root SSH 登录已禁用" || echo "  - 建议禁用 PermitRootLogin"
-    [ "${pubkey_auth,,}" = "yes" ] || [ -z "$pubkey_auth" ] && echo "  - 公钥登录可用" || echo "  - 建议启用 PubkeyAuthentication"
-    [ "${empty_password,,}" = "no" ] || [ -z "$empty_password" ] && echo "  - 空密码登录未开启" || echo "  - 必须禁用 PermitEmptyPasswords"
+    printf '%b\n' "\n${BOLD}$(ui_text "Recommendations:" "建议:")${PLAIN}"
+    [ "${password_auth,,}" = "no" ] && echo "  - $(ui_text "Password login is disabled" "密码登录已禁用")" || echo "  - $(ui_text "Disable PasswordAuthentication" "建议禁用 PasswordAuthentication")"
+    [ "${permit_root,,}" = "no" ] && echo "  - $(ui_text "root SSH login is disabled" "root SSH 登录已禁用")" || echo "  - $(ui_text "Disable PermitRootLogin" "建议禁用 PermitRootLogin")"
+    [ "${pubkey_auth,,}" = "yes" ] || [ -z "$pubkey_auth" ] && echo "  - $(ui_text "Public-key login is available" "公钥登录可用")" || echo "  - $(ui_text "Enable PubkeyAuthentication" "建议启用 PubkeyAuthentication")"
+    [ "${empty_password,,}" = "no" ] || [ -z "$empty_password" ] && echo "  - $(ui_text "Empty-password login is not enabled" "空密码登录未开启")" || echo "  - $(ui_text "PermitEmptyPasswords must be disabled" "必须禁用 PermitEmptyPasswords")"
 
-    printf '%b\n' "\n${BOLD}authorized_keys 权限:${PLAIN}"
+    printf '%b\n' "\n${BOLD}$(ui_text "authorized_keys permissions:" "authorized_keys 权限:")${PLAIN}"
     find /root /home -maxdepth 3 -name authorized_keys -type f -exec stat -c '%a %U:%G %n' {} \; 2>/dev/null || true
 
-    printf '%b\n' "\n${BOLD}防火墙端口匹配:${PLAIN}"
+    printf '%b\n' "\n${BOLD}$(ui_text "Firewall port match:" "防火墙端口匹配:")${PLAIN}"
     if command -v ufw > /dev/null 2>&1; then
         ufw status numbered | grep -E "${port:-22}|OpenSSH" || true
     else
@@ -8520,45 +9062,47 @@ action_external_trust_inventory() {
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#              外部资源信任清单                #${PLAIN}"
+    printf '%b\n' "${CYAN}#              $(ui_text "External Resource Trust Inventory" "外部资源信任清单")                #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${BOLD}当前策略:${PLAIN} $EXTERNAL_TRUST_MODE"
-    printf '%b\n' "${YELLOW}strict:${PLAIN} 仅官方/信息服务通过；${YELLOW}standard:${PLAIN} 未知来源需危险确认；${YELLOW}permissive:${PLAIN} 仅提示。"
+    printf '%b\n' "${BOLD}$(ui_text "Current policy:" "当前策略:")${PLAIN} $EXTERNAL_TRUST_MODE"
+    printf '%b\n' "${YELLOW}strict:${PLAIN} $(ui_text "only official/information services are allowed;" "仅官方/信息服务通过；") ${YELLOW}standard:${PLAIN} $(ui_text "unknown sources require dangerous-operation confirmation;" "未知来源需危险确认；") ${YELLOW}permissive:${PLAIN} $(ui_text "warnings only." "仅提示。")"
     printf '%b\n' ""
     list_external_resource_inventory
-    printf '%b\n' "\n${BOLD}远程脚本执行入口:${PLAIN}"
+    printf '%b\n' "\n${BOLD}$(ui_text "Remote-script execution entry points:" "远程脚本执行入口:")${PLAIN}"
     if command -v rg > /dev/null 2>&1; then
-        rg -n "run_remote_script|download_remote_script|run_remote_script_as_user" "$script_path" 2>/dev/null || true
+        rg -n -o "run_remote_script[a-zA-Z0-9_]*|download_remote_script[a-zA-Z0-9_]*" \
+            "$script_path" 2>/dev/null || true
     else
-        grep -En "run_remote_script|download_remote_script|run_remote_script_as_user" "$script_path" 2>/dev/null || true
+        grep -Eno "run_remote_script[a-zA-Z0-9_]*|download_remote_script[a-zA-Z0-9_]*" \
+            "$script_path" 2>/dev/null || true
     fi
 }
 
 action_configure_maintenance_window() {
     local schedule randomized_delay reboot_time auto_reboot
-    log_info "配置自动更新维护窗口..."
-    read -r -p "维护窗口 OnCalendar [默认 Sun *-*-* 04:10:00]: " schedule
+    ui_log_info "Configuring the automatic-update maintenance window..." "配置自动更新维护窗口..."
+    builtin read -r -p "$(ui_text "Maintenance-window OnCalendar [default: Sun *-*-* 04:10:00]: " "维护窗口 OnCalendar [默认 Sun *-*-* 04:10:00]: ")" schedule
     schedule="${schedule:-Sun *-*-* 04:10:00}"
-    read -r -p "随机延迟 [默认 30m]: " randomized_delay
+    builtin read -r -p "$(ui_text "Randomized delay [default: 30m]: " "随机延迟 [默认 30m]: ")" randomized_delay
     randomized_delay="${randomized_delay:-30m}"
-    read -r -p "自动重启时间 [默认 04:45]: " reboot_time
+    builtin read -r -p "$(ui_text "Automatic reboot time [default: 04:45]: " "自动重启时间 [默认 04:45]: ")" reboot_time
     reboot_time="${reboot_time:-04:45}"
-    validate_systemd_calendar_value "$schedule" || { log_error "无效的 OnCalendar: $schedule"; return 1; }
-    validate_systemd_duration_value "$randomized_delay" || { log_error "无效的随机延迟: $randomized_delay"; return 1; }
+    validate_systemd_calendar_value "$schedule" || { ui_log_error "Invalid OnCalendar value: $schedule" "无效的 OnCalendar: $schedule"; return 1; }
+    validate_systemd_duration_value "$randomized_delay" || { ui_log_error "Invalid randomized delay: $randomized_delay" "无效的随机延迟: $randomized_delay"; return 1; }
     [[ "$reboot_time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || {
-        log_error "无效的自动重启时间: $reboot_time"
+        ui_log_error "Invalid automatic reboot time: $reboot_time" "无效的自动重启时间: $reboot_time"
         return 1
     }
-    if confirm_action "安全更新后是否允许自动重启?" "n"; then
+    if confirm_action "$(ui_text "Allow automatic reboot after security updates?" "安全更新后是否允许自动重启?")" "n"; then
         auto_reboot="true"
     else
         auto_reboot="false"
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将配置 apt-daily-upgrade.timer: $schedule ($randomized_delay)"
+        ui_log_info "[DRY RUN] Would configure apt-daily-upgrade.timer: $schedule ($randomized_delay)" "[DRY RUN] 将配置 apt-daily-upgrade.timer: $schedule ($randomized_delay)"
         log_info "[DRY RUN] Automatic-Reboot=$auto_reboot Automatic-Reboot-Time=$reboot_time"
-        log_info "[DRY RUN] 将创建 init-maintenance-check.timer，记录 apt 更新、重启提醒和 Docker 镜像线索"
+        ui_log_info "[DRY RUN] Would create init-maintenance-check.timer to record apt updates, reboot reminders, and Docker image indicators" "[DRY RUN] 将创建 init-maintenance-check.timer，记录 apt 更新、重启提醒和 Docker 镜像线索"
         return 0
     fi
 
@@ -8566,7 +9110,7 @@ action_configure_maintenance_window() {
     install_packages_batch "unattended-upgrades" || return 1
     mkdir -p /etc/systemd/system/apt-daily-upgrade.timer.d
     write_file_atomic /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf \
-        "APT 安全更新 timer override" 644 0 0 <<EOF || return 1
+        "$(ui_text "APT security-update timer override" "APT 安全更新 timer override")" 644 0 0 <<EOF || return 1
 [Timer]
 OnCalendar=
 OnCalendar=$schedule
@@ -8574,12 +9118,12 @@ RandomizedDelaySec=$randomized_delay
 Persistent=true
 EOF
     write_file_atomic /etc/apt/apt.conf.d/52unattended-maintenance-window \
-        "unattended-upgrades 维护窗口" 644 0 0 <<EOF || return 1
+        "$(ui_text "unattended-upgrades maintenance window" "unattended-upgrades 维护窗口")" 644 0 0 <<EOF || return 1
 Unattended-Upgrade::Automatic-Reboot "$auto_reboot";
 Unattended-Upgrade::Automatic-Reboot-Time "$reboot_time";
 EOF
     write_file_atomic /usr/local/sbin/init-maintenance-check \
-        "维护检查 executable" 700 0 0 <<'EOF' || return 1
+        "$(ui_text "maintenance-check executable" "维护检查 executable")" 700 0 0 <<'EOF' || return 1
 #!/bin/bash
 set -euo pipefail
 
@@ -8608,14 +9152,14 @@ LOG_FILE="/var/log/init-maintenance-check.log"
     if command -v docker >/dev/null 2>&1; then
         docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' 2>/dev/null || true
         echo
-        echo "提示: Compose 项目建议在维护窗口内执行 docker compose pull && docker compose up -d。"
+        echo "Tip: run docker compose pull && docker compose up -d for Compose projects during a maintenance window."
     else
         echo "docker: missing"
     fi
 } >> "$LOG_FILE" 2>&1
 EOF
     write_file_atomic /etc/systemd/system/init-maintenance-check.service \
-        "维护检查 service" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
+        "$(ui_text "maintenance-check service" "维护检查 service")" 644 0 0 validate_systemd_candidate <<'EOF' || return 1
 [Unit]
 Description=Init Script Maintenance Check
 After=network-online.target
@@ -8625,7 +9169,7 @@ Type=oneshot
 ExecStart=/usr/local/sbin/init-maintenance-check
 EOF
     write_file_atomic /etc/systemd/system/init-maintenance-check.timer \
-        "维护检查 timer" 644 0 0 validate_systemd_candidate <<EOF || return 1
+        "$(ui_text "maintenance-check timer" "维护检查 timer")" 644 0 0 validate_systemd_candidate <<EOF || return 1
 [Unit]
 Description=Run Init Script Maintenance Check
 
@@ -8638,11 +9182,11 @@ Persistent=true
 WantedBy=timers.target
 EOF
     systemd_daemon_reload || return 1
-    run_command "启用 apt-daily-upgrade.timer" systemctl enable --now apt-daily-upgrade.timer || return 1
-    run_command "启用 init-maintenance-check.timer" systemctl enable --now init-maintenance-check.timer || return 1
-    log_success "自动更新维护窗口已配置"
-    log_info "查看: systemctl list-timers apt-daily-upgrade.timer"
-    log_info "维护检查日志: tail -n 100 /var/log/init-maintenance-check.log"
+    run_command "$(ui_text "Enable apt-daily-upgrade.timer" "启用 apt-daily-upgrade.timer")" systemctl enable --now apt-daily-upgrade.timer || return 1
+    run_command "$(ui_text "Enable init-maintenance-check.timer" "启用 init-maintenance-check.timer")" systemctl enable --now init-maintenance-check.timer || return 1
+    ui_log_success "Automatic-update maintenance window configured" "自动更新维护窗口已配置"
+    ui_log_info "View: systemctl list-timers apt-daily-upgrade.timer" "查看: systemctl list-timers apt-daily-upgrade.timer"
+    ui_log_info "Maintenance-check log: tail -n 100 /var/log/init-maintenance-check.log" "维护检查日志: tail -n 100 /var/log/init-maintenance-check.log"
 }
 
 action_ops_enhancements() {
@@ -8682,67 +9226,67 @@ action_ops_enhancements() {
 
 # --- 模块: 用户管理 ---
 function action_user_manager() {
-    log_info "用户管理..."
-    read -r -p "请输入新用户名: " new_user
+    ui_log_info "User management..." "用户管理..."
+    builtin read -r -p "$(ui_text "New username: " "请输入新用户名: ")" new_user
     if [ -z "$new_user" ]; then
-        log_warning "用户名不能为空"
+        ui_log_warning "The username cannot be empty" "用户名不能为空"
         return 1
     fi
     if id "$new_user" > /dev/null 2>&1; then
-        log_warning "用户已存在: $new_user"
+        ui_log_warning "User already exists: $new_user" "用户已存在: $new_user"
         return 1
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将创建用户 $new_user 并配置 sudo/SSH"
+        ui_log_info "[DRY RUN] Would create user $new_user and configure sudo/SSH" "[DRY RUN] 将创建用户 $new_user 并配置 sudo/SSH"
         return 0
     fi
 
     adduser --disabled-password --gecos "" "$new_user" || return 1
 
-    read -r -p "是否为该用户设置 SSH 公钥? [y/n]: " add_key
+    builtin read -r -p "$(ui_text "Configure an SSH public key for this user? [y/n]: " "是否为该用户设置 SSH 公钥? [y/n]: ")" add_key
     case "$add_key" in
         y|Y|yes|YES)
-            read -r -p "请输入公钥内容: " pubkey
+            builtin read -r -p "$(ui_text "Public key: " "请输入公钥内容: ")" pubkey
             if [ -n "$pubkey" ]; then
                 install_authorized_key "$new_user" "/home/$new_user" "$pubkey" || return 1
-                log_success "已验证并添加公钥"
+                ui_log_success "Public key validated and added" "已验证并添加公钥"
             fi
             ;;
     esac
 
-    if confirm_action "是否为该用户设置密码并授予 sudo 权限?" "n"; then
+    if confirm_action "$(ui_text "Set a password and grant sudo access to this user?" "是否为该用户设置密码并授予 sudo 权限?")" "n"; then
         if passwd "$new_user"; then
             usermod -aG sudo "$new_user" || return 1
-            log_success "已为 $new_user 授予 sudo 权限"
+            ui_log_success "Granted sudo access to $new_user" "已为 $new_user 授予 sudo 权限"
         else
-            log_error "密码设置失败，未授予 sudo 权限"
+            ui_log_error "Password setup failed; sudo access was not granted" "密码设置失败，未授予 sudo 权限"
             return 1
         fi
     fi
 
-    if confirm_action "是否禁用 root SSH 登录?" "n"; then
+    if confirm_action "$(ui_text "Disable root SSH login?" "是否禁用 root SSH 登录?")" "n"; then
         local ssh_candidate
         ssh_candidate="$(mktemp /etc/ssh/.sshd_config.user-manager.XXXXXX)" || return 1
         cp /etc/ssh/sshd_config "$ssh_candidate" || return 1
         set_sshd_directive_in_file "$ssh_candidate" PermitRootLogin no || return 1
         atomic_install_file /etc/ssh/sshd_config "$ssh_candidate" \
-            "禁用 root SSH 登录" preserve 0 0 validate_sshd_candidate || return 1
+            "$(ui_text "disable root SSH login" "禁用 root SSH 登录")" preserve 0 0 validate_sshd_candidate || return 1
         if ! reload_ssh_service; then
             rollback_last_operation || true
             reload_ssh_service || true
             return 1
         fi
-        log_success "已禁用 root SSH 登录"
+        ui_log_success "Root SSH login disabled" "已禁用 root SSH 登录"
     fi
 }
 # --- 模块: 清理痕迹/历史记录 (危险) ---
 function action_clean_traces() {
-    if ! confirm_dangerous_action "清理痕迹/历史记录" "将清空 shell 历史与部分系统日志，可能影响审计与排障"; then
+    if ! confirm_dangerous_action "$(ui_text "Clear traces/history" "清理痕迹/历史记录")" "$(ui_text "This clears shell history and some system logs and may impair auditing and troubleshooting" "将清空 shell 历史与部分系统日志，可能影响审计与排障")"; then
         return 1
     fi
     if [ "$DRY_RUN" = "1" ]; then
-        log_info "[DRY RUN] 将清理 history 和系统日志"
+        ui_log_info "[DRY RUN] Would clear shell history and system logs" "[DRY RUN] 将清理 history 和系统日志"
         return 0
     fi
 
@@ -8774,12 +9318,14 @@ function action_clean_traces() {
         journalctl --vacuum-time=1s > /dev/null 2>&1 || true
     fi
 
-    log_success "清理完成（history 与部分日志已清空）"
+    ui_log_success "Cleanup completed (shell history and some logs were cleared)" "清理完成（history 与部分日志已清空）"
 }
 
 # --- 任务流 ---
 function task_init_no_mirror() {
-    log_info "开始初始化流程（不换源）..."
+    ui_log_info \
+        "Starting the initialization workflow (keeping current apt sources)..." \
+        "开始初始化流程（不换源）..."
     invoke_action action_install_essentials || return 1
     invoke_action action_configure_ssh || return 1
     invoke_action action_configure_firewall || return 1
@@ -8789,7 +9335,9 @@ function task_init_no_mirror() {
 }
 
 function task_init_with_mirror() {
-    log_info "开始初始化流程（换源）..."
+    ui_log_info \
+        "Starting the initialization workflow (changing apt sources)..." \
+        "开始初始化流程（换源）..."
     invoke_action action_change_mirrors || return 1
     invoke_action action_install_essentials || return 1
     invoke_action action_configure_ssh || return 1
@@ -8860,7 +9408,7 @@ function task_custom_init() {
     
     # 验证输入
     if [[ -z "$selections" ]]; then
-        log_warning "未选择任何模块，返回主菜单"
+        ui_log_warning "No modules selected; returning to the main menu" "未选择任何模块，返回主菜单"
         return
     fi
     
@@ -8870,38 +9418,38 @@ function task_custom_init() {
         if [[ "$sel" =~ ^([1-9]|1[0-3])$ ]]; then
             selected_modules+=("$sel")
         elif [[ "$sel" != "0" ]]; then
-            log_warning "无效选择: ${sel}，已忽略"
+            ui_log_warning "Invalid selection ignored: ${sel}" "无效选择: ${sel}，已忽略"
         fi
     done
     
     if [ ${#selected_modules[@]} -eq 0 ]; then
-        log_warning "没有有效的模块选择，返回主菜单"
+        ui_log_warning "No valid modules selected; returning to the main menu" "没有有效的模块选择，返回主菜单"
         return
     fi
     
     # 显示确认
     clear
     printf '%b\n' "${CYAN}################################################${PLAIN}"
-    printf '%b\n' "${CYAN}#           确认选择的模块                      #${PLAIN}"
+    printf '%b\n' "${CYAN}#           $(ui_text "Confirm Selected Modules" "确认选择的模块")                      #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}已选择以下模块:${PLAIN}"
+    printf '%b\n' "${YELLOW}$(ui_text "Selected modules:" "已选择以下模块:")${PLAIN}"
     for sel in "${selected_modules[@]}"; do
-        printf '%b\n' "  ${GREEN}✓${PLAIN} ${modules[$sel]}"
+        printf '%b\n' "  ${GREEN}$(ui_text "[x]" "✓")${PLAIN} ${modules[$sel]}"
     done
     printf '%b\n' ""
-    read -r -p "确认执行? [y/n]: " confirm
+    builtin read -r -p "$(ui_text "Proceed? [y/n]: " "确认执行? [y/n]: ")" confirm
     case "$confirm" in
         y|Y|yes|YES)
             ;;
         *)
-            log_info "已取消，返回主菜单"
+            ui_log_info "Canceled; returning to the main menu" "已取消，返回主菜单"
             return
             ;;
     esac
     
     # 执行选中的模块
-    log_info "开始执行自定义初始化..."
+    ui_log_info "Starting custom initialization..." "开始执行自定义初始化..."
     printf '%b\n' ""
     
     local has_mirror=false
@@ -8909,19 +9457,16 @@ function task_custom_init() {
     
     # 按顺序执行选中的模块
     for sel in "${selected_modules[@]}"; do
+        ui_log_separator
+        ui_log_info "Running: ${modules[$sel]}" "执行: ${modules[$sel]}"
+        ui_log_separator
         case "$sel" in
             1)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_change_mirrors || return 1
                 has_mirror=true
                 printf '%b\n' ""
                 ;;
             2)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 # 如果没换源，先更新一次
                 if [ "$has_mirror" = false ]; then
                     update_apt_once || return 1
@@ -8931,80 +9476,47 @@ function task_custom_init() {
                 printf '%b\n' ""
                 ;;
             3)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_optimize_system || return 1
                 printf '%b\n' ""
                 ;;
             4)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_configure_swap || return 1
                 printf '%b\n' ""
                 ;;
             5)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_configure_ssh || return 1
                 printf '%b\n' ""
                 ;;
             6)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_configure_firewall || return 1
                 printf '%b\n' ""
                 ;;
             7)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_configure_fail2ban || return 1
                 printf '%b\n' ""
                 ;;
             8)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_configure_auto_updates || return 1
                 printf '%b\n' ""
                 ;;
             9)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_install_docker || return 1
                 printf '%b\n' ""
                 ;;
             10)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action action_install_runtime || return 1
                 printf '%b\n' ""
                 ;;
             11)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action install_backup_tools || return 1
                 printf '%b\n' ""
                 ;;
             12)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action configure_journald_persistent || return 1
                 invoke_action install_health_check_timer || return 1
                 printf '%b\n' ""
                 ;;
             13)
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                log_info "执行: ${modules[$sel]}"
-                log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 invoke_action install_security_audit_tools || return 1
                 printf '%b\n' ""
                 ;;
@@ -9013,61 +9525,61 @@ function task_custom_init() {
     
     # 询问是否清理
     printf '%b\n' ""
-    read -r -p "是否执行清理 (移除无用包)? [y/n]: " do_cleanup
+    builtin read -r -p "$(ui_text "Run cleanup (remove unused packages)? [y/n]: " "是否执行清理 (移除无用包)? [y/n]: ")" do_cleanup
     case "$do_cleanup" in
         y|Y|yes|YES)
             invoke_action cleanup || return 1
             ;;
         *)
-            log_info "跳过清理"
+            ui_log_info "Skipping cleanup" "跳过清理"
             ;;
     esac
     
-    log_success "自定义初始化完成！"
-    log_info "日志文件: $LOG_FILE"
-    log_info "备份目录: $BACKUP_DIR"
+    ui_log_success "Custom initialization completed!" "自定义初始化完成！"
+    ui_log_info "Log file: $LOG_FILE" "日志文件: $LOG_FILE"
+    ui_log_info "Backup directory: $BACKUP_DIR" "备份目录: $BACKUP_DIR"
     
     printf '%b\n' ""
-    read -r -p "按 Enter 键返回主菜单..."
+    builtin read -r -p "$(ui_text "Press Enter to return to the main menu..." "按 Enter 键返回主菜单...")"
 }
 
 function cleanup() {
-    log_info "清理系统..."
+    ui_log_info "Cleaning up the system..." "清理系统..."
     apt-get autoremove -y >> "$LOG_FILE" 2>&1
     apt-get clean >> "$LOG_FILE" 2>&1
-    log_success "所有任务完成！"
-    log_info "日志文件: $LOG_FILE"
-    log_info "备份目录: $BACKUP_DIR"
+    ui_log_success "All tasks completed!" "所有任务完成！"
+    ui_log_info "Log file: $LOG_FILE" "日志文件: $LOG_FILE"
+    ui_log_info "Backup directory: $BACKUP_DIR" "备份目录: $BACKUP_DIR"
 }
 
 function action_install_croc() {
-    log_info "正在安装 croc (文件传输工具)..."
+    ui_log_info "Installing croc (file-transfer tool)..." "正在安装 croc (文件传输工具)..."
 
     update_apt_once
-    if run_cmd "尝试通过 apt 安装 croc" "apt-get install -y croc"; then
-        log_success "croc 安装成功"
-        log_info "使用方法: croc send [file]"
+    if run_cmd "$(ui_text "Try to install croc with apt" "尝试通过 apt 安装 croc")" "apt-get install -y croc"; then
+        ui_log_success "croc installed successfully" "croc 安装成功"
+        ui_log_info "Usage: croc send [file]" "使用方法: croc send [file]"
         return 0
     fi
 
-    log_warning "apt 源中未能安装 croc，准备回退到官方安装脚本"
-    if run_remote_script_unverified "https://getcroc.schollz.com" "croc 官方安装脚本"; then
-        log_success "croc 安装成功"
-        log_info "使用方法: croc send [file]"
+    ui_log_warning "Could not install croc from apt; falling back to the official installer" "apt 源中未能安装 croc，准备回退到官方安装脚本"
+    if run_remote_script_unverified "https://getcroc.schollz.com" "$(ui_text "official croc installer" "croc 官方安装脚本")"; then
+        ui_log_success "croc installed successfully" "croc 安装成功"
+        ui_log_info "Usage: croc send [file]" "使用方法: croc send [file]"
     else
-        log_error "croc 安装失败"
+        ui_log_error "Failed to install croc" "croc 安装失败"
         return 1
     fi
 }
 
 function action_install_rclone() {
-    log_info "正在安装 rclone (预编译二进制)..."
+    ui_log_info "Installing rclone (prebuilt binary)..." "正在安装 rclone (预编译二进制)..."
 
     if command -v rclone > /dev/null 2>&1; then
         local rclone_ver
         rclone_ver=$(rclone --version 2>/dev/null | head -n 1)
-        log_info "检测到已安装 rclone: $rclone_ver"
-        if ! confirm_action "是否重新安装 rclone?" "n"; then
+        ui_log_info "Existing rclone installation detected: $rclone_ver" "检测到已安装 rclone: $rclone_ver"
+        if ! confirm_action "$(ui_text "Reinstall rclone?" "是否重新安装 rclone?")" "n"; then
             return 0
         fi
     fi
@@ -9075,34 +9587,34 @@ function action_install_rclone() {
     local arch
     arch=$(uname -m)
     if [ "$arch" != "x86_64" ] && [ "$arch" != "amd64" ]; then
-        log_warning "当前架构为 ${arch}，默认下载 amd64 版本可能无法运行"
-        if ! confirm_action "仍然继续下载 amd64 版本?" "n"; then
+        ui_log_warning "The current architecture is ${arch}; the default amd64 download may not run" "当前架构为 ${arch}，默认下载 amd64 版本可能无法运行"
+        if ! confirm_action "$(ui_text "Continue downloading the amd64 build anyway?" "仍然继续下载 amd64 版本?")" "n"; then
             return 1
         fi
     fi
 
     update_apt_once
-    run_cmd "安装依赖" "apt-get install -y unzip curl"
+    run_cmd "$(ui_text "Install dependencies" "安装依赖")" "apt-get install -y unzip curl"
 
     local base_url="https://downloads.rclone.org"
     local version_file="/tmp/rclone-version.txt"
     local checksums_path="/tmp/rclone-SHA256SUMS"
     local temp_dir="/tmp/rclone-install.$$"
 
-    if ! confirm_external_resource "$base_url" "下载 rclone 版本信息、预编译包和 SHA256 校验文件"; then
-        log_warning "已跳过 rclone 下载"
+    if ! confirm_external_resource "$base_url" "$(ui_text "Download rclone version information, the prebuilt archive, and its SHA256 checksum file" "下载 rclone 版本信息、预编译包和 SHA256 校验文件")"; then
+        ui_log_warning "Skipped the rclone download" "已跳过 rclone 下载"
         return 1
     fi
 
-    if ! fetch_file "$base_url/version.txt" "$version_file" "rclone 版本信息"; then
-        log_error "无法获取 rclone 最新版本信息"
+    if ! fetch_file "$base_url/version.txt" "$version_file" "$(ui_text "rclone version information" "rclone 版本信息")"; then
+        ui_log_error "Could not retrieve the latest rclone version information" "无法获取 rclone 最新版本信息"
         return 1
     fi
 
     local rclone_version
     rclone_version=$(awk '{print $NF}' "$version_file" | head -1)
     if [[ ! "$rclone_version" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
-        log_error "无法解析 rclone 版本: $rclone_version"
+        ui_log_error "Could not parse the rclone version: $rclone_version" "无法解析 rclone 版本: $rclone_version"
         return 1
     fi
 
@@ -9111,12 +9623,12 @@ function action_install_rclone() {
     local url="${base_url}/${rclone_version}/${zip_name}"
     local checksums_url="${base_url}/${rclone_version}/SHA256SUMS"
 
-    if ! fetch_file "$url" "$zip_path" "rclone ${rclone_version} 预编译包"; then
-        log_warning "已跳过 rclone 下载"
+    if ! fetch_file "$url" "$zip_path" "$(ui_text "rclone ${rclone_version} prebuilt archive" "rclone ${rclone_version} 预编译包")"; then
+        ui_log_warning "Skipped the rclone download" "已跳过 rclone 下载"
         return 1
     fi
     if ! fetch_file "$checksums_url" "$checksums_path" "rclone ${rclone_version} SHA256SUMS"; then
-        log_error "无法下载 rclone 校验文件"
+        ui_log_error "Could not download the rclone checksum file" "无法下载 rclone 校验文件"
         return 1
     fi
 
@@ -9126,54 +9638,54 @@ function action_install_rclone() {
         expected_sha=$(awk -v file="$zip_name" '$2 == file {print $1}' "$checksums_path")
         actual_sha=$(sha256sum "$zip_path" | awk '{print $1}')
         if [ -z "$expected_sha" ] || [ "$expected_sha" != "$actual_sha" ]; then
-            log_error "rclone SHA256 校验失败"
-            log_error "期望: ${expected_sha:-N/A}"
-            log_error "实际: $actual_sha"
+            ui_log_error "rclone SHA256 verification failed" "rclone SHA256 校验失败"
+            ui_log_error "Expected: ${expected_sha:-N/A}" "期望: ${expected_sha:-N/A}"
+            ui_log_error "Actual: $actual_sha" "实际: $actual_sha"
             return 1
         fi
-        log_success "rclone SHA256 校验通过: $actual_sha"
+        ui_log_success "rclone SHA256 verification passed: $actual_sha" "rclone SHA256 校验通过: $actual_sha"
     fi
 
     register_temp_file "$temp_dir"
-    run_cmd "创建临时目录" "mkdir -p \"$temp_dir\""
-    run_cmd "解压 rclone" "unzip -o \"$zip_path\" -d \"$temp_dir\""
+    run_cmd "$(ui_text "Create the temporary directory" "创建临时目录")" "mkdir -p \"$temp_dir\""
+    run_cmd "$(ui_text "Extract rclone" "解压 rclone")" "unzip -o \"$zip_path\" -d \"$temp_dir\""
 
     local rclone_dir
     rclone_dir=$(find "$temp_dir" -maxdepth 1 -type d -name "rclone-*-linux-amd64" | head -1)
     if [ -z "$rclone_dir" ]; then
-        log_error "无法找到解压目录 (rclone-*-linux-amd64)"
+        ui_log_error "Could not find the extracted directory (rclone-*-linux-amd64)" "无法找到解压目录 (rclone-*-linux-amd64)"
         return 1
     fi
 
-    run_cmd "安装 rclone 二进制" "cp \"$rclone_dir/rclone\" /usr/bin/"
-    run_cmd "设置 rclone 权限" "chown root:root /usr/bin/rclone && chmod 755 /usr/bin/rclone"
+    run_cmd "$(ui_text "Install the rclone binary" "安装 rclone 二进制")" "cp \"$rclone_dir/rclone\" /usr/bin/"
+    run_cmd "$(ui_text "Set rclone permissions" "设置 rclone 权限")" "chown root:root /usr/bin/rclone && chmod 755 /usr/bin/rclone"
 
-    run_cmd "创建 manpage 目录" "mkdir -p /usr/local/share/man/man1"
-    run_cmd "安装 rclone manpage" "cp \"$rclone_dir/rclone.1\" /usr/local/share/man/man1/"
+    run_cmd "$(ui_text "Create the man-page directory" "创建 manpage 目录")" "mkdir -p /usr/local/share/man/man1"
+    run_cmd "$(ui_text "Install the rclone man page" "安装 rclone manpage")" "cp \"$rclone_dir/rclone.1\" /usr/local/share/man/man1/"
     if command -v mandb > /dev/null 2>&1; then
-        run_cmd "更新 man 索引" "mandb"
+        run_cmd "$(ui_text "Update the man-page index" "更新 man 索引")" "mandb"
     else
-        log_warning "mandb 未安装，已跳过 man 索引更新"
+        ui_log_warning "mandb is not installed; skipped the man-page index update" "mandb 未安装，已跳过 man 索引更新"
     fi
 
-    log_success "rclone 安装完成"
-    log_info "下一步: 运行 rclone config 进行配置"
+    ui_log_success "rclone installation completed" "rclone 安装完成"
+    ui_log_info "Next: run rclone config" "下一步: 运行 rclone config 进行配置"
 }
 
 
 function action_install_terminal_tools() {
-    log_info "开始初始化终极终端环境..."
+    ui_log_info "Initializing the terminal environment..." "开始初始化终极终端环境..."
     determine_target_user
     local user_home="$INSTALL_HOME"
     if [ -z "$user_home" ]; then
         user_home="$HOME"
     fi
-    log_info "用户级配置目标: $INSTALL_USER ($user_home)"
+    ui_log_info "User configuration target: $INSTALL_USER ($user_home)" "用户级配置目标: $INSTALL_USER ($user_home)"
     
     # Update & Install deps. Keep the portable foundation separate from
     # repository-dependent enhancements so one unavailable optional package
     # cannot cancel the entire zsh/toolchain transaction.
-    log_info "更新系统并安装基础依赖..."
+    ui_log_info "Updating the system and installing core dependencies..." "更新系统并安装基础依赖..."
     update_apt_once || return 1
     local -a core_packages=(
         git curl wget unzip tar build-essential zsh tmux xz-utils bzip2
@@ -9191,7 +9703,7 @@ function action_install_terminal_tools() {
         if apt_package_has_candidate "$package"; then
             enhancement_packages+=("$package")
         else
-            log_warning "当前 APT 源没有可安装的可选包，已跳过: $package"
+            ui_log_warning "The configured APT repositories do not provide this optional package; skipped: $package" "当前 APT 源没有可安装的可选包，已跳过: $package"
         fi
     done
 
@@ -9205,84 +9717,84 @@ function action_install_terminal_tools() {
         fi
     done
     if [ -n "$rar_package" ]; then
-        log_info "RAR 解压支持将使用: $rar_package"
+        ui_log_info "RAR extraction support will use: $rar_package" "RAR 解压支持将使用: $rar_package"
     else
-        log_warning "当前 APT 源没有可用的 RAR 解压工具，已跳过"
+        ui_log_warning "No RAR extraction tool is available from the configured APT repositories; skipped" "当前 APT 源没有可用的 RAR 解压工具，已跳过"
     fi
 
     if [ "${#enhancement_packages[@]}" -gt 0 ]; then
         if ! install_packages_batch "${enhancement_packages[@]}"; then
-            log_warning "部分终端增强工具安装失败；核心 zsh 环境已安装，可稍后单独重试"
+            ui_log_warning "Some terminal enhancements failed to install; the core zsh environment is installed and the optional tools can be retried later" "部分终端增强工具安装失败；核心 zsh 环境已安装，可稍后单独重试"
         fi
     fi
-    if ! run_cmd "安装 tldr" "apt-get install -y tldr"; then
-        log_warning "tldr 安装失败，尝试安装 tealdeer 作为替代..."
-        run_cmd "安装 tealdeer" "apt-get install -y tealdeer"
+    if ! run_cmd "$(ui_text "Install tldr" "安装 tldr")" "apt-get install -y tldr"; then
+        ui_log_warning "Failed to install tldr; trying tealdeer as an alternative..." "tldr 安装失败，尝试安装 tealdeer 作为替代..."
+        run_cmd "$(ui_text "Install tealdeer" "安装 tealdeer")" "apt-get install -y tealdeer"
     fi
     
     # Eza
-    log_info "安装 Eza (现代版 ls)..."
+    ui_log_info "Installing Eza (modern ls)..." "安装 Eza (现代版 ls)..."
     mkdir -p /etc/apt/keyrings
     if [ ! -f /etc/apt/keyrings/gierens.gpg ]; then
         local eza_key_url="https://raw.githubusercontent.com/eza-community/eza/main/deb.asc"
         local eza_key_tmp="/tmp/eza-deb.asc"
-        if download_file "$eza_key_url" "$eza_key_tmp" "eza 仓库密钥"; then
-            run_cmd "导入 eza GPG 密钥" "gpg --dearmor -o /etc/apt/keyrings/gierens.gpg --yes \"$eza_key_tmp\""
-            run_cmd "写入 eza 源" "echo \"deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main\" | tee /etc/apt/sources.list.d/gierens.list"
-            run_cmd "更新 eza 源权限" "chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list"
+        if download_file "$eza_key_url" "$eza_key_tmp" "$(ui_text "eza repository key" "eza 仓库密钥")"; then
+            run_cmd "$(ui_text "Import the eza GPG key" "导入 eza GPG 密钥")" "gpg --dearmor -o /etc/apt/keyrings/gierens.gpg --yes \"$eza_key_tmp\""
+            run_cmd "$(ui_text "Add the eza repository" "写入 eza 源")" "echo \"deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main\" | tee /etc/apt/sources.list.d/gierens.list"
+            run_cmd "$(ui_text "Update eza repository file permissions" "更新 eza 源权限")" "chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list"
             APT_UPDATED=false
             update_apt_once || return 1
         else
-            log_warning "已跳过 eza 仓库配置"
+            ui_log_warning "Skipped eza repository configuration" "已跳过 eza 仓库配置"
         fi
     fi
-    run_cmd "安装 eza" "apt-get install -y eza"
+    run_cmd "$(ui_text "Install eza" "安装 eza")" "apt-get install -y eza"
     
     # Bat
-    log_info "安装 Bat (现代版 cat)..."
-    run_cmd "安装 bat" "apt-get install -y bat"
+    ui_log_info "Installing Bat (modern cat)..." "安装 Bat (现代版 cat)..."
+    run_cmd "$(ui_text "Install bat" "安装 bat")" "apt-get install -y bat"
     run_as_user "mkdir -p \"$user_home/.local/bin\""
     run_as_user "ln -sf /usr/bin/batcat \"$user_home/.local/bin/bat\""
     
     # Zoxide
-    log_info "安装 Zoxide (智能 cd)..."
+    ui_log_info "Installing Zoxide (smart cd)..." "安装 Zoxide (智能 cd)..."
     if command -v zoxide > /dev/null 2>&1; then
-        log_info "zoxide 已安装"
-    elif run_cmd "尝试通过 apt 安装 zoxide" "apt-get install -y zoxide"; then
-        log_success "zoxide 安装成功"
+        ui_log_info "zoxide is already installed" "zoxide 已安装"
+    elif run_cmd "$(ui_text "Try to install zoxide with apt" "尝试通过 apt 安装 zoxide")" "apt-get install -y zoxide"; then
+        ui_log_success "zoxide installed successfully" "zoxide 安装成功"
     else
-        log_warning "apt 源中未能安装 zoxide，准备回退到官方安装脚本"
-        run_remote_script_as_user_unverified_sh "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "zoxide 官方安装脚本" || log_warning "已跳过 zoxide 安装"
+        ui_log_warning "Could not install zoxide from apt; falling back to the official installer" "apt 源中未能安装 zoxide，准备回退到官方安装脚本"
+        run_remote_script_as_user_unverified_sh "https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh" "$(ui_text "official zoxide installer" "zoxide 官方安装脚本")" || ui_log_warning "Skipped zoxide installation" "已跳过 zoxide 安装"
     fi
     
     # Starship
-    log_info "安装 Starship (终端提示符)..."
+    ui_log_info "Installing Starship (shell prompt)..." "安装 Starship (终端提示符)..."
     local starship_path
     starship_path="$(terminal_user_command_path starship || true)"
     if [ -n "$starship_path" ]; then
-        log_info "starship 已安装: $starship_path"
-    elif run_cmd "尝试通过 apt 安装 starship" "apt-get install -y starship"; then
-        log_success "starship 安装成功"
+        ui_log_info "starship is already installed: $starship_path" "starship 已安装: $starship_path"
+    elif run_cmd "$(ui_text "Try to install starship with apt" "尝试通过 apt 安装 starship")" "apt-get install -y starship"; then
+        ui_log_success "starship installed successfully" "starship 安装成功"
     else
-        log_warning "apt 源中未能安装 starship，准备回退到官方安装脚本"
-        run_remote_script_as_user_unverified_sh "https://starship.rs/install.sh" "starship 官方安装脚本" "-y" || log_warning "已跳过 starship 安装"
+        ui_log_warning "Could not install starship from apt; falling back to the official installer" "apt 源中未能安装 starship，准备回退到官方安装脚本"
+        run_remote_script_as_user_unverified_sh "https://starship.rs/install.sh" "$(ui_text "official starship installer" "starship 官方安装脚本")" "-y" || ui_log_warning "Skipped starship installation" "已跳过 starship 安装"
     fi
     starship_path="$(terminal_user_command_path starship || true)"
     if [ -n "$starship_path" ]; then
-        log_success "Starship 可执行文件验证通过: $starship_path"
+        ui_log_success "Starship executable verified: $starship_path" "Starship 可执行文件验证通过: $starship_path"
     else
-        log_warning "Starship 未安装或不在目标用户 PATH 中；.zshrc 将跳过初始化"
+        ui_log_warning "Starship is not installed or is not in the target user's PATH; .zshrc initialization will be skipped" "Starship 未安装或不在目标用户 PATH 中；.zshrc 将跳过初始化"
     fi
     
     # Neovim
-    log_info "安装最新版 Neovim..."
+    ui_log_info "Installing the latest supported Neovim..." "安装最新版 Neovim..."
     local nvim_version="v0.10.4"
     local nvim_tar="/tmp/nvim-linux-x86_64-${nvim_version}.tar.gz"
     local nvim_url="https://github.com/neovim/neovim/releases/download/${nvim_version}/nvim-linux-x86_64.tar.gz"
     local nvim_sha256="95aaa8e89473f5421114f2787c13ae0ec6e11ebbd1a13a1bd6fcf63420f8073f"
     if download_and_verify_sha256 "$nvim_url" "$nvim_sha256" "$nvim_tar" "Neovim ${nvim_version}"; then
         if [ "$DRY_RUN" = "1" ]; then
-            log_info "[DRY RUN] 解压并安装 Neovim"
+            ui_log_info "[DRY RUN] Would extract and install Neovim" "[DRY RUN] 解压并安装 Neovim"
             return 0
         fi
         local nvim_stage nvim_source
@@ -9294,7 +9806,7 @@ function action_install_terminal_tools() {
         elif [ -x "$nvim_stage/nvim-linux64/bin/nvim" ]; then
             nvim_source="$nvim_stage/nvim-linux64"
         else
-            log_error "Neovim 归档结构无效"
+            ui_log_error "Invalid Neovim archive structure" "Neovim 归档结构无效"
             return 1
         fi
         replace_directory_transactional /opt/nvim "$nvim_source" "Neovim ${nvim_version}" || return 1
@@ -9302,52 +9814,52 @@ function action_install_terminal_tools() {
         # Link
         ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
         rm -f -- "$nvim_tar"
-        log_success "Neovim 安装成功"
+        ui_log_success "Neovim installed successfully" "Neovim 安装成功"
     else
-        log_warning "已跳过 Neovim 安装"
+        ui_log_warning "Skipped Neovim installation" "已跳过 Neovim 安装"
     fi
     
     # uv
-    log_info "安装 uv (Python 包管理器)..."
+    ui_log_info "Installing uv (Python package manager)..." "安装 uv (Python 包管理器)..."
     local uv_path
     uv_path="$(terminal_user_command_path uv || true)"
     if [ -z "$uv_path" ]; then
-        run_remote_script_as_user_unverified_sh "https://astral.sh/uv/install.sh" "uv 官方安装脚本" || log_warning "已跳过 uv 安装"
+        run_remote_script_as_user_unverified_sh "https://astral.sh/uv/install.sh" "$(ui_text "official uv installer" "uv 官方安装脚本")" || ui_log_warning "Skipped uv installation" "已跳过 uv 安装"
         uv_path="$(terminal_user_command_path uv || true)"
     fi
     if [ -n "$uv_path" ]; then
-        log_success "uv 可执行文件验证通过: $uv_path"
+        ui_log_success "uv executable verified: $uv_path" "uv 可执行文件验证通过: $uv_path"
     else
-        log_warning "uv 未安装或不在目标用户 PATH 中；.zshrc 将跳过补全初始化"
+        ui_log_warning "uv is not installed or is not in the target user's PATH; .zshrc completion setup will be skipped" "uv 未安装或不在目标用户 PATH 中；.zshrc 将跳过补全初始化"
     fi
     
     # Oh My Zsh
-    log_info "安装 Oh My Zsh..."
+    ui_log_info "Installing Oh My Zsh..." "安装 Oh My Zsh..."
     local omz_main="$user_home/.oh-my-zsh/oh-my-zsh.sh"
     local omz_ready=false
     if [ -r "$omz_main" ]; then
         omz_ready=true
-        log_info "Oh My Zsh 已安装: $omz_main"
+        ui_log_info "Oh My Zsh is already installed: $omz_main" "Oh My Zsh 已安装: $omz_main"
     else
         if [ -d "$user_home/.oh-my-zsh" ]; then
-            log_warning "检测到不完整的 Oh My Zsh 目录（缺少 oh-my-zsh.sh）: $user_home/.oh-my-zsh"
-            log_warning "为避免覆盖现有文件，本次不会自动删除该目录；请先移动它再重试安装"
+            ui_log_warning "An incomplete Oh My Zsh directory was detected (oh-my-zsh.sh is missing): $user_home/.oh-my-zsh" "检测到不完整的 Oh My Zsh 目录（缺少 oh-my-zsh.sh）: $user_home/.oh-my-zsh"
+            ui_log_warning "To avoid overwriting existing files, the directory will not be removed automatically; move it and retry installation" "为避免覆盖现有文件，本次不会自动删除该目录；请先移动它再重试安装"
         else
             run_remote_script_as_user_unverified_sh \
                 "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh" \
-                "Oh My Zsh 官方安装脚本" "--unattended" || log_warning "已跳过 Oh My Zsh 安装"
+                "$(ui_text "official Oh My Zsh installer" "Oh My Zsh 官方安装脚本")" "--unattended" || ui_log_warning "Skipped Oh My Zsh installation" "已跳过 Oh My Zsh 安装"
             [ -r "$omz_main" ] && omz_ready=true
         fi
     fi
     if [ "$omz_ready" = true ]; then
-        log_success "Oh My Zsh 主文件验证通过: $omz_main"
+        ui_log_success "Oh My Zsh main file verified: $omz_main" "Oh My Zsh 主文件验证通过: $omz_main"
     else
-        log_warning "Oh My Zsh 未完整安装；.zshrc 将跳过加载"
+        ui_log_warning "Oh My Zsh is not fully installed; .zshrc will not load it" "Oh My Zsh 未完整安装；.zshrc 将跳过加载"
     fi
     
     # Plugins
     if [ "$omz_ready" = true ]; then
-        log_info "下载 Zsh 插件..."
+        ui_log_info "Downloading Zsh plugins..." "下载 Zsh 插件..."
         local zsh_custom="${ZSH_CUSTOM:-$user_home/.oh-my-zsh/custom}"
         run_as_user "mkdir -p \"$zsh_custom/plugins\""
         if [ ! -d "$zsh_custom/plugins/zsh-autosuggestions" ]; then
@@ -9357,11 +9869,11 @@ function action_install_terminal_tools() {
             run_as_user "git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \"$zsh_custom/plugins/zsh-syntax-highlighting\""
         fi
     else
-        log_warning "Oh My Zsh 不完整，已跳过插件目录创建"
+        ui_log_warning "Oh My Zsh is incomplete; skipped plugin-directory creation" "Oh My Zsh 不完整，已跳过插件目录创建"
     fi
     
     # .zshrc
-    log_info "生成配置文件 .zshrc ..."
+    ui_log_info "Generating .zshrc..." "生成配置文件 .zshrc ..."
     local zshrc_file="$user_home/.zshrc"
     local zsh_marker_start="### INIT.SH ZSHRC BEGIN"
     local zsh_marker_end="### INIT.SH ZSHRC END"
@@ -9371,10 +9883,10 @@ function action_install_terminal_tools() {
         create_backup "$zshrc_file" >/dev/null
     fi
     ensure_block_in_file "$zshrc_file" "$zsh_marker_start" "$zsh_marker_end" \
-        "$zshrc_block" "Zsh 配置块" validate_zsh_candidate || return 1
+        "$zshrc_block" "$(ui_text "Zsh configuration block" "Zsh 配置块")" validate_zsh_candidate || return 1
 
     # --- Compatibility Migration (Auto-detect & Sync) ---
-    log_info "正在迁移现有配置到 .zshrc ..."
+    ui_log_info "Migrating existing configuration to .zshrc..." "正在迁移现有配置到 .zshrc ..."
     
     # 1. MOTD Migration
     # If cool-motd is executable, ensure it runs in zshrc
@@ -9383,7 +9895,7 @@ function action_install_terminal_tools() {
              echo "" >> "$zshrc_file"
              echo "# MOTD" >> "$zshrc_file"
              echo "/usr/local/bin/cool-motd.sh" >> "$zshrc_file"
-             log_info "已迁移 MOTD 配置到 .zshrc"
+             ui_log_info "Migrated the MOTD configuration to .zshrc" "已迁移 MOTD 配置到 .zshrc"
         fi
     fi
 
@@ -9397,7 +9909,7 @@ function action_install_terminal_tools() {
 export GOROOT=/usr/local/go
 export PATH=$GOROOT/bin:$PATH
 GO_EOF
-            log_info "已迁移 Go 环境变量到 .zshrc"
+            ui_log_info "Migrated Go environment variables to .zshrc" "已迁移 Go 环境变量到 .zshrc"
         fi
     fi
 
@@ -9412,7 +9924,7 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 NVM_EOF
-            log_info "已迁移 NVM 配置到 .zshrc"
+            ui_log_info "Migrated NVM configuration to .zshrc" "已迁移 NVM 配置到 .zshrc"
          fi
     fi
 
@@ -9421,10 +9933,10 @@ NVM_EOF
         chown "$INSTALL_USER:$INSTALL_USER" "$zshrc_file" 2>/dev/null || true
     fi
 
-    log_info "切换默认 Shell 到 Zsh..."
+    ui_log_info "Changing the default shell to Zsh..." "切换默认 Shell 到 Zsh..."
     set_user_login_shell_to_zsh "$INSTALL_USER" || return 1
     
-    log_success "终端环境初始化完成！目标用户: $INSTALL_USER；请结束旧 tmux/screen 会话并重新 SSH。"
+    ui_log_success "Terminal environment initialized for $INSTALL_USER. End old tmux/screen sessions and reconnect over SSH." "终端环境初始化完成！目标用户: ${INSTALL_USER}；请结束旧 tmux/screen 会话并重新 SSH。"
 }
 
 function action_toggle_zsh_icons() {
@@ -9437,7 +9949,7 @@ function action_toggle_zsh_icons() {
 
     local zshrc_file="$INSTALL_HOME/.zshrc"
     if [ ! -f "$zshrc_file" ]; then
-        log_error "未找到 ${zshrc_file}，请先执行选项 17 初始化终端环境。"
+        ui_log_error "${zshrc_file} was not found; initialize the terminal environment first with option 17." "未找到 ${zshrc_file}，请先执行选项 17 初始化终端环境。"
         return
     fi
     
@@ -9450,7 +9962,7 @@ function action_toggle_zsh_icons() {
         fi
     }
 
-    log_info "正在切换 Zsh 图标显示设置..."
+    ui_log_info "Toggling Zsh icon display..." "正在切换 Zsh 图标显示设置..."
     
     # Check if icons are enabled (look for --icons)
     if run_zsh_cmd "grep -q \"alias ls=\\\"eza --icons\\\"\" \"$zshrc_file\""; then
@@ -9458,37 +9970,37 @@ function action_toggle_zsh_icons() {
         run_zsh_cmd "sed -i 's/alias ll=\"eza --icons -l\"/alias ll=\"eza -l\"/g' \"$zshrc_file\""
         run_zsh_cmd "sed -i 's/alias la=\"eza --icons -la\"/alias la=\"eza -la\"/g' \"$zshrc_file\""
         run_zsh_cmd "sed -i 's/alias tree=\"eza --icons --tree\"/alias tree=\"eza --tree\"/g' \"$zshrc_file\""
-        log_success "已禁用图标 (兼容模式)。乱码问题应已解决。"
+        ui_log_success "Icons disabled (compatibility mode). Garbled glyphs should now be resolved." "已禁用图标 (兼容模式)。乱码问题应已解决。"
     elif run_zsh_cmd "grep -q \"alias ls=\\\"eza\\\"\" \"$zshrc_file\""; then
         run_zsh_cmd "sed -i 's/alias ls=\"eza\"/alias ls=\"eza --icons\"/g' \"$zshrc_file\""
         run_zsh_cmd "sed -i 's/alias ll=\"eza -l\"/alias ll=\"eza --icons -l\"/g' \"$zshrc_file\""
         run_zsh_cmd "sed -i 's/alias la=\"eza -la\"/alias la=\"eza --icons -la\"/g' \"$zshrc_file\""
         run_zsh_cmd "sed -i 's/alias tree=\"eza --tree\"/alias tree=\"eza --icons --tree\"/g' \"$zshrc_file\""
-        log_success "已启用图标 (丰富模式)。请确保终端支持 Nerd Fonts。"
+        ui_log_success "Icons enabled (rich mode). Ensure the terminal supports Nerd Fonts." "已启用图标 (丰富模式)。请确保终端支持 Nerd Fonts。"
     else
-        log_warning "无法自动匹配别名配置，请手动检查 .zshrc。"
+        ui_log_warning "Could not match the alias configuration automatically; check .zshrc manually." "无法自动匹配别名配置，请手动检查 .zshrc。"
         return
     fi
     
-    log_info "请断开 SSH 并重新连接，或运行 'source $zshrc_file' 以生效。"
+    ui_log_info "Reconnect over SSH or run 'source $zshrc_file' for the change to take effect." "请断开 SSH 并重新连接，或运行 'source $zshrc_file' 以生效。"
 }
 
 function action_install_network_http_tools() {
-    log_info "安装网络/HTTP 工具集..."
+    ui_log_info "Installing the network/HTTP tool set..." "安装网络/HTTP 工具集..."
     update_apt_once
     install_packages_batch \
         "mtr-tiny" "traceroute" "dnsutils" "iproute2" "iputils-ping" \
         "netcat-openbsd" "socat" "iperf3" "nmap" "tcpdump" "iftop" "nethogs"
 
     if ! apt-get install -y httpie >> "$LOG_FILE" 2>&1; then
-        log_warning "httpie 安装失败，尝试安装 xh..."
-        apt-get install -y xh >> "$LOG_FILE" 2>&1 || log_warning "xh 安装失败"
+        ui_log_warning "Failed to install httpie; trying xh..." "httpie 安装失败，尝试安装 xh..."
+        apt-get install -y xh >> "$LOG_FILE" 2>&1 || ui_log_warning "Failed to install xh" "xh 安装失败"
     fi
     if ! apt-get install -y dog >> "$LOG_FILE" 2>&1; then
-        log_warning "dog 安装失败（某些发行版包名不同），已跳过"
+        ui_log_warning "Failed to install dog (the package name differs on some distributions); skipped" "dog 安装失败（某些发行版包名不同），已跳过"
     fi
 
-    log_success "网络/HTTP 工具集安装完成"
+    ui_log_success "Network/HTTP tool set installation completed" "网络/HTTP 工具集安装完成"
 }
 
 
@@ -9536,15 +10048,51 @@ menu_back_and_exit() {
 dry_run_action_plan() {
     local action="${1:-unknown}"
     case "$action" in
-        action_install_essentials) log_info "[DRY RUN] 计划: 安装基础工具、按 SYSTEM_TIMEZONE 配置时区并启用时间同步" ;;
-        action_configure_ssh) log_info "[DRY RUN] 计划: 选择并验证 SSH 密钥账户，生成并校验 SSH 候选配置，必要时放行新端口后 reload" ;;
-        action_configure_firewall) log_info "[DRY RUN] 计划: 保留现有 UFW 规则，补充 SSH/可选 Web 规则并启用" ;;
-        action_configure_fail2ban) log_info "[DRY RUN] 计划: 写入 Fail2ban SSH jail 并启用服务" ;;
-        action_configure_auto_updates) log_info "[DRY RUN] 计划: 原子写入 unattended-upgrades 配置" ;;
-        action_configure_swap) log_info "[DRY RUN] 计划: 配置 swapfile、fstab 与 swappiness" ;;
-        action_install_docker) log_info "[DRY RUN] 计划: 配置 Docker 官方仓库、安装并启动 Docker" ;;
-        task_init_no_mirror|task_init_with_mirror|task_custom_init) log_info "[DRY RUN] 计划: 初始化组合动作；未执行任何子模块" ;;
-        *) log_info "[DRY RUN] 计划调用动作: ${action}（已阻止实际执行）" ;;
+        action_install_essentials)
+            ui_log_info \
+                "[DRY RUN] Plan: install essential tools, apply SYSTEM_TIMEZONE, and enable time synchronization" \
+                "[DRY RUN] 计划: 安装基础工具、按 SYSTEM_TIMEZONE 配置时区并启用时间同步"
+            ;;
+        action_configure_ssh)
+            ui_log_info \
+                "[DRY RUN] Plan: select and validate the SSH key account, validate a candidate SSH configuration, allow a new port if needed, and reload SSH" \
+                "[DRY RUN] 计划: 选择并验证 SSH 密钥账户，生成并校验 SSH 候选配置，必要时放行新端口后 reload"
+            ;;
+        action_configure_firewall)
+            ui_log_info \
+                "[DRY RUN] Plan: keep existing UFW rules, add SSH and optional web rules, and enable UFW" \
+                "[DRY RUN] 计划: 保留现有 UFW 规则，补充 SSH/可选 Web 规则并启用"
+            ;;
+        action_configure_fail2ban)
+            ui_log_info \
+                "[DRY RUN] Plan: write the Fail2ban SSH jail and enable the service" \
+                "[DRY RUN] 计划: 写入 Fail2ban SSH jail 并启用服务"
+            ;;
+        action_configure_auto_updates)
+            ui_log_info \
+                "[DRY RUN] Plan: atomically write the unattended-upgrades configuration" \
+                "[DRY RUN] 计划: 原子写入 unattended-upgrades 配置"
+            ;;
+        action_configure_swap)
+            ui_log_info \
+                "[DRY RUN] Plan: configure a swapfile, fstab, and swappiness" \
+                "[DRY RUN] 计划: 配置 swapfile、fstab 与 swappiness"
+            ;;
+        action_install_docker)
+            ui_log_info \
+                "[DRY RUN] Plan: configure the official Docker repository, install Docker, and start it" \
+                "[DRY RUN] 计划: 配置 Docker 官方仓库、安装并启动 Docker"
+            ;;
+        task_init_no_mirror|task_init_with_mirror|task_custom_init)
+            ui_log_info \
+                "[DRY RUN] Plan: initialization workflow; no submodule was executed" \
+                "[DRY RUN] 计划: 初始化组合动作；未执行任何子模块"
+            ;;
+        *)
+            ui_log_info \
+                "[DRY RUN] Planned action: ${action} (execution blocked)" \
+                "[DRY RUN] 计划调用动作: ${action}（已阻止实际执行）"
+            ;;
     esac
 }
 
@@ -9554,11 +10102,15 @@ handle_action_failure() {
     operation_total="${#OPERATION_TARGETS[@]}"
 
     if [ "$operation_total" -le "$operation_start" ]; then
-        log_warning "动作失败或被取消: $action (status=$status)；没有新增的可回滚文件变更"
+        ui_log_warning \
+            "Action failed or was cancelled: $action (status=$status); no new file changes to roll back" \
+            "动作失败或被取消: $action (status=$status)；没有新增的可回滚文件变更"
         return 0
     fi
     if [ "$ROLLBACK_ENABLED" != "true" ]; then
-        log_warning "动作失败: $action；文件回滚已禁用，变更保留在回滚账本中"
+        ui_log_warning \
+            "Action failed: $action; file rollback is disabled and changes remain in the rollback ledger" \
+            "动作失败: ${action}；文件回滚已禁用，变更保留在回滚账本中"
         return 0
     fi
 
@@ -9570,26 +10122,40 @@ handle_action_failure() {
             mode="prompt"
         fi
     elif [ "$mode" = "prompt" ] && [ "$NON_INTERACTIVE" = "1" ]; then
-        log_warning "非交互模式无法提示，ACTION_ROLLBACK_MODE=prompt 按 always 处理"
+        ui_log_warning \
+            "Cannot prompt in non-interactive mode; treating ACTION_ROLLBACK_MODE=prompt as always" \
+            "非交互模式无法提示，ACTION_ROLLBACK_MODE=prompt 按 always 处理"
         mode="always"
     fi
 
     case "$mode" in
         always)
-            log_warning "动作失败，自动回滚该动作新增的文件变更: $action"
+            ui_log_warning \
+                "Action failed; automatically rolling back its new file changes: $action" \
+                "动作失败，自动回滚该动作新增的文件变更: $action"
             rollback_operations_from "$operation_start" || \
-                log_error "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
+                ui_log_error \
+                    "Some file changes from $action could not be rolled back; failed entries remain in the ledger" \
+                    "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
             ;;
         prompt)
-            if confirm_action "动作 $action 失败，是否回滚该动作新增的文件变更?" "y"; then
+            if confirm_action "$(ui_text \
+                "Action $action failed. Roll back its new file changes?" \
+                "动作 $action 失败，是否回滚该动作新增的文件变更?")" "y"; then
                 rollback_operations_from "$operation_start" || \
-                    log_error "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
+                    ui_log_error \
+                        "Some file changes from $action could not be rolled back; failed entries remain in the ledger" \
+                        "动作 $action 的部分文件变更回滚失败；失败项仍保留在账本中"
             else
-                log_warning "已保留动作 $action 的文件变更，可稍后从回滚菜单处理"
+                ui_log_warning \
+                    "File changes from $action were kept and can be handled later from the rollback menu" \
+                    "已保留动作 $action 的文件变更，可稍后从回滚菜单处理"
             fi
             ;;
         never)
-            log_warning "ACTION_ROLLBACK_MODE=never：已保留动作 $action 的文件变更"
+            ui_log_warning \
+                "ACTION_ROLLBACK_MODE=never: file changes from $action were kept" \
+                "ACTION_ROLLBACK_MODE=never：已保留动作 $action 的文件变更"
             ;;
     esac
 }
@@ -9626,7 +10192,7 @@ run_menu_action() {
     local status=0
     invoke_action "$@" || status=$?
     if [ "$status" -ne 0 ]; then
-        log_warning "操作返回状态: $status"
+        ui_log_warning "Operation returned status: $status" "操作返回状态: $status"
     fi
     menu_pause
     # 菜单层已经展示失败；不要让 set -e 因菜单动作失败而退出整个脚本。
@@ -9637,7 +10203,7 @@ run_menu_flow() {
     local status=0
     invoke_action "$@" || status=$?
     if [ "$status" -ne 0 ]; then
-        log_warning "操作返回状态: $status"
+        ui_log_warning "Operation returned status: $status" "操作返回状态: $status"
     fi
     return 0
 }
@@ -10009,7 +10575,7 @@ handle_signal() {
     [ "$signal_name" = "INT" ] && exit_code=130
     trap - INT TERM EXIT
     set +e
-    log_warning "收到 ${signal_name}，正在终止活动子进程并清理临时文件"
+    ui_log_warning "Received ${signal_name}; terminating active child processes and cleaning temporary files" "收到 ${signal_name}，正在终止活动子进程并清理临时文件"
     if [ -n "$ACTIVE_CHILD_PID" ] && kill -0 "$ACTIVE_CHILD_PID" 2>/dev/null; then
         if [ "$ACTIVE_CHILD_IS_GROUP" = true ]; then
             kill -TERM -- "-$ACTIVE_CHILD_PID" 2>/dev/null || true
@@ -10021,7 +10587,7 @@ handle_signal() {
     fi
     recover_pending_directory_transactions || true
     cleanup_temp_files
-    log_warning "操作已中断；文件备份保留在 ${BACKUP_DIR}，请结合日志检查未记录的外部状态变更"
+    ui_log_warning "Operation interrupted; file backups remain in ${BACKUP_DIR}. Review the log for external state changes that were not recorded." "操作已中断；文件备份保留在 ${BACKUP_DIR}，请结合日志检查未记录的外部状态变更"
     exit "$exit_code"
 }
 
@@ -10061,7 +10627,9 @@ main() {
         if [ ! -w "$(dirname "$LOG_FILE")" ]; then
             LOG_FILE="/tmp/init_script_plan_$(date +%Y%m%d_%H%M%S)_$$.log"
         fi
-        log_info "Profile PLAN_ONLY 模式，不执行系统变更"
+        ui_log_info \
+            "Profile PLAN_ONLY mode; no system changes will be made" \
+            "Profile PLAN_ONLY 模式，不执行系统变更"
         if [ -n "$PROFILE_FILE" ]; then
             load_profile_file "$PROFILE_FILE"
             apply_profile_modules "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"
@@ -10069,7 +10637,7 @@ main() {
         fi
         PROFILE_LOADED_NAME="$INIT_PROFILE"
         if ! PROFILE_LOADED_MODULES="$(profile_modules_for_preset "$INIT_PROFILE")"; then
-            log_error "未知 Profile: $INIT_PROFILE"
+            ui_log_error "Unknown profile: $INIT_PROFILE" "未知 Profile: $INIT_PROFILE"
             exit 1
         fi
         apply_profile_modules "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"
@@ -10091,23 +10659,23 @@ main() {
         chmod 700 "$BACKUP_DIR" 2>/dev/null || true
     fi
 
-    log_info "脚本开始执行，日志文件: $LOG_FILE"
+    ui_log_info "Script started; log file: $LOG_FILE" "脚本开始执行，日志文件: $LOG_FILE"
 
     # 启动时不主动探测资源/网络；诊断菜单可按需执行。
     printf '%b\n' ""
 
     if [ -n "$PROFILE_FILE" ]; then
-        log_info "导入 Profile 文件: $PROFILE_FILE"
+        ui_log_info "Importing profile file: $PROFILE_FILE" "导入 Profile 文件: $PROFILE_FILE"
         load_profile_file "$PROFILE_FILE"
         apply_profile_modules "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"
         exit 0
     fi
 
     if [ -n "$INIT_PROFILE" ]; then
-        log_info "使用内置 Profile: $INIT_PROFILE"
+        ui_log_info "Using built-in profile: $INIT_PROFILE" "使用内置 Profile: $INIT_PROFILE"
         PROFILE_LOADED_NAME="$INIT_PROFILE"
         if ! PROFILE_LOADED_MODULES="$(profile_modules_for_preset "$INIT_PROFILE")"; then
-            log_error "未知 Profile: $INIT_PROFILE"
+            ui_log_error "Unknown profile: $INIT_PROFILE" "未知 Profile: $INIT_PROFILE"
             exit 1
         fi
         apply_profile_modules "$PROFILE_LOADED_NAME" "$PROFILE_LOADED_MODULES"

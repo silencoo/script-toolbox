@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# agentctl — shared Shell frontend for coding-agent provider setup.
-#
-# Per-client setup.sh files remain the implementation and raw-URL-compatible
-# entrypoints. This command selects one of them and manages the optional Claude
-# status-line preset without taking ownership of MCP profiles, persistent
-# instructions, or the installed CLI binary.
+# agentctl — unified coding-agent configuration frontend.
+# Per-client setup.sh files are private render backends for Provider use/apply.
 
 set -euo pipefail
 umask 077
@@ -20,10 +16,11 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.13.0"
+VERSION="0.16.3"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
+ACCOUNT_CLIENT="${SCRIPT_DIR}/account-client.mjs"
 FAILOVER_CLIENT="${SCRIPT_DIR}/failover-client.mjs"
 PRICING_CLIENT="${SCRIPT_DIR}/pricing-client.mjs"
 PROXY_CLIENT="${SCRIPT_DIR}/proxy-client.mjs"
@@ -41,32 +38,28 @@ Usage:
   agentctl tui
   agentctl interactive
   agentctl update [--check|--yes]
-  agentctl setup <claude|codex|opencode|pi> [setup options]
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl statusline <install|status|uninstall> [options]
-  agentctl providers <claude|codex|opencode|pi>
   agentctl provider <command> [options]
+  agentctl account <status|list|save|use|delete> ...
   agentctl failover <command> [options]
   agentctl pricing <command> [options]
   agentctl proxy <plan|start|status|stop|token> ...
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
-  agentctl help <claude|codex|opencode|pi>
   agentctl workspace <command> [options]
   agentctl preset <list|show|create|delete|plan|apply|current|rollback|push|pull> ...
   agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Commands:
-  setup       Install the selected CLI when missing, then configure its
-              provider, model, and credential. "init" and "configure" are
-              accepted aliases.
   status      Read CLI/provider configuration source and credential metadata,
               including external Claude config and official Codex login.
               Secret values are never emitted.
   statusline  Preview/install, inspect, or safely uninstall the managed Claude
               Code status-line preset. Existing external settings are preserved.
-  providers   Show the selected client's provider/model presets.
-  provider    Manage portable provider profiles, target/platform overlays,
-              model aliases, and local Secret references.
+  provider    List built-ins and local/Workspace profiles in one catalog; use a
+              selection to install/configure one client and store local Secrets.
+  account     Save and switch owner-only Codex ChatGPT official-login
+              snapshots independently from inference Provider profiles.
   failover    Manage portable ordered provider routes and guarded retry/
               circuit-breaker policy. Runtime counters remain device-local.
   pricing     Manage an independent versioned fixed-decimal price catalog and
@@ -75,7 +68,6 @@ Commands:
               not take over client configuration automatically.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
-  help        Show the selected client's setup options.
   workspace   Manage one encrypted recovery key for portable Provider,
               Secret, failover, pricing, MCP, Skills, Prompts, and Preset
               catalogs. Device-generated state remains local.
@@ -87,10 +79,11 @@ Commands:
               controllers share one runtime and update together.
 
 Run without arguments in a terminal for the unified TUI. Use "interactive"
-for the guided Shell menu. Setup options after the
-client name are passed unchanged to that client's existing setup.sh backend.
+for the guided Shell menu. Per-client setup scripts are internal renderers;
+all user-facing Provider selection goes through "agentctl provider".
 Run "agentctl workspace --help" for Workspace commands.
-Run "agentctl provider --help" for portable Provider Store commands.
+Run "agentctl provider --help" for the unified Provider catalog.
+Run "agentctl account --help" for Codex official-account commands.
 Run "agentctl failover --help" for portable failover-route commands.
 Run "agentctl pricing --help" for price catalog and calculation commands.
 Run "agentctl proxy --help" for the optional local proxy lifecycle.
@@ -111,6 +104,13 @@ run_provider() {
   [ -r "$PROVIDER_CLIENT" ] ||
     die "Provider Store client not found: $PROVIDER_CLIENT"
   exec node "$PROVIDER_CLIENT" "$@"
+}
+
+run_account() {
+  require_node22 "agentctl account"
+  [ -r "$ACCOUNT_CLIENT" ] ||
+    die "Account controller not found: $ACCOUNT_CLIENT"
+  exec node "$ACCOUNT_CLIENT" "$@"
 }
 
 run_failover() {
@@ -194,37 +194,6 @@ select_client() {
   resolve_client "$MENU_VALUE"
 }
 
-run_setup() {
-  local requested="$1"
-  shift
-  resolve_client "$requested"
-  if [ "${1:-}" = "--" ]; then
-    shift
-  fi
-  log "Opening ${CLIENT_LABEL} provider setup..."
-  AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
-    AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
-    exec "$SETUP_SCRIPT" "$@"
-}
-
-run_providers() {
-  local requested="$1"
-  shift
-  [ $# -eq 0 ] || die "providers accepts only a client name"
-  resolve_client "$requested"
-  exec "$SETUP_SCRIPT" --list-providers
-}
-
-run_client_help() {
-  local requested="$1"
-  shift
-  [ $# -eq 0 ] || die "help accepts only a client name"
-  resolve_client "$requested"
-  AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
-    AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
-    exec "$SETUP_SCRIPT" --help
-}
-
 run_statusline() {
   local manager
   resolve_agent_root
@@ -286,7 +255,7 @@ status_safe_provider() {
     codex)
       case "$value" in
         ""|*[!A-Za-z0-9._-]*) ;;
-        script_toolbox_*) STATUS_SAFE_VALUE="$value" ;;
+        *) STATUS_SAFE_VALUE="$(printf '%s' "$value" | cut -c1-96)" ;;
       esac
       ;;
     opencode|pi)
@@ -325,6 +294,7 @@ status_set_metadata() {
       CLI_COMMAND="opencode"
       CONFIG_FILE_1="${HOME}/.config/opencode/opencode.json"
       STATE_FILE="${HOME}/.config/opencode/.script-toolbox-provider"
+      AUTH_FILE="${HOME}/.local/share/opencode/auth.json"
       CREDENTIAL_EXPECTED_PREFIX="${HOME}/.config/opencode/provider-keys/"
       ;;
     pi)
@@ -337,8 +307,42 @@ status_set_metadata() {
   esac
 }
 
+status_prepare_identity() {
+  IDENTITY_STATUS="not-applicable"
+  IDENTITY_KIND=""
+  IDENTITY_PROVIDER=""
+  IDENTITY_ACCOUNT=""
+  IDENTITY_SOURCE="none"
+  IDENTITY_CREDENTIAL_FILE=""
+  IDENTITY_CREDENTIAL_EXISTS=false
+  IDENTITY_CREDENTIAL_MODE=""
+  IDENTITY_CREDENTIAL_PRIVATE=false
+
+  [ "$CLIENT_ID" = "codex" ] || return 0
+  IDENTITY_STATUS="not-configured"
+  [ -f "$AUTH_FILE" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  if jq -e '
+    .auth_mode == "chatgpt"
+    and ((.tokens // {}) | [.. | strings | select(length > 0)] | length > 0)
+  ' "$AUTH_FILE" >/dev/null 2>&1; then
+    IDENTITY_STATUS="configured"
+    IDENTITY_KIND="chatgpt"
+    IDENTITY_PROVIDER="openai"
+    IDENTITY_ACCOUNT="current"
+    IDENTITY_SOURCE="official-login"
+    IDENTITY_CREDENTIAL_FILE="$AUTH_FILE"
+    IDENTITY_CREDENTIAL_EXISTS=true
+    IDENTITY_CREDENTIAL_MODE="$(status_file_mode "$AUTH_FILE")"
+    case "$IDENTITY_CREDENTIAL_MODE" in
+      ?00|??00) IDENTITY_CREDENTIAL_PRIVATE=true ;;
+    esac
+  fi
+}
+
 status_prepare() {
-  local raw_value="" candidate="" raw_version=""
+  local raw_value="" candidate="" raw_version="" native_provider="" native_selected=""
 
   status_set_metadata
   CLI_INSTALLED=false
@@ -357,6 +361,10 @@ status_prepare() {
   CREDENTIAL_MODE=""
   CREDENTIAL_PRIVATE=false
   CREDENTIAL_PATH_VALID=true
+  INFERENCE_PROVIDER=""
+  INFERENCE_SOURCE="none"
+  OFFICIAL_LOGIN_PRESERVED=false
+  IDENTITY_INFERENCE_SPLIT=false
 
   if command -v "$CLI_COMMAND" >/dev/null 2>&1; then
     CLI_INSTALLED=true
@@ -387,6 +395,7 @@ status_prepare() {
     fi
   fi
   [ ! -f "$STATE_FILE" ] || STATE_EXISTS=true
+  status_prepare_identity
 
   case "$CLIENT_ID" in
     claude)
@@ -447,18 +456,20 @@ status_prepare() {
         candidate="$(sed -n '1p' "$STATE_FILE")"
       fi
       if [ "$OWNERSHIP_MARKER" != true ] &&
-         [ -f "$AUTH_FILE" ] &&
-         command -v jq >/dev/null 2>&1; then
-        if jq -e '
-          .auth_mode == "chatgpt"
-          and ((.tokens // {}) | [.. | strings | select(length > 0)] | length > 0)
-        ' "$AUTH_FILE" >/dev/null 2>&1; then
+         { [ -z "$STATUS_PROVIDER" ] || [ "$STATUS_PROVIDER" = "openai" ]; } &&
+         [ "$IDENTITY_STATUS" = "configured" ]; then
           PROVIDER_SOURCE="official-login"
           STATUS_PROVIDER="openai-chatgpt"
           CREDENTIAL_KIND="official-auth"
-          CREDENTIAL_FILE="$AUTH_FILE"
-          CREDENTIAL_EXISTS=true
-        elif jq -e '((.OPENAI_API_KEY // "") | length > 0)' \
+          CREDENTIAL_FILE="$IDENTITY_CREDENTIAL_FILE"
+          CREDENTIAL_EXISTS="$IDENTITY_CREDENTIAL_EXISTS"
+          CREDENTIAL_MODE="$IDENTITY_CREDENTIAL_MODE"
+          CREDENTIAL_PRIVATE="$IDENTITY_CREDENTIAL_PRIVATE"
+      elif [ "$OWNERSHIP_MARKER" != true ] &&
+           { [ -z "$STATUS_PROVIDER" ] || [ "$STATUS_PROVIDER" = "openai" ]; } &&
+           [ -f "$AUTH_FILE" ] &&
+           command -v jq >/dev/null 2>&1; then
+        if jq -e '((.OPENAI_API_KEY // "") | length > 0)' \
           "$AUTH_FILE" >/dev/null 2>&1; then
           PROVIDER_SOURCE="official-login"
           STATUS_PROVIDER="openai"
@@ -466,12 +477,15 @@ status_prepare() {
           CREDENTIAL_FILE="$AUTH_FILE"
           CREDENTIAL_EXISTS=true
         fi
+      elif [ "$OWNERSHIP_MARKER" != true ] && [ -n "$STATUS_PROVIDER" ]; then
+        PROVIDER_SOURCE="external"
       fi
       ;;
     opencode)
       if grep -q '"script-toolbox-' "$CONFIG_FILE_1" 2>/dev/null ||
          [ "$STATE_EXISTS" = true ]; then
         OWNERSHIP_MARKER=true
+        PROVIDER_SOURCE="agentctl"
       fi
       if [ "$STATE_EXISTS" = true ]; then
         raw_value="$(sed -n '1p' "$STATE_FILE")"
@@ -480,9 +494,49 @@ status_prepare() {
         candidate="$(sed -n '2p' "$STATE_FILE")"
       fi
       STATUS_MODEL="$(status_json_value "$CONFIG_FILE_1" '.model // empty')"
-      case "$STATUS_MODEL" in
-        "${STATUS_PROVIDER}/"*) STATUS_MODEL="${STATUS_MODEL#"${STATUS_PROVIDER}/"}" ;;
-      esac
+      if [ "$OWNERSHIP_MARKER" = true ]; then
+        case "$STATUS_MODEL" in
+          "${STATUS_PROVIDER}/"*) STATUS_MODEL="${STATUS_MODEL#"${STATUS_PROVIDER}/"}" ;;
+        esac
+      elif [ -f "$AUTH_FILE" ] && command -v jq >/dev/null 2>&1; then
+        case "$STATUS_MODEL" in
+          */*) native_selected="${STATUS_MODEL%%/*}" ;;
+        esac
+        native_provider="$(jq -r --arg selected "$native_selected" '
+          def valid_record:
+            type == "object"
+            and ((.type // "") | type == "string");
+          if ($selected | length) > 0 then
+            if has($selected) and (.[$selected] | valid_record) then $selected else "" end
+          else
+            ([to_entries[] | select(.value | valid_record) | .key]
+              | if length == 1 then .[0] else "" end)
+          end
+        ' "$AUTH_FILE" 2>/dev/null || true)"
+        case "$native_provider" in
+          anthropic) STATUS_PROVIDER="anthropic-api" ;;
+          openai) STATUS_PROVIDER="openai-api" ;;
+          google) STATUS_PROVIDER="google-gemini" ;;
+          deepseek) STATUS_PROVIDER="deepseek" ;;
+          openrouter) STATUS_PROVIDER="openrouter" ;;
+          *) STATUS_PROVIDER="" ;;
+        esac
+        if [ -n "$STATUS_PROVIDER" ]; then
+          PROVIDER_SOURCE="external-native-auth"
+          CREDENTIAL_KIND="native-auth"
+          CREDENTIAL_FILE="$AUTH_FILE"
+          CREDENTIAL_EXISTS=true
+          CREDENTIAL_MODE="$(status_file_mode "$AUTH_FILE")"
+          case "$CREDENTIAL_MODE" in
+            ?00|??00) CREDENTIAL_PRIVATE=true ;;
+          esac
+          if [ "$native_selected" = "$native_provider" ]; then
+            STATUS_MODEL="${STATUS_MODEL#*/}"
+          else
+            STATUS_MODEL=""
+          fi
+        fi
+      fi
       ;;
     pi)
       if grep -q '"script-toolbox-' "$CONFIG_FILE_2" 2>/dev/null ||
@@ -537,6 +591,12 @@ status_prepare() {
     else
       PROVIDER_STATUS="incomplete"
     fi
+  elif [ "$PROVIDER_SOURCE" = "external-native-auth" ]; then
+    if [ -n "$STATUS_PROVIDER" ] && [ "$CREDENTIAL_EXISTS" = true ]; then
+      PROVIDER_STATUS="configured"
+    else
+      PROVIDER_STATUS="incomplete"
+    fi
   elif [ "$PROVIDER_SOURCE" = "external" ]; then
     if [ "$CONFIG_VALID" = true ] &&
        [ -n "$STATUS_PROVIDER" ] &&
@@ -552,6 +612,21 @@ status_prepare() {
       PROVIDER_STATUS="incomplete"
     fi
   fi
+
+  INFERENCE_PROVIDER="$STATUS_PROVIDER"
+  INFERENCE_SOURCE="$PROVIDER_SOURCE"
+  if [ "$CLIENT_ID" = "codex" ] &&
+     [ "$PROVIDER_SOURCE" = "official-login" ] &&
+     [ "$STATUS_PROVIDER" = "openai-chatgpt" ]; then
+    INFERENCE_PROVIDER="openai-official"
+    INFERENCE_SOURCE="official-account"
+  fi
+  if [ "$CLIENT_ID" = "codex" ] && [ "$IDENTITY_STATUS" = "configured" ]; then
+    OFFICIAL_LOGIN_PRESERVED=true
+    if [ "$PROVIDER_SOURCE" = "agentctl" ] || [ "$PROVIDER_SOURCE" = "external" ]; then
+      IDENTITY_INFERENCE_SPLIT=true
+    fi
+  fi
 }
 
 status_emit_human() {
@@ -562,8 +637,17 @@ status_emit_human() {
   else
     log "  CLI         : not installed"
   fi
-  log "  Provider    : ${PROVIDER_STATUS}${STATUS_PROVIDER:+ ($STATUS_PROVIDER)}"
-  log "  Source      : $PROVIDER_SOURCE"
+  if [ "$CLIENT_ID" = "codex" ]; then
+    log "  Identity    : ${IDENTITY_STATUS}${IDENTITY_KIND:+ ($IDENTITY_KIND / $IDENTITY_ACCOUNT)}"
+    log "  Inference   : ${PROVIDER_STATUS}${INFERENCE_PROVIDER:+ ($INFERENCE_PROVIDER)}"
+    log "  Source      : $INFERENCE_SOURCE"
+    if [ "$IDENTITY_INFERENCE_SPLIT" = true ]; then
+      log "  Integration : official login preserved for Remote Control"
+    fi
+  else
+    log "  Provider    : ${PROVIDER_STATUS}${STATUS_PROVIDER:+ ($STATUS_PROVIDER)}"
+    log "  Source      : $PROVIDER_SOURCE"
+  fi
   log "  Model       : ${STATUS_MODEL:-not resolved}"
   log "  Config      : $CONFIG_FILE_1"
   [ -z "$CONFIG_FILE_2" ] || log "                $CONFIG_FILE_2"
@@ -581,6 +665,9 @@ status_emit_human() {
   else
     log "  Credential  : $CREDENTIAL_KIND; missing${CREDENTIAL_FILE:+ ($CREDENTIAL_FILE)}"
   fi
+  if [ "$CLIENT_ID" = "codex" ] && [ "$IDENTITY_CREDENTIAL_EXISTS" = true ]; then
+    log "  Official auth: $IDENTITY_CREDENTIAL_FILE (mode ${IDENTITY_CREDENTIAL_MODE:-unknown}, $([ "$IDENTITY_CREDENTIAL_PRIVATE" = true ] && printf private || printf insecure))"
+  fi
 }
 
 status_emit_json() {
@@ -593,6 +680,15 @@ status_emit_json() {
     --arg provider_source "$PROVIDER_SOURCE" \
     --arg provider "$STATUS_PROVIDER" \
     --arg model "$STATUS_MODEL" \
+    --arg inference_provider "$INFERENCE_PROVIDER" \
+    --arg inference_source "$INFERENCE_SOURCE" \
+    --arg identity_status "$IDENTITY_STATUS" \
+    --arg identity_kind "$IDENTITY_KIND" \
+    --arg identity_provider "$IDENTITY_PROVIDER" \
+    --arg identity_account "$IDENTITY_ACCOUNT" \
+    --arg identity_source "$IDENTITY_SOURCE" \
+    --arg identity_credential_file "$IDENTITY_CREDENTIAL_FILE" \
+    --arg identity_credential_mode "$IDENTITY_CREDENTIAL_MODE" \
     --arg config_file_1 "$CONFIG_FILE_1" \
     --arg config_file_2 "$CONFIG_FILE_2" \
     --arg state_file "$STATE_FILE" \
@@ -606,7 +702,11 @@ status_emit_json() {
     --argjson ownership_marker "$OWNERSHIP_MARKER" \
     --argjson credential_exists "$CREDENTIAL_EXISTS" \
     --argjson credential_private "$CREDENTIAL_PRIVATE" \
-    --argjson credential_path_valid "$CREDENTIAL_PATH_VALID" '
+    --argjson credential_path_valid "$CREDENTIAL_PATH_VALID" \
+    --argjson identity_credential_exists "$IDENTITY_CREDENTIAL_EXISTS" \
+    --argjson identity_credential_private "$IDENTITY_CREDENTIAL_PRIVATE" \
+    --argjson official_login_preserved "$OFFICIAL_LOGIN_PRESERVED" \
+    --argjson identity_inference_split "$IDENTITY_INFERENCE_SPLIT" '
       {
         client: $client,
         label: $label,
@@ -617,6 +717,32 @@ status_emit_json() {
         provider_source: $provider_source,
         provider: (if $provider == "" then null else $provider end),
         model: (if $model == "" then null else $model end),
+        identity: {
+          status: $identity_status,
+          kind: (if $identity_kind == "" then null else $identity_kind end),
+          provider: (if $identity_provider == "" then null else $identity_provider end),
+          account: (if $identity_account == "" then null else $identity_account end),
+          source: $identity_source,
+          credential_file: (
+            if $identity_credential_file == "" then null else $identity_credential_file end
+          ),
+          credential_exists: $identity_credential_exists,
+          credential_private: $identity_credential_private,
+          credential_mode: (
+            if $identity_credential_mode == "" then null else $identity_credential_mode end
+          )
+        },
+        inference: {
+          status: $provider_status,
+          provider: (if $inference_provider == "" then null else $inference_provider end),
+          model: (if $model == "" then null else $model end),
+          source: $inference_source,
+          credential_kind: $credential_kind,
+          credential_exists: $credential_exists,
+          credential_private: $credential_private
+        },
+        official_login_preserved: $official_login_preserved,
+        identity_inference_split: $identity_inference_split,
         config_files: (
           [$config_file_1, $config_file_2] | map(select(length > 0))
         ),
@@ -743,9 +869,8 @@ run_interactive() {
 
   choose_menu \
     "What would you like to do?" 1 \
-    "setup|Install or configure a coding agent" \
+    "provider|Browse the unified Provider catalog" \
     "status|Inspect client and provider status" \
-    "providers|List provider and model presets" \
     "workspace|Inspect the unified MCP / Skills / Prompts Workspace" \
     "uninstall|Remove managed provider configuration" \
     "exit|Exit without changes"
@@ -761,17 +886,13 @@ run_interactive() {
 
   select_client
   case "$action" in
-    setup)
-      log "Opening ${CLIENT_LABEL} provider setup..."
-      AGENTCTL_SETUP_COMMAND="${SCRIPT_DIR}/agentctl setup ${CLIENT_ID}" \
-        AGENTCTL_UNINSTALL_COMMAND="${SCRIPT_DIR}/agentctl uninstall ${CLIENT_ID}" \
-        exec "$SETUP_SCRIPT"
+    provider)
+      require_node22 "agentctl provider"
+      node "$PROVIDER_CLIENT" list --target "$CLIENT_ID"
+      log "Use: agentctl provider use <name> --target ${CLIENT_ID} --secret-file <private-file> --yes"
       ;;
     status)
       run_status "$CLIENT_ID"
-      ;;
-    providers)
-      exec "$SETUP_SCRIPT" --list-providers
       ;;
     uninstall)
       run_uninstall "$CLIENT_ID"
@@ -799,11 +920,6 @@ case "${1:-}" in
     shift
     run_ctl_update "${SCRIPT_DIR}/../update-commands.sh" agentctl "$@"
     ;;
-  setup|init|configure)
-    [ $# -ge 2 ] || die "$1 requires a client name"
-    shift
-    run_setup "$@"
-    ;;
   status)
     shift
     run_status "$@"
@@ -812,28 +928,25 @@ case "${1:-}" in
     shift
     run_statusline "$@"
     ;;
-  providers|list-providers)
-    [ $# -eq 2 ] || die "$1 requires exactly one client name"
-    shift
-    run_providers "$@"
-    ;;
   uninstall|remove)
     [ $# -ge 2 ] || die "$1 requires a client name"
     shift
     run_uninstall "$@"
     ;;
-  help)
-    [ $# -eq 2 ] || die "help requires exactly one client name"
-    shift
-    run_client_help "$@"
+  help|-h|--help)
+    usage
     ;;
   workspace)
     shift
     run_workspace "$@"
     ;;
-  provider|profile)
+  provider)
     shift
     run_provider "$@"
+    ;;
+  account|identity)
+    shift
+    run_account "$@"
     ;;
   failover|route)
     shift
@@ -852,9 +965,6 @@ case "${1:-}" in
     ;;
   doctor)
     run_orchestrator "$@"
-    ;;
-  -h|--help)
-    usage
     ;;
   -V|--version)
     printf 'agentctl %s\n' "$VERSION"

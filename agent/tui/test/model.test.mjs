@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROVIDER_TARGETS,
+  accountEntries,
   actionForKey,
   actionNeedsConfirmation,
   clampSelection,
@@ -24,10 +25,39 @@ import {
 
 test("section navigation wraps and invalid sections fall back", () => {
   assert.equal(normalizeSection("mcp"), "mcp");
+  assert.equal(normalizeSection("accounts"), "accounts");
   assert.equal(normalizeSection("providers"), "providers");
   assert.equal(normalizeSection("unknown"), "overview");
   assert.equal(moveSection("overview", -1), "cloud");
   assert.equal(moveSection("cloud", 1), "overview");
+});
+
+test("official account presentation exposes labels only and marks the active snapshot", () => {
+  const entries = accountEntries({
+    accounts: {
+      accounts: [{
+        name: "secondary",
+        current: false,
+        saved_at: "2026-08-11T00:00:00.000Z",
+        credential_private: true,
+        access_token: "never-render"
+      }, {
+        name: "primary",
+        current: true,
+        saved_at: "2026-08-10T00:00:00.000Z",
+        credential_private: true,
+        account_id: "never-render-either"
+      }, {
+        name: "Unsafe Label",
+        current: false
+      }]
+    }
+  });
+  assert.deepEqual(entries.map(({ name }) => name), ["primary", "secondary"]);
+  assert.equal(entries[0].current, true);
+  assert.equal(entries[0].credentialPrivate, true);
+  assert.equal(JSON.stringify(entries).includes("never-render"), false);
+  assert.equal(Object.hasOwn(entries[0], "account_id"), false);
 });
 
 test("target and preset selection are deterministic", () => {
@@ -158,7 +188,7 @@ test("Snippet presentation merges local and cloud metadata without content", () 
   assert.equal(JSON.stringify(entries).includes("never-render"), false);
 });
 
-test("Provider presentation distinguishes local/cloud entries and drops Secret values", () => {
+test("Provider presentation merges matching local/Workspace profiles and drops Secret values", () => {
   const entries = providerEntries([{
     name: "gateway",
     description: "Local gateway",
@@ -170,23 +200,162 @@ test("Provider presentation distinguishes local/cloud entries and drops Secret v
     auth_mode: "bearer",
     secret_reference: "gateway_key",
     secret_present: true,
+    compaction_upstream: "responses_v2",
+    compaction_policy: "auto",
+    compaction_mode: "remote_native",
+    compaction_label: "Remote · native",
+    context_window_tokens: 1_000_000,
+    auto_compact_tokens: 500_000,
+    context_label: "1,000,000 max · compact at 500,000",
+    official_identity_policy: "preserve",
+    official_identity_account: "current",
     applied: true,
     target: "codex",
     platform: "darwin",
     secret_value: "never-render-local"
   }], [{
     name: "gateway",
+    description: "Local gateway",
     protocol: "openai_responses",
-    ready: false,
-    issue: "local Secret is missing",
+    endpoint: "https://gateway.example.test/v1",
+    requested_model: "daily",
+    outbound_model: "vendor-model",
+    ready: true,
+    auth_mode: "bearer",
+    secret_reference: "gateway_key",
+    secret_present: true,
+    compaction_upstream: "responses_v2",
+    compaction_policy: "auto",
+    compaction_mode: "remote_native",
+    compaction_label: "Remote · native",
+    context_window_tokens: 1_000_000,
+    auto_compact_tokens: 500_000,
+    context_label: "1,000,000 max · compact at 500,000",
+    official_identity_policy: "preserve",
+    official_identity_account: "current",
     secret_value: "never-render-cloud"
   }]);
-  assert.deepEqual(entries.map(({ key }) => key), ["local:gateway", "cloud:gateway"]);
+  assert.deepEqual(entries.map(({ key }) => key), ["gateway"]);
   assert.equal(entries[0].applied, true);
+  assert.equal(entries[0].source, "local");
+  assert.deepEqual(entries[0].sources, ["local", "cloud"]);
+  assert.equal(entries[0].syncStatus, "backed-up");
+  assert.deepEqual(entries[0].syncConflicts, []);
   assert.equal(entries[0].secretReference, "gateway_key");
-  assert.equal(entries[1].source, "cloud");
+  assert.equal(entries[0].officialIdentityPolicy, "preserve");
+  assert.equal(entries[0].officialIdentityAccount, "current");
+  assert.equal(entries[0].compactionLabel, "Remote · native");
+  assert.equal(entries[0].contextWindowTokens, 1_000_000);
+  assert.equal(entries[0].autoCompactTokens, 500_000);
+  assert.match(entries[0].contextLabel, /compact at 500,000/);
   assert.equal(JSON.stringify(entries).includes("never-render"), false);
   assert.equal(Object.hasOwn(entries[0], "secret_value"), false);
+});
+
+test("Provider presentation keeps local precedence and reports safe metadata conflicts", () => {
+  const entries = providerEntries([{
+    name: "gateway",
+    source: "local",
+    endpoint: "https://local.example.test/v1",
+    protocol: "openai_responses",
+    ready: true,
+    secret_present: true
+  }], [{
+    name: "gateway",
+    source: "cloud",
+    endpoint: "https://workspace.example.test/v1",
+    protocol: "openai_responses",
+    ready: true,
+    secret_present: true
+  }]);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].source, "local");
+  assert.equal(entries[0].endpoint, "https://local.example.test/v1");
+  assert.equal(entries[0].syncStatus, "conflict");
+  assert.deepEqual(entries[0].syncConflicts, ["Endpoint"]);
+});
+
+test("Provider presentation keeps an unmaterialized built-in template distinct", () => {
+  const entries = providerEntries([{
+    name: "deepseek",
+    source: "builtin",
+    materialized: false,
+    status: "needs-key",
+    requested_model: "deepseek-v4-pro",
+    outbound_model: "deepseek-v4-pro",
+    models_available: ["deepseek-v4-pro", "deepseek-v4-flash"],
+    secret_reference: "deepseek_api_key",
+    native_auth_present: true,
+    native_auth_provider: "deepseek",
+    native_auth_type: "api",
+    native_selected: true,
+    native_selected_model: "deepseek-v4-pro"
+  }], []);
+  assert.equal(entries[0].key, "deepseek");
+  assert.equal(entries[0].source, "builtin");
+  assert.deepEqual(entries[0].sources, ["builtin"]);
+  assert.equal(entries[0].syncStatus, "builtin-only");
+  assert.equal(entries[0].status, "needs-key");
+  assert.deepEqual(entries[0].modelsAvailable, ["deepseek-v4-pro", "deepseek-v4-flash"]);
+  assert.equal(entries[0].nativeAuthPresent, true);
+  assert.equal(entries[0].nativeAuthProvider, "deepseek");
+  assert.equal(entries[0].nativeAuthType, "api");
+  assert.equal(entries[0].nativeSelected, true);
+  assert.equal(entries[0].nativeSelectedModel, "deepseek-v4-pro");
+});
+
+test("Provider presentation treats a materialized built-in as local while retaining its origin", () => {
+  const entries = providerEntries([{
+    name: "deepseek",
+    source: "builtin",
+    materialized: true,
+    endpoint: "https://api.deepseek.com/anthropic",
+    protocol: "anthropic_messages",
+    ready: true,
+    secret_present: true
+  }], []);
+  assert.equal(entries[0].source, "local");
+  assert.deepEqual(entries[0].sources, ["builtin", "local"]);
+  assert.equal(entries[0].syncStatus, "local-only");
+});
+
+test("Provider presentation prefers a Workspace profile over its unmaterialized built-in template", () => {
+  const entries = providerEntries([{
+    name: "deepseek",
+    source: "builtin",
+    materialized: false,
+    endpoint: "https://api.deepseek.com/anthropic",
+    protocol: "anthropic_messages",
+    ready: false,
+    status: "needs-key"
+  }], [{
+    name: "deepseek",
+    source: "cloud",
+    endpoint: "https://workspace-gateway.example.test",
+    protocol: "anthropic_messages",
+    ready: true,
+    secret_present: true
+  }]);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].source, "cloud");
+  assert.equal(entries[0].endpoint, "https://workspace-gateway.example.test");
+  assert.deepEqual(entries[0].sources, ["builtin", "cloud"]);
+  assert.equal(entries[0].syncStatus, "workspace-only");
+});
+
+test("Provider presentation hides incompatible targets by default and can reveal them", () => {
+  const remote = [{
+    name: "claude-only",
+    source: "cloud",
+    enabled: false,
+    compatible: false,
+    status: "disabled"
+  }];
+  assert.deepEqual(providerEntries([], remote), []);
+  const entries = providerEntries([], remote, { includeIncompatible: true });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].name, "claude-only");
+  assert.equal(entries[0].syncStatus, "workspace-only");
 });
 
 test("actions are scoped and writes require confirmation", () => {
@@ -199,9 +368,13 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("snippets", "p"), "snippets-plan");
   assert.equal(actionForKey("snippets", "a"), "snippets-apply");
   assert.equal(actionForKey("snippets", "c"), "snippet-copy");
-  assert.equal(actionForKey("agents", "c"), "agent-configure");
-  assert.equal(actionForKey("agents", "p"), "agent-providers");
+  assert.equal(actionForKey("agents", "c"), "agent-provider");
+  assert.equal(actionForKey("agents", "p"), "agent-provider");
+  assert.equal(actionForKey("agents", "\r"), "agent-provider");
   assert.equal(actionForKey("agents", "x"), "agent-uninstall");
+  assert.equal(actionForKey("accounts", "a"), "account-use");
+  assert.equal(actionForKey("accounts", "\r"), "account-use");
+  assert.equal(actionForKey("accounts", "x"), "account-delete");
   assert.equal(actionForKey("providers", "p"), "provider-plan");
   assert.equal(actionForKey("providers", "a"), "provider-apply");
   assert.equal(actionForKey("providers", "u"), "provider-sync-push");
@@ -213,6 +386,8 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("snippets-apply"), true);
   assert.equal(actionNeedsConfirmation("snippet-copy"), false);
   assert.equal(actionNeedsConfirmation("agent-uninstall"), true);
+  assert.equal(actionNeedsConfirmation("account-use"), true);
+  assert.equal(actionNeedsConfirmation("account-delete"), true);
   assert.equal(actionNeedsConfirmation("provider-plan"), false);
   assert.equal(actionNeedsConfirmation("provider-apply"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
@@ -250,6 +425,40 @@ test("component summaries preserve useful state without raw secrets", () => {
       credential_private: false
     }
   }).kind, "warn");
+  assert.deepEqual(componentSummary("identity", {
+    ok: true,
+    data: {
+      identity: {
+        status: "configured",
+        kind: "chatgpt",
+        account: "current",
+        source: "official-login",
+        credential_exists: true,
+        credential_private: true
+      }
+    }
+  }), {
+    label: "Active",
+    kind: "good",
+    detail: "ChatGPT · current account · official login"
+  });
+  assert.deepEqual(componentSummary("inference", {
+    ok: true,
+    data: {
+      inference: {
+        status: "configured",
+        provider: "minimax",
+        model: "MiniMax-M3",
+        source: "agentctl",
+        credential_exists: true,
+        credential_private: true
+      }
+    }
+  }), {
+    label: "Configured",
+    kind: "good",
+    detail: "minimax / MiniMax-M3 · agentctl"
+  });
   assert.deepEqual(componentSummary("prompts", {
     ok: true,
     data: { managed: false, profile: null }
@@ -257,6 +466,11 @@ test("component summaries preserve useful state without raw secrets", () => {
 });
 
 test("Workspace empty states distinguish setup, connectivity, and incompatible data", () => {
+  const connecting = workspacePresentation(null, "", true);
+  assert.equal(connecting.state, "connecting");
+  assert.equal(connecting.status, "Connecting…");
+  assert.match(connecting.description, /Local configuration is already available/);
+
   const missing = workspacePresentation(null, "[error] remote configuration not found: /private/path");
   assert.equal(missing.state, "unconfigured");
   assert.equal(missing.status, "Local only");
@@ -273,4 +487,14 @@ test("Workspace empty states distinguish setup, connectivity, and incompatible d
   const offline = workspacePresentation(null, "[error] remote request timed out");
   assert.equal(offline.state, "offline");
   assert.match(offline.safety, /Press r/);
+
+  const cached = { store_id: "a".repeat(32) };
+  const refreshing = workspacePresentation(cached, "", true);
+  assert.equal(refreshing.state, "refreshing");
+  assert.equal(refreshing.status, "Online · refreshing");
+
+  const stale = workspacePresentation(cached, "[error] could not reach the remote toolbox store");
+  assert.equal(stale.state, "stale");
+  assert.equal(stale.status, "Cached · retrying");
+  assert.match(stale.description, /last successful Workspace index/);
 });

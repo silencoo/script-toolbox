@@ -1,4 +1,5 @@
-export const CURRENT_PROVIDER_SCHEMA = 1;
+export const CURRENT_PROVIDER_SCHEMA = 2;
+export const CURRENT_PROVIDER_SECRETS_SCHEMA = 1;
 export const PROVIDER_STORE_KIND = "agentctl-provider-store";
 export const PROVIDER_SECRETS_KIND = "agentctl-provider-secrets";
 
@@ -25,6 +26,19 @@ export const PROVIDER_PLATFORMS = Object.freeze([
   "linux",
   "windows"
 ]);
+export const PROVIDER_COMPACTION_UPSTREAMS = Object.freeze([
+  "responses_v2",
+  "responses_v1",
+  "anthropic_messages_beta",
+  "none"
+]);
+export const PROVIDER_COMPACTION_POLICIES = Object.freeze([
+  "auto",
+  "remote",
+  "local"
+]);
+
+const MAX_CONTEXT_TOKENS = 10_000_000;
 
 const PROFILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const REFERENCE_NAME = /^[A-Za-z][A-Za-z0-9._-]*$/;
@@ -207,9 +221,134 @@ function validateModels(value, label) {
   return value;
 }
 
+function compactionProtocol(upstream) {
+  if (["responses_v2", "responses_v1"].includes(upstream)) return "openai_responses";
+  if (upstream === "anthropic_messages_beta") return "anthropic_messages";
+  return "";
+}
+
+export function validateCompactionUpstream(value, label = "compaction upstream") {
+  if (!PROVIDER_COMPACTION_UPSTREAMS.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_COMPACTION_UPSTREAMS.join(", ")}`
+    );
+  }
+  return value;
+}
+
+export function validateCompactionPolicy(value, label = "compaction policy") {
+  if (!PROVIDER_COMPACTION_POLICIES.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_COMPACTION_POLICIES.join(", ")}`
+    );
+  }
+  return value;
+}
+
+function validateTokenCount(value, label) {
+  if (value !== null && (!Number.isSafeInteger(value) || value < 1 ||
+      value > MAX_CONTEXT_TOKENS)) {
+    throw new ProviderSchemaError(
+      `${label} must be null or an integer from 1 to ${MAX_CONTEXT_TOKENS}`
+    );
+  }
+  return value;
+}
+
+export function validateContextWindowTokens(value, label = "context window tokens") {
+  return validateTokenCount(value, label);
+}
+
+export function validateAutoCompactTokens(value, label = "auto-compact tokens") {
+  return validateTokenCount(value, label);
+}
+
+function validateContext(value, label, { partial = false } = {}) {
+  requireObject(value, label);
+  rejectUnknown(value, ["window_tokens", "auto_compact_tokens"], label);
+  if (!partial || value.window_tokens !== undefined) {
+    validateContextWindowTokens(value.window_tokens, `${label}.window_tokens`);
+  }
+  if (!partial || value.auto_compact_tokens !== undefined) {
+    validateAutoCompactTokens(value.auto_compact_tokens, `${label}.auto_compact_tokens`);
+  }
+  if (partial && Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  if (value.window_tokens !== undefined && value.window_tokens !== null &&
+      value.auto_compact_tokens !== undefined && value.auto_compact_tokens !== null &&
+      value.auto_compact_tokens > value.window_tokens) {
+    throw new ProviderSchemaError(
+      `${label}.auto_compact_tokens cannot exceed window_tokens`
+    );
+  }
+  return value;
+}
+
+function validateCompaction(value, label, { partial = false, protocol = "" } = {}) {
+  requireObject(value, label);
+  rejectUnknown(value, ["upstream", "policy"], label);
+  if (!partial || value.upstream !== undefined) {
+    validateCompactionUpstream(value.upstream, `${label}.upstream`);
+  }
+  if (!partial || value.policy !== undefined) {
+    validateCompactionPolicy(value.policy, `${label}.policy`);
+  }
+  if (partial && Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  if (value.policy === "remote" && value.upstream === "none") {
+    throw new ProviderSchemaError(`${label} cannot force remote compaction without an upstream capability`);
+  }
+  const requiredProtocol = value.upstream === undefined
+    ? ""
+    : compactionProtocol(value.upstream);
+  if (protocol && requiredProtocol && protocol !== requiredProtocol) {
+    throw new ProviderSchemaError(
+      `${label}.upstream '${value.upstream}' requires protocol ${requiredProtocol}`
+    );
+  }
+  return value;
+}
+
+function legacyCompaction(profile) {
+  let endpoint = "";
+  try {
+    endpoint = new URL(profile.endpoint).toString().replace(/\/$/, "");
+  } catch {}
+  if (profile.name === "openai-api" && profile.protocol === "openai_responses" &&
+      endpoint === "https://api.openai.com/v1") {
+    return { upstream: "responses_v2", policy: "auto" };
+  }
+  if (profile.name === "anthropic-api" && profile.protocol === "anthropic_messages" &&
+      endpoint === "https://api.anthropic.com") {
+    return { upstream: "anthropic_messages_beta", policy: "auto" };
+  }
+  return { upstream: "none", policy: "auto" };
+}
+
+function normalizeProviderProfileSchema(value) {
+  requireObject(value, "provider profile");
+  if (value.schema === 1) {
+    rejectUnknown(value, [
+      "schema", "name", "description", "protocol", "endpoint", "auth",
+      "models", "targets", "platforms"
+    ], "provider profile schema 1");
+    value.schema = CURRENT_PROVIDER_SCHEMA;
+    value.compaction = legacyCompaction(value);
+    value.context = { window_tokens: null, auto_compact_tokens: null };
+  }
+  if (value.context === undefined) {
+    value.context = { window_tokens: null, auto_compact_tokens: null };
+  }
+  return value;
+}
+
 function validateTargetOverride(value, label) {
   requireObject(value, label);
-  rejectUnknown(value, ["enabled", "endpoint", "protocol", "auth", "model"], label);
+  rejectUnknown(value, [
+    "enabled", "endpoint", "protocol", "auth", "model", "compaction", "context"
+  ], label);
   if (Object.keys(value).length === 0) {
     throw new ProviderSchemaError(`${label} cannot be empty`);
   }
@@ -220,6 +359,15 @@ function validateTargetOverride(value, label) {
   if (value.protocol !== undefined) validateProtocol(value.protocol, `${label}.protocol`);
   if (value.auth !== undefined) validateAuth(value.auth, `${label}.auth`, { partial: true });
   if (value.model !== undefined) validateModelId(value.model, `${label}.model`);
+  if (value.compaction !== undefined) {
+    validateCompaction(value.compaction, `${label}.compaction`, {
+      partial: true,
+      protocol: value.protocol || ""
+    });
+  }
+  if (value.context !== undefined) {
+    validateContext(value.context, `${label}.context`, { partial: true });
+  }
   return value;
 }
 
@@ -246,11 +394,41 @@ function validatePlatforms(value, label) {
   return value;
 }
 
+function validateOverlayPolicies(profile) {
+  const base = {
+    protocol: profile.protocol,
+    auth: profile.auth,
+    compaction: profile.compaction,
+    context: profile.context
+  };
+  for (const target of PROVIDER_TARGETS) {
+    const targetResolved = mergeOverride(base, profile.targets[target]);
+    validateCompaction(targetResolved.compaction,
+      `provider profile targets.${target} resolved compaction`, {
+        protocol: targetResolved.protocol
+      });
+    validateContext(targetResolved.context,
+      `provider profile targets.${target} resolved context`);
+    for (const platform of PROVIDER_PLATFORMS) {
+      const resolved = mergeOverride(
+        targetResolved,
+        profile.platforms[platform]?.targets?.[target]
+      );
+      validateCompaction(resolved.compaction,
+        `provider profile platforms.${platform}.targets.${target} resolved compaction`, {
+          protocol: resolved.protocol
+        });
+      validateContext(resolved.context,
+        `provider profile platforms.${platform}.targets.${target} resolved context`);
+    }
+  }
+}
+
 export function validateProviderProfile(value, expectedName = "") {
-  requireObject(value, "provider profile");
+  normalizeProviderProfileSchema(value);
   rejectUnknown(value, [
     "schema", "name", "description", "protocol", "endpoint", "auth",
-    "models", "targets", "platforms"
+    "models", "compaction", "context", "targets", "platforms"
   ], "provider profile");
   if (value.schema !== CURRENT_PROVIDER_SCHEMA) {
     throw new ProviderSchemaError(
@@ -266,8 +444,13 @@ export function validateProviderProfile(value, expectedName = "") {
   value.endpoint = validateEndpoint(value.endpoint);
   validateAuth(value.auth, "provider profile auth");
   validateModels(value.models, "provider profile models");
+  validateCompaction(value.compaction, "provider profile compaction", {
+    protocol: value.protocol
+  });
+  validateContext(value.context, "provider profile context");
   validateTargets(value.targets, "provider profile targets");
   validatePlatforms(value.platforms, "provider profile platforms");
+  validateOverlayPolicies(value);
   return value;
 }
 
@@ -286,6 +469,9 @@ export function validateProviderStore(value) {
   rejectUnknown(value, [
     "schema", "kind", "created_at", "updated_at", "profiles"
   ], "provider Store");
+  if (value.schema === 1 && value.kind === PROVIDER_STORE_KIND) {
+    value.schema = CURRENT_PROVIDER_SCHEMA;
+  }
   if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_STORE_KIND) {
     throw new ProviderSchemaError(
       `provider Store must use ${PROVIDER_STORE_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
@@ -306,7 +492,7 @@ export function validateProviderStore(value) {
 
 export function newProviderSecrets(now = new Date().toISOString()) {
   return {
-    schema: CURRENT_PROVIDER_SCHEMA,
+    schema: CURRENT_PROVIDER_SECRETS_SCHEMA,
     kind: PROVIDER_SECRETS_KIND,
     updated_at: now,
     secrets: {}
@@ -316,9 +502,9 @@ export function newProviderSecrets(now = new Date().toISOString()) {
 export function validateProviderSecrets(value) {
   requireObject(value, "provider Secret Store");
   rejectUnknown(value, ["schema", "kind", "updated_at", "secrets"], "provider Secret Store");
-  if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_SECRETS_KIND) {
+  if (value.schema !== CURRENT_PROVIDER_SECRETS_SCHEMA || value.kind !== PROVIDER_SECRETS_KIND) {
     throw new ProviderSchemaError(
-      `provider Secret Store must use ${PROVIDER_SECRETS_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
+      `provider Secret Store must use ${PROVIDER_SECRETS_KIND} schema ${CURRENT_PROVIDER_SECRETS_SCHEMA}`
     );
   }
   requireTimestamp(value.updated_at, "provider Secret Store updated_at");
@@ -340,6 +526,12 @@ function mergeOverride(base, override = {}) {
       ? { mode: "none" }
       : { ...base.auth, ...override.auth };
   }
+  if (override.compaction) {
+    result.compaction = { ...base.compaction, ...override.compaction };
+  }
+  if (override.context) {
+    result.context = { ...base.context, ...override.context };
+  }
   return result;
 }
 
@@ -347,7 +539,7 @@ export function resolveProviderProfile(profile, {
   target,
   platform = normalizeRuntimePlatform()
 }) {
-  validateProviderProfile(structuredClone(profile), profile.name);
+  profile = validateProviderProfile(structuredClone(profile), profile.name);
   validateTarget(target);
   validatePlatform(platform);
   let resolved = {
@@ -358,6 +550,8 @@ export function resolveProviderProfile(profile, {
     endpoint: profile.endpoint,
     protocol: profile.protocol,
     auth: structuredClone(profile.auth),
+    compaction: structuredClone(profile.compaction),
+    context: structuredClone(profile.context),
     model: profile.models.default,
     models: structuredClone(profile.models)
   };
@@ -369,6 +563,10 @@ export function resolveProviderProfile(profile, {
   resolved.endpoint = validateEndpoint(resolved.endpoint, "resolved endpoint");
   validateProtocol(resolved.protocol, "resolved protocol");
   validateAuth(resolved.auth, "resolved auth");
+  validateCompaction(resolved.compaction, "resolved compaction", {
+    protocol: resolved.protocol
+  });
+  validateContext(resolved.context, "resolved context");
   validateModelId(resolved.model, "resolved model");
   const seen = new Set();
   let outbound = resolved.model;
@@ -384,4 +582,65 @@ export function resolveProviderProfile(profile, {
   resolved.requested_model = resolved.model;
   resolved.outbound_model = outbound;
   return resolved;
+}
+
+export function effectiveProviderCompaction(resolved) {
+  validateTarget(resolved.target, "compaction target");
+  validateProtocol(resolved.protocol, "compaction protocol");
+  const compaction = structuredClone(resolved.compaction || {
+    upstream: "none",
+    policy: "auto"
+  });
+  validateCompaction(compaction, "resolved compaction", { protocol: resolved.protocol });
+
+  if (compaction.policy === "local") {
+    return {
+      ...compaction,
+      mode: "client_local",
+      label: "Local · forced",
+      native: false,
+      responses_compact: false,
+      issue: ""
+    };
+  }
+  if (["responses_v2", "responses_v1"].includes(compaction.upstream) &&
+      resolved.target === "codex") {
+    return {
+      ...compaction,
+      mode: "remote_native",
+      label: "Remote · native",
+      native: true,
+      responses_compact: true,
+      issue: ""
+    };
+  }
+  if (compaction.upstream === "anthropic_messages_beta" &&
+      resolved.target === "claude") {
+    return {
+      ...compaction,
+      mode: "messages_native",
+      label: "Messages · Anthropic beta",
+      native: true,
+      responses_compact: false,
+      issue: ""
+    };
+  }
+  if (compaction.policy === "remote") {
+    return {
+      ...compaction,
+      mode: "unsupported",
+      label: "Unavailable · target unsupported",
+      native: false,
+      responses_compact: false,
+      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target}`
+    };
+  }
+  return {
+    ...compaction,
+    mode: "client_local",
+    label: "Local · upstream unverified",
+    native: false,
+    responses_compact: false,
+    issue: ""
+  };
 }

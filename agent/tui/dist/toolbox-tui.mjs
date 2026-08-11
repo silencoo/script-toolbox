@@ -22942,7 +22942,8 @@ async function writeJsonAtomic(filePath, value) {
 }
 
 // ../agentctl/provider-schema.mjs
-var CURRENT_PROVIDER_SCHEMA = 1;
+var CURRENT_PROVIDER_SCHEMA = 2;
+var CURRENT_PROVIDER_SECRETS_SCHEMA = 1;
 var PROVIDER_STORE_KIND = "agentctl-provider-store";
 var PROVIDER_SECRETS_KIND = "agentctl-provider-secrets";
 var PROVIDER_PROTOCOLS = Object.freeze([
@@ -22968,6 +22969,18 @@ var PROVIDER_PLATFORMS = Object.freeze([
   "linux",
   "windows"
 ]);
+var PROVIDER_COMPACTION_UPSTREAMS = Object.freeze([
+  "responses_v2",
+  "responses_v1",
+  "anthropic_messages_beta",
+  "none"
+]);
+var PROVIDER_COMPACTION_POLICIES = Object.freeze([
+  "auto",
+  "remote",
+  "local"
+]);
+var MAX_CONTEXT_TOKENS = 1e7;
 var PROFILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var REFERENCE_NAME = /^[A-Za-z][A-Za-z0-9._-]*$/;
 var CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
@@ -23126,9 +23139,131 @@ function validateModels(value, label) {
   }
   return value;
 }
+function compactionProtocol(upstream) {
+  if (["responses_v2", "responses_v1"].includes(upstream)) return "openai_responses";
+  if (upstream === "anthropic_messages_beta") return "anthropic_messages";
+  return "";
+}
+function validateCompactionUpstream(value, label = "compaction upstream") {
+  if (!PROVIDER_COMPACTION_UPSTREAMS.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_COMPACTION_UPSTREAMS.join(", ")}`
+    );
+  }
+  return value;
+}
+function validateCompactionPolicy(value, label = "compaction policy") {
+  if (!PROVIDER_COMPACTION_POLICIES.includes(value)) {
+    throw new ProviderSchemaError(
+      `${label} must be one of: ${PROVIDER_COMPACTION_POLICIES.join(", ")}`
+    );
+  }
+  return value;
+}
+function validateTokenCount(value, label) {
+  if (value !== null && (!Number.isSafeInteger(value) || value < 1 || value > MAX_CONTEXT_TOKENS)) {
+    throw new ProviderSchemaError(
+      `${label} must be null or an integer from 1 to ${MAX_CONTEXT_TOKENS}`
+    );
+  }
+  return value;
+}
+function validateContextWindowTokens(value, label = "context window tokens") {
+  return validateTokenCount(value, label);
+}
+function validateAutoCompactTokens(value, label = "auto-compact tokens") {
+  return validateTokenCount(value, label);
+}
+function validateContext(value, label, { partial = false } = {}) {
+  requireObject(value, label);
+  rejectUnknown(value, ["window_tokens", "auto_compact_tokens"], label);
+  if (!partial || value.window_tokens !== void 0) {
+    validateContextWindowTokens(value.window_tokens, `${label}.window_tokens`);
+  }
+  if (!partial || value.auto_compact_tokens !== void 0) {
+    validateAutoCompactTokens(value.auto_compact_tokens, `${label}.auto_compact_tokens`);
+  }
+  if (partial && Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  if (value.window_tokens !== void 0 && value.window_tokens !== null && value.auto_compact_tokens !== void 0 && value.auto_compact_tokens !== null && value.auto_compact_tokens > value.window_tokens) {
+    throw new ProviderSchemaError(
+      `${label}.auto_compact_tokens cannot exceed window_tokens`
+    );
+  }
+  return value;
+}
+function validateCompaction(value, label, { partial = false, protocol = "" } = {}) {
+  requireObject(value, label);
+  rejectUnknown(value, ["upstream", "policy"], label);
+  if (!partial || value.upstream !== void 0) {
+    validateCompactionUpstream(value.upstream, `${label}.upstream`);
+  }
+  if (!partial || value.policy !== void 0) {
+    validateCompactionPolicy(value.policy, `${label}.policy`);
+  }
+  if (partial && Object.keys(value).length === 0) {
+    throw new ProviderSchemaError(`${label} cannot be empty`);
+  }
+  if (value.policy === "remote" && value.upstream === "none") {
+    throw new ProviderSchemaError(`${label} cannot force remote compaction without an upstream capability`);
+  }
+  const requiredProtocol = value.upstream === void 0 ? "" : compactionProtocol(value.upstream);
+  if (protocol && requiredProtocol && protocol !== requiredProtocol) {
+    throw new ProviderSchemaError(
+      `${label}.upstream '${value.upstream}' requires protocol ${requiredProtocol}`
+    );
+  }
+  return value;
+}
+function legacyCompaction(profile) {
+  let endpoint = "";
+  try {
+    endpoint = new URL(profile.endpoint).toString().replace(/\/$/, "");
+  } catch {
+  }
+  if (profile.name === "openai-api" && profile.protocol === "openai_responses" && endpoint === "https://api.openai.com/v1") {
+    return { upstream: "responses_v2", policy: "auto" };
+  }
+  if (profile.name === "anthropic-api" && profile.protocol === "anthropic_messages" && endpoint === "https://api.anthropic.com") {
+    return { upstream: "anthropic_messages_beta", policy: "auto" };
+  }
+  return { upstream: "none", policy: "auto" };
+}
+function normalizeProviderProfileSchema(value) {
+  requireObject(value, "provider profile");
+  if (value.schema === 1) {
+    rejectUnknown(value, [
+      "schema",
+      "name",
+      "description",
+      "protocol",
+      "endpoint",
+      "auth",
+      "models",
+      "targets",
+      "platforms"
+    ], "provider profile schema 1");
+    value.schema = CURRENT_PROVIDER_SCHEMA;
+    value.compaction = legacyCompaction(value);
+    value.context = { window_tokens: null, auto_compact_tokens: null };
+  }
+  if (value.context === void 0) {
+    value.context = { window_tokens: null, auto_compact_tokens: null };
+  }
+  return value;
+}
 function validateTargetOverride(value, label) {
   requireObject(value, label);
-  rejectUnknown(value, ["enabled", "endpoint", "protocol", "auth", "model"], label);
+  rejectUnknown(value, [
+    "enabled",
+    "endpoint",
+    "protocol",
+    "auth",
+    "model",
+    "compaction",
+    "context"
+  ], label);
   if (Object.keys(value).length === 0) {
     throw new ProviderSchemaError(`${label} cannot be empty`);
   }
@@ -23139,6 +23274,15 @@ function validateTargetOverride(value, label) {
   if (value.protocol !== void 0) validateProtocol2(value.protocol, `${label}.protocol`);
   if (value.auth !== void 0) validateAuth(value.auth, `${label}.auth`, { partial: true });
   if (value.model !== void 0) validateModelId(value.model, `${label}.model`);
+  if (value.compaction !== void 0) {
+    validateCompaction(value.compaction, `${label}.compaction`, {
+      partial: true,
+      protocol: value.protocol || ""
+    });
+  }
+  if (value.context !== void 0) {
+    validateContext(value.context, `${label}.context`, { partial: true });
+  }
   return value;
 }
 function validateTargets(value, label) {
@@ -23162,8 +23306,47 @@ function validatePlatforms(value, label) {
   }
   return value;
 }
+function validateOverlayPolicies(profile) {
+  const base = {
+    protocol: profile.protocol,
+    auth: profile.auth,
+    compaction: profile.compaction,
+    context: profile.context
+  };
+  for (const target of PROVIDER_TARGETS) {
+    const targetResolved = mergeOverride(base, profile.targets[target]);
+    validateCompaction(
+      targetResolved.compaction,
+      `provider profile targets.${target} resolved compaction`,
+      {
+        protocol: targetResolved.protocol
+      }
+    );
+    validateContext(
+      targetResolved.context,
+      `provider profile targets.${target} resolved context`
+    );
+    for (const platform2 of PROVIDER_PLATFORMS) {
+      const resolved = mergeOverride(
+        targetResolved,
+        profile.platforms[platform2]?.targets?.[target]
+      );
+      validateCompaction(
+        resolved.compaction,
+        `provider profile platforms.${platform2}.targets.${target} resolved compaction`,
+        {
+          protocol: resolved.protocol
+        }
+      );
+      validateContext(
+        resolved.context,
+        `provider profile platforms.${platform2}.targets.${target} resolved context`
+      );
+    }
+  }
+}
 function validateProviderProfile(value, expectedName = "") {
-  requireObject(value, "provider profile");
+  normalizeProviderProfileSchema(value);
   rejectUnknown(value, [
     "schema",
     "name",
@@ -23172,6 +23355,8 @@ function validateProviderProfile(value, expectedName = "") {
     "endpoint",
     "auth",
     "models",
+    "compaction",
+    "context",
     "targets",
     "platforms"
   ], "provider profile");
@@ -23189,8 +23374,13 @@ function validateProviderProfile(value, expectedName = "") {
   value.endpoint = validateEndpoint(value.endpoint);
   validateAuth(value.auth, "provider profile auth");
   validateModels(value.models, "provider profile models");
+  validateCompaction(value.compaction, "provider profile compaction", {
+    protocol: value.protocol
+  });
+  validateContext(value.context, "provider profile context");
   validateTargets(value.targets, "provider profile targets");
   validatePlatforms(value.platforms, "provider profile platforms");
+  validateOverlayPolicies(value);
   return value;
 }
 function validateProviderStore(value) {
@@ -23202,6 +23392,9 @@ function validateProviderStore(value) {
     "updated_at",
     "profiles"
   ], "provider Store");
+  if (value.schema === 1 && value.kind === PROVIDER_STORE_KIND) {
+    value.schema = CURRENT_PROVIDER_SCHEMA;
+  }
   if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_STORE_KIND) {
     throw new ProviderSchemaError(
       `provider Store must use ${PROVIDER_STORE_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
@@ -23222,9 +23415,9 @@ function validateProviderStore(value) {
 function validateProviderSecrets(value) {
   requireObject(value, "provider Secret Store");
   rejectUnknown(value, ["schema", "kind", "updated_at", "secrets"], "provider Secret Store");
-  if (value.schema !== CURRENT_PROVIDER_SCHEMA || value.kind !== PROVIDER_SECRETS_KIND) {
+  if (value.schema !== CURRENT_PROVIDER_SECRETS_SCHEMA || value.kind !== PROVIDER_SECRETS_KIND) {
     throw new ProviderSchemaError(
-      `provider Secret Store must use ${PROVIDER_SECRETS_KIND} schema ${CURRENT_PROVIDER_SCHEMA}`
+      `provider Secret Store must use ${PROVIDER_SECRETS_KIND} schema ${CURRENT_PROVIDER_SECRETS_SCHEMA}`
     );
   }
   requireTimestamp(value.updated_at, "provider Secret Store updated_at");
@@ -23243,13 +23436,19 @@ function mergeOverride(base, override = {}) {
   if (override.auth) {
     result.auth = override.auth.mode === "none" ? { mode: "none" } : { ...base.auth, ...override.auth };
   }
+  if (override.compaction) {
+    result.compaction = { ...base.compaction, ...override.compaction };
+  }
+  if (override.context) {
+    result.context = { ...base.context, ...override.context };
+  }
   return result;
 }
 function resolveProviderProfile(profile, {
   target,
   platform: platform2 = normalizeRuntimePlatform()
 }) {
-  validateProviderProfile(structuredClone(profile), profile.name);
+  profile = validateProviderProfile(structuredClone(profile), profile.name);
   validateTarget(target);
   validatePlatform(platform2);
   let resolved = {
@@ -23260,6 +23459,8 @@ function resolveProviderProfile(profile, {
     endpoint: profile.endpoint,
     protocol: profile.protocol,
     auth: structuredClone(profile.auth),
+    compaction: structuredClone(profile.compaction),
+    context: structuredClone(profile.context),
     model: profile.models.default,
     models: structuredClone(profile.models)
   };
@@ -23271,6 +23472,10 @@ function resolveProviderProfile(profile, {
   resolved.endpoint = validateEndpoint(resolved.endpoint, "resolved endpoint");
   validateProtocol2(resolved.protocol, "resolved protocol");
   validateAuth(resolved.auth, "resolved auth");
+  validateCompaction(resolved.compaction, "resolved compaction", {
+    protocol: resolved.protocol
+  });
+  validateContext(resolved.context, "resolved context");
   validateModelId(resolved.model, "resolved model");
   const seen = /* @__PURE__ */ new Set();
   let outbound = resolved.model;
@@ -23286,6 +23491,63 @@ function resolveProviderProfile(profile, {
   resolved.requested_model = resolved.model;
   resolved.outbound_model = outbound;
   return resolved;
+}
+function effectiveProviderCompaction(resolved) {
+  validateTarget(resolved.target, "compaction target");
+  validateProtocol2(resolved.protocol, "compaction protocol");
+  const compaction = structuredClone(resolved.compaction || {
+    upstream: "none",
+    policy: "auto"
+  });
+  validateCompaction(compaction, "resolved compaction", { protocol: resolved.protocol });
+  if (compaction.policy === "local") {
+    return {
+      ...compaction,
+      mode: "client_local",
+      label: "Local \xB7 forced",
+      native: false,
+      responses_compact: false,
+      issue: ""
+    };
+  }
+  if (["responses_v2", "responses_v1"].includes(compaction.upstream) && resolved.target === "codex") {
+    return {
+      ...compaction,
+      mode: "remote_native",
+      label: "Remote \xB7 native",
+      native: true,
+      responses_compact: true,
+      issue: ""
+    };
+  }
+  if (compaction.upstream === "anthropic_messages_beta" && resolved.target === "claude") {
+    return {
+      ...compaction,
+      mode: "messages_native",
+      label: "Messages \xB7 Anthropic beta",
+      native: true,
+      responses_compact: false,
+      issue: ""
+    };
+  }
+  if (compaction.policy === "remote") {
+    return {
+      ...compaction,
+      mode: "unsupported",
+      label: "Unavailable \xB7 target unsupported",
+      native: false,
+      responses_compact: false,
+      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target}`
+    };
+  }
+  return {
+    ...compaction,
+    mode: "client_local",
+    label: "Local \xB7 upstream unverified",
+    native: false,
+    responses_compact: false,
+    issue: ""
+  };
 }
 
 // ../agentctl/failover-schema.mjs
@@ -23653,8 +23915,19 @@ function loopbackEndpoint(value) {
   const host = new URL(value).hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
 }
+function officialOpenAiEndpoint(value) {
+  const endpoint = new URL(value);
+  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" && endpoint.port === "" && endpoint.pathname.replace(/\/$/, "") === "/v1" && endpoint.search === "";
+}
 function compatibilityIssue(resolved) {
   const { target, protocol, auth } = resolved;
+  const context = resolved.context || {
+    window_tokens: null,
+    auto_compact_tokens: null
+  };
+  if (target !== "claude" && (context.window_tokens !== null || context.auto_compact_tokens !== null)) {
+    return `${TARGET_LABELS[target]} does not yet support managed context policy`;
+  }
   if (target === "claude") {
     if (protocol !== "anthropic_messages") {
       return "Claude Code direct mode requires anthropic_messages";
@@ -23672,14 +23945,17 @@ function compatibilityIssue(resolved) {
     }
   }
   if (target === "opencode") {
-    if (!["anthropic_messages", "openai_responses", "openai_chat"].includes(protocol)) {
-      return "OpenCode custom providers support Anthropic Messages, OpenAI Responses, or OpenAI Chat";
+    if (!["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(protocol)) {
+      return "OpenCode custom providers support Anthropic Messages, OpenAI Responses, OpenAI Chat, or Google Generative AI";
     }
     if (protocol === "anthropic_messages" && auth.mode !== "x-api-key") {
       return "OpenCode Anthropic direct mode requires x-api-key authentication";
     }
     if (["openai_responses", "openai_chat"].includes(protocol) && auth.mode !== "bearer") {
       return "OpenCode OpenAI direct mode requires bearer authentication";
+    }
+    if (protocol === "google_generative" && auth.mode !== "x-goog-api-key") {
+      return "OpenCode Google direct mode requires x-goog-api-key authentication";
     }
   }
   if (target === "pi") {
@@ -23699,7 +23975,10 @@ function targetPaths(target, { home = homedir() } = {}) {
     return {
       root: root2,
       config_files: [join2(root2, "settings.json")],
-      state_files: [join2(root2, ".script-toolbox-provider")],
+      state_files: [
+        join2(root2, ".script-toolbox-provider"),
+        join2(root2, ".script-toolbox-provider-context.json")
+      ],
       key_dir: "",
       key_file: ""
     };
@@ -23743,6 +24022,28 @@ function backendPath(target, agentRoot) {
   const [directory, file] = TARGET_BACKENDS[target];
   return join2(agentRoot, directory, file);
 }
+function tokenLabel(value) {
+  return value === null ? "auto" : new Intl.NumberFormat("en-US").format(value);
+}
+function renderContextPolicy(resolved) {
+  const context = structuredClone(resolved.context || {
+    window_tokens: null,
+    auto_compact_tokens: null
+  });
+  let label = "Client default";
+  if (context.window_tokens !== null && context.auto_compact_tokens !== null) {
+    label = `${tokenLabel(context.window_tokens)} max \xB7 compact at ${tokenLabel(context.auto_compact_tokens)}`;
+  } else if (context.window_tokens !== null) {
+    label = `${tokenLabel(context.window_tokens)} max \xB7 client auto-compact`;
+  } else if (context.auto_compact_tokens !== null) {
+    label = `Model default \xB7 compact at ${tokenLabel(context.auto_compact_tokens)}`;
+  }
+  return {
+    ...context,
+    label,
+    managed: resolved.target === "claude" && (context.window_tokens !== null || context.auto_compact_tokens !== null)
+  };
+}
 function renderProviderPlan(resolved, {
   secretPresent = false,
   home = homedir(),
@@ -23751,10 +24052,14 @@ function renderProviderPlan(resolved, {
   validateTarget(resolved.target);
   validatePlatform(resolved.platform);
   const paths = targetPaths(resolved.target, { home });
-  const issue = resolved.enabled ? compatibilityIssue(resolved) : "";
+  const directIssue = resolved.enabled ? compatibilityIssue(resolved) : "";
+  const compaction = effectiveProviderCompaction(resolved);
+  const context = renderContextPolicy(resolved);
+  const issue = resolved.enabled ? directIssue || compaction.issue : "";
   const needsSecret = resolved.auth.mode !== "none";
   const secretReady = !needsSecret || secretPresent;
   const compatible = !issue;
+  const providerName = resolved.target === "codex" && compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint) ? "OpenAI" : resolved.profile;
   return {
     schema: 1,
     profile: resolved.profile,
@@ -23768,14 +24073,23 @@ function renderProviderPlan(resolved, {
     issue: issue || (!secretReady ? `local Secret '${resolved.auth.secret}' is missing` : ""),
     protocol: resolved.protocol,
     endpoint: resolved.endpoint,
+    provider_name: providerName,
     requested_model: resolved.requested_model,
     outbound_model: resolved.outbound_model,
+    compaction,
+    context,
     auth: {
       mode: resolved.auth.mode,
       secret: resolved.auth.secret || null,
       present: secretReady,
       synthetic: resolved.auth.mode === "none"
     },
+    official_identity: resolved.target === "codex" ? {
+      policy: "preserve",
+      account: "current",
+      config_file: join2(paths.root, "auth.json"),
+      managed: false
+    } : null,
     backend: backendPath(resolved.target, agentRoot),
     config_files: paths.config_files,
     ownership_files: paths.state_files,
@@ -24196,6 +24510,15 @@ function publicProviderProfile(profile, bundle, target, {
     auth_mode: plan.auth.mode,
     secret_reference: plan.auth.secret || "",
     secret_present: plan.auth.present,
+    compaction_upstream: plan.compaction.upstream,
+    compaction_policy: plan.compaction.policy,
+    compaction_mode: plan.compaction.mode,
+    compaction_label: plan.compaction.label,
+    context_window_tokens: plan.context.window_tokens,
+    auto_compact_tokens: plan.context.auto_compact_tokens,
+    context_label: plan.context.label,
+    official_identity_policy: plan.official_identity?.policy || "",
+    official_identity_account: plan.official_identity?.account || "",
     applied: false,
     source: "cloud"
   };
@@ -24213,6 +24536,7 @@ function createRemoteWorkspace({
   let workspaceCache = null;
   let masterConfig = null;
   let publicIndex = null;
+  let indexInFlight = null;
   const childCache = /* @__PURE__ */ new Map();
   const childStoreIds = /* @__PURE__ */ new Map();
   async function connection() {
@@ -24226,64 +24550,73 @@ function createRemoteWorkspace({
   }
   async function index({ refresh = false } = {}) {
     if (publicIndex && !refresh) return structuredClone(publicIndex);
-    const config = await readConfigFn(workspaceConfig);
-    const [workspace, status] = await Promise.all([
-      loadWorkspaceFn(workspaceConfig, config),
-      statusFn(config, WORKSPACE_REMOTE_PROTOCOL)
-    ]);
-    const childStatuses = await Promise.all(["mcp", "skills", "prompts"].map(async (type) => {
-      const attachment = workspace.stores[type];
-      if (!attachment) return [type, null];
-      try {
-        return [type, await childStatusFn(attachment.config, PROTOCOLS[type])];
-      } catch (error) {
-        return [type, { latest: null, error: String(error?.message || error) }];
-      }
-    }));
-    const previousStores = publicIndex?.stores || {};
-    const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
-    workspaceCache = workspace;
-    masterConfig = config;
-    publicIndex = {
-      schema: 2,
-      mode: "workspace",
-      source: "cloud",
-      remote_schema: sourceSchema,
-      migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
-      endpoint: config.endpoint,
-      store_id: config.store_id,
-      latest: status.latest,
-      web_ui_enabled: status.web_ui_enabled,
-      stores: Object.fromEntries(childStatuses.map(([type, childStatus]) => {
+    if (indexInFlight) return structuredClone(await indexInFlight);
+    const pending = (async () => {
+      const config = await readConfigFn(workspaceConfig);
+      const [workspace, status] = await Promise.all([
+        loadWorkspaceFn(workspaceConfig, config).then(validateWorkspaceSnapshot),
+        statusFn(config, WORKSPACE_REMOTE_PROTOCOL)
+      ]);
+      const childStatuses = await Promise.all(["mcp", "skills", "prompts"].map(async (type) => {
         const attachment = workspace.stores[type];
-        if (!attachment) {
-          childCache.delete(type);
-          childStoreIds.delete(type);
-          return [type, { attached: false }];
+        if (!attachment) return [type, null];
+        try {
+          return [type, await childStatusFn(attachment.config, PROTOCOLS[type])];
+        } catch (error) {
+          return [type, { latest: null, error: String(error?.message || error) }];
         }
-        const store = {
-          attached: true,
-          attached_at: attachment.attached_at,
-          latest: childStatus?.latest || null,
-          available: !childStatus?.error
-        };
-        if (previousStores[type]?.latest?.version !== store.latest?.version || childStoreIds.get(type) !== attachment.config.store_id) childCache.delete(type);
-        childStoreIds.set(type, attachment.config.store_id);
-        return [type, store];
-      })),
-      presets: Object.fromEntries(Object.entries(workspace.presets).map(([name, preset]) => [name, publicPreset(name, preset)])),
-      agent: {
-        synced: workspace.agent.providers !== null,
-        synced_at: workspace.agent.synced_at,
-        profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
-        secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
-        failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
-        pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
-        pricing_version: workspace.agent.pricing?.version || null,
-        secret_values: "hidden"
-      }
-    };
-    return structuredClone(publicIndex);
+      }));
+      const previousStores = publicIndex?.stores || {};
+      const sourceSchema = workspace.source_schema || workspace.schema || CURRENT_WORKSPACE_SCHEMA;
+      workspaceCache = workspace;
+      masterConfig = config;
+      publicIndex = {
+        schema: 2,
+        mode: "workspace",
+        source: "cloud",
+        remote_schema: sourceSchema,
+        migration_pending: sourceSchema !== CURRENT_WORKSPACE_SCHEMA,
+        endpoint: config.endpoint,
+        store_id: config.store_id,
+        latest: status.latest,
+        web_ui_enabled: status.web_ui_enabled,
+        stores: Object.fromEntries(childStatuses.map(([type, childStatus]) => {
+          const attachment = workspace.stores[type];
+          if (!attachment) {
+            childCache.delete(type);
+            childStoreIds.delete(type);
+            return [type, { attached: false }];
+          }
+          const store = {
+            attached: true,
+            attached_at: attachment.attached_at,
+            latest: childStatus?.latest || null,
+            available: !childStatus?.error
+          };
+          if (previousStores[type]?.latest?.version !== store.latest?.version || childStoreIds.get(type) !== attachment.config.store_id) childCache.delete(type);
+          childStoreIds.set(type, attachment.config.store_id);
+          return [type, store];
+        })),
+        presets: Object.fromEntries(Object.entries(workspace.presets).map(([name, preset]) => [name, publicPreset(name, preset)])),
+        agent: {
+          synced: workspace.agent.providers !== null,
+          synced_at: workspace.agent.synced_at,
+          profiles: Object.keys(workspace.agent.providers?.profiles || {}).length,
+          secrets: Object.keys(workspace.agent.secrets?.secrets || {}).length,
+          failover_routes: Object.keys(workspace.agent.failover?.routes || {}).length,
+          pricing_rates: Object.keys(workspace.agent.pricing?.rates || {}).length,
+          pricing_version: workspace.agent.pricing?.version || null,
+          secret_values: "hidden"
+        }
+      };
+      return publicIndex;
+    })();
+    indexInFlight = pending;
+    try {
+      return structuredClone(await pending);
+    } finally {
+      if (indexInFlight === pending) indexInFlight = null;
+    }
   }
   async function rawWorkspace() {
     if (!workspaceCache) await index();
@@ -24700,8 +25033,15 @@ var defaultAgentRoot = resolve4(
 );
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+var WORKSPACE_RETRY_DELAY_MS = 250;
 var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
 var PROMPT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex"]);
+function transientWorkspaceError(error) {
+  return /could not reach|request timed out|HTTP (?:408|425|429|5\d\d)\b/i.test(String(error?.message || error));
+}
+function wait(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
 function sanitizeOutput(value) {
   return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
 }
@@ -24802,6 +25142,19 @@ function createController({
     skills: join4(agentRoot, "skillsctl", "skillsctl"),
     prompts: join4(agentRoot, "promptctl", "promptctl")
   };
+  let cachedWorkspace = null;
+  let workspaceLastConnectedAt = "";
+  let workspaceLastError = "";
+  let workspaceFailureCount = 0;
+  async function refreshWorkspaceIndex() {
+    try {
+      return await remoteWorkspace.index({ refresh: true });
+    } catch (error) {
+      if (!transientWorkspaceError(error)) throw error;
+      await wait(WORKSPACE_RETRY_DELAY_MS);
+      return remoteWorkspace.index({ refresh: true });
+    }
+  }
   function agentctlCommand(args) {
     return process.platform === "win32" ? { executable: "bash", args: [agentctl, ...args] } : { executable: agentctl, args };
   }
@@ -24819,57 +25172,14 @@ function createController({
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
     const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
       runAgentctlJson(["provider", "status", "--json"], "provider status"),
-      runAgentctlJson(["provider", "list", "--json"], "provider list"),
+      runAgentctlJson(["provider", "list", "--target", target, "--json"], "provider list"),
       runAgentctlJson(["failover", "status", "--json"], "failover status"),
       runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
       runAgentctlJson(["proxy", "status", "--json"], "proxy status")
     ]);
     const status = providerStatus.data || {};
-    const missing = new Set(Array.isArray(status.missing_secrets) ? status.missing_secrets : []);
-    const platform2 = status.platform || normalizeRuntimePlatform();
-    const profiles = (Array.isArray(providerList.data) ? providerList.data : []).map((profile) => {
-      try {
-        const resolved = resolveProviderProfile(profile, { target, platform: platform2 });
-        const reference = resolved.auth.secret || "";
-        const secretPresent = resolved.auth.mode === "none" || Boolean(
-          providerStatus.ok && status.secrets_exists && reference && !missing.has(reference)
-        );
-        const plan = renderProviderPlan(resolved, { secretPresent, agentRoot });
-        const current = status.current?.[target];
-        const applied = current?.profile === profile.name && current.platform === plan.platform && current.protocol === plan.protocol && current.endpoint === plan.endpoint && current.requested_model === plan.requested_model && current.outbound_model === plan.outbound_model;
-        return {
-          name: profile.name,
-          description: profile.description,
-          target,
-          platform: platform2,
-          protocol: plan.protocol,
-          endpoint: plan.endpoint,
-          requested_model: plan.requested_model,
-          outbound_model: plan.outbound_model,
-          enabled: plan.enabled,
-          compatible: plan.compatible,
-          ready: plan.ready,
-          issue: plan.issue,
-          auth_mode: plan.auth.mode,
-          secret_reference: plan.auth.secret || "",
-          secret_present: plan.auth.present,
-          applied,
-          source: "local"
-        };
-      } catch (error) {
-        return {
-          name: String(profile?.name || "invalid"),
-          description: String(profile?.description || ""),
-          target,
-          platform: platform2,
-          enabled: true,
-          compatible: false,
-          ready: false,
-          issue: sanitizeOutput(error?.message || error),
-          source: "local"
-        };
-      }
-    });
+    const platform2 = status.platform || process.platform;
+    const profiles = Array.isArray(providerList.data) ? providerList.data : [];
     const errors = [
       ["Provider status", providerStatus],
       ["Provider catalog", providerList],
@@ -24877,10 +25187,6 @@ function createController({
       ["Pricing", pricing],
       ["Proxy", proxy]
     ].filter(([, result]) => !result.ok && !result.data).map(([label, result]) => `${label}: ${result.error}`);
-    if (status.store_exists === false) {
-      const listError = errors.findIndex((value) => value.startsWith("Provider catalog:"));
-      if (listError >= 0) errors.splice(listError, 1);
-    }
     return {
       schema: 1,
       target,
@@ -24893,21 +25199,74 @@ function createController({
       errors
     };
   }
-  async function snapshot() {
-    const remoteResult = remoteWorkspace.index({ refresh: true }).then((data) => ({ data, connection: data, error: "" })).catch(async (error) => {
-      let connection = null;
-      if (typeof remoteWorkspace.connection === "function") {
-        connection = await remoteWorkspace.connection().catch(() => null);
-      }
-      return { data: null, connection, error: sanitizeOutput(error?.message || error) };
-    });
-    let [doctorResult, agentsResult, presetsResult, snippetsResult, remote] = await Promise.all([
-      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
+  async function localSnapshot() {
+    const connectionPromise = typeof remoteWorkspace.connection === "function" ? remoteWorkspace.connection().then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) })) : Promise.resolve({ data: null, error: "remote configuration not found" });
+    const [doctorResult, agentsResult, presetsResult, snippetsResult, accountsResult, connectionResult] = await Promise.all([
+      runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
       runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
       runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
-      remoteResult
+      runAgentctlJson(["account", "status", "--json"], "Codex account status"),
+      connectionPromise
     ]);
+    const accounts = accountsResult.data?.kind === "agentctl-codex-account-store" ? accountsResult.data : {
+      schema: 1,
+      kind: "agentctl-codex-account-store",
+      active: { status: "unavailable", official_login: false, saved_as: null },
+      account_count: 0,
+      accounts: []
+    };
+    const accountLabel = typeof accounts.active?.saved_as === "string" ? accounts.active.saved_as : "";
+    const agents = Array.isArray(agentsResult.data) ? agentsResult.data.map((agent) => agent?.client === "codex" && agent.identity && accountLabel ? { ...agent, identity: { ...agent.identity, account: accountLabel } } : agent) : agentsResult.data;
+    const doctor = doctorResult.data ? structuredClone(doctorResult.data) : doctorResult.data;
+    const codexReport = doctor?.targets?.find((report) => report.target === "codex");
+    if (codexReport?.provider?.data?.identity && accountLabel) {
+      codexReport.provider.data.identity.account = accountLabel;
+    }
+    const workspaceConfigured = Boolean(connectionResult.data?.configured);
+    if (!workspaceConfigured) {
+      cachedWorkspace = null;
+      workspaceLastConnectedAt = "";
+      workspaceLastError = "";
+      workspaceFailureCount = 0;
+    }
+    return {
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      phase: "local",
+      doctor,
+      doctorError: doctorResult.error,
+      agents,
+      agentsError: agentsResult.error,
+      accounts,
+      accountsError: accountsResult.ok ? "" : accountsResult.error,
+      presets: presetsResult.data || {},
+      presetsError: presetsResult.error,
+      presetSource: "local",
+      snippets: normalizeSnippetMetadata(snippetsResult.data),
+      snippetsError: snippetsResult.error,
+      workspace: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
+      workspaceConnection: connectionResult.data,
+      workspaceLoading: workspaceConfigured,
+      workspaceError: workspaceConfigured ? workspaceLastError : connectionResult.error,
+      workspaceStale: Boolean(cachedWorkspace && workspaceLastError),
+      workspaceLastConnectedAt,
+      workspaceFailureCount
+    };
+  }
+  async function hydrateSnapshot(local) {
+    const remoteResult = refreshWorkspaceIndex().then((data) => ({ data, connection: data, error: "", fresh: true })).catch((error) => ({
+      data: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
+      connection: local.workspaceConnection,
+      error: sanitizeOutput(error?.message || error),
+      fresh: false
+    }));
+    let [remote, doctorResult] = await Promise.all([
+      remoteResult,
+      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor")
+    ]);
+    if (!doctorResult.data) {
+      doctorResult = { data: local.doctor, error: local.doctorError };
+    }
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
       try {
         const availability = await remoteWorkspace.runtimeAvailability();
@@ -24945,22 +25304,42 @@ function createController({
       } catch {
       }
     }
+    const activeAccount = local.accounts?.active?.saved_as;
+    const hydratedCodex = doctorResult.data?.targets?.find((report) => report.target === "codex");
+    if (hydratedCodex?.provider?.data?.identity && activeAccount) {
+      hydratedCodex.provider.data.identity.account = activeAccount;
+    }
+    if (remote.fresh) {
+      cachedWorkspace = structuredClone(remote.data);
+      workspaceLastConnectedAt = (/* @__PURE__ */ new Date()).toISOString();
+      workspaceLastError = "";
+      workspaceFailureCount = 0;
+    } else {
+      workspaceLastError = remote.error;
+      workspaceFailureCount += 1;
+    }
     const cloudPresets = remote.data?.presets;
     return {
+      ...local,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      phase: "workspace",
       doctor: doctorResult.data,
       doctorError: doctorResult.error,
-      agents: agentsResult.data,
-      agentsError: agentsResult.error,
-      presets: cloudPresets || presetsResult.data || {},
-      presetsError: cloudPresets ? "" : presetsResult.error,
+      presets: cloudPresets || local.presets || {},
+      presetsError: cloudPresets ? "" : local.presetsError,
       presetSource: cloudPresets ? "cloud" : "local",
-      snippets: normalizeSnippetMetadata(snippetsResult.data),
-      snippetsError: snippetsResult.error,
       workspace: remote.data,
       workspaceConnection: remote.connection,
-      workspaceError: remote.error
+      workspaceLoading: false,
+      workspaceError: remote.error,
+      workspaceStale: Boolean(remote.data && !remote.fresh),
+      workspaceLastConnectedAt,
+      workspaceFailureCount
     };
+  }
+  async function snapshot() {
+    const local = await localSnapshot();
+    return hydrateSnapshot(local);
   }
   async function remoteCatalog(type, target, options2 = {}) {
     try {
@@ -25026,13 +25405,16 @@ No remote catalog was written locally.`;
   function providerPlanDetail(plan, source) {
     const entries = Array.isArray(plan?.plans) ? plan.plans : [];
     const selected = entries[0] || {};
+    const sourceLabel = source === "cloud" ? "Workspace" : source === "builtin" ? "Built-in" : "Local";
     return [
-      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} \xB7 ${source === "cloud" ? "Workspace" : "Local"}`,
+      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} \xB7 ${sourceLabel}`,
       `State: ${selected.enabled === false ? "disabled" : selected.ready ? "ready" : "blocked"}`,
       `Protocol: ${selected.protocol || "unknown"}`,
       `Endpoint: ${selected.endpoint || "unknown"}`,
       `Model: ${selected.requested_model || "unknown"} -> ${selected.outbound_model || "unknown"}`,
+      `Context: ${selected.context?.label || "Client default"}`,
       `Secret: ${selected.auth?.secret || "none"} (${selected.auth?.present ? "ready" : "missing"})`,
+      ...selected.official_identity ? ["Official Identity: preserve current ChatGPT login; Provider does not manage auth.json"] : [],
       ...selected.issue ? [`Blocked by: ${selected.issue}`] : [],
       "No client file was changed."
     ].join("\n");
@@ -25040,12 +25422,12 @@ No remote catalog was written locally.`;
   async function providerAction(actionName, profile, target, source) {
     if (!profile) throw new Error("No Provider profile is selected.");
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
-    if (!["local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
-    const operation = actionName === "provider-apply" ? "apply" : "plan";
+    if (!["builtin", "local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
+    const operation = actionName === "provider-apply" ? source === "cloud" ? "apply" : "use" : "plan";
     const execute = async (paths = null) => {
       const args = ["provider", operation, profile, "--target", target, "--json"];
       if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
-      if (operation === "apply") args.push("--yes");
+      if (["apply", "use"].includes(operation)) args.push("--yes");
       return runAgentctlJson(args, `provider ${operation}`);
     };
     const result = source === "cloud" ? await remoteWorkspace.withProviderFiles(profile, target, execute) : await execute();
@@ -25053,20 +25435,21 @@ No remote catalog was written locally.`;
     return {
       ok: result.ok,
       data: result.data,
-      detail: operation === "apply" && result.ok ? `${profile} applied from ${source === "cloud" ? "Workspace" : "local catalog"} to ${target}; start a new agent session` : detail
+      detail: ["apply", "use"].includes(operation) && result.ok ? `${profile} applied from ${source === "cloud" ? "Workspace" : source === "builtin" ? "the built-in catalog" : "the local catalog"} to ${target}; start a new agent session` : detail
     };
   }
-  async function providerSync(actionName) {
+  async function providerSync(actionName, profile) {
+    if (!profile) throw new Error("No Provider profile is selected.");
     const direction = actionName === "provider-sync-push" ? "push" : "pull";
     const result = await runAgentctlJson(
-      ["workspace", "agent", direction, "--yes", "--json"],
+      ["workspace", "agent", direction, "--profile", profile, "--yes", "--json"],
       `Workspace agent ${direction}`
     );
-    const bundle = result.data?.bundle || {};
+    const secretCount = result.data?.secrets_copied || 0;
     return {
       ok: result.ok,
       data: result.data,
-      detail: result.ok ? `${direction === "push" ? "Backed up" : "Merged"} ${bundle.profiles || 0} profile(s), ${bundle.secrets || 0} hidden Secret value(s), ${bundle.failover_routes || 0} failover route(s), and ${bundle.pricing_rates || 0} pricing rate(s).` : result.error || `Workspace agent ${direction} failed.`
+      detail: result.ok ? `${direction === "push" ? "Used the local" : "Used the Workspace"} '${profile}' profile ${direction === "push" ? "in encrypted Workspace" : "in the local catalog"}; ${secretCount} referenced Secret value(s) copied without being printed. Every other profile and catalog was preserved.` : result.error || `Workspace agent ${direction} failed.`
     };
   }
   async function remoteComponentAction(actionName, type, name, target) {
@@ -25149,11 +25532,24 @@ No remote catalog was written locally.`;
       return providerAction(actionName, selection, target, source);
     }
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
-      return providerSync(actionName);
+      return providerSync(actionName, selection);
     }
-    if (actionName === "agent-providers" || actionName === "agent-uninstall") {
+    if (actionName === "account-use" || actionName === "account-delete") {
+      if (!selection) throw new Error("No Codex account is selected.");
+      const operation = actionName === "account-use" ? "use" : "delete";
+      const result2 = await runAgentctlJson(
+        ["account", operation, selection, "--yes", "--json"],
+        `Codex account ${operation}`
+      );
+      return {
+        ok: result2.ok,
+        data: result2.data,
+        detail: result2.ok ? operation === "use" ? `${selection} is now the active Codex official account; inference Provider is unchanged; start a new Codex session` : `${selection} was removed from the saved account Store; live auth is unchanged` : result2.error || `Codex account ${operation} failed.`
+      };
+    }
+    if (actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-      const args2 = actionName === "agent-providers" ? ["providers", agent] : ["uninstall", agent, "--yes"];
+      const args2 = ["uninstall", agent, "--yes"];
       const command = agentctlCommand(args2);
       const result2 = await run(command.executable, command.args);
       return {
@@ -25204,14 +25600,11 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? successDetail : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
   }
-  function interactiveCommand(agent) {
-    if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-    return agentctlCommand(["setup", agent]);
-  }
   return {
     snapshot,
+    localSnapshot,
+    hydrateSnapshot,
     action,
-    interactiveCommand,
     promptPreview,
     providerDashboard,
     remoteCatalog
@@ -25222,6 +25615,7 @@ No remote catalog was written locally.`;
 var SECTIONS = Object.freeze([
   { id: "overview", label: "Overview" },
   { id: "agents", label: "Agents" },
+  { id: "accounts", label: "Accounts" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
@@ -25323,44 +25717,137 @@ function snippetEntries(localEntries, remoteEntries) {
 function providerDisplayText(value, maximum = 2048) {
   return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, maximum) : "";
 }
-function providerEntry(value, source) {
+function providerTokenCount(value) {
+  return value === null || Number.isSafeInteger(value) && value >= 1 && value <= 1e7 ? value : null;
+}
+function providerEntry(value, fallbackSource) {
   if (!value || typeof value.name !== "string") return null;
   const name = providerDisplayText(value.name, 64);
   if (!name) return null;
+  const source = ["builtin", "local", "cloud"].includes(value.source) ? value.source : fallbackSource;
   return {
     key: `${source}:${name}`,
     name,
+    label: providerDisplayText(value.label, 80),
     source,
+    materialized: value.materialized === true,
     description: providerDisplayText(value.description, 500),
     protocol: providerDisplayText(value.protocol, 40),
     endpoint: providerDisplayText(value.endpoint, 2048),
     requestedModel: providerDisplayText(value.requested_model, 240),
     outboundModel: providerDisplayText(value.outbound_model, 240),
+    modelsAvailable: Array.isArray(value.models_available) ? value.models_available.map((model) => providerDisplayText(model, 240)).filter(Boolean) : [],
     enabled: value.enabled !== false,
     compatible: value.compatible !== false,
     ready: value.ready === true,
+    status: providerDisplayText(value.status, 32),
     issue: providerDisplayText(value.issue, 500),
     authMode: providerDisplayText(value.auth_mode, 32),
     secretReference: providerDisplayText(value.secret_reference, 96),
     secretPresent: value.secret_present === true,
+    nativeAuthPresent: value.native_auth_present === true,
+    nativeAuthProvider: providerDisplayText(value.native_auth_provider, 96),
+    nativeAuthType: providerDisplayText(value.native_auth_type, 32),
+    nativeSelected: value.native_selected === true,
+    nativeSelectedModel: providerDisplayText(value.native_selected_model, 240),
+    compactionUpstream: providerDisplayText(value.compaction_upstream, 40),
+    compactionPolicy: providerDisplayText(value.compaction_policy, 20),
+    compactionMode: providerDisplayText(value.compaction_mode, 40),
+    compactionLabel: providerDisplayText(value.compaction_label, 100),
+    contextWindowTokens: providerTokenCount(value.context_window_tokens),
+    autoCompactTokens: providerTokenCount(value.auto_compact_tokens),
+    contextLabel: providerDisplayText(value.context_label, 120),
+    officialIdentityPolicy: providerDisplayText(value.official_identity_policy, 32),
+    officialIdentityAccount: providerDisplayText(value.official_identity_account, 64),
     applied: value.applied === true,
     target: providerDisplayText(value.target, 32),
     platform: providerDisplayText(value.platform, 32)
   };
 }
-function providerEntries(localEntries, remoteEntries) {
-  const entries = [];
+var PROVIDER_SYNC_FIELDS = Object.freeze([
+  ["description", "Description"],
+  ["protocol", "Protocol"],
+  ["endpoint", "Endpoint"],
+  ["requestedModel", "Requested model"],
+  ["outboundModel", "Outbound model"],
+  ["enabled", "Target availability"],
+  ["compatible", "Target compatibility"],
+  ["authMode", "Authentication"],
+  ["secretReference", "Secret reference"],
+  ["secretPresent", "Secret availability"],
+  ["compactionUpstream", "Compaction capability"],
+  ["compactionPolicy", "Compaction policy"],
+  ["compactionMode", "Effective compaction"],
+  ["contextWindowTokens", "Context window"],
+  ["autoCompactTokens", "Auto-compact trigger"],
+  ["officialIdentityPolicy", "Official identity policy"],
+  ["officialIdentityAccount", "Official identity account"]
+]);
+function providerSyncConflicts(local, cloud) {
+  if (!local || !cloud) return [];
+  return PROVIDER_SYNC_FIELDS.filter(([field]) => local[field] !== cloud[field]).map(([, label]) => label);
+}
+function providerCandidate(group) {
+  const ordered = [group.local, group.cloud, group.builtin].filter(Boolean);
+  return ordered.find((entry) => entry.enabled && entry.compatible) || ordered[0] || null;
+}
+function mergedProviderEntry(name, group) {
+  const selected = providerCandidate(group);
+  if (!selected) return null;
+  const native = [group.local, group.builtin].find((entry) => entry?.nativeAuthPresent) || null;
+  const source = group.cloud === selected ? "cloud" : group.local === selected ? "local" : "builtin";
+  const sources = [];
+  if (group.builtin) sources.push("builtin");
+  if (group.local) sources.push("local");
+  if (group.cloud) sources.push("cloud");
+  const syncConflicts = providerSyncConflicts(group.local, group.cloud);
+  const syncStatus = group.local && group.cloud ? syncConflicts.length > 0 ? "conflict" : "backed-up" : group.local ? "local-only" : group.cloud ? "workspace-only" : "builtin-only";
+  return {
+    ...selected,
+    key: name,
+    source,
+    sources,
+    syncStatus,
+    syncConflicts,
+    nativeAuthPresent: native?.nativeAuthPresent || selected.nativeAuthPresent,
+    nativeAuthProvider: native?.nativeAuthProvider || selected.nativeAuthProvider,
+    nativeAuthType: native?.nativeAuthType || selected.nativeAuthType,
+    nativeSelected: native?.nativeSelected || selected.nativeSelected,
+    nativeSelectedModel: native?.nativeSelectedModel || selected.nativeSelectedModel
+  };
+}
+function providerEntries(localEntries, remoteEntries, { includeIncompatible = false } = {}) {
+  const groups = /* @__PURE__ */ new Map();
+  const add = (value, fallbackSource) => {
+    const entry = providerEntry(value, fallbackSource);
+    if (!entry) return;
+    const group = groups.get(entry.name) || { builtin: null, local: null, cloud: null };
+    if (entry.source === "builtin") {
+      group.builtin = entry;
+      if (entry.materialized) group.local = entry;
+    } else if (entry.source === "cloud") {
+      group.cloud = entry;
+    } else {
+      group.local = entry;
+    }
+    groups.set(entry.name, group);
+  };
   for (const value of Array.isArray(localEntries) ? localEntries : []) {
-    const entry = providerEntry(value, "local");
-    if (entry) entries.push(entry);
+    add(value, "local");
   }
   for (const value of Array.isArray(remoteEntries) ? remoteEntries : []) {
-    const entry = providerEntry(value, "cloud");
-    if (entry) entries.push(entry);
+    add(value, "cloud");
   }
-  return entries.sort(
-    (left, right) => left.name.localeCompare(right.name) || Number(right.source === "local") - Number(left.source === "local")
-  );
+  return [...groups.entries()].map(([name, group]) => mergedProviderEntry(name, group)).filter((entry) => entry && (includeIncompatible || entry.applied || entry.enabled && entry.compatible)).sort((left, right) => left.name.localeCompare(right.name));
+}
+function accountEntries(snapshot) {
+  const entries = Array.isArray(snapshot?.accounts?.accounts) ? snapshot.accounts.accounts : [];
+  return entries.filter((value) => value && typeof value.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name)).map((value) => ({
+    name: value.name.slice(0, 64),
+    current: value.current === true,
+    savedAt: typeof value.saved_at === "string" ? value.saved_at.slice(0, 40) : "",
+    credentialPrivate: value.credential_private === true
+  })).sort((left, right) => Number(right.current) - Number(left.current) || left.name.localeCompare(right.name));
 }
 function mcpTargetComparison(snapshot) {
   const targets = Object.fromEntries(TARGETS.map((target) => [
@@ -25410,21 +25897,10 @@ function selectionWindow(items, selected, size = 9) {
 function componentSummary(component, check2) {
   if (!check2?.ok) return { label: "Unavailable", kind: "bad", detail: check2?.summary || check2?.error || "No status" };
   const data = check2.data || {};
+  if (component === "identity") return identitySummary(data);
+  if (component === "inference") return inferenceSummary(data);
   if (component === "provider") {
-    const label = data.provider_status === "configured" ? "Configured" : data.provider_status || "Unknown";
-    const source = {
-      agentctl: "agentctl",
-      external: "external config",
-      "official-login": "official login"
-    }[data.provider_source] || "";
-    const configured = data.provider_status === "configured";
-    const insecureCredential = configured && data.credential_exists === true && data.credential_private === false;
-    const selection = [data.provider, data.model].filter(Boolean).join(" / ") || "No provider selected";
-    return {
-      label,
-      kind: configured ? insecureCredential ? "warn" : "good" : "bad",
-      detail: source ? `${selection} \xB7 ${source}` : selection
-    };
+    return inferenceSummary(data);
   }
   if (component === "mcp") {
     const selection = data.selection_mode === "manual" ? "custom" : data.profile || "none";
@@ -25456,11 +25932,66 @@ function componentSummary(component, check2) {
     detail: promptData.profile || "none"
   };
 }
+function identitySummary(data = {}) {
+  let identity = data.identity;
+  if (!identity || typeof identity !== "object") {
+    identity = data.provider_source === "official-login" ? {
+      status: "configured",
+      kind: data.provider === "openai-chatgpt" ? "chatgpt" : null,
+      account: data.provider === "openai-chatgpt" ? "current" : null,
+      source: "official-login",
+      credential_exists: data.credential_exists,
+      credential_private: data.credential_private
+    } : { status: "not-applicable", source: "none" };
+  }
+  if (identity.status === "not-applicable") {
+    return { label: "N/A", kind: "muted", detail: "No separate official Identity" };
+  }
+  if (identity.status !== "configured") {
+    return { label: "Not logged in", kind: "muted", detail: "No ChatGPT official login" };
+  }
+  const insecure = identity.credential_exists === true && identity.credential_private === false;
+  const kind = identity.kind === "chatgpt" ? "ChatGPT" : identity.kind || "Official";
+  const account = identity.account === "current" ? "current account" : identity.account || "current account";
+  return {
+    label: "Active",
+    kind: insecure ? "warn" : "good",
+    detail: `${kind} \xB7 ${account} \xB7 official login`
+  };
+}
+function inferenceSummary(data = {}) {
+  const inference = data.inference && typeof data.inference === "object" ? data.inference : {
+    status: data.provider_status,
+    provider: data.provider,
+    model: data.model,
+    source: data.provider_source,
+    credential_exists: data.credential_exists,
+    credential_private: data.credential_private
+  };
+  const label = inference.status === "configured" ? "Configured" : inference.status || "Unknown";
+  const source = {
+    agentctl: "agentctl",
+    external: "external config",
+    "official-login": "official login",
+    "official-account": "ChatGPT subscription"
+  }[inference.source] || "";
+  const configured = inference.status === "configured";
+  const insecureCredential = configured && inference.credential_exists === true && inference.credential_private === false;
+  const selection = [inference.provider, inference.model].filter(Boolean).join(" / ") || "No Provider selected";
+  return {
+    label,
+    kind: configured ? insecureCredential ? "warn" : "good" : "bad",
+    detail: source ? `${selection} \xB7 ${source}` : selection
+  };
+}
 function actionForKey(section, input) {
   if (section === "agents") {
-    if (input === "p") return "agent-providers";
-    if (input === "c" || input === "\r") return "agent-configure";
+    if (input === "p" || input === "c" || input === "\r") return "agent-provider";
     if (input === "x") return "agent-uninstall";
+  }
+  if (section === "accounts") {
+    if (input === "a" || input === "\r") return "account-use";
+    if (input === "x") return "account-delete";
   }
   if (section === "providers") {
     if (input === "p") return "provider-plan";
@@ -25483,16 +26014,21 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
-  if (action === "agent-providers") return `Show ${selection || "agent"} providers`;
-  if (action === "agent-configure") return `Configure or install ${selection || "agent"}`;
+  if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
+  if (action === "account-use") return `Switch Codex official account to ${selection || "account"}`;
+  if (action === "account-delete") return `Delete saved Codex account ${selection || "account"}`;
   if (action === "provider-plan") return `Plan Provider ${selection || "profile"} for ${targetLabel(target)}`;
   if (action === "provider-apply") return `Apply Provider ${selection || "profile"} to ${targetLabel(target)}`;
-  if (action === "provider-sync-push") return "Back up local Provider catalogs to encrypted Workspace";
-  if (action === "provider-sync-pull") return "Merge encrypted Workspace Provider catalogs locally";
+  if (action === "provider-sync-push") {
+    return `Use local ${selection || "Provider"} in encrypted Workspace`;
+  }
+  if (action === "provider-sync-pull") {
+    return `Use Workspace ${selection || "Provider"} in the local catalog`;
+  }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
   if (action === "prompt-view-cloud") return `View Workspace Prompt ${selection || "selection"} for ${target}`;
@@ -25510,7 +26046,32 @@ function actionLabel(action, selection, target) {
 function safePromptPreviewText(value) {
   return String(value ?? "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
 }
-function workspacePresentation(workspace, error = "") {
+function workspacePresentation(workspace, error = "", loading = false) {
+  const diagnostic = String(error || "").replace(/^\s*\[error\]\s*/i, "").trim();
+  if (workspace && diagnostic) {
+    return {
+      state: "stale",
+      kind: "warn",
+      heading: "Workspace reconnecting",
+      status: "Cached \xB7 retrying",
+      description: "The last successful Workspace index remains available while the connection is retried.",
+      safety: "Local state and cached cloud metadata remain ready; writes still require a live connection.",
+      commands: [],
+      diagnostic
+    };
+  }
+  if (workspace && loading) {
+    return {
+      state: "refreshing",
+      kind: "good",
+      heading: "Workspace connected",
+      status: "Online \xB7 refreshing",
+      description: "The last successful Workspace index remains visible while fresh metadata loads.",
+      safety: "No local view is blocked by this refresh.",
+      commands: [],
+      diagnostic: ""
+    };
+  }
   if (workspace) {
     return {
       state: "ready",
@@ -25523,7 +26084,18 @@ function workspacePresentation(workspace, error = "") {
       diagnostic: ""
     };
   }
-  const diagnostic = String(error || "").replace(/^\s*\[error\]\s*/i, "").trim();
+  if (loading) {
+    return {
+      state: "connecting",
+      kind: "warn",
+      heading: "Workspace connecting",
+      status: "Connecting\u2026",
+      description: "Local configuration is already available while encrypted Workspace metadata loads.",
+      safety: "No local view is blocked by this connection.",
+      commands: [],
+      diagnostic: ""
+    };
+  }
   if (/remote configuration not found/i.test(diagnostic)) {
     return {
       state: "unconfigured",
@@ -25615,12 +26187,14 @@ var COLORS = Object.freeze({
   claude: "yellow",
   opencode: "green",
   pi: "magenta",
+  builtin: "yellow",
   local: "green",
   cloud: "blue"
 });
 var SECTION_COLORS = Object.freeze({
   overview: "white",
   agents: "blue",
+  accounts: "yellow",
   providers: "magenta",
   mcp: "cyan",
   skills: "green",
@@ -25634,7 +26208,7 @@ function usage() {
   process.stdout.write(`script-toolbox agent TUI
 
 Usage:
-  toolbox-tui [--section <overview|agents|providers|mcp|skills|prompts|snippets|presets|cloud>]
+  toolbox-tui [--section <overview|agents|accounts|providers|mcp|skills|prompts|snippets|presets|cloud>]
   toolbox-tui --help
 
 Keys:
@@ -25645,8 +26219,9 @@ Keys:
   p / a                             Plan / apply selected configuration
   Prompts: v local \xB7 V Workspace    View Prompt content on demand
   u                                 Roll back a preset
-  Agents: c configure \xB7 p providers \xB7 x uninstall owned config
-  Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge
+  Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
+  Accounts: a/Enter switch \xB7 x delete saved account
+  Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -25673,9 +26248,40 @@ function TargetBadge({ target, selected = false }) {
   const label = targetLabel(target).toUpperCase().padEnd(11);
   return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[target] || COLORS.accent, bold: true, inverse: selected }, ` ${label} `);
 }
-function SourceBadge({ source, selected = false }) {
-  const label = source === "cloud" ? "WORKSPACE" : "LOCAL";
-  return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[source] || COLORS.muted, bold: true, inverse: selected }, ` ${label.padEnd(9)} `);
+function providerStorageMark(entry) {
+  if (entry?.syncStatus === "conflict") return "L\u2260W";
+  if (entry?.syncStatus === "backed-up") return "L+W";
+  if (entry?.syncStatus === "workspace-only") return "W";
+  if (entry?.syncStatus === "local-only") return "L";
+  return "B";
+}
+function providerStorageKind(entry) {
+  if (entry?.syncStatus === "conflict") return "bad";
+  if (entry?.syncStatus === "backed-up") return "good";
+  if (entry?.syncStatus === "workspace-only") return "cloud";
+  if (entry?.syncStatus === "local-only") return "local";
+  return "builtin";
+}
+function providerStorageLabel(entry) {
+  if (entry?.syncStatus === "conflict") return "LOCAL \u2260 WORKSPACE";
+  if (entry?.syncStatus === "backed-up") return "LOCAL + WORKSPACE";
+  if (entry?.syncStatus === "workspace-only") return "WORKSPACE ONLY";
+  if (entry?.syncStatus === "local-only") return "LOCAL ONLY";
+  return "BUILT-IN TEMPLATE";
+}
+function providerSyncDetail(entry) {
+  if (entry?.syncStatus === "conflict") {
+    return `Choose a winner: u Local \u2192 Workspace \xB7 d Workspace \u2192 Local \xB7 differs in ${(entry.syncConflicts || []).join(", ") || "configuration metadata"}`;
+  }
+  if (entry?.syncStatus === "backed-up") return "Local profile is backed up in Workspace";
+  if (entry?.syncStatus === "workspace-only") return "Workspace only \xB7 apply directly or press d to install this profile locally";
+  if (entry?.syncStatus === "local-only") return "Local only \xB7 press u to upload this profile";
+  return "Built-in template \xB7 applying materializes it locally";
+}
+function ProviderSourceBadge({ entry, selected = false }) {
+  const kind = providerStorageKind(entry);
+  const label = providerStorageLabel(entry);
+  return /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.muted, bold: true, inverse: selected }, ` ${label} `);
 }
 function Panel({ title, children, grow = 1, accent = "cyan" }) {
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "round", borderColor: accent, paddingX: 1, flexGrow: grow, flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: accent }, title), children);
@@ -25714,18 +26320,38 @@ function ErrorText({ value }) {
   if (!value) return null;
   return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", wrap: "truncate-end" }, String(value).split("\n")[0]);
 }
+function accountSummary(snapshot) {
+  const accounts = snapshot?.accounts || {};
+  const active = accounts.active || {};
+  const state = active.saved_as ? active.saved_as : active.official_login ? "current login is unsaved" : "not logged in";
+  return {
+    value: `${accounts.account_count || 0} saved \xB7 ${state}`,
+    kind: active.saved_as ? "good" : active.official_login ? "warn" : "muted"
+  };
+}
+function WorkspaceCatalogFallback({ snapshot }) {
+  return snapshot.workspaceLoading ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace is connecting in the background; local state is already available.") : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections.");
+}
 function LoadingView() {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Connecting\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, "Loading local controller state and encrypted Workspace metadata."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local or remote configuration is being changed."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Loading local state\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, "Reading local agent, account, Provider, MCP, Skills, Prompt, and Preset metadata."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local or remote configuration is being changed."));
 }
 function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
   const workspace = snapshot.workspace;
   const connection = workspace || snapshot.workspaceConnection;
-  const cloud = workspacePresentation(workspace, snapshot.workspaceError);
+  const cloud = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
+  const accounts = accountSummary(snapshot);
   if (!report) {
-    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? "connected" : cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Remotes", value: `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), workspace && /* @__PURE__ */ import_react34.default.createElement(
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", report.provider) }), target === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Remotes",
+      value: snapshot.workspaceLoading ? "checking in background" : `${Object.values(snapshot.doctor?.remote || {}).filter((value) => value.ok).length}/3 available`,
+      kind: snapshot.workspaceLoading ? "warn" : "value"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: workspace ? `${workspace.latest?.version || "empty"} \xB7 ${workspace.web_ui_enabled ? "web on" : "web off"}` : cloud.status, kind: cloud.kind }), workspace && /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Provider backup",
@@ -25739,10 +26365,27 @@ function Agents({ snapshot, selected }) {
   if (agents.length === 0) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.agentsError || snapshot.doctorError || "No agent status" });
   const safeIndex = clampSelection(selected, agents.length);
   const current = agents[safeIndex];
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Provider", summary: componentSummary("provider", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
+  const accounts = accountSummary(snapshot);
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: current }) }), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
 }
-function ProvidersView({ snapshot, surface, selected, target }) {
-  const entries = providerEntries(surface.local, surface.cloud);
+function AccountsView({ snapshot, selected }) {
+  const entries = accountEntries(snapshot);
+  const safeIndex = clampSelection(selected, entries.length);
+  const visible = selectionWindow(entries, safeIndex, 10);
+  const current = entries[safeIndex] || null;
+  const active = snapshot.accounts?.active || {};
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Saved accounts ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.name, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.current ? "green" : index === safeIndex ? "yellow" : "white", bold: index === safeIndex || item.current }, item.name), item.current && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF current"))), entries.length === 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no saved official accounts)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current?.current ? "green" : "yellow", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "yellow" }, current?.name || "Codex official accounts"), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Live login",
+      value: active.saved_as || (active.official_login ? "unsaved official account" : active.status || "not logged in"),
+      kind: active.official_login ? active.saved_as ? "good" : "warn" : "muted"
+    }
+  ), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.current ? "active" : "saved", kind: current.current ? "good" : "local" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved", value: current.savedAt ? new Date(current.savedAt).toLocaleString() : "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Credential", value: current.credentialPrivate ? "owner-only snapshot" : "unsafe permissions", kind: current.credentialPrivate ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "a/Enter"), " switch or refresh \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " delete non-current snapshot")) : /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Save the current ChatGPT login with an explicit local label:"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "agentctl account save primary --yes")))), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store", value: displayPath(snapshot.accounts?.store), kind: "local" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Account switching changes only auth.json; the selected inference Provider and Model remain unchanged."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.accountsError }));
+}
+function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
+  const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
+  const entries = showIncompatible ? allEntries : providerEntries(surface.local, surface.cloud);
   const safeIndex = clampSelection(selected, entries.length);
   const visible = selectionWindow(entries, safeIndex, 10);
   const current = entries[safeIndex] || null;
@@ -25752,18 +26395,69 @@ function ProvidersView({ snapshot, surface, selected, target }) {
   const pricing = dashboard.pricing || {};
   const proxy = dashboard.proxy || {};
   const remote = snapshot.workspace?.agent || {};
-  const localCount = entries.filter((entry) => entry.source === "local").length;
-  const cloudCount = entries.filter((entry) => entry.source === "cloud").length;
-  const stateKind = !current?.enabled ? "muted" : current?.ready ? "good" : current?.compatible ? "warn" : "bad";
+  const runtime = Array.isArray(snapshot.agents) ? snapshot.agents.find((agent) => agent.client === target) || null : null;
+  const hiddenCount = allEntries.length - providerEntries(surface.local, surface.cloud).length;
+  const backedUpCount = allEntries.filter((entry) => entry.syncStatus === "backed-up").length;
+  const conflictCount = allEntries.filter((entry) => entry.syncStatus === "conflict").length;
+  const stateKind = !current?.enabled ? "muted" : current?.ready ? "good" : current?.nativeAuthPresent ? "local" : current?.compatible ? "warn" : "bad";
   const proxyKind = proxy.status === "running" ? "good" : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " \xB7 ", localCount, " local / ", cloudCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[item.source], bold: true }, item.source === "cloud" ? "W" : "L"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.enabled && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "disabled"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[current.source] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(SourceBadge, { source: current.source })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: !current.enabled ? "disabled" : current.ready ? "ready" : "blocked", kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Protocol", value: current.protocol || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), runtime && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginBottom: 1 }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " visible \xB7 ", allEntries.length, " total \xB7 ", backedUpCount, " backed up", conflictCount > 0 ? ` \xB7 ${conflictCount} conflict` : ""), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[providerStorageKind(item)], bold: true }, providerStorageMark(item).padEnd(3)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.applied && item.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "\u25C7"), item.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "native auth"), (!item.enabled || !item.compatible) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "incompatible"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)"), hiddenCount > 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden \xB7 i show`)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[providerStorageKind(current)] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(ProviderSourceBadge, { entry: current })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"), kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
-      label: "Secret",
+      label: "Backup state",
+      value: providerSyncDetail(current),
+      kind: providerStorageKind(current)
+    }
+  ), current.sources.includes("builtin") && current.syncStatus !== "builtin-only" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Catalog origin", value: "agentctl built-in template", kind: "builtin" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Protocol", value: current.protocol || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Compaction",
+      value: current.compactionLabel || "Local \xB7 upstream unverified",
+      kind: current.compactionMode === "remote_native" || current.compactionMode === "messages_native" ? "good" : current.compactionPolicy === "local" ? "local" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Context",
+      value: current.contextLabel || "Client default",
+      kind: current.contextWindowTokens !== null || current.autoCompactTokens !== null ? "good" : "muted"
+    }
+  ), current.modelsAvailable.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model choices", value: current.modelsAvailable.join(", ") }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Provider Secret",
       value: current.authMode === "none" ? "not required" : `${current.secretReference || "missing reference"} \xB7 ${current.secretPresent ? "present" : "missing"}`,
       kind: current.authMode === "none" || current.secretPresent ? "good" : "warn"
     }
-  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Applied", value: current.applied ? "current on this device" : "not current", kind: current.applied ? "good" : "muted" }), current.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: current.description }), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" })) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Initialize locally or back up a Provider bundle to Workspace."))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(
+  ), current.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Native client auth",
+      value: `OpenCode \xB7 ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""} \xB7 available outside agentctl`,
+      kind: "local"
+    }
+  ), current.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Native selection",
+      value: current.nativeSelectedModel || "selected by OpenCode",
+      kind: "local"
+    }
+  ), current.officialIdentityPolicy === "preserve" && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Official Identity",
+      value: "preserve current ChatGPT login \xB7 auth.json untouched",
+      kind: "good"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Applied",
+      value: current.applied ? "current under agentctl" : current.nativeSelected ? "current in OpenCode \xB7 external" : "not current under agentctl",
+      kind: current.applied ? "good" : current.nativeSelected ? "local" : "muted"
+    }
+  ), current.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: current.description }), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" }), !current.secretPresent && current.secretReference && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "agentctl provider use ", current.name, " --target ", target, " --secret-file ./key --yes"), current.nativeAuthPresent && !current.secretPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Native auth is usable by OpenCode, but is not yet managed or backed up by agentctl.")) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Initialize locally or back up a Provider bundle to Workspace."))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Local catalog",
@@ -25784,7 +26478,7 @@ function ProvidersView({ snapshot, surface, selected, target }) {
       value: `${proxy.status || "unavailable"}${proxy.profile ? ` \xB7 ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`,
       kind: proxyKind
     }
-  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading local and encrypted Workspace Provider catalogs\u2026"), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " upload local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " download/merge"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Secret values remain hidden; applying writes only the selected client target."));
+  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
 }
 function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
@@ -25827,7 +26521,7 @@ function McpView({ snapshot, target, catalog, selected }) {
       key: `${entry}-error`,
       value: !comparison.targets[entry].check?.ok ? `${targetLabel(entry)}: ${comparison.targets[entry].check?.summary || comparison.targets[entry].check?.error || snapshot.doctorError || "status unavailable"}` : ""
     }
-  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."));
+  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }
 function PromptView({ snapshot, target, catalog, selected }) {
   const states = Object.fromEntries(TARGETS.map((entry) => [
@@ -25845,7 +26539,7 @@ function PromptView({ snapshot, target, catalog, selected }) {
       key: `${entry}-prompt-error`,
       value: !states[entry].ok ? `${states[entry].label}: ${states[entry].error}` : ""
     }
-  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "prompts" }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "v"), " view active local Prompt \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "V"), " view selected Workspace Prompt"));
+  )), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "prompts" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "v"), " view active local Prompt \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "V"), " view selected Workspace Prompt"));
 }
 function PromptPreview({ preview, offset, pageSize }) {
   const content = safePromptPreviewText(preview.content).replace(/\r\n?/g, "\n");
@@ -25863,12 +26557,12 @@ function SnippetView({ snapshot, catalog, selected }) {
   const current = entries[safeIndex] || null;
   const localCount = entries.filter((entry) => entry.local).length;
   const remoteCount = entries.filter((entry) => entry.remote).length;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Snippets are connecting in the background; local Snippets are ready."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "[/] select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
 }
 function ComponentView({ snapshot, target, component, catalog, selected }) {
   const state = componentTargetState(snapshot, component, target);
   const { check: check2, data, selection, items, summary } = state;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Active client"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: COMPONENT_LABELS[component], summary }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Selection", value: selection }), component === "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Managed", value: data.managed ? "yes" : "no", kind: data.managed ? "good" : "bad" }), component !== "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Items", value: items?.length ? items.join(", ") : "none" }), Array.isArray(data.drift) && data.drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Drift", value: data.drift.join(", "), kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: !check2?.ok ? check2?.summary || check2?.error || snapshot.doctorError : "" }), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component }) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Active client"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: COMPONENT_LABELS[component], summary }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Selection", value: selection }), component === "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Managed", value: data.managed ? "yes" : "no", kind: data.managed ? "good" : "bad" }), component !== "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Items", value: items?.length ? items.join(", ") : "none" }), Array.isArray(data.drift) && data.drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Drift", value: data.drift.join(", "), kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: !check2?.ok ? check2?.summary || check2?.error || snapshot.doctorError : "" }), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }
 function Presets({ snapshot, selected, target }) {
   const entries = presetEntries(snapshot);
@@ -25886,11 +26580,11 @@ function Cloud({ snapshot }) {
   }
   const workspace = snapshot.workspace;
   const connection = snapshot.workspaceConnection;
-  const presentation = workspacePresentation(workspace, snapshot.workspaceError);
+  const presentation = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
   if (!workspace) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }), connection?.store_id && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store ID", value: connection.store_id }), /* @__PURE__ */ import_react34.default.createElement(Text, null, presentation.description), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, presentation.safety), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "Next step"), presentation.commands.map((command, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${command}-${index}`, color: command.startsWith("agentctl ") ? "cyan" : "gray" }, command))), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "bad" }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 3}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: COLORS[presentation.kind] }, presentation.heading), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Status", value: presentation.status, kind: presentation.kind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: workspace.endpoint }), snapshot.workspaceLastConnectedAt && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Last connected", value: new Date(snapshot.workspaceLastConnectedAt).toLocaleString() }), presentation.state !== "ready" && /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[presentation.kind] }, presentation.description), presentation.diagnostic && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Diagnostic", value: presentation.diagnostic, kind: "warn" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Version", value: workspace.latest?.version || "none" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Format", value: workspace.migration_pending ? `schema ${workspace.remote_schema} \xB7 compatible in memory` : `schema ${workspace.remote_schema || 3}`, kind: workspace.migration_pending ? "warn" : "good" }), workspace.migration_pending && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Upgrade preview: agentctl workspace migrate"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Web UI", value: workspace.web_ui_enabled ? "enabled" : "disabled", kind: workspace.web_ui_enabled ? "good" : "muted" }), Object.entries(workspace.stores || {}).map(([name, store]) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: name, label: name, value: store.attached ? `${store.available === false ? "unreachable" : "attached"} \xB7 ${store.latest?.version || "empty"}` : "not attached", kind: store.attached && store.available !== false ? "good" : store.attached ? "warn" : "muted" })), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Presets", value: Object.keys(workspace.presets || {}).join(", ") || "none" }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Providers",
@@ -25900,7 +26594,7 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/Enter"), " configure or install \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: [/] select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "Tab / Shift+Tab or arrows  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Up/Down  select previous / next item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: [/] select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: [/] select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 [/] scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: [/] select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -25912,7 +26606,7 @@ function App2({ initialSection, controller, onLaunch }) {
   const [busy, setBusy] = (0, import_react34.useState)(false);
   const [selected, setSelected] = (0, import_react34.useState)(0);
   const [selectedAgent, setSelectedAgent] = (0, import_react34.useState)(0);
-  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ accounts: 0, providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
   const [catalogs, setCatalogs] = (0, import_react34.useState)({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
@@ -25923,6 +26617,7 @@ function App2({ initialSection, controller, onLaunch }) {
     local: [],
     cloud: [],
     dashboard: null,
+    target: "codex",
     loading: false,
     localError: "",
     cloudError: "",
@@ -25932,21 +26627,45 @@ function App2({ initialSection, controller, onLaunch }) {
   const [lastDetail, setLastDetail] = (0, import_react34.useState)("");
   const [confirm, setConfirm] = (0, import_react34.useState)(null);
   const [showHelp, setShowHelp] = (0, import_react34.useState)(false);
+  const [showIncompatibleProviders, setShowIncompatibleProviders] = (0, import_react34.useState)(false);
   const [promptPreview, setPromptPreview] = (0, import_react34.useState)(null);
   const [promptPreviewOffset, setPromptPreviewOffset] = (0, import_react34.useState)(0);
+  const refreshSequence = (0, import_react34.useRef)(0);
   const refresh = (0, import_react34.useCallback)(async (quiet = false) => {
+    const sequence = refreshSequence.current + 1;
+    refreshSequence.current = sequence;
     setLoading(true);
     if (!quiet) setMessage("Refreshing diagnostics\u2026");
     try {
-      const next = await controller.snapshot();
-      setSnapshot(next);
-      setSelected((value) => clampSelection(value, presetEntries(next).length));
-      setSelectedAgent((value) => clampSelection(value, Array.isArray(next.agents) ? next.agents.length : 0));
-      setMessage(`Updated ${new Date(next.updatedAt).toLocaleTimeString()}`);
+      const local = typeof controller.localSnapshot === "function" ? await controller.localSnapshot() : await controller.snapshot();
+      if (refreshSequence.current !== sequence) return;
+      setSnapshot(local);
+      setSelected((value) => clampSelection(value, presetEntries(local).length));
+      setSelectedAgent((value) => clampSelection(value, Array.isArray(local.agents) ? local.agents.length : 0));
+      setComponentSelected((value) => ({
+        ...value,
+        accounts: clampSelection(value.accounts, accountEntries(local).length)
+      }));
+      setLoading(false);
+      setMessage(local.workspaceLoading ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} \xB7 Workspace ${local.workspace ? "refreshing" : "connecting"}\u2026` : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
+      if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
+        void controller.hydrateSnapshot(local).then((next) => {
+          if (refreshSequence.current !== sequence) return;
+          setSnapshot(next);
+          setSelected((value) => clampSelection(value, presetEntries(next).length));
+          const cloud = workspacePresentation(next.workspace, next.workspaceError, false);
+          setMessage(`${cloud.status} \xB7 local state remains ready`);
+        }).catch((error) => {
+          if (refreshSequence.current !== sequence) return;
+          setSnapshot((value) => value ? { ...value, workspaceLoading: false } : value);
+          setMessage(`Local ready \xB7 Workspace refresh failed: ${error.message}`);
+        });
+      }
     } catch (error) {
+      if (refreshSequence.current !== sequence) return;
       setMessage(`Refresh failed: ${error.message}`);
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === sequence) setLoading(false);
     }
   }, [controller]);
   (0, import_react34.useEffect)(() => {
@@ -25991,36 +26710,56 @@ function App2({ initialSection, controller, onLaunch }) {
     const key = `${snapshot.updatedAt}:${workspaceStoreId || "local"}:${snapshot.workspace?.latest?.version || "none"}:${providerTarget}`;
     let cancelled = false;
     setProviderSurface((value) => ({
-      ...value,
+      local: value.target === providerTarget ? value.local : [],
+      cloud: [],
+      dashboard: value.target === providerTarget ? value.dashboard : null,
+      target: providerTarget,
       loading: true,
       localError: "",
       cloudError: "",
       key
     }));
-    const local = Promise.resolve().then(() => controller.providerDashboard(providerTarget)).then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: String(error?.message || error) }));
-    const cloud = workspaceStoreId ? controller.remoteCatalog("providers", providerTarget) : Promise.resolve({ ok: true, items: [], error: "" });
-    void Promise.all([local, cloud]).then(([localResult, cloudResult]) => {
+    let localItems = providerSurface.target === providerTarget ? providerSurface.local : [];
+    let cloudItems = [];
+    let dashboard = providerSurface.target === providerTarget ? providerSurface.dashboard : null;
+    let localError = "";
+    let cloudError = "";
+    let localDone = false;
+    let cloudDone = false;
+    let current = null;
+    const projectCloud = (items) => items.map((profile) => ({
+      ...profile,
+      applied: current?.profile === profile.name && current.platform === profile.platform && current.protocol === profile.protocol && current.endpoint === profile.endpoint && current.requested_model === profile.requested_model && current.outbound_model === profile.outbound_model && current.compaction_upstream === profile.compaction_upstream && current.compaction_policy === profile.compaction_policy && current.compaction_mode === profile.compaction_mode && current.context_window_tokens === profile.context_window_tokens && current.auto_compact_tokens === profile.auto_compact_tokens
+    }));
+    const publish = () => {
       if (cancelled) return;
-      const localItems = localResult.data?.profiles || [];
-      const current = localResult.data?.status?.current?.[providerTarget];
-      const cloudItems = (cloudResult.items || []).map((profile) => ({
-        ...profile,
-        applied: current?.profile === profile.name && current.platform === profile.platform && current.protocol === profile.protocol && current.endpoint === profile.endpoint && current.requested_model === profile.requested_model && current.outbound_model === profile.outbound_model
-      }));
       setProviderSurface({
         local: localItems,
         cloud: cloudItems,
-        dashboard: localResult.data,
-        loading: false,
-        localError: localResult.error,
-        cloudError: cloudResult.error,
+        dashboard,
+        target: providerTarget,
+        loading: !localDone || !cloudDone,
+        localError,
+        cloudError,
         key
       });
-      const entries = providerEntries(localItems, cloudItems);
-      setComponentSelected((value) => ({
-        ...value,
-        providers: clampSelection(value.providers, entries.length)
-      }));
+    };
+    const local = Promise.resolve().then(() => controller.providerDashboard(providerTarget)).then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: String(error?.message || error) }));
+    const cloud = workspaceStoreId ? controller.remoteCatalog("providers", providerTarget) : Promise.resolve({ ok: true, items: [], error: "" });
+    void local.then((result) => {
+      localDone = true;
+      dashboard = result.data;
+      localItems = result.data?.profiles || [];
+      current = result.data?.status?.current?.[providerTarget] || null;
+      cloudItems = projectCloud(cloudItems);
+      localError = result.error;
+      publish();
+    });
+    void cloud.then((result) => {
+      cloudDone = true;
+      cloudItems = projectCloud(result.items || []);
+      cloudError = result.error;
+      publish();
     });
     return () => {
       cancelled = true;
@@ -26029,7 +26768,18 @@ function App2({ initialSection, controller, onLaunch }) {
   const selectedPreset = (0, import_react34.useMemo)(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents) ? snapshot.agents[selectedAgent]?.client || "" : "";
   const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
-  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud);
+  const mergedProviders = providerEntries(providerSurface.local, providerSurface.cloud, {
+    includeIncompatible: showIncompatibleProviders
+  });
+  (0, import_react34.useEffect)(() => {
+    setComponentSelected((value) => {
+      const providers = clampSelection(value.providers, mergedProviders.length);
+      return providers === value.providers ? value : { ...value, providers };
+    });
+  }, [mergedProviders.length]);
+  const savedAccounts = accountEntries(snapshot);
+  const selectedAccount = savedAccounts[clampSelection(componentSelected.accounts, savedAccounts.length)] || null;
+  const selectedAccountName = selectedAccount?.name || "";
   const selectedProvider = mergedProviders[clampSelection(componentSelected.providers, mergedProviders.length)] || null;
   const selectedProviderName = selectedProvider?.name || "";
   const selectedProviderSource = selectedProvider?.source || "local";
@@ -26064,26 +26814,25 @@ function App2({ initialSection, controller, onLaunch }) {
   }, [controller, selectedRemote, snapshot, target]);
   const executeAction = (0, import_react34.useCallback)(async (action) => {
     setConfirm(null);
-    if (action === "agent-configure") {
-      try {
-        onLaunch(controller.interactiveCommand(selectedAgentId));
-        exit();
-      } catch (error) {
-        setMessage(`Failed: ${error.message}`);
-      }
+    if (action === "agent-provider") {
+      setProviderTarget(selectedAgentId);
+      setComponentSelected((value) => ({ ...value, providers: 0 }));
+      setSection("providers");
+      setMessage(`Unified Providers opened for ${targetLabel(selectedAgentId)}.`);
       return;
     }
     setBusy(true);
     const providerAction = action.startsWith("provider-");
+    const accountAction = action.startsWith("account-");
     const actionTarget = providerAction ? providerTarget : target;
-    const selection = action.startsWith("agent-") ? selectedAgentId : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
     setMessage(`${actionLabel(action, selection, actionTarget)}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
         target: actionTarget
       });
@@ -26097,10 +26846,9 @@ function App2({ initialSection, controller, onLaunch }) {
     }
   }, [
     controller,
-    exit,
-    onLaunch,
     providerTarget,
     refresh,
+    selectedAccountName,
     selectedAgentId,
     selectedLocalSnippet,
     selectedPreset,
@@ -26147,7 +26895,14 @@ function App2({ initialSection, controller, onLaunch }) {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
         return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS2));
       }
+      if (section === "accounts") return;
       return setTarget((value) => otherTarget(value));
+    }
+    if (section === "providers" && (input === "i" || input === "I")) {
+      setComponentSelected((value) => ({ ...value, providers: 0 }));
+      setShowIncompatibleProviders(!showIncompatibleProviders);
+      setMessage(showIncompatibleProviders ? "Incompatible Providers hidden." : "Showing incompatible Providers for inspection.");
+      return;
     }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
@@ -26156,6 +26911,12 @@ function App2({ initialSection, controller, onLaunch }) {
         value + delta,
         Array.isArray(snapshot?.agents) ? snapshot.agents.length : 0
       ));
+    }
+    if (section === "accounts" && delta !== 0) {
+      return setComponentSelected((value) => ({
+        ...value,
+        accounts: clampSelection(value.accounts + delta, savedAccounts.length)
+      }));
     }
     if (section === "presets" && delta !== 0) {
       return setSelected((value) => clampSelection(value + delta, presetEntries(snapshot).length));
@@ -26182,12 +26943,28 @@ function App2({ initialSection, controller, onLaunch }) {
       setMessage("No agent is selected.");
       return;
     }
+    if (action.startsWith("account-") && !selectedAccountName) {
+      setMessage("No saved Codex official account is selected.");
+      return;
+    }
+    if (action === "account-delete" && selectedAccount?.current) {
+      setMessage("The current account cannot be deleted; switch to another saved account first.");
+      return;
+    }
     if ((action === "provider-plan" || action === "provider-apply") && !selectedProviderName) {
       setMessage("No local or Workspace Provider profile is selected.");
       return;
     }
     if ((action === "provider-sync-push" || action === "provider-sync-pull") && !snapshot?.workspaceConnection?.configured) {
       setMessage("Connect or restore an encrypted Workspace before synchronizing Provider catalogs.");
+      return;
+    }
+    if (action === "provider-sync-push" && !selectedProvider?.sources?.includes("local")) {
+      setMessage(selectedProvider?.syncStatus === "builtin-only" ? "Apply the built-in Provider once to materialize it locally before uploading it." : "The selected Provider has no local copy to upload.");
+      return;
+    }
+    if (action === "provider-sync-pull" && !selectedProvider?.sources?.includes("cloud")) {
+      setMessage("The selected Provider has no Workspace copy to download.");
       return;
     }
     if (["plan", "apply"].includes(action) && !selectedPreset) {
@@ -26204,7 +26981,8 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
-      const selection = action.startsWith("agent-") ? selectedAgentId : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+      const accountAction = action.startsWith("account-");
+      const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
         label: actionLabel(action, selection, providerAction ? providerTarget : target)
@@ -26217,13 +26995,15 @@ function App2({ initialSection, controller, onLaunch }) {
   if (snapshot) {
     content = /* @__PURE__ */ import_react34.default.createElement(Overview, { snapshot, target });
     if (section === "agents") content = /* @__PURE__ */ import_react34.default.createElement(Agents, { snapshot, selected: selectedAgent });
+    if (section === "accounts") content = /* @__PURE__ */ import_react34.default.createElement(AccountsView, { snapshot, selected: componentSelected.accounts });
     if (section === "providers") content = /* @__PURE__ */ import_react34.default.createElement(
       ProvidersView,
       {
         snapshot,
         surface: providerSurface,
         selected: componentSelected.providers,
-        target: providerTarget
+        target: providerTarget,
+        showIncompatible: showIncompatibleProviders
       }
     );
     if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(McpView, { snapshot, target, catalog: catalogs.mcp, selected: componentSelected.mcp });
@@ -26234,9 +27014,9 @@ function App2({ initialSection, controller, onLaunch }) {
     if (section === "cloud") content = /* @__PURE__ */ import_react34.default.createElement(Cloud, { snapshot });
   }
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
-  const activeTarget = section === "providers" ? providerTarget : target;
-  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "providers" ? `Providers \xB7 ${targetLabel(providerTarget)}` : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: activeTarget, selected: true }), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1, flexWrap: "wrap" }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
+  const activeTarget = section === "providers" ? providerTarget : section === "accounts" ? "codex" : target;
+  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "providers" ? `Providers \xB7 ${targetLabel(providerTarget)}` : section === "accounts" ? "Accounts \xB7 Codex official Identity" : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : section === "accounts" ? "identity target" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: activeTarget, selected: true }), !["snippets", "accounts"].includes(section) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1, flexWrap: "wrap" }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
     Text,
     {
       key: item.id,
@@ -26246,7 +27026,7 @@ function App2({ initialSection, controller, onLaunch }) {
       dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", section === "snippets" ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {

@@ -23,8 +23,9 @@ sudo ./server-toolkit.sh
 
 ### 菜单语言与终端编码
 
-交互菜单默认使用纯 ASCII 英文，以兼容未配置 UTF-8 locale、串口控制台和部分精简
-SSH 终端。无需安装额外 locale 或 `gettext`。
+全脚本的交互菜单、提示、确认、状态消息、Profile 计划和只读报告默认使用纯 ASCII
+英文，以兼容未配置 UTF-8 locale、串口控制台和部分精简 SSH 终端。无需安装额外
+locale 或 `gettext`。
 
 需要中文菜单时可显式指定：
 

@@ -1,5 +1,100 @@
 # Changelog — agent/
 
+## 2026-08-11 — native compaction capabilities
+
+- Added profile-scoped Workspace reconciliation. In the Providers TUI, `u`
+  now means the selected Local profile wins and `d` means its Workspace copy
+  wins; only that profile and its referenced encrypted Secret values are
+  upserted. The CLI exposes the same safe operation through
+  `workspace agent push|pull --profile <name>`, preserving every unrelated
+  Provider, failover/pricing catalog, generated config, and applied selection.
+  Bumped `agentctl` to 0.16.3.
+- Hardened background Workspace refreshes against transient network failures:
+  one safe read retry is attempted, overlapping index refreshes are coalesced,
+  and the TUI retains the last successful public Workspace index as
+  `Cached · retrying` instead of collapsing a usable dashboard to `Offline`.
+- Fixed OpenCode native credential discovery: `agentctl status` and the
+  Provider catalog now surface provider/type metadata from OpenCode's local
+  auth store without copying credentials into the agentctl Secret Store or
+  exposing values. The TUI distinguishes native auth/current selection from
+  an agentctl-applied Provider. Bumped `agentctl` to 0.16.2.
+- Extended Provider schema 2 before publication with a distinct portable
+  `context.window_tokens` / `context.auto_compact_tokens` policy. Claude Code
+  renders these as `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `autoCompactWindow`;
+  exact model metadata now follows switches between DeepSeek V4 Pro/Flash,
+  MiniMax M3, and MiniMax M2.7/M2.5 instead of inheriting a Provider-wide
+  guess. Unknown or dynamically routed models retain client/user defaults.
+- Added owner-only Claude context state so Provider switches and uninstall
+  restore pre-agentctl values exactly. Externally changed managed values fail
+  closed unless context replacement is explicitly forced.
+- Upgraded portable Provider profiles and Stores to schema 2 with separate
+  `compaction.upstream` capability and `compaction.policy` intent. The exact
+  OpenAI and Anthropic built-ins declare their native APIs; migrated or custom
+  third-party profiles default to `none/auto` until explicitly verified.
+- Added a preview-first one-time `agentctl provider migrate schema` command.
+  Loading an old encrypted Workspace remains safe in memory, while the next
+  local/Workspace save emits schema 2. Provider Secret Stores remain schema 1
+  because their format did not change.
+- Made Codex's official OpenAI projection use the Provider display name it
+  recognizes for native remote compaction. A forced-local policy avoids that
+  gate, and TUI/CLI plans show the effective result rather than implying every
+  Responses-compatible gateway supports compaction.
+- Upgraded the loopback proxy config to schema 4 and conditionally allowlisted
+  `/v1/responses/compact` only when every backend in the selected route has a
+  native Responses compaction capability. Anthropic beta headers and
+  `context_management` bodies continue through unchanged; no cross-protocol
+  emulation was added.
+- Added migration, renderer, native-route, Anthropic pass-through, proxy
+  lifecycle, context ownership, and safe UI projection coverage.
+
+## 2026-08-11 — unified Provider catalog and CCS migration
+
+- Replaced the separate `agentctl providers <client>` preset view and public
+  per-client setup flow with one target-aware `agentctl provider` catalog.
+  Built-ins render without a local Store; `provider use` materializes the
+  selection, imports an owner-only Secret file, installs/configures one client,
+  and rolls back catalog, Secret, native config, and selection state together.
+- Added built-in Anthropic API, OpenAI API, Gemini, DeepSeek, OpenRouter, and
+  regional MiniMax profiles with per-client protocol/endpoints, model choices,
+  and exact validation URLs. Custom profiles skip guessed validation endpoints.
+- Added read-only CCS SQLite migration for Claude and Codex third-party
+  Providers and API keys. Official Claude/ChatGPT OAuth identities are skipped
+  and Secret values never enter output.
+- Updated the TUI to consume resolved CLI rows directly, mark Built-in/Local/
+  Workspace as `B/L/W`, show Needs-key guidance, and route Agents `c/p/Enter`
+  into the same Providers section. Bumped `agentctl` to 0.15.0.
+- Merged matching local and Workspace Provider rows into one local-first entry,
+  added `L+W` backup and `L≠W` metadata-conflict states, and hid profiles that
+  cannot serve the selected client by default with an explicit `i` reveal.
+
+## 2026-08-11 — official-account switching and local-first dashboard
+
+- Added a preview-first, owner-only Codex Account Store for saving multiple
+  official ChatGPT logins under explicit local labels and atomically switching
+  `auth.json` without changing the selected inference Provider or Model.
+- Refresh the outgoing account snapshot before every switch and fail closed for
+  unsafe, unmanaged, or unsaved live credentials. Status and TUI models expose
+  labels and file-safety metadata only; OAuth tokens and account IDs never enter
+  output, and account snapshots are not uploaded to Workspace.
+- Added a dedicated Accounts TUI section with confirmed switch/delete actions.
+  The initial dashboard snapshot now publishes all local state first, marks a
+  configured Workspace as `Connecting…`, and hydrates cloud diagnostics and
+  catalogs in the background without clearing usable local Provider profiles.
+
+## 2026-08-11 — Codex Identity and Inference separation
+
+- Split Codex diagnostics into an official ChatGPT Identity and an independent
+  inference Provider/Model while retaining the previous flat Provider fields
+  for command compatibility.
+- Made every direct Codex Provider plan explicitly preserve the current
+  official login. Provider apply, rollback, and managed-path discovery never
+  include `~/.codex/auth.json`; integration tests verify its bytes and private
+  mode remain unchanged. Apply also aborts and transactionally restores the
+  file if a backend ever violates that read-only boundary.
+- Updated Overview, Agents, and Providers views to show the active Identity and
+  inference route separately. Provider profiles remain inference-only and do
+  not bind or switch a ChatGPT account.
+
 ## 2026-08-11 — completed Toolbox Store cloud migration
 
 - Copied and byte-verified every opaque R2 object into the product-neutral

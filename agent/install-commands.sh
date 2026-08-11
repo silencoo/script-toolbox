@@ -310,8 +310,10 @@ stage_runtime() {
   copy_runtime_file update-commands.sh
 
   copy_runtime_file agentctl/agentctl
+  copy_runtime_file agentctl/account-client.mjs
   copy_runtime_file agentctl/orchestrator-client.mjs
   copy_runtime_file agentctl/provider-client.mjs
+  copy_runtime_file agentctl/provider-catalog.mjs
   copy_runtime_file agentctl/provider-renderer.mjs
   copy_runtime_file agentctl/provider-schema.mjs
   copy_runtime_file agentctl/failover-client.mjs

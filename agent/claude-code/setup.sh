@@ -32,8 +32,12 @@ KEY_ENV_OVERRIDE=""
 BASE_URL_OVERRIDE=""
 MODELS_URL_OVERRIDE=""
 AUTH_MODE_OVERRIDE=""
+CONTEXT_WINDOW_TOKENS=""
+AUTO_COMPACT_TOKENS=""
+CONTEXT_POLICY_SET=0
 REGION=""
 FORCE=0
+FORCE_CONTEXT=0
 SKIP_VALIDATE=0
 UNINSTALL=0
 LIST_PROVIDERS=0
@@ -45,6 +49,7 @@ INSTALL_STATUSLINE=1
 SETTINGS_DIR="${HOME}/.claude"
 SETTINGS_FILE="${SETTINGS_DIR}/settings.json"
 STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider"
+CONTEXT_STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider-context.json"
 MANAGED_BY="agent/claude-code/setup.sh"
 SETUP_COMMAND="${AGENTCTL_SETUP_COMMAND:-./setup.sh}"
 UNINSTALL_COMMAND="${AGENTCTL_UNINSTALL_COMMAND:-$0 --uninstall}"
@@ -66,6 +71,10 @@ ${C_BOLD}Options:${C_RESET}
   --models-url <url>         Override the key/model validation endpoint.
   --key-env <name>           Custom provider environment variable.
   --auth-mode <mode>         custom only: api-key or auth-token.
+  --context-window-tokens <tokens|auto>
+                             Set the real model window or restore the prior value.
+  --auto-compact-tokens <tokens|auto>
+                             Set the auto-compact trigger or restore the prior value.
   --region <china|global>    Backward-compatible alias for MiniMax selection.
   --list-providers           Print presets and current model IDs.
   --skip-validate            Skip the models endpoint probe.
@@ -75,6 +84,7 @@ ${C_BOLD}Options:${C_RESET}
   --no-statusline            Do not install/update the managed status-line
                              preset when settings.json has no external one.
   --force                    Replace a provider config not created by this script.
+  --force-context            Replace context values changed after agentctl applied them.
   --uninstall                Remove only this script's Claude environment/model keys;
                              the independent status-line preset is preserved.
   -h | --help                Show this help.
@@ -109,6 +119,10 @@ while [ $# -gt 0 ]; do
     --models-url)     MODELS_URL_OVERRIDE="${2:?}"; shift 2 ;;
     --key-env)        KEY_ENV_OVERRIDE="${2:?}"; shift 2 ;;
     --auth-mode)      AUTH_MODE_OVERRIDE="${2:?}"; shift 2 ;;
+    --context-window-tokens)
+      CONTEXT_WINDOW_TOKENS="${2:?}"; CONTEXT_POLICY_SET=1; shift 2 ;;
+    --auto-compact-tokens)
+      AUTO_COMPACT_TOKENS="${2:?}"; CONTEXT_POLICY_SET=1; shift 2 ;;
     --region)         REGION="${2:?}"; shift 2 ;;
     --list-providers) LIST_PROVIDERS=1; shift ;;
     --skip-validate)  SKIP_VALIDATE=1; shift ;;
@@ -116,6 +130,7 @@ while [ $# -gt 0 ]; do
     --clean-shell-env) CLEAN_SHELL_ENV=1; shift ;;
     --no-statusline)   INSTALL_STATUSLINE=0; shift ;;
     --force)          FORCE=1; shift ;;
+    --force-context)  FORCE_CONTEXT=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
     -h|--help)        usage; exit 0 ;;
     *)                die "unknown argument: $1 (use --help)" ;;
@@ -126,6 +141,204 @@ if [ "$LIST_PROVIDERS" = 1 ]; then
   list_providers
   exit 0
 fi
+
+validate_context_tokens() {
+  local value="$1" label="$2"
+  [ -z "$value" ] && return 0
+  [ "$value" = "auto" ] && return 0
+  case "$value" in
+    *[!0-9]*|0|0*) die "$label must be a positive integer or auto" ;;
+  esac
+  [ "$value" -le 10000000 ] 2>/dev/null ||
+    die "$label must not exceed 10000000"
+}
+
+validate_context_tokens "$CONTEXT_WINDOW_TOKENS" "--context-window-tokens"
+validate_context_tokens "$AUTO_COMPACT_TOKENS" "--auto-compact-tokens"
+if [ -n "$CONTEXT_WINDOW_TOKENS" ] && [ "$CONTEXT_WINDOW_TOKENS" != "auto" ] &&
+   [ -n "$AUTO_COMPACT_TOKENS" ] && [ "$AUTO_COMPACT_TOKENS" != "auto" ] &&
+   [ "$AUTO_COMPACT_TOKENS" -gt "$CONTEXT_WINDOW_TOKENS" ]; then
+  die "--auto-compact-tokens cannot exceed --context-window-tokens"
+fi
+
+CONTEXT_STATE_ACTION="preserve"
+CONTEXT_STATE_TEMP=""
+
+context_state_json() {
+  if [ ! -e "$CONTEXT_STATE_FILE" ]; then
+    jq -nc --arg managed_by "$MANAGED_BY" \
+      '{schema: 1, managed_by: $managed_by, fields: {}}'
+    return
+  fi
+  [ -f "$CONTEXT_STATE_FILE" ] && [ ! -L "$CONTEXT_STATE_FILE" ] ||
+    die "context ownership state must be a regular, non-symlink file: $CONTEXT_STATE_FILE"
+  case "$(file_mode "$CONTEXT_STATE_FILE")" in
+    ?00|??00) ;;
+    *) die "context ownership state must be owner-only (chmod 600): $CONTEXT_STATE_FILE" ;;
+  esac
+  [ "$(wc -c < "$CONTEXT_STATE_FILE" | tr -d ' ')" -le 65536 ] ||
+    die "context ownership state is unexpectedly large: $CONTEXT_STATE_FILE"
+  jq -ce --arg managed_by "$MANAGED_BY" '
+    select(
+    .schema == 1
+    and .managed_by == $managed_by
+    and (.fields | type == "object")
+    and ((.fields | keys) - ["window_tokens", "auto_compact_tokens"] | length == 0)
+    and (all(.fields[];
+      type == "object"
+      and ((keys - ["before", "applied"]) | length == 0)
+      and (.before | type == "object")
+      and ((.before | keys) - ["present", "value"] | length == 0)
+      and (.before.present | type == "boolean")
+      and (has("applied"))
+    ))
+    and (.fields.window_tokens == null or (
+      (.fields.window_tokens.applied | type == "string")
+      and (.fields.window_tokens.applied | test("^[1-9][0-9]*$"))
+      and ((.fields.window_tokens.applied | tonumber) <= 10000000)
+      and ([.fields.window_tokens.before.value | type] - ["null", "string", "number"] | length == 0)
+    ))
+    and (.fields.auto_compact_tokens == null or (
+      (.fields.auto_compact_tokens.applied | type == "number")
+      and (.fields.auto_compact_tokens.applied % 1 == 0)
+      and (.fields.auto_compact_tokens.applied >= 1)
+      and (.fields.auto_compact_tokens.applied <= 10000000)
+      and ([.fields.auto_compact_tokens.before.value | type] - ["null", "number"] | length == 0)
+    ))
+    )
+  ' "$CONTEXT_STATE_FILE" ||
+    die "context ownership state is invalid: $CONTEXT_STATE_FILE"
+}
+
+apply_context_policy_to_temp() {
+  local settings_temp="$1" old_state bundle next_settings window_managed auto_managed
+  [ "$CONTEXT_POLICY_SET" = 1 ] || return 0
+  old_state="$(context_state_json)"
+
+  window_managed="$(printf '%s' "$old_state" | jq -r '.fields | has("window_tokens")')"
+  auto_managed="$(printf '%s' "$old_state" | jq -r '.fields | has("auto_compact_tokens")')"
+  if [ "$FORCE_CONTEXT" != 1 ] && [ -n "$CONTEXT_WINDOW_TOKENS" ] &&
+     [ "$window_managed" = true ] &&
+     ! printf '%s' "$old_state" | jq -e --slurpfile settings "$settings_temp" '
+       .fields.window_tokens.applied ==
+         ($settings[0].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS // null)
+     ' >/dev/null; then
+    die "managed Claude context window changed externally; use --force to replace it"
+  fi
+  if [ "$FORCE_CONTEXT" != 1 ] && [ -n "$AUTO_COMPACT_TOKENS" ] &&
+     [ "$auto_managed" = true ] &&
+     ! printf '%s' "$old_state" | jq -e --slurpfile settings "$settings_temp" '
+       .fields.auto_compact_tokens.applied ==
+         ($settings[0].autoCompactWindow // null)
+     ' >/dev/null; then
+    die "managed Claude auto-compact window changed externally; use --force to replace it"
+  fi
+
+  bundle="$(make_temp_near "$settings_temp")"
+  next_settings="$(make_temp_near "$settings_temp")"
+  CONTEXT_STATE_TEMP="$(make_temp_near "$CONTEXT_STATE_FILE")"
+  if ! jq -n \
+    --slurpfile settings "$settings_temp" \
+    --argjson old "$old_state" \
+    --arg window "$CONTEXT_WINDOW_TOKENS" \
+    --arg auto_compact "$AUTO_COMPACT_TOKENS" '
+    ($settings[0]) as $current
+    | {
+        settings: (
+          $current
+          | if $window == "" then .
+            elif $window == "auto" then
+              if $old.fields.window_tokens == null then .
+              elif $old.fields.window_tokens.before.present then
+                .env = (.env // {})
+                | .env.CLAUDE_CODE_MAX_CONTEXT_TOKENS =
+                    $old.fields.window_tokens.before.value
+              else del(.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
+              end
+            else
+              .env = (.env // {})
+              | .env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = $window
+            end
+          | if .env == {} then del(.env) else . end
+          | if $auto_compact == "" then .
+            elif $auto_compact == "auto" then
+              if $old.fields.auto_compact_tokens == null then .
+              elif $old.fields.auto_compact_tokens.before.present then
+                .autoCompactWindow = $old.fields.auto_compact_tokens.before.value
+              else del(.autoCompactWindow)
+              end
+            else .autoCompactWindow = ($auto_compact | tonumber)
+            end
+        ),
+        state: (
+          $old
+          | .fields = (.fields // {})
+          | if $window == "" then .
+            elif $window == "auto" then del(.fields.window_tokens)
+            else
+              .fields.window_tokens = (
+                .fields.window_tokens // {
+                  before: {
+                    present: (($current.env // {}) | has("CLAUDE_CODE_MAX_CONTEXT_TOKENS")),
+                    value: ($current.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS // null)
+                  },
+                  applied: null
+                }
+              )
+              | .fields.window_tokens.applied = $window
+            end
+          | if $auto_compact == "" then .
+            elif $auto_compact == "auto" then del(.fields.auto_compact_tokens)
+            else
+              .fields.auto_compact_tokens = (
+                .fields.auto_compact_tokens // {
+                  before: {
+                    present: ($current | has("autoCompactWindow")),
+                    value: ($current.autoCompactWindow // null)
+                  },
+                  applied: null
+                }
+              )
+              | .fields.auto_compact_tokens.applied = ($auto_compact | tonumber)
+            end
+        )
+      }
+  ' > "$bundle"; then
+    rm -f "$bundle" "$next_settings" "$CONTEXT_STATE_TEMP"
+    CONTEXT_STATE_TEMP=""
+    die "failed to render Claude context policy"
+  fi
+  jq '.settings' "$bundle" > "$next_settings" || {
+    rm -f "$bundle" "$next_settings" "$CONTEXT_STATE_TEMP"
+    CONTEXT_STATE_TEMP=""
+    die "failed to render Claude context settings"
+  }
+  jq '.state' "$bundle" > "$CONTEXT_STATE_TEMP" || {
+    rm -f "$bundle" "$next_settings" "$CONTEXT_STATE_TEMP"
+    CONTEXT_STATE_TEMP=""
+    die "failed to render Claude context ownership state"
+  }
+  rm -f "$bundle"
+  replace_file "$next_settings" "$settings_temp"
+  if jq -e '.fields | length == 0' "$CONTEXT_STATE_TEMP" >/dev/null; then
+    rm -f "$CONTEXT_STATE_TEMP"
+    CONTEXT_STATE_TEMP=""
+    CONTEXT_STATE_ACTION="remove"
+  else
+    chmod 600 "$CONTEXT_STATE_TEMP"
+    CONTEXT_STATE_ACTION="write"
+  fi
+}
+
+finalize_context_state() {
+  case "$CONTEXT_STATE_ACTION" in
+    write)
+      replace_file "$CONTEXT_STATE_TEMP" "$CONTEXT_STATE_FILE" 600
+      CONTEXT_STATE_TEMP=""
+      ;;
+    remove) rm -f "$CONTEXT_STATE_FILE" ;;
+  esac
+}
 
 [ "$UNINSTALL" != 1 ] || [ "$DRY_RUN" != 1 ] ||
   die "--dry-run previews setup only and cannot be combined with --uninstall"
@@ -163,7 +376,14 @@ if [ "$UNINSTALL" = 1 ]; then
     rm -f "$TMP"
     die "failed to update $SETTINGS_FILE with jq; the original file was left unchanged"
   fi
+  if [ -e "$CONTEXT_STATE_FILE" ]; then
+    CONTEXT_WINDOW_TOKENS="auto"
+    AUTO_COMPACT_TOKENS="auto"
+    CONTEXT_POLICY_SET=1
+    apply_context_policy_to_temp "$TMP"
+  fi
   replace_file "$TMP" "$SETTINGS_FILE"
+  finalize_context_state
   rm -f "$STATE_FILE"
   ok "removed $MANAGED_BY settings"
   exit 0
@@ -416,7 +636,9 @@ if ! jq \
   rm -f "$TMP"
   die "failed to update $SETTINGS_FILE with jq; the original file was left unchanged"
 fi
+apply_context_policy_to_temp "$TMP"
 replace_file "$TMP" "$SETTINGS_FILE"
+finalize_context_state
 write_secret_file "$STATE_FILE" "$PROVIDER"
 ok "wrote $SETTINGS_FILE (chmod 600)"
 

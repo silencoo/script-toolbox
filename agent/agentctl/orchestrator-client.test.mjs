@@ -124,6 +124,10 @@ assert.equal(doctor.targets[0].preset.drift, false);
 assert.equal(doctor.targets[0].restart.recommended, true);
 assert.ok(doctor.secrets);
 assert.ok(doctor.remote);
+const localDoctor = JSON.parse(run(agentctl, ["doctor", "codex", "--local", "--json"]));
+assert.equal(localDoctor.remote.mcp.skipped, true);
+assert.equal(localDoctor.remote.skills.skipped, true);
+assert.equal(localDoctor.remote.prompt.skipped, true);
 
 run(promptctl, ["apply", "--target", "codex", "--profile", "personal", "--yes"]);
 current = JSON.parse(run(agentctl, ["preset", "current", "--target", "codex", "--json"]));

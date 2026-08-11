@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   ProviderSchemaError,
+  effectiveProviderCompaction,
   normalizeRuntimePlatform,
   resolveProviderProfile,
   validatePlatform,
@@ -289,7 +290,7 @@ function validateCapability(value) {
 function validateState(value) {
   const keys = [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config", "route", "backend_profiles"
+    "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
   ];
   if (!value || value.schema !== 1 || value.kind !== STATE_KIND ||
       typeof value.instance_id !== "string" || !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
@@ -310,6 +311,15 @@ function validateState(value) {
   validateTarget(value.target);
   if (!["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(value.protocol)) {
     throw new ProxyClientError("proxy runtime state protocol is invalid");
+  }
+  if (value.compaction !== undefined &&
+      (!value.compaction || typeof value.compaction !== "object" ||
+       Array.isArray(value.compaction) ||
+       typeof value.compaction.responses_compact !== "boolean" ||
+       !["client_local", "remote_native", "messages_native"].includes(value.compaction.mode) ||
+       typeof value.compaction.label !== "string" || value.compaction.label.length > 100 ||
+       Object.keys(value.compaction).some((key) => !["mode", "responses_compact", "label"].includes(key)))) {
+    throw new ProxyClientError("proxy runtime state compaction is invalid");
   }
   return value;
 }
@@ -437,6 +447,7 @@ async function inspectStatus(options) {
     circuits: health.body?.circuits ?? [],
     pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
     pricing_model_source: health.body?.pricing_model_source ?? null,
+    compaction: health.body?.compaction ?? state.compaction ?? null,
     local_base_url: localBaseUrl(state.host, state.port, state.protocol)
   };
 }
@@ -455,6 +466,7 @@ function emitStatus(status, options) {
   if (status.pricing_model_source) {
     process.stdout.write(`Pricing:    ${status.pricing_catalog_version || "catalog unavailable"} (${status.pricing_model_source} model)\n`);
   }
+  if (status.compaction) process.stdout.write(`Compaction: ${status.compaction.label || status.compaction.mode}\n`);
   process.stdout.write(`Capability: ${status.capability_present ? "present" : "missing"} (${status.capability_file})\n`);
   process.stdout.write(`Metadata:   ${status.metadata_log}\n`);
   process.stdout.write(`Usage:      ${status.usage_log}\n`);
@@ -520,6 +532,7 @@ async function buildPlan(profileName, options) {
   const backends = resolvedBackends.map((resolved) => {
     const secretPresent = resolved.auth.mode === "none" ||
       Boolean(secrets.secrets[resolved.auth.secret]);
+    const compaction = effectiveProviderCompaction(resolved);
     return {
       profile: resolved.profile,
       endpoint: resolved.endpoint,
@@ -533,12 +546,34 @@ async function buildPlan(profileName, options) {
         aliases: structuredClone(resolved.models.aliases),
         requested_default: resolved.requested_model,
         outbound_default: resolved.outbound_model
-      }
+      },
+      compaction
     };
   });
   const missing = backends.filter((backend) => !backend.auth.present)
     .map((backend) => `${backend.profile}:${backend.auth.secret}`);
-  const issue = compatibility || (missing.length
+  const nativeModes = new Set(backends.map((backend) => backend.compaction.mode));
+  const responsesCompact = protocol === "openai_responses" &&
+    backends.every((backend) => backend.compaction.responses_compact);
+  const messagesNative = protocol === "anthropic_messages" &&
+    backends.every((backend) => backend.compaction.mode === "messages_native");
+  const forcedRemote = backends.some((backend) => backend.compaction.policy === "remote");
+  const compactionIssue = backends.find((backend) => backend.compaction.issue)?.compaction.issue ||
+    (forcedRemote && !responsesCompact && !messagesNative
+      ? "failover route cannot guarantee the forced remote compaction capability"
+      : "");
+  const compaction = responsesCompact
+    ? { mode: "remote_native", label: "Remote · native", responses_compact: true }
+    : messagesNative
+      ? { mode: "messages_native", label: "Messages · Anthropic beta", responses_compact: false }
+      : {
+          mode: "client_local",
+          label: nativeModes.size > 1
+            ? "Local · route capability not uniform"
+            : backends[0].compaction.label,
+          responses_compact: false
+        };
+  const issue = compatibility || compactionIssue || (missing.length
     ? `local Secrets are missing for ${missing.join(", ")}`
     : "");
   const primary = backends[0];
@@ -572,6 +607,7 @@ async function buildPlan(profileName, options) {
     models: primary.models,
     auth: primary.auth,
     backends,
+    compaction,
     retry,
     circuit,
     listen: { host: "127.0.0.1", port: options.port },
@@ -615,6 +651,7 @@ function emitPlan(plan, options, apply) {
   process.stdout.write(`  Profile      : ${plan.profile} (${plan.target}; ${plan.platform})\n`);
   if (plan.route) process.stdout.write(`  Route        : ${plan.route} · ${plan.backends.length} backends\n`);
   process.stdout.write(`  Protocol     : ${plan.protocol}\n`);
+  process.stdout.write(`  Compaction   : ${plan.compaction.label}\n`);
   process.stdout.write(`  Model        : ${plan.models.requested_default} -> ${plan.models.outbound_default}\n`);
   process.stdout.write(`  Upstream     : ${plan.endpoint}\n`);
   process.stdout.write(`  Local URL    : ${plan.local_base_url}\n`);
@@ -670,7 +707,7 @@ async function clearDeadRuntime(options) {
 
 function daemonConfig(plan, options) {
   return {
-    schema: 3,
+    schema: 4,
     kind: CONFIG_KIND,
     instance_id: randomUUID(),
     created_at: new Date().toISOString(),
@@ -678,6 +715,7 @@ function daemonConfig(plan, options) {
     target: plan.target,
     platform: plan.platform,
     protocol: plan.protocol,
+    compaction: plan.compaction,
     route: plan.route,
     backends: plan.backends.map((backend) => ({
       profile: backend.profile,

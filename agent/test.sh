@@ -44,8 +44,8 @@ run_dependency_tests() {
 }
 
 run_config_tests() {
-  local test_root fake_bin test_home bad_home minimax_home system_path
-  local dry_home key_input insecure_key multiline_key no_statusline_home
+  local test_root fake_bin test_home bad_home minimax_home system_path real_node_dir
+  local dry_home key_input insecure_key multiline_key no_statusline_home context_home
   command -v jq >/dev/null 2>&1 || {
     echo "skip: isolated provider config tests require jq" >&2
     return 2
@@ -54,6 +54,7 @@ run_config_tests() {
   fake_bin="${test_root}/bin"
   test_home="${test_root}/home"
   system_path="$PATH"
+  real_node_dir="$(dirname "$(command -v node)")"
   mkdir -p "$fake_bin" "$test_home"
 
   # All setup scripts only need these commands to report a version. Validation
@@ -128,6 +129,48 @@ run_config_tests() {
   ' "$test_root/key-claude-home/.claude/settings.json" >/dev/null ||
     { rm -rf "$test_root"; return 1; }
   [ -x "$test_root/key-claude-home/.claude/scripts/script-toolbox-statusline.py" ] ||
+    { rm -rf "$test_root"; return 1; }
+
+  # Context policy is portable Provider intent, while the Claude backend owns
+  # only the values it temporarily replaces. Releasing the policy restores the
+  # exact pre-agentctl values instead of deleting user configuration.
+  context_home="$test_root/context-home"
+  mkdir -p "$context_home/.claude"
+  printf '%s\n' \
+    '{"env":{"KEEP_CONTEXT_TEST":"yes","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"300000"},"autoCompactWindow":250000}' \
+    > "$context_home/.claude/settings.json"
+  chmod 600 "$context_home/.claude/settings.json"
+  HOME="$context_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 \
+      --key-file "$key_input" --skip-validate --no-statusline \
+      --context-window-tokens 1000000 --auto-compact-tokens 500000 \
+      >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .env.CLAUDE_CODE_MAX_CONTEXT_TOKENS == "1000000"
+    and .autoCompactWindow == 500000
+    and .env.KEEP_CONTEXT_TEST == "yes"
+  ' "$context_home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .schema == 1
+    and .fields.window_tokens.before.value == "300000"
+    and .fields.auto_compact_tokens.before.value == 250000
+  ' "$context_home/.claude/.script-toolbox-provider-context.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  HOME="$context_home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/claude-code/setup.sh" \
+      --provider anthropic --model claude-sonnet-4-6 \
+      --key-file "$key_input" --skip-validate --no-statusline \
+      --context-window-tokens auto --auto-compact-tokens auto \
+      >/dev/null || { rm -rf "$test_root"; return 1; }
+  jq -e '
+    .env.CLAUDE_CODE_MAX_CONTEXT_TOKENS == "300000"
+    and .autoCompactWindow == 250000
+    and .env.KEEP_CONTEXT_TEST == "yes"
+  ' "$context_home/.claude/settings.json" >/dev/null ||
+    { rm -rf "$test_root"; return 1; }
+  [ ! -e "$context_home/.claude/.script-toolbox-provider-context.json" ] ||
     { rm -rf "$test_root"; return 1; }
 
   no_statusline_home="$test_root/no-statusline-home"
@@ -351,16 +394,18 @@ name = "User provider"
 base_url = "http://localhost:1234/v1"
 EOF
 
-  HOME="$test_home" PATH="${fake_bin}:${system_path}" \
-    "$SCRIPT_DIR/agentctl/agentctl" setup codex \
-      --provider openrouter --model openai/gpt-5.6 --key test-codex \
-      --skip-validate --force >/dev/null || { rm -rf "$test_root"; return 1; }
+  printf '%s\n' 'test-codex' > "$test_root/codex-provider.key"
+  chmod 600 "$test_root/codex-provider.key"
+  HOME="$test_home" PATH="${real_node_dir}:${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/agentctl/agentctl" provider use openrouter --target codex \
+      --model openai/gpt-5.6 --secret-file "$test_root/codex-provider.key" \
+      --skip-validate --yes >/dev/null || { rm -rf "$test_root"; return 1; }
   grep -q 'wire_api = "responses"' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
-  grep -q '\[model_providers.script_toolbox_openrouter.auth\]' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
+  grep -q '\[model_providers.script_toolbox_custom.auth\]' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
   awk '
     /^\[[^]]+\]/ { exit }
     $0 == "model = \"openai/gpt-5.6\"" { model = 1 }
-    $0 == "model_provider = \"script_toolbox_openrouter\"" { provider = 1 }
+    $0 == "model_provider = \"script_toolbox_custom\"" { provider = 1 }
     END { exit !(model && provider) }
   ' "$test_home/.codex/config.toml" || { rm -rf "$test_root"; return 1; }
   ! grep -q '\[profiles.script_toolbox\]' "$test_home/.codex/config.toml" || {
@@ -372,10 +417,10 @@ EOF
   ! grep -q 'requires_openai_auth' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
-  [ "$(cat "$test_home/.codex/provider-keys/script_toolbox_openrouter.key")" = "test-codex" ] || {
+  [ "$(cat "$test_home/.codex/provider-keys/script_toolbox_custom.key")" = "test-codex" ] || {
     rm -rf "$test_root"; return 1;
   }
-  [ "$(stat -c '%a' "$test_home/.codex/provider-keys/script_toolbox_openrouter.key" 2>/dev/null || stat -f '%Lp' "$test_home/.codex/provider-keys/script_toolbox_openrouter.key")" = "600" ] || {
+  [ "$(stat -c '%a' "$test_home/.codex/provider-keys/script_toolbox_custom.key" 2>/dev/null || stat -f '%Lp' "$test_home/.codex/provider-keys/script_toolbox_custom.key")" = "600" ] || {
     rm -rf "$test_root"; return 1;
   }
 
@@ -432,7 +477,7 @@ EOF
     "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
-  grep -q '\[model_providers.script_toolbox_openrouter\]' "$test_home/.codex/config.toml" || {
+  grep -q '\[model_providers.script_toolbox_custom\]' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
@@ -563,7 +608,7 @@ EOF
   [ -f "$test_home/.codex/instructions/personal.md" ] || {
     rm -rf "$test_root"; return 1;
   }
-  [ ! -e "$test_home/.codex/provider-keys/script_toolbox_openrouter.key" ] || {
+  [ ! -e "$test_home/.codex/provider-keys/script_toolbox_custom.key" ] || {
     rm -rf "$test_root"; return 1;
   }
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
@@ -691,6 +736,13 @@ if node --test "$SCRIPT_DIR/agentctl/provider-client.test.mjs"; then
   :
 else
   echo "FAIL: portable provider Store tests" >&2
+  fail=1
+fi
+
+if node --test "$SCRIPT_DIR/agentctl/account-client.test.mjs"; then
+  :
+else
+  echo "FAIL: Codex official-account Store tests" >&2
   fail=1
 fi
 

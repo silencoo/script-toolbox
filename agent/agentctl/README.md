@@ -14,16 +14,15 @@ dashboard:
 
 The dashboard starts on Overview and combines portable Providers, MCP, Skills,
 Prompts, development presets, and encrypted Workspace state. It refreshes
-automatically, browses cloud catalogs on demand, and can plan/apply one selected
+automatically, publishes local state before connecting to Workspace in the
+background, browses cloud catalogs on demand, and can plan/apply one selected
 Provider, Profile, Pack, Prompt, or Preset without first restoring the whole
-Store. The Providers view distinguishes local/Workspace sources and resolves
-Claude Code, Codex, OpenCode, and Pi independently.
-The Agents section also selects a client for provider discovery, interactive
-setup/install, or confirmed removal of agentctl-owned provider configuration.
-Node.js 22 or newer is required. Use `agentctl interactive` for the older
-line-oriented guide that selects Claude Code, Codex, OpenCode, or Pi and then
-delegates to that client's setup implementation. Non-TTY no-argument callers
-retain the guide for compatibility.
+Store. The Providers view distinguishes built-in/local/Workspace sources,
+reconciles one conflicting row at a time, and resolves Claude Code, Codex,
+OpenCode, and Pi independently. The Agents section
+opens that same Provider view or confirms removal of agentctl-owned
+configuration. Node.js 22 or newer is required. `agentctl interactive` provides
+a compact line-oriented view of the same catalog.
 
 The same dashboard can be selected explicitly:
 
@@ -34,23 +33,18 @@ The same dashboard can be selected explicitly:
 ## Explicit commands
 
 ```bash
-# Open the selected client's provider/model setup.
-./agent/agentctl/agentctl setup claude
+# Built-ins are visible immediately, even before a local Store exists.
+./agent/agentctl/agentctl provider list --target claude
 
-# Forward automation flags unchanged.
-./agent/agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6
+# Preview, then use one Provider. Use also installs the client when missing.
+./agent/agentctl/agentctl provider plan deepseek --target claude
+./agent/agentctl/agentctl provider use deepseek --target claude \
+  --secret-file /secure/deepseek-api-key --yes
 
-# Resolve the provider/model and affected paths without a key or any changes.
-./agent/agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 --dry-run
-
-# Prefer a private file to putting a key in shell history.
-./agent/agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 --key-file /secure/openai-api-key
-
-# "init" and "configure" are setup aliases.
-./agent/agentctl/agentctl init opencode
+# The same catalog resolves independently for each client.
+./agent/agentctl/agentctl provider list --target codex
+./agent/agentctl/agentctl provider use openai-api --target codex \
+  --model gpt-5.6 --secret-file /secure/openai-api-key --yes
 
 # Inspect installed CLIs and provider state without secrets.
 ./agent/agentctl/agentctl status all
@@ -61,48 +55,117 @@ The same dashboard can be selected explicitly:
 ./agent/agentctl/agentctl statusline install --yes
 ./agent/agentctl/agentctl statusline status --json
 
-# Inspect client-specific presets and options.
-./agent/agentctl/agentctl providers pi
-./agent/agentctl/agentctl help codex
-
 # Remove only setup.sh-owned provider/model/credential state.
 ./agent/agentctl/agentctl uninstall codex
 ./agent/agentctl/agentctl uninstall codex --yes
 ```
 
-Client aliases include `claude`/`claude-code` and
-`opencode`/`open-code`.
+Provider targets are `claude`, `codex`, `opencode`, and `pi`.
 
 `status` reports the CLI path/version, resolved provider/model, configuration
 source, ownership marker, config/state paths, and credential-file
-existence/mode. The source distinguishes agentctl-owned settings, externally
-managed Claude settings such as CC Switch, and Codex's official ChatGPT/API-key
-login. It never emits a credential value. JSON status requires `jq`.
+existence/mode. Codex additionally reports nested `identity` and `inference`
+objects: the Identity is the current official ChatGPT login, while inference is
+the Provider and Model that actually handle requests. The old flat Provider
+fields remain available for command compatibility. It never emits a credential
+value. JSON status requires `jq`.
 
-All four setup backends accept `--dry-run` and `--key-file PATH`. Dry-run exits
-before validation requests, package installation, or filesystem changes, and
-does not require a key. Key files must be regular, non-symlinked, owner-only
-files containing exactly one non-empty line (normally mode `0600`).
+For OpenCode, status and the Provider catalog also discover safe metadata from
+its native `auth.json`: provider ID, authentication type, and an explicitly
+selected global model when present. Native credentials remain external and are
+never copied, printed, uploaded, or treated as an agentctl Provider Secret.
+Consequently a row may report `native-auth` or `native-current` while its
+portable `gemini_api_key` (or equivalent reference) is still missing.
 
-Claude provider setup also installs the status-line preset when no external
-`statusLine` exists. `--no-statusline` opts out. The independent
+## Codex official accounts
+
+`agentctl account` manages the official ChatGPT Identity independently from
+inference Provider profiles. It stores complete local OAuth snapshots because
+they are needed to switch accounts, but the Store directory is owner-only and
+every snapshot is mode `0600` on Unix-like systems. Tokens and account IDs are
+never printed, included in TUI state, or uploaded to the encrypted Workspace.
+
+All mutations are preview-first:
+
+```bash
+# Inspect only labels, active state, timestamps, and permission health.
+agentctl account status
+agentctl account list --json
+
+# Capture the currently active official login under a local label.
+agentctl account save primary
+agentctl account save primary --yes
+
+# After using Codex's normal login flow for another ChatGPT account:
+agentctl account save secondary --yes
+
+# Preview, then atomically switch auth.json. Provider/Model stay unchanged.
+agentctl account use primary
+agentctl account use primary --yes
+
+# The active snapshot cannot be deleted.
+agentctl account delete secondary --yes
+```
+
+Labels use lowercase letters, digits, and single hyphens. Before a switch,
+agentctl refreshes the saved copy of the outgoing account so token rotations are
+not lost. It refuses to overwrite an unsafe or unrecognized live `auth.json`,
+or an official login that has not first been saved. Start a new Codex session
+after switching; already-running processes may retain their in-memory session.
+The Account Store is device-local by design and is separate from Provider
+backup/restore.
+
+Per-client setup scripts are private render backends. Public selection, model
+choice, Secret import, installation, and switching all go through
+`agentctl provider`. Secret input files must be regular, non-symlinked,
+owner-only files containing exactly one non-empty line (normally mode `0600`).
+
+Provider switching never changes Claude's independent status-line setting. The
 `agentctl statusline` lifecycle previews mutations by default, can privately
 preserve an external setting with `install --force --yes`, and restores that
 setting on uninstall. It never prints the saved command.
 
-## Portable provider profiles
+## Unified Provider catalog
 
-The Provider Store captures portable intent rather than a snapshot of one
-machine's generated configuration. A profile contains one base endpoint and
-protocol, a Secret reference, explicit model aliases, optional per-agent
-overrides, and optional Darwin/Linux/Windows target overlays. Its strict schema
+The public catalog always includes built-ins and merges materialized local
+profiles with encrypted Workspace profiles in the TUI. The Provider Store
+captures portable intent rather than a snapshot of one machine's generated
+configuration. A profile contains one base endpoint and protocol, a Secret
+reference, explicit model aliases, optional per-agent overrides, optional
+Darwin/Linux/Windows target overlays, and an explicit compaction
+capability/policy plus a separate client context policy. Its strict schema
 has no fields for absolute config paths, PIDs, ports, logs, health state, or
 generated client files.
 
+Provider Store schema 2 separates what an upstream has been verified to
+support from what a client should do:
+
+- `compaction.upstream`: `responses_v2`, `responses_v1`,
+  `anthropic_messages_beta`, or `none`.
+- `compaction.policy`: `auto`, `remote`, or `local`.
+- `context.window_tokens`: the selected model's verified maximum, or `null`
+  to leave the client default in place.
+- `context.auto_compact_tokens`: an independent client-side trigger, or
+  `null` to leave the client default in place.
+
+`auto` uses a native remote path only when both the target and declared
+upstream match; otherwise compaction stays local. The exact `openai-api` and
+`anthropic-api` built-ins carry native declarations. Custom and migrated
+third-party profiles default to `none/auto` until explicitly verified—accepting
+Responses traffic alone does not prove `/responses/compact` support.
+
+Provider profiles describe inference only. They do not contain or bind an
+official ChatGPT account. A Codex plan reports `official_identity.policy` as
+`preserve`, so applying MiniMax, OpenRouter, or another Responses-compatible
+profile changes `config.toml` and its separate Provider Secret while leaving the
+current `~/.codex/auth.json` untouched. Consequently Remote Control can retain
+the current official Identity while inference uses the selected third party.
+The apply transaction verifies that protected file after the backend returns;
+an unexpected change aborts the operation and restores its original bytes.
+
 ```bash
-# Preview and initialize the two local Stores.
-agentctl provider init
-agentctl provider init --yes
+# Browse built-ins and local profiles without initialization.
+agentctl provider list --target codex
 
 # Create one reusable OpenAI Responses profile.
 agentctl provider create work-gateway \
@@ -112,6 +175,8 @@ agentctl provider create work-gateway \
   --alias daily=vendor-model-2026 \
   --auth-mode bearer \
   --secret work_gateway_key \
+  --compaction-upstream none \
+  --compaction-policy auto \
   --yes
 
 # Disable an incompatible direct target, then specialize Windows without
@@ -122,7 +187,34 @@ agentctl provider platform work-gateway windows codex \
 
 agentctl provider resolve work-gateway \
   --target codex --platform windows --json
+
+# Persist a verified Claude model window and an independent compact trigger.
+agentctl provider use minimax-cn --target claude \
+  --context-window-tokens 1000000 \
+  --auto-compact-tokens 500000 --yes
 ```
+
+CCSwitch migration reads its SQLite database in read-only mode, imports only
+third-party Claude/Codex Providers and their API keys, and deliberately skips
+official OAuth identities. Values are written only to the owner-only Secret
+Store and never printed:
+
+```bash
+agentctl provider migrate ccs
+agentctl provider migrate ccs --yes
+```
+
+Upgrade an existing schema 1 Provider Store once after updating agentctl:
+
+```bash
+agentctl provider migrate schema
+agentctl provider migrate schema --yes
+```
+
+The migration recognizes only exact official OpenAI/Anthropic built-ins.
+Everything else receives `none/auto`; it never probes an endpoint or changes
+the separate Secret Store. Legacy encrypted Workspace data is normalized in
+memory and is written as schema 2 on the next explicit Workspace save.
 
 Secret values live separately in
 `~/.config/agentctl/provider-secrets.json` on Unix-like systems and the native
@@ -150,17 +242,17 @@ resolution is deterministic: base profile, then target override, then the
 selected platform overlay, then exact alias expansion. Alias cycles are
 rejected.
 
-Plan and apply project the resolved profile through the existing ownership-safe
+Plan and use project the resolved profile through the ownership-safe
 backend for each client. The model written to a native direct configuration is
 the final outbound model after exact alias expansion:
 
 ```bash
 agentctl provider plan work-gateway --target codex
-agentctl provider apply work-gateway --target codex --yes
+agentctl provider use work-gateway --target codex --yes
 agentctl provider current
 
 # Apply every enabled and compatible target as one rollback-capable operation.
-agentctl provider apply work-gateway --target all --yes
+agentctl provider use work-gateway --target all --yes
 ```
 
 Direct mode deliberately rejects protocol/auth combinations a client cannot
@@ -170,22 +262,42 @@ natively speak:
 | --- | --- | --- |
 | Claude Code | `anthropic_messages` | `bearer`, `x-api-key` |
 | Codex | `openai_responses` | `bearer` |
-| OpenCode | `anthropic_messages`, `openai_responses`, `openai_chat` | Anthropic uses `x-api-key`; OpenAI uses `bearer` |
+| OpenCode | all four Store protocols | Anthropic uses `x-api-key`; OpenAI uses `bearer`; Google uses `x-goog-api-key` |
 | Pi | all four Store protocols | `bearer`, `x-api-key`, `x-goog-api-key`; loopback-only `none` |
 
-Disable an incompatible target or give it an explicit endpoint/protocol/auth
-override. Protocol conversion belongs to the optional proxy layer, not these
-native renderers. `apply` passes each Secret through a short-lived owner-only
-file and records only the profile, endpoint, protocol, requested/outbound
-models, platform, and timestamp in device-local state. Claude profile apply
-does not alter the separately managed status-line setting.
+Disable an incompatible target or give it an explicit
+endpoint/protocol/auth/compaction/context override. Neither the native renderers nor
+the optional proxy emulate one protocol through another. `use` passes each
+Secret through a short-lived owner-only file and records only safe selection
+metadata in device-local state. Claude profile apply does not alter the
+separately managed status-line setting.
+
+For Codex, an exact official OpenAI profile with `responses_v1` or
+`responses_v2` in `auto`/`remote` mode is rendered with the `OpenAI` Provider
+name Codex recognizes, enabling its native remote compact request. `local`
+keeps the profile under its own name. Codex-specific thresholds such as
+`model_auto_compact_token_limit` are not inferred from remote compaction
+capability.
+
+Claude Code is currently the direct renderer for the portable `context`
+policy. It maps `window_tokens` to `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
+`auto_compact_tokens` to `autoCompactWindow`. Exact built-in model metadata is
+applied when the model changes: DeepSeek V4 Pro/Flash use a 1,000,000-token
+maximum while leaving the compact trigger to the client/user setting, MiniMax
+M3 uses a 1,000,000-token maximum and a conservative 500,000-token trigger,
+and MiniMax M2.7/M2.5 use their 204,800-token maximum. A separate owner-only
+state file remembers any values that existed before agentctl took control;
+switching to a profile with `null` context values or uninstalling restores
+those originals. Changing to a model without exact catalog metadata clears
+inherited context assumptions unless explicit context values are supplied with
+the same command. Other targets reject a non-null managed context policy until
+their native renderer implements an equivalent setting.
 
 For a fresh machine, restore the Secret reference locally (or later through
 the encrypted Workspace), then import and apply the portable catalog in one
 operation:
 
 ```bash
-agentctl provider init --yes
 agentctl provider secret set work_gateway_key \
   --secret-file /secure/work-gateway-key --yes
 agentctl provider restore work-gateway \
@@ -245,6 +357,12 @@ root. Every request must present the hidden local capability as
 `x-agentctl-proxy-token`, Bearer, `x-api-key`, or `x-goog-api-key`. The proxy
 strips all of those client credentials before applying the real upstream
 Secret in memory.
+
+For `openai_responses`, `/v1/responses/compact` is allowlisted only when every
+backend in the selected single/failover route resolves to native Responses
+compaction. Mixed or unverified routes remain local. Anthropic Messages stays
+on `/v1/messages`; beta headers and `context_management` are passed through
+natively rather than translated.
 
 Plans, runtime state, daemon arguments, and metadata logs never contain the
 capability or upstream Secret value. Request/response bodies and headers are
@@ -418,6 +536,13 @@ and Presets:
 # Inspect redacted local/remote counts.
 agentctl workspace agent status
 
+# Reconcile one same-name Provider without touching any other profile or
+# failover/pricing catalog. Both commands preview unless --yes is supplied.
+agentctl workspace agent push --profile minimax-cn
+agentctl workspace agent push --profile minimax-cn --yes
+agentctl workspace agent pull --profile minimax-cn
+agentctl workspace agent pull --profile minimax-cn --yes
+
 # Preview, then replace only the remote agent bundle from this machine.
 agentctl workspace agent push
 agentctl workspace agent push --yes
@@ -431,7 +556,14 @@ agentctl workspace agent pull --yes
 agentctl workspace agent pull --replace --yes
 ```
 
-The default pull is merge-safe and rejects conflicting profiles or Secret
+For a same-name `L≠W` conflict, profile-scoped `push` means **Local wins** and
+profile-scoped `pull` means **Workspace wins**. The selected profile and only
+its referenced Secret values are upserted; unrelated Provider profiles,
+failover/pricing catalogs, generated configuration, and the device-local
+applied selection are preserved. `--replace` cannot be combined with
+`--profile`.
+
+The default whole-bundle pull is merge-safe and rejects conflicting profiles or Secret
 references; `--replace` is the explicit exact-restore mode. Secret values are
 end-to-end encrypted, restored to an owner-only local file, and never included
 in status, previews, plans, or normal exports. Provider selections, rendered

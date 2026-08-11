@@ -269,6 +269,7 @@ test("encrypted Workspace agent sync restores catalogs and Secrets without runti
   const source = workspaceAgentOptions(root, workspaceConfig, "source");
   const fresh = workspaceAgentOptions(root, workspaceConfig, "fresh");
   const secretMarker = "WORKSPACE-PROVIDER-SECRET-MUST-STAY-ENCRYPTED";
+  const profileSecretMarker = "PROFILE-SCOPED-SECRET-MUST-STAY-ENCRYPTED";
   await writeFile(createTokenFile, `${environment.CREATE_TOKEN}\n`, { mode: 0o600 });
   await chmod(createTokenFile, 0o600);
 
@@ -362,6 +363,58 @@ test("encrypted Workspace agent sync restores catalogs and Secrets without runti
     assert.equal(status.local.secrets, 2);
     assert.equal(JSON.stringify(status).includes(secretMarker), false);
 
+    const sourceProfileStore = JSON.parse(await readFile(source.providerStore, "utf8"));
+    sourceProfileStore.profiles.primary.description = "local profile-scoped update";
+    await writeJsonAtomic(source.providerStore, sourceProfileStore);
+    const sourceProfileSecrets = JSON.parse(await readFile(source.providerSecrets, "utf8"));
+    sourceProfileSecrets.secrets.primary_key = {
+      value: profileSecretMarker,
+      updated_at: new Date().toISOString()
+    };
+    await writeJsonAtomic(source.providerSecrets, sourceProfileSecrets);
+
+    const profilePushPreview = await agentPush({ ...source, profile: "primary" });
+    assert.equal(profilePushPreview.scope, "profile");
+    assert.equal(profilePushPreview.profile_changed, true);
+    assert.equal(profilePushPreview.secrets_copied, 1);
+    assert.equal((await loadWorkspace(workspaceConfig)).agent.secrets.secrets.primary_key.value, secretMarker);
+    const profilePushed = await agentPush({ ...source, profile: "primary", yes: true });
+    assert.equal(profilePushed.changed, true);
+    assert.equal(profilePushed.replace_remote_agent_bundle, false);
+    const afterProfilePush = await loadWorkspace(workspaceConfig);
+    assert.equal(afterProfilePush.agent.providers.profiles.primary.description,
+      "local profile-scoped update");
+    assert.equal(afterProfilePush.agent.providers.profiles.backup.description,
+      "backup test provider");
+    assert.equal(afterProfilePush.agent.secrets.secrets.primary_key.value, profileSecretMarker);
+    assert.equal(afterProfilePush.agent.secrets.secrets.backup_key.value, "BACKUP-SECRET");
+    assert.equal(afterProfilePush.agent.failover.routes.resilient.retry.mode, "next_request");
+    assert.equal(afterProfilePush.agent.pricing.version, "workspace-test");
+
+    const profilePullPreview = await agentPull({ ...fresh, profile: "primary" });
+    assert.equal(profilePullPreview.scope, "profile");
+    assert.deepEqual(profilePullPreview.writes.sort(), ["providers", "secrets"]);
+    assert.equal(
+      JSON.parse(await readFile(fresh.providerSecrets, "utf8"))
+        .secrets.primary_key.value,
+      secretMarker
+    );
+    const profilePulled = await agentPull({ ...fresh, profile: "primary", yes: true });
+    assert.equal(profilePulled.changed, true);
+    const freshProfilesAfterPull = JSON.parse(await readFile(fresh.providerStore, "utf8"));
+    const freshSecretsAfterPull = JSON.parse(await readFile(fresh.providerSecrets, "utf8"));
+    assert.equal(freshProfilesAfterPull.profiles.primary.description,
+      "local profile-scoped update");
+    assert.equal(freshProfilesAfterPull.profiles.backup.description, "backup test provider");
+    assert.equal(freshSecretsAfterPull.secrets.primary_key.value, profileSecretMarker);
+    assert.equal(freshSecretsAfterPull.secrets.backup_key.value, "BACKUP-SECRET");
+    assert.equal(JSON.parse(await readFile(fresh.failoverStore, "utf8")).routes.resilient.name,
+      "resilient");
+    await assert.rejects(
+      () => agentPull({ ...fresh, profile: "primary", replace: true }),
+      /--replace cannot be combined with --profile/
+    );
+
     const conflicting = JSON.parse(await readFile(fresh.providerSecrets, "utf8"));
     conflicting.secrets.primary_key.value = "DIFFERENT-LOCAL-SECRET";
     conflicting.secrets.primary_key.updated_at = new Date(Date.now() + 1000).toISOString();
@@ -378,7 +431,7 @@ test("encrypted Workspace agent sync restores catalogs and Secrets without runti
     assert.equal(
       JSON.parse(await readFile(fresh.providerSecrets, "utf8"))
         .secrets.primary_key.value,
-      secretMarker
+      profileSecretMarker
     );
 
     const firstWriter = await loadWorkspace(workspaceConfig);

@@ -72,7 +72,7 @@ function emptyAgentBundle(now = new Date().toISOString()): AgentWorkspaceBundle 
     schema: 1,
     synced_at: now,
     providers: {
-      schema: 1,
+      schema: 2,
       kind: "agentctl-provider-store",
       created_at: now,
       updated_at: now,
@@ -162,17 +162,17 @@ export function AgentWorkspace({
       const raw = drafts[field].trim()
       if (field === "providers" && !raw) throw new Error("Provider Store JSON cannot be empty.")
       const value = raw ? JSON.parse(raw) : null
-      const next = structuredClone(snapshot)
+      let next = structuredClone(snapshot)
       next.updated_at = new Date().toISOString()
       next.agent[field] = value
       next.agent.synced_at = next.updated_at
-      validateWorkspaceSnapshot(next, config)
+      next = validateWorkspaceSnapshot(next, config)
       setState((current) => ({
         ...current,
         workspaceSnapshot: next,
         workspaceDirty: true,
       }))
-      setDrafts((current) => ({ ...current, [field]: formatted(value) }))
+      setDrafts((current) => ({ ...current, [field]: formatted(next.agent[field]) }))
       toast.success(`${field === "providers" ? "Provider" : field === "failover" ? "Failover" : "Pricing"} JSON applied locally.`)
     } catch (caught) {
       toast.error(safeMessage(caught))
@@ -185,15 +185,18 @@ export function AgentWorkspace({
     if (!config || !snapshot) return
     setSaving(true)
     try {
-      validateWorkspaceSnapshot(snapshot, config)
+      const validated = validateWorkspaceSnapshot(snapshot, config)
       const version = await saveEncryptedWorkspace(
         config,
-        snapshot,
+        validated,
         state.workspaceVersion,
       ) as string
       setState((current) => ({
         ...current,
         workspaceVersion: version,
+        workspaceSnapshot: current.workspaceSnapshot === snapshot
+          ? validated
+          : current.workspaceSnapshot,
         workspaceDirty: current.workspaceSnapshot === snapshot
           ? false
           : current.workspaceDirty,
@@ -408,7 +411,7 @@ function Summary({
 const CATALOG_META = {
   providers: {
     title: "Portable Provider Store",
-    description: "Endpoints, protocols, exact model aliases, target overrides, and Darwin/Linux/Windows overlays. Secret values are stored separately.",
+    description: "Endpoints, protocols, native compaction capabilities/policies, model context and auto-compact windows, exact aliases, target overrides, and OS overlays. Secret values are stored separately.",
     empty: false,
   },
   failover: {

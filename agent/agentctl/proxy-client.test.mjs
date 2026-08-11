@@ -110,6 +110,10 @@ async function waitFor(check, timeoutMs = 3000) {
 test("proxy route and URL projection is protocol-bounded", () => {
   assert.equal(allowedRoute("anthropic_messages", "POST", "/v1/messages"), true);
   assert.equal(allowedRoute("openai_responses", "POST", "/v1/responses"), true);
+  assert.equal(allowedRoute("openai_responses", "POST", "/v1/responses/compact"), false);
+  assert.equal(allowedRoute("openai_responses", "POST", "/v1/responses/compact", {
+    responsesCompact: true
+  }), true);
   assert.equal(allowedRoute("openai_chat", "POST", "/v1/chat/completions"), true);
   assert.equal(
     allowedRoute("google_generative", "POST", "/v1beta/models/gemini:test"),
@@ -165,7 +169,7 @@ test("proxy header projection removes every local credential before upstream aut
 test("daemon config rejects a non-loopback listener", () => {
   const root = "/tmp/agentctl-proxy-test";
   const config = {
-    schema: 3,
+    schema: 4,
     kind: "agentctl-proxy-config",
     instance_id: "11111111-1111-4111-8111-111111111111",
     created_at: new Date().toISOString(),
@@ -173,6 +177,11 @@ test("daemon config rejects a non-loopback listener", () => {
     target: "codex",
     platform: "linux",
     protocol: "openai_responses",
+    compaction: {
+      mode: "client_local",
+      label: "Local · upstream unverified",
+      responses_compact: false
+    },
     route: null,
     backends: [{
       profile: "test",
@@ -279,9 +288,14 @@ test("Anthropic, OpenAI Chat, and Google native protocols preserve route and aut
     const root = await mkdtemp(join(tmpdir(), `agent-proxy-${item.name}-`));
     let observed = null;
     const upstream = createServer((request, response) => {
-      observed = { path: request.url, headers: request.headers };
-      request.resume();
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
       request.on("end", () => {
+        observed = {
+          path: request.url,
+          headers: request.headers,
+          body: Buffer.concat(chunks).toString("utf8")
+        };
         response.writeHead(200, { "content-type": "application/json" });
         response.end('{"ok":true}');
       });
@@ -320,9 +334,17 @@ test("Anthropic, OpenAI Chat, and Google native protocols preserve route and aut
         method: "POST",
         headers: {
           "x-agentctl-proxy-token": capability.token,
-          "content-type": "application/json"
+          "content-type": "application/json",
+          ...(item.protocol === "anthropic_messages"
+            ? { "anthropic-beta": "compact-2026-01-12" }
+            : {})
         },
-        body: '{"model":"test-model"}'
+        body: JSON.stringify({
+          model: "test-model",
+          ...(item.protocol === "anthropic_messages"
+            ? { context_management: { edits: [{ type: "compact_20260112" }] } }
+            : {})
+        })
       });
       assert.equal(response.status, 200);
       await response.arrayBuffer();
@@ -332,6 +354,11 @@ test("Anthropic, OpenAI Chat, and Google native protocols preserve route and aut
         : "UPSTREAM-NATIVE-KEY";
       assert.equal(observed.headers[item.upstreamHeader], expected);
       assert.equal(observed.headers["x-agentctl-proxy-token"], undefined);
+      if (item.protocol === "anthropic_messages") {
+        assert.equal(observed.headers["anthropic-beta"], "compact-2026-01-12");
+        assert.equal(JSON.parse(observed.body).context_management.edits[0].type,
+          "compact_20260112");
+      }
       run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"]);
       pid = 0;
     } finally {
@@ -402,6 +429,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       "--alias", "model-a=vendor-model-a",
       "--auth-mode", "bearer",
       "--secret", "upstream_key",
+      "--compaction-upstream", "responses_v2",
       ...providerArgs(root), "--yes"
     ]);
     const keyFile = join(root, "upstream-key");
@@ -438,6 +466,8 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(preview.auth.secret, "upstream_key");
     assert.equal(preview.models.requested_default, "model-a");
     assert.equal(preview.models.outbound_default, "vendor-model-a");
+    assert.equal(preview.compaction.mode, "remote_native");
+    assert.equal(preview.compaction.responses_compact, true);
     assert.equal(preview.pricing.version, "2026.08-test");
     assert.equal(JSON.stringify(preview).includes("REAL-UPSTREAM-SECRET"), false);
 
@@ -461,6 +491,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(running.pid, proxyPid);
     assert.equal(running.pricing_catalog_version, "2026.08-test");
     assert.equal(running.pricing_model_source, "response");
+    assert.equal(running.compaction.mode, "remote_native");
     assert.equal(Object.hasOwn(running, "token"), false);
 
     const capabilityPath = join(root, "config", "proxy-capability.json");
@@ -501,12 +532,26 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.match(requests[0].body, /BODY-MUST-NOT-ENTER-METADATA/);
     assert.equal(JSON.parse(requests[0].body).model, "vendor-model-a");
 
+    const compacted = await fetch(`${localUrl}/compact`, {
+      method: "POST",
+      headers: {
+        "x-agentctl-proxy-token": capability.token,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ model: "model-a", input: "COMPACT-MARKER" })
+    });
+    assert.equal(compacted.status, 200);
+    await compacted.arrayBuffer();
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].path, "/v1/responses/compact");
+    assert.equal(JSON.parse(requests[1].body).model, "vendor-model-a");
+
     const wrongRoute = await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
       method: "POST",
       headers: { "x-agentctl-proxy-token": capability.token }
     });
     assert.equal(wrongRoute.status, 404);
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
 
     const tooLarge = await fetch(localUrl, {
       method: "POST",
@@ -514,7 +559,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       body: "x".repeat(2048)
     });
     assert.equal(tooLarge.status, 413);
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
 
     const timedOut = await fetch(localUrl, {
       method: "POST",

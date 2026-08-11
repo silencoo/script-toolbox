@@ -27,22 +27,61 @@ explicit `interactive` command.
 The dashboard combines a full portable Providers control plane, live
 MCP/Skills/Prompt selections, a shared Snippets library, development presets,
 and encrypted Workspace status. It refreshes every 30 seconds or immediately
-with `r`. The Cloud-backed views are remote-first: opening Providers, MCP,
-Skills, Prompts, or Snippets lazily derives a secret-free display catalog from
-the encrypted Store in process memory. The React view never receives a child
-capability or a Provider/MCP Secret value.
+with `r`. Every refresh is local-first: agent status, official-account labels,
+local Providers, MCP, Skills, Prompt bindings, Snippets, and Presets render
+without waiting for the network. A configured Workspace is shown as
+`Connecting…` while cloud diagnostics and catalogs hydrate in the background.
+Transient read failures receive one bounded retry. After the first successful
+connection, the last public Workspace index stays visible as
+`Cached · retrying` during later network interruptions; local state never
+disappears, and remote writes still require a fresh live connection.
+Opening Providers, MCP, Skills, Prompts, or Snippets lazily derives a
+secret-free cloud display catalog from the encrypted Store in process memory.
+The React view never receives a child capability or a Provider/MCP Secret value.
 
-The Providers view keeps local and encrypted Workspace profiles in one bounded
-list while marking every row `L` or `W`. It resolves the selected profile for
+The Providers view presents one row per logical Provider. Matching local and
+encrypted Workspace copies are merged instead of duplicated: `B` is an
+unmaterialized built-in template, `L` is local-only, `W` is Workspace-only,
+`L+W` is a local profile with a matching backup, and `L≠W` identifies safe
+configuration metadata that needs reconciliation. Local configuration takes
+precedence, while a Workspace-only profile remains directly applicable.
+Providers incompatible with the selected client are hidden by default; `i`
+temporarily reveals them for inspection. Built-ins render immediately even
+when the local Store does not exist. The view resolves each selection for
 Claude Code, Codex, OpenCode, or Pi using the current operating-system overlay,
 then shows exact protocol, endpoint, requested/outbound model IDs, Secret
 presence, compatibility, and device-local applied state. Each client has its
-own target color. `p` plans and `a` applies only the selected source/profile and
-target. A Workspace-only apply exposes the selected profile and required Secret
-to the existing provider controller through owner-only temporary files; they
-are removed immediately after the action. `u` backs up the complete portable
-local bundle and `d` merge-restores it, both behind confirmation. Exact
-replacement remains the explicit CLI operation.
+own target color. `p` plans and `a` applies only the selected profile and target.
+For OpenCode, a `native auth` marker reports a matching credential from the
+client's own auth store even when the portable agentctl Secret is absent.
+`native-current` additionally means OpenCode's global model selects that
+provider. This metadata is read-only and never copies or uploads the native
+credential.
+A Workspace-only apply exposes the selected profile and required Secret to the
+existing provider controller through owner-only temporary files; they are
+removed immediately after the action. Provider synchronization is also scoped
+to the selected row: `u` chooses the local copy and replaces only its Workspace
+counterpart, while `d` chooses the Workspace copy and replaces only its local
+counterpart. Only Secret references used by that profile travel with it; all
+other profiles, failover/pricing catalogs, generated configuration, and the
+device-local applied selection remain untouched. Whole-bundle merge/exact
+replacement remains available through the explicit CLI operations.
+
+For Codex, Overview, Agents, and Providers show two simultaneous rows:
+`Identity` is the current official ChatGPT login, while `Inference` is the
+Provider and Model handling requests. A Codex Provider selection changes only
+Inference and explicitly preserves the current Identity; the detail pane shows
+that `auth.json` is untouched. Provider profiles therefore never silently bind
+or switch an official account.
+
+The Accounts section manages that separate Codex Identity layer. It displays
+only local labels, the active marker, save timestamps, and owner-only permission
+health. `a` or Enter confirms an atomic switch; `x` deletes a non-current saved
+snapshot. New labels are captured explicitly with
+`agentctl account save <name> --yes`. The outgoing snapshot is refreshed before
+switching, while an unsafe, unrecognized, or unsaved live login fails closed.
+OAuth tokens and account IDs never enter the TUI model, and account snapshots
+are device-local rather than Workspace-backed.
 
 The MCP view keeps Claude Code and Codex visible at the same time. It separates
 shared servers, client-only servers, and explicitly disabled servers instead of
@@ -75,13 +114,19 @@ because promptctl needs that editable local source. Whole child-Store pulls
 remain explicit CLI operations; the Providers view exposes only the bounded
 agent-bundle upload and merge-restore operations described above.
 
+The Providers detail pane reports the resolved compaction behavior as one
+plain-language value: `Remote · native`, `Messages · Anthropic beta`, or a
+local fallback. This is derived from Provider Store schema 2 capability and
+policy fields; it is not guessed from an endpoint or model name.
+The adjacent Context row independently shows the verified model maximum and
+client auto-compact trigger, or `Client default` when the Provider leaves both
+values unmanaged.
+
 The Agents view is actionable as well as diagnostic. Select Claude Code,
-Codex, OpenCode, or Pi with `[`/`]` (or Up/Down); `p` shows its built-in
-provider catalog, `c` or
-Enter temporarily suspends Ink and opens the existing interactive setup/install
-flow, and `x` removes only agentctl-owned provider configuration after
-confirmation. When setup exits, the dashboard reopens on Agents with refreshed
-status.
+Codex, OpenCode, or Pi with `[`/`]` (or Up/Down); `c`, `p`, or Enter opens the
+same unified Providers section for that client. `x` removes only
+agentctl-owned provider configuration after confirmation. There is no second
+interactive setup catalog.
 
 Cloud empty states distinguish local-only setup, incompatible Workspace data,
 temporary connectivity failures, rejected capabilities, and invalid local
@@ -98,22 +143,24 @@ the remote snapshot itself cannot be opened.
 | `r` | Refresh now |
 | `[` / `]`, Up / Down | Select the previous / next Profile, Pack, Prompt, Snippet, or Preset |
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
-| Providers: `u` / `d` | Upload local catalogs / download and merge the encrypted Workspace bundle |
+| Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
+| Providers: `i` | Show or hide profiles incompatible with the selected client |
 | Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
 | Snippets: `c` | Copy the selected local snippet without rendering it |
 | `u` | Roll back a preset transaction |
-| Agents: `c` / Enter | Configure the selected agent, installing its CLI if needed |
-| Agents: `p` | Show provider/model choices |
+| Agents: `c` / `p` / Enter | Open unified Providers for the selected agent |
 | Agents: `x` | Confirm removal of agentctl-owned provider configuration |
+| Accounts: `a` / Enter | Confirm switch to the selected saved official account |
+| Accounts: `x` | Delete the selected non-current account snapshot |
 | `?` | Toggle keyboard help |
 | `q` | Quit |
 
 The interface uses standard terminal colors and symbols; it does not require a
 Nerd Font. Green/yellow/red continue to communicate health where used in status
 fields. Target badges are deliberately distinct: Claude Code yellow, Codex
-cyan, OpenCode green, and Pi magenta. Local/Workspace sources use green/blue,
-and every active section gets its own navigation accent instead of a single
-indistinguishable color.
+cyan, OpenCode green, and Pi magenta. Provider availability always has a
+textual `B/L/W/L+W/L≠W` cue in addition to color, and every active section gets
+its own navigation accent instead of a single indistinguishable color.
 
 ## Development
 

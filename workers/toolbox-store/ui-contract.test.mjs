@@ -128,6 +128,12 @@ test("Provider Workspace keeps portable catalogs encrypted and Secret values mas
   assert.match(storeClient, /\[1, 2\]\.includes\(snapshot\.schema\)/);
   assert.match(storeClient, /upgraded\.schema = 3/);
   assert.match(storeClient, /newer Workspace version exists/);
+  assert.match(storeClient, /providerStore\?\.schema === 1/);
+  assert.match(storeClient, /profile\.compaction = legacyProviderCompaction\(profile\)/);
+  assert.match(storeClient, /profile\.context === undefined/);
+  assert.match(storeClient, /validateProviderContext\(profile\.context/);
+  assert.match(storeClient, /"responses_v2", "responses_v1", "anthropic_messages_beta", "none"/);
+  assert.match(agentWorkspace, /schema: 2,[\s\S]*?kind: "agentctl-provider-store"/);
   assert.match(agentWorkspace, /saveEncryptedWorkspace/);
   assert.match(agentWorkspace, /state\.workspaceVersion/);
   assert.match(agentWorkspace, /type="password"/);

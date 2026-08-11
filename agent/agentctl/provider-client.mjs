@@ -19,6 +19,8 @@ import { pathToFileURL } from "node:url";
 import {
   CURRENT_PROVIDER_SCHEMA,
   PROVIDER_AUTH_MODES,
+  PROVIDER_COMPACTION_POLICIES,
+  PROVIDER_COMPACTION_UPSTREAMS,
   PROVIDER_PLATFORMS,
   PROVIDER_PROTOCOLS,
   PROVIDER_TARGETS,
@@ -28,6 +30,10 @@ import {
   normalizeRuntimePlatform,
   resolveProviderProfile,
   validateAuthMode,
+  validateAutoCompactTokens,
+  validateCompactionPolicy,
+  validateCompactionUpstream,
+  validateContextWindowTokens,
   validateEndpoint,
   validateModelId,
   validatePlatform,
@@ -38,6 +44,16 @@ import {
   validateReferenceName,
   validateTarget
 } from "./provider-schema.mjs";
+import {
+  builtinModelContext,
+  builtinModels,
+  builtinNativeAuthProvider,
+  builtinProvider,
+  builtinProviderCatalog,
+  builtinProviderProfile,
+  builtinValidationUrl,
+  isBuiltinProvider
+} from "./provider-catalog.mjs";
 import {
   ProviderRendererError,
   allProviderTargets,
@@ -57,20 +73,26 @@ export class ProviderClientError extends Error {
 }
 
 function usage() {
-  process.stdout.write(`agentctl provider — portable provider profiles and local Secrets
+  process.stdout.write(`agentctl provider — one catalog for built-ins, local profiles, and Workspace restore
 
 Usage:
-  agentctl provider init [--yes]
   agentctl provider status [--json]
-  agentctl provider list [--json]
+  agentctl provider list --target <target> [--platform <platform>] [--json]
   agentctl provider show <profile> [--json]
   agentctl provider resolve <profile> --target <target> [--platform <platform>] [--json]
   agentctl provider plan <profile> --target <target|all> [--platform <platform>] [--json]
-  agentctl provider apply <profile> --target <target|all> [--platform <platform>]
-      [--skip-validate] [--force] [--yes]
+  agentctl provider use <profile> --target <target|all> [--model <id>]
+      [--context-window-tokens <tokens|auto>] [--auto-compact-tokens <tokens|auto>]
+      [--secret-file <private-file>] [--platform <platform>] [--skip-validate] [--yes]
   agentctl provider current [--target <target|all>] [--json]
+  agentctl provider migrate ccs [--database <cc-switch.db>]
+      [--target <claude|codex|all>] [--force] [--yes] [--json]
+  agentctl provider migrate schema [--yes] [--json]
   agentctl provider create <profile> --protocol <protocol> --base-url <url>
       --model <id> [--auth-mode <mode>] [--secret <reference>]
+      [--compaction-upstream <capability>] [--compaction-policy <policy>]
+      [--context-window-tokens <tokens|auto>]
+      [--auto-compact-tokens <tokens|auto>]
       [--description <text>] [--alias <requested=outbound>]... [--yes]
   agentctl provider target <profile> <target> [override options] [--yes]
   agentctl provider platform <profile> <platform> <target> [override options] [--yes]
@@ -83,11 +105,19 @@ Usage:
   agentctl provider restore <profile> --input <file> --target <target|all>
       [--replace] [--skip-validate] [--force] [--yes]
 
+Examples:
+  agentctl provider list --target claude
+  agentctl provider use deepseek --target claude --secret-file ./deepseek.key --yes
+  agentctl provider current --target claude
+
 Protocols:
   ${PROVIDER_PROTOCOLS.join(", ")}
 
 Authentication modes:
   ${PROVIDER_AUTH_MODES.join(", ")}
+
+Compaction upstreams: ${PROVIDER_COMPACTION_UPSTREAMS.join(", ")}
+Compaction policies:  ${PROVIDER_COMPACTION_POLICIES.join(", ")}
 
 Targets:   ${PROVIDER_TARGETS.join(", ")}
 Platforms: ${PROVIDER_PLATFORMS.join(", ")}
@@ -99,15 +129,26 @@ Override options:
   --model <id>               Override the requested/default model.
   --auth-mode <mode>         Override the authentication mode.
   --secret <reference>       Override the local Secret reference.
+  --compaction-upstream <capability>
+                             Declare a verified native upstream capability.
+  --compaction-policy <policy>
+                             Choose auto, remote, or local behavior.
+  --context-window-tokens <tokens|auto>
+                             Declare the selected model's real context window.
+  --auto-compact-tokens <tokens|auto>
+                             Set a client auto-compact trigger independently.
   --inherit                  Remove the entire target/platform override.
 
 Storage options:
   --store <file>             Portable catalog (default: platform config dir).
   --secrets <file>           Local chmod-600 Secret Store.
   --state <file>             Device-local applied-selection state.
-  --skip-validate            Do not probe the provider models endpoint on apply.
+  --database <file>          CCS SQLite database used only by migrate ccs.
+  --skip-validate            Do not probe the provider models endpoint on use.
   --yes, -y                  Apply the displayed mutation; otherwise preview.
 
+Built-in profiles appear before the local Store is initialized. Using one
+materializes it into the portable Store so Workspace backup can synchronize it.
 Provider exports contain Secret reference names but never Secret values.
 Generated client configuration, absolute config paths, logs, process state,
 and proxy health are deliberately outside this Store.
@@ -174,12 +215,21 @@ export function parseArguments(argv, defaults = providerDefaults()) {
       case "--model": options.model = takeValue(argv, argument); break;
       case "--auth-mode": options.authMode = takeValue(argv, argument); break;
       case "--secret": options.secret = takeValue(argv, argument); break;
+      case "--compaction-upstream":
+        options.compactionUpstream = takeValue(argv, argument); break;
+      case "--compaction-policy":
+        options.compactionPolicy = takeValue(argv, argument); break;
+      case "--context-window-tokens":
+        options.contextWindowTokens = takeValue(argv, argument); break;
+      case "--auto-compact-tokens":
+        options.autoCompactTokens = takeValue(argv, argument); break;
       case "--secret-file": options.secretFile = takeValue(argv, argument); break;
       case "--platform": options.platform = takeValue(argv, argument); break;
       case "--target": options.target = takeValue(argv, argument); break;
       case "--alias": options.aliases.push(takeValue(argv, argument)); break;
       case "--output": options.output = takeValue(argv, argument); break;
       case "--input": options.input = takeValue(argv, argument); break;
+      case "--database": options.database = takeValue(argv, argument); break;
       case "--enable":
         if (options.enabled === false) throw new ProviderClientError("--enable and --disable conflict");
         options.enabled = true;
@@ -210,6 +260,7 @@ export function parseArguments(argv, defaults = providerDefaults()) {
   if (options.output) options.output = resolve(options.output);
   if (options.input) options.input = resolve(options.input);
   if (options.secretFile) options.secretFile = resolve(options.secretFile);
+  if (options.database) options.database = resolve(options.database);
   return { positional, options };
 }
 
@@ -239,6 +290,55 @@ async function readJson(path, label) {
     throw error;
   }
   return value;
+}
+
+async function nativeProviderState(target, { home = homedir() } = {}) {
+  if (target !== "opencode") {
+    return { credentials: new Map(), selected_provider: "", selected_model: "" };
+  }
+  const credentials = new Map();
+  const authPath = join(home, ".local", "share", "opencode", "auth.json");
+  try {
+    const value = await readJson(authPath, "OpenCode native auth");
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [provider, record] of Object.entries(value)) {
+        if (!/^[A-Za-z0-9._-]{1,96}$/.test(provider) ||
+            !record || typeof record !== "object" || Array.isArray(record)) continue;
+        const type = typeof record.type === "string" &&
+          /^[A-Za-z0-9._-]{1,32}$/.test(record.type)
+          ? record.type
+          : "unknown";
+        credentials.set(provider, { provider, type });
+      }
+    }
+  } catch {
+    // Native client state is advisory. A missing or malformed external file
+    // must not make the portable Provider catalog unavailable.
+  }
+
+  let selectedProvider = "";
+  let selectedModel = "";
+  const configPath = join(home, ".config", "opencode", "opencode.json");
+  try {
+    const value = await readJson(configPath, "OpenCode config");
+    const model = typeof value?.model === "string" ? value.model : "";
+    const separator = model.indexOf("/");
+    if (separator > 0 && separator < model.length - 1) {
+      const provider = model.slice(0, separator);
+      const selected = model.slice(separator + 1);
+      if (/^[A-Za-z0-9._-]{1,96}$/.test(provider) && selected.length <= 240) {
+        selectedProvider = provider;
+        selectedModel = selected;
+      }
+    }
+  } catch {
+    // As above, native state augments rather than gates the portable catalog.
+  }
+  return {
+    credentials,
+    selected_provider: selectedProvider,
+    selected_model: selectedModel
+  };
 }
 
 async function writeJsonAtomic(path, value) {
@@ -322,6 +422,14 @@ function validateProviderState(value) {
     }
   }
   for (const [target, record] of Object.entries(value.current)) {
+    if (record && typeof record === "object" && !Array.isArray(record)) {
+      record.provider_name ??= record.profile;
+      record.compaction_upstream ??= "none";
+      record.compaction_policy ??= "auto";
+      record.compaction_mode ??= "client_local";
+      record.context_window_tokens ??= null;
+      record.auto_compact_tokens ??= null;
+    }
     validateTarget(target, "provider state target");
     if (!record || typeof record !== "object" || Array.isArray(record) ||
         record.target !== target || typeof record.profile !== "string" ||
@@ -339,7 +447,10 @@ function validateProviderState(value) {
     validateModelId(record.outbound_model, `provider state outbound model for '${target}'`);
     const allowed = [
       "target", "profile", "platform", "protocol", "endpoint",
-      "requested_model", "outbound_model", "applied_at"
+      "requested_model", "outbound_model", "provider_name",
+      "compaction_upstream", "compaction_policy", "compaction_mode",
+      "context_window_tokens", "auto_compact_tokens",
+      "official_identity_policy", "applied_at"
     ];
     for (const key of Object.keys(record)) {
       if (!allowed.includes(key)) {
@@ -347,6 +458,41 @@ function validateProviderState(value) {
           `provider selection state for '${target}' contains unsupported field '${key}'`
         );
       }
+    }
+    if (record.official_identity_policy !== undefined &&
+        (target !== "codex" || record.official_identity_policy !== "preserve")) {
+      throw new ProviderClientError(
+        `provider selection state for '${target}' has an invalid official Identity policy`
+      );
+    }
+    if (record.provider_name !== undefined && typeof record.provider_name !== "string") {
+      throw new ProviderClientError(
+        `provider selection state for '${target}' has an invalid rendered Provider name`
+      );
+    }
+    if (record.compaction_upstream !== undefined) {
+      validateCompactionUpstream(record.compaction_upstream,
+        `provider state compaction upstream for '${target}'`);
+    }
+    if (record.compaction_policy !== undefined) {
+      validateCompactionPolicy(record.compaction_policy,
+        `provider state compaction policy for '${target}'`);
+    }
+    if (record.compaction_mode !== undefined &&
+        !["client_local", "remote_native", "messages_native"].includes(record.compaction_mode)) {
+      throw new ProviderClientError(
+        `provider selection state for '${target}' has an invalid compaction mode`
+      );
+    }
+    validateContextWindowTokens(record.context_window_tokens,
+      `provider state context window for '${target}'`);
+    validateAutoCompactTokens(record.auto_compact_tokens,
+      `provider state auto-compact window for '${target}'`);
+    if (record.context_window_tokens !== null && record.auto_compact_tokens !== null &&
+        record.auto_compact_tokens > record.context_window_tokens) {
+      throw new ProviderClientError(
+        `provider selection state for '${target}' has auto-compact above its context window`
+      );
     }
   }
   return value;
@@ -388,6 +534,28 @@ function profileOrThrow(store, name) {
   const profile = store.profiles[name];
   if (!profile) throw new ProviderClientError(`provider profile not found: ${name}`);
   return profile;
+}
+
+function catalogProfileOrThrow(store, name) {
+  validateProfileName(name);
+  const profile = store.profiles[name] || builtinProviderProfile(name);
+  if (!profile) throw new ProviderClientError(`provider profile not found: ${name}`);
+  return profile;
+}
+
+function matchesAppliedSelection(current, plan) {
+  return current?.profile === plan.profile &&
+    current.platform === plan.platform &&
+    current.protocol === plan.protocol &&
+    current.endpoint === plan.endpoint &&
+    current.requested_model === plan.requested_model &&
+    current.outbound_model === plan.outbound_model &&
+    current.provider_name === plan.provider_name &&
+    current.compaction_upstream === plan.compaction.upstream &&
+    current.compaction_policy === plan.compaction.policy &&
+    current.compaction_mode === plan.compaction.mode &&
+    current.context_window_tokens === plan.context.window_tokens &&
+    current.auto_compact_tokens === plan.context.auto_compact_tokens;
 }
 
 function collectSecretReferences(store) {
@@ -449,6 +617,7 @@ async function status(options) {
     secrets_exists: Boolean(secretsDetails),
     state: options.statePath,
     state_exists: Boolean(stateDetails),
+    builtin_count: builtinProviderCatalog().length,
     profile_count: Object.keys(store.profiles).length,
     secret_count: Object.keys(secrets.secrets).length,
     referenced_secrets: [...references.keys()].sort(),
@@ -459,26 +628,178 @@ async function status(options) {
   process.stdout.write(`Provider Store: ${output.store_exists ? output.store : "not initialized"}\n`);
   process.stdout.write(`Secret Store:   ${output.secrets_exists ? output.secrets : "not initialized"}\n`);
   process.stdout.write(`Platform:       ${output.platform}\n`);
-  process.stdout.write(`Profiles:       ${output.profile_count}\n`);
+  process.stdout.write(`Profiles:       ${output.builtin_count} built-in, ${output.profile_count} materialized/local\n`);
   process.stdout.write(`Secrets:        ${output.secret_count} present, ${missing.length} missing\n`);
   process.stdout.write(`Applied:        ${Object.keys(state.current).length} target(s)\n`);
   if (missing.length) process.stdout.write(`Missing refs:   ${missing.join(", ")}\n`);
 }
 
+async function migrateSchema(options) {
+  const raw = await readJson(options.storePath, "provider Store");
+  const fromSchema = raw?.schema;
+  const legacyProfiles = raw?.profiles && typeof raw.profiles === "object"
+    ? Object.values(raw.profiles).filter((profile) => profile?.schema === 1).length
+    : 0;
+  const missingContextProfiles = raw?.profiles && typeof raw.profiles === "object"
+    ? Object.values(raw.profiles).filter((profile) => profile?.context === undefined).length
+    : 0;
+  const next = validateProviderStore(structuredClone(raw));
+  let enrichedContextTargets = 0;
+  for (const [name, profile] of Object.entries(next.profiles)) {
+    const builtin = builtinProviderProfile(name);
+    if (!builtin) continue;
+    for (const target of PROVIDER_TARGETS) {
+      const builtinResolved = resolveProviderProfile(builtin, {
+        target,
+        platform: normalizeRuntimePlatform()
+      });
+      if (raw.profiles?.[name]?.targets?.[target]?.context !== undefined) continue;
+      const localResolved = resolveProviderProfile(profile, {
+        target,
+        platform: normalizeRuntimePlatform()
+      });
+      const modelContext = builtinModelContext(
+        name,
+        target,
+        localResolved.outbound_model
+      );
+      if (!modelContext) continue;
+      if (localResolved.protocol !== builtinResolved.protocol ||
+          localResolved.endpoint !== builtinResolved.endpoint ||
+          localResolved.auth.mode !== builtinResolved.auth.mode) continue;
+      profile.targets[target] ||= {};
+      profile.targets[target].context = modelContext;
+      enrichedContextTargets += 1;
+    }
+  }
+  validateProviderStore(next);
+  const changed = fromSchema !== CURRENT_PROVIDER_SCHEMA || legacyProfiles > 0 ||
+    missingContextProfiles > 0 || enrichedContextTargets > 0;
+  const output = {
+    ok: true,
+    preview: !options.yes,
+    changed,
+    store: options.storePath,
+    from_schema: fromSchema,
+    to_schema: CURRENT_PROVIDER_SCHEMA,
+    migrated_profiles: legacyProfiles,
+    initialized_context_profiles: missingContextProfiles,
+    enriched_context_targets: enrichedContextTargets,
+    default_for_unverified_upstreams: "none/auto"
+  };
+  if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  else {
+    process.stdout.write(`${options.yes ? "[apply]" : "[preview]"} migrate Provider Store schema\n`);
+    process.stdout.write(`  Store:    ${options.storePath}\n`);
+    process.stdout.write(`  Schema:   ${fromSchema} -> ${CURRENT_PROVIDER_SCHEMA}\n`);
+    process.stdout.write(`  Profiles: ${legacyProfiles} legacy profile(s)\n`);
+    process.stdout.write(`  Context:  ${missingContextProfiles} initialized profile(s), ${enrichedContextTargets} verified built-in target(s)\n`);
+    process.stdout.write("  Safety:   unverified upstreams become none/auto (local compaction)\n");
+    if (!options.yes && changed) process.stdout.write("Re-run with --yes to apply.\n");
+  }
+  if (options.yes && changed) await saveProviderStore(options.storePath, next);
+  return output;
+}
+
 async function list(options) {
-  const store = await loadProviderStore(options.storePath);
-  const rows = Object.values(store.profiles).sort((a, b) => a.name.localeCompare(b.name));
+  if (!options.target || options.target === "all") {
+    throw new ProviderClientError("provider list requires one --target");
+  }
+  const target = validateTarget(options.target);
+  const platform = options.platform || normalizeRuntimePlatform();
+  validatePlatform(platform);
+  const [store, secrets, state, native] = await Promise.all([
+    loadProviderStore(options.storePath, { allowMissing: true }),
+    loadProviderSecrets(options.secretsPath, { allowMissing: true }),
+    loadProviderState(options.statePath, { allowMissing: true }),
+    nativeProviderState(target)
+  ]);
+  const builtins = builtinProviderCatalog();
+  const builtinNames = new Set(builtins.map((entry) => entry.name));
+  const candidates = [
+    ...builtins.map((entry) => ({
+      catalog: entry,
+      profile: store.profiles[entry.name] || entry.profile,
+      source: "builtin",
+      materialized: Boolean(store.profiles[entry.name])
+    })),
+    ...Object.values(store.profiles)
+      .filter((profile) => !builtinNames.has(profile.name))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((profile) => ({ catalog: null, profile, source: "local", materialized: true }))
+  ];
+  const rows = candidates.map(({ catalog, profile, source, materialized }) => {
+    const resolved = resolveProviderProfile(profile, { target, platform });
+    const secretPresent = resolved.auth.mode === "none" ||
+      Boolean(secrets.secrets[resolved.auth.secret]);
+    const plan = renderProviderPlan(resolved, { secretPresent });
+    const nativeAuthProvider = catalog
+      ? builtinNativeAuthProvider(profile.name, target)
+      : "";
+    const nativeAuth = nativeAuthProvider
+      ? native.credentials.get(nativeAuthProvider) || null
+      : null;
+    const nativeSelected = Boolean(nativeAuth &&
+      native.selected_provider === nativeAuthProvider);
+    const status = !plan.enabled
+      ? "disabled"
+      : !plan.compatible ? "incompatible"
+        : plan.auth.present ? "ready"
+          : nativeSelected ? "native-current"
+            : nativeAuth ? "native-auth" : "needs-key";
+    return {
+      name: profile.name,
+      label: catalog?.label || profile.name,
+      description: profile.description,
+      source,
+      materialized,
+      target,
+      platform,
+      protocol: plan.protocol,
+      endpoint: plan.endpoint,
+      requested_model: plan.requested_model,
+      outbound_model: plan.outbound_model,
+      models_available: catalog ? builtinModels(profile.name, target) : [],
+      enabled: plan.enabled,
+      compatible: plan.compatible,
+      ready: plan.ready,
+      status,
+      issue: plan.issue,
+      auth_mode: plan.auth.mode,
+      secret_reference: plan.auth.secret || "",
+      secret_present: plan.auth.present,
+      native_auth_present: Boolean(nativeAuth),
+      native_auth_provider: nativeAuth?.provider || "",
+      native_auth_type: nativeAuth?.type || "",
+      native_selected: nativeSelected,
+      native_selected_model: nativeSelected ? native.selected_model : "",
+      compaction_upstream: plan.compaction.upstream,
+      compaction_policy: plan.compaction.policy,
+      compaction_mode: plan.compaction.mode,
+      compaction_label: plan.compaction.label,
+      context_window_tokens: plan.context.window_tokens,
+      auto_compact_tokens: plan.context.auto_compact_tokens,
+      context_label: plan.context.label,
+      official_identity_policy: plan.official_identity?.policy || "",
+      official_identity_account: plan.official_identity?.account || "",
+      applied: matchesAppliedSelection(state.current[target], plan)
+    };
+  }).filter((row) => row.enabled);
   if (options.json) return process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
-  if (!rows.length) return process.stdout.write("(no provider profiles)\n");
-  for (const profile of rows) {
+  for (const row of rows) {
+    const marker = row.source === "builtin" ? "B" : "L";
+    const stateLabel = row.applied ? "current" : row.status;
     process.stdout.write(
-      `${profile.name.padEnd(24)} ${profile.protocol.padEnd(20)} ${profile.models.default}\n`
+      `${marker} ${row.name.padEnd(22)} ${stateLabel.padEnd(12)} ${row.protocol.padEnd(20)} ${row.outbound_model}\n`
     );
   }
 }
 
 async function show(name, options) {
-  const profile = profileOrThrow(await loadProviderStore(options.storePath), name);
+  const profile = catalogProfileOrThrow(
+    await loadProviderStore(options.storePath, { allowMissing: true }),
+    name
+  );
   process.stdout.write(`${JSON.stringify(profile, null, 2)}\n`);
 }
 
@@ -501,6 +822,40 @@ function parseAliases(values) {
   return aliases;
 }
 
+function parseContextTokenOption(value, label, validator) {
+  if (value === undefined || value === null) return null;
+  if (["auto", "none", "inherit"].includes(value)) return null;
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new ProviderClientError(`${label} must be a positive integer or auto`);
+  }
+  const tokens = Number(value);
+  try {
+    return validator(tokens, label);
+  } catch (error) {
+    if (error instanceof ProviderSchemaError) throw new ProviderClientError(error.message);
+    throw error;
+  }
+}
+
+function contextFromOptions(options, { defaults = true } = {}) {
+  const context = {};
+  if (defaults || options.contextWindowTokens !== undefined) {
+    context.window_tokens = parseContextTokenOption(
+      options.contextWindowTokens,
+      "--context-window-tokens",
+      validateContextWindowTokens
+    );
+  }
+  if (defaults || options.autoCompactTokens !== undefined) {
+    context.auto_compact_tokens = parseContextTokenOption(
+      options.autoCompactTokens,
+      "--auto-compact-tokens",
+      validateAutoCompactTokens
+    );
+  }
+  return context;
+}
+
 async function create(name, options) {
   validateProfileName(name);
   if (!options.protocol || !options.endpoint || !options.model) {
@@ -513,6 +868,11 @@ async function create(name, options) {
   const endpoint = validateEndpoint(options.endpoint);
   validateModelId(options.model);
   validateAuthMode(mode);
+  const compaction = {
+    upstream: validateCompactionUpstream(options.compactionUpstream || "none"),
+    policy: validateCompactionPolicy(options.compactionPolicy || "auto")
+  };
+  const context = contextFromOptions(options);
   if (mode !== "none" && !options.secret) {
     throw new ProviderClientError("create requires --secret unless --auth-mode none is used");
   }
@@ -527,6 +887,8 @@ async function create(name, options) {
     endpoint,
     auth: mode === "none" ? { mode } : { mode, secret: options.secret },
     models: { default: options.model, aliases: parseAliases(options.aliases) },
+    compaction,
+    context,
     targets: {},
     platforms: {}
   };
@@ -537,6 +899,9 @@ async function create(name, options) {
     protocol: profile.protocol,
     endpoint: profile.endpoint,
     model: profile.models.default,
+    compaction: `${profile.compaction.upstream}/${profile.compaction.policy}`,
+    context_window_tokens: profile.context.window_tokens ?? "auto",
+    auto_compact_tokens: profile.context.auto_compact_tokens ?? "auto",
     secret: profile.auth.secret || "none"
   }, options);
   if (options.yes) await saveProviderStore(options.storePath, store);
@@ -549,7 +914,11 @@ function buildOverride(options) {
     options.endpoint !== undefined,
     options.model !== undefined,
     options.authMode !== undefined,
-    options.secret !== undefined
+    options.secret !== undefined,
+    options.compactionUpstream !== undefined,
+    options.compactionPolicy !== undefined,
+    options.contextWindowTokens !== undefined,
+    options.autoCompactTokens !== undefined
   ];
   if (options.inherit) {
     if (fields.some(Boolean)) {
@@ -568,6 +937,18 @@ function buildOverride(options) {
     if (options.secret !== undefined) {
       override.auth.secret = validateReferenceName(options.secret, "Secret reference");
     }
+  }
+  if (options.compactionUpstream !== undefined || options.compactionPolicy !== undefined) {
+    override.compaction = {};
+    if (options.compactionUpstream !== undefined) {
+      override.compaction.upstream = validateCompactionUpstream(options.compactionUpstream);
+    }
+    if (options.compactionPolicy !== undefined) {
+      override.compaction.policy = validateCompactionPolicy(options.compactionPolicy);
+    }
+  }
+  if (options.contextWindowTokens !== undefined || options.autoCompactTokens !== undefined) {
+    override.context = contextFromOptions(options, { defaults: false });
   }
   if (!Object.keys(override).length) {
     throw new ProviderClientError("at least one override option or --inherit is required");
@@ -608,7 +989,10 @@ async function mutateTarget(name, target, platform, options) {
 
 async function resolveProfile(name, options) {
   if (!options.target) throw new ProviderClientError("resolve requires --target");
-  const profile = profileOrThrow(await loadProviderStore(options.storePath), name);
+  const profile = catalogProfileOrThrow(
+    await loadProviderStore(options.storePath, { allowMissing: true }),
+    name
+  );
   const resolvedProfile = resolveProviderProfile(profile, {
     target: options.target,
     platform: options.platform || normalizeRuntimePlatform()
@@ -626,9 +1010,9 @@ async function applicationPlans(name, options, {
   store = null,
   secrets = null
 } = {}) {
-  store ||= await loadProviderStore(options.storePath);
+  store ||= await loadProviderStore(options.storePath, { allowMissing: true });
   secrets ||= await loadProviderSecrets(options.secretsPath, { allowMissing: true });
-  const profile = profileOrThrow(store, name);
+  const profile = catalogProfileOrThrow(store, name);
   const platform = options.platform || normalizeRuntimePlatform();
   validatePlatform(platform);
   return requestedTargets(options.target).map((target) => {
@@ -661,7 +1045,12 @@ function emitApplicationPlans(name, plans, options, { preview = false } = {}) {
       process.stdout.write(`  Protocol    : ${plan.protocol}\n`);
       process.stdout.write(`  Endpoint    : ${plan.endpoint}\n`);
       process.stdout.write(`  Model       : ${plan.requested_model} -> ${plan.outbound_model}\n`);
+      process.stdout.write(`  Compaction  : ${plan.compaction.label} (${plan.compaction.upstream}; ${plan.compaction.policy})\n`);
+      process.stdout.write(`  Context     : ${plan.context.label}\n`);
       process.stdout.write(`  Secret      : ${plan.auth.secret || "none"} (${plan.auth.present ? "ready" : "missing"})\n`);
+      if (plan.official_identity) {
+        process.stdout.write("  Identity    : preserve current ChatGPT login (not managed by this Provider)\n");
+      }
       process.stdout.write(`  Config      : ${plan.config_files.join(", ")}\n`);
       if (plan.issue) process.stdout.write(`  Blocked by  : ${plan.issue}\n`);
     }
@@ -724,6 +1113,23 @@ async function restoreManagedFiles(snapshots) {
   }
 }
 
+async function assertProtectedFilesUnchanged(snapshots) {
+  for (const [path, snapshot] of snapshots) {
+    const details = await pathState(path);
+    if (!snapshot.existed) {
+      if (details) {
+        throw new ProviderClientError(`Provider backend modified protected Identity file: ${path}`);
+      }
+      continue;
+    }
+    if (!details || details.isSymbolicLink() || !details.isFile() ||
+        (details.mode & 0o777) !== snapshot.mode ||
+        !(await readFile(path)).equals(snapshot.bytes)) {
+      throw new ProviderClientError(`Provider backend modified protected Identity file: ${path}`);
+    }
+  }
+}
+
 async function assertBackend(plan) {
   const details = await pathState(plan.backend);
   if (!details || details.isSymbolicLink() || !details.isFile()) {
@@ -743,8 +1149,29 @@ function appliedRecord(plan) {
     endpoint: plan.endpoint,
     requested_model: plan.requested_model,
     outbound_model: plan.outbound_model,
+    provider_name: plan.provider_name,
+    compaction_upstream: plan.compaction.upstream,
+    compaction_policy: plan.compaction.policy,
+    compaction_mode: plan.compaction.mode,
+    context_window_tokens: plan.context.window_tokens,
+    auto_compact_tokens: plan.context.auto_compact_tokens,
+    ...(plan.official_identity ? {
+      official_identity_policy: plan.official_identity.policy
+    } : {}),
     applied_at: new Date().toISOString()
   };
+}
+
+function validationUrlForPlan(plan, profile) {
+  if (!isBuiltinProvider(profile.name)) return "";
+  const builtin = builtinProviderProfile(profile.name);
+  const expected = resolveProviderProfile(builtin, {
+    target: plan.target,
+    platform: plan.platform
+  });
+  if (expected.protocol !== plan.protocol || expected.endpoint !== plan.endpoint ||
+      expected.auth.mode !== plan.auth.mode) return "";
+  return builtinValidationUrl(profile.name, plan.target);
 }
 
 async function applyApplication(name, options, prepared = {}) {
@@ -752,6 +1179,7 @@ async function applyApplication(name, options, prepared = {}) {
   const secrets = prepared.secrets ||
     await loadProviderSecrets(options.secretsPath, { allowMissing: true });
   const plans = prepared.plans || await applicationPlans(name, options, { store, secrets });
+  const selectedProfile = catalogProfileOrThrow(store, name);
   const preview = prepared.suppressPlan
     ? {
       schema: 1,
@@ -782,7 +1210,13 @@ async function applyApplication(name, options, prepared = {}) {
   for (const plan of activePlans) {
     managedPaths.push(...await managedTargetPaths(plan.target));
   }
-  const snapshots = await snapshotManagedFiles(managedPaths);
+  const protectedPaths = activePlans
+    .map((plan) => plan.official_identity?.config_file || "")
+    .filter(Boolean);
+  const snapshots = await snapshotManagedFiles([...managedPaths, ...protectedPaths]);
+  const protectedSnapshots = new Map(
+    protectedPaths.map((path) => [path, snapshots.get(path)])
+  );
   const state = await loadProviderState(options.statePath, { allowMissing: true });
   const secretDirectory = await mkdtemp(join(tmpdir(), "agentctl-provider-"));
   const applied = [];
@@ -797,16 +1231,19 @@ async function applyApplication(name, options, prepared = {}) {
       const keyFile = join(secretDirectory, `${plan.target}.key`);
       await writeFile(keyFile, `${secretValue}\n`, { flag: "wx", mode: 0o600 });
       await chmod(keyFile, 0o600);
+      const modelsUrl = validationUrlForPlan(plan, selectedProfile);
       const args = backendArguments(plan, {
         keyFile,
-        skipValidate: options.skipValidate,
-        force: options.force
+        modelsUrl,
+        skipValidate: options.skipValidate || !modelsUrl,
+        force: options.force,
+        forceContext: options.contextForce ?? options.force
       });
       const result = spawnSync(plan.backend, args, {
         encoding: "utf8",
         env: {
           ...process.env,
-          AGENTCTL_SETUP_COMMAND: `agentctl provider apply ${name} --target ${plan.target}`,
+          AGENTCTL_SETUP_COMMAND: `agentctl provider use ${name} --target ${plan.target}`,
           AGENTCTL_UNINSTALL_COMMAND: `agentctl uninstall ${plan.target}`
         },
         stdio: options.json ? "pipe" : "inherit"
@@ -816,6 +1253,7 @@ async function applyApplication(name, options, prepared = {}) {
           `${plan.target_label} provider backend failed; previous managed files will be restored`
         );
       }
+      if (plan.official_identity) await assertProtectedFilesUnchanged(protectedSnapshots);
       state.current[plan.target] = appliedRecord(plan);
       applied.push(plan.target);
     }
@@ -839,6 +1277,9 @@ async function applyApplication(name, options, prepared = {}) {
     profile: name,
     platform: plans[0].platform,
     applied,
+    official_identity: applied.includes("codex")
+      ? { policy: "preserve", account: "current" }
+      : null,
     restart_required: true
   };
   if (!prepared.suppressResult) {
@@ -846,6 +1287,128 @@ async function applyApplication(name, options, prepared = {}) {
     else process.stdout.write(`Applied '${name}' to ${applied.join(", ")}. Start new agent sessions to use it.\n`);
   }
   return output;
+}
+
+function profileForUse(profile, options) {
+  const next = structuredClone(profile);
+  const contextSpecified = options.contextWindowTokens !== undefined ||
+    options.autoCompactTokens !== undefined;
+  if (options.model !== undefined || contextSpecified) {
+    if (!options.target || options.target === "all") {
+      throw new ProviderClientError(
+        "--model and context options require one concrete --target"
+      );
+    }
+    const target = validateTarget(options.target);
+    const before = resolveProviderProfile(next, {
+      target,
+      platform: options.platform || normalizeRuntimePlatform()
+    });
+    next.targets[target] = {
+      ...(next.targets[target] || {})
+    };
+    if (options.model !== undefined) {
+      validateModelId(options.model);
+      next.targets[target].model = options.model;
+      if (options.model !== before.model) {
+        const afterModel = resolveProviderProfile(next, {
+          target,
+          platform: options.platform || normalizeRuntimePlatform()
+        });
+        next.targets[target].context = builtinModelContext(
+          next.name,
+          target,
+          afterModel.outbound_model
+        ) || {
+          window_tokens: null,
+          auto_compact_tokens: null
+        };
+      }
+    }
+    if (contextSpecified) {
+      next.targets[target].context = {
+        ...(next.targets[target].context || {}),
+        ...contextFromOptions(options, { defaults: false })
+      };
+    }
+  }
+  validateProviderStore({
+    ...newProviderStore(),
+    profiles: { [next.name]: next }
+  });
+  return next;
+}
+
+async function useProvider(name, options) {
+  requestedTargets(options.target);
+  validateProfileName(name);
+  const [store, secrets] = await Promise.all([
+    loadProviderStore(options.storePath, { allowMissing: true }),
+    loadProviderSecrets(options.secretsPath, { allowMissing: true })
+  ]);
+  const existing = store.profiles[name];
+  const builtin = builtinProvider(name);
+  if (!existing && !builtin) throw new ProviderClientError(`provider profile not found: ${name}`);
+  const selected = profileForUse(existing || builtin.profile, options);
+  const nextStore = structuredClone(store);
+  nextStore.profiles[name] = selected;
+  validateProviderStore(nextStore);
+  const nextSecrets = structuredClone(secrets);
+  const platform = options.platform || normalizeRuntimePlatform();
+  const references = new Set(requestedTargets(options.target).map((target) => {
+    const resolved = resolveProviderProfile(selected, { target, platform });
+    return resolved.auth.mode === "none" ? "" : resolved.auth.secret;
+  }).filter(Boolean));
+  if (options.secretFile) {
+    if (references.size !== 1) {
+      throw new ProviderClientError(
+        "--secret-file requires the selected targets to share one Secret reference"
+      );
+    }
+    const reference = [...references][0];
+    nextSecrets.secrets[reference] = {
+      value: await readPrivateSecret(options.secretFile),
+      updated_at: new Date().toISOString()
+    };
+  }
+  validateProviderSecrets(nextSecrets);
+  const plans = await applicationPlans(name, options, {
+    store: nextStore,
+    secrets: nextSecrets
+  });
+  if (!options.yes) {
+    return applyApplication(name, options, {
+      store: nextStore,
+      secrets: nextSecrets,
+      plans
+    });
+  }
+  const portableSnapshots = await snapshotManagedFiles([
+    options.storePath,
+    options.secretsPath
+  ]);
+  try {
+    await saveProviderStore(options.storePath, nextStore);
+    await saveProviderSecrets(options.secretsPath, nextSecrets);
+    return await applyApplication(name, {
+      ...options,
+      force: true,
+      contextForce: options.force
+    }, {
+      store: nextStore,
+      secrets: nextSecrets,
+      plans
+    });
+  } catch (error) {
+    try {
+      await restoreManagedFiles(portableSnapshots);
+    } catch (rollback) {
+      throw new ProviderClientError(
+        `${error.message}; Provider catalog rollback failed: ${rollback.message}`
+      );
+    }
+    throw error;
+  }
 }
 
 async function current(options) {
@@ -898,6 +1461,313 @@ async function readPrivateSecret(path) {
     throw new ProviderClientError("Secret input must contain exactly one non-empty line");
   }
   return lines[0];
+}
+
+function ccsSlug(value, fallback) {
+  const slug = String(value || "")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/g, "");
+  return slug || fallback;
+}
+
+function safeCcsLabel(value) {
+  return String(value || "CCS Provider")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim()
+    .slice(0, 120) || "CCS Provider";
+}
+
+function tomlString(value) {
+  const text = value.trim();
+  if (text.startsWith('"') && text.endsWith('"')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new ProviderClientError("CCS Codex config contains an unsupported quoted value");
+    }
+  }
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1);
+  return text;
+}
+
+function ccsCodexToml(text) {
+  if (typeof text !== "string" || text.length > MAX_STORE_BYTES) {
+    throw new ProviderClientError("CCS Codex config is missing or unexpectedly large");
+  }
+  let section = "";
+  const top = {};
+  const providers = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const heading = /^\[([^\]]+)\]$/.exec(line);
+    if (heading) {
+      section = heading[1];
+      continue;
+    }
+    const assignment = /^([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/.exec(line);
+    if (!assignment) continue;
+    const [, key, rawValue] = assignment;
+    if (!section && ["model", "model_provider"].includes(key)) {
+      top[key] = tomlString(rawValue);
+      continue;
+    }
+    const provider = /^model_providers\.([A-Za-z0-9_-]+)$/.exec(section);
+    if (provider && ["base_url", "wire_api"].includes(key)) {
+      providers[provider[1]] ||= {};
+      providers[provider[1]][key] = tomlString(rawValue);
+    }
+  }
+  const selected = providers[top.model_provider] || Object.values(providers)[0] || {};
+  return {
+    model: top.model || "",
+    provider: top.model_provider || "",
+    endpoint: selected.base_url || "",
+    wireApi: selected.wire_api || ""
+  };
+}
+
+function importedCcsProfile(row, index) {
+  if (typeof row.settings_config !== "string" || row.settings_config.length > MAX_STORE_BYTES) {
+    throw new ProviderClientError(`CCS Provider '${safeCcsLabel(row.name)}' has invalid settings`);
+  }
+  let settings;
+  try {
+    settings = JSON.parse(row.settings_config);
+  } catch {
+    throw new ProviderClientError(`CCS Provider '${safeCcsLabel(row.name)}' has invalid JSON`);
+  }
+  const label = safeCcsLabel(row.name);
+  if (row.app_type === "claude") {
+    const environment = settings?.env && typeof settings.env === "object"
+      ? settings.env
+      : {};
+    const endpointValue = environment.ANTHROPIC_BASE_URL;
+    const token = environment.ANTHROPIC_AUTH_TOKEN || environment.ANTHROPIC_API_KEY;
+    if (!endpointValue || !token || environment.CLAUDE_CODE_OAUTH_TOKEN ||
+        /official/i.test(label)) {
+      return { skipped: true, reason: "official Identity or no portable API endpoint", label };
+    }
+    const endpoint = validateEndpoint(endpointValue, `CCS Provider '${label}' endpoint`);
+    const model = validateModelId(
+      environment.ANTHROPIC_MODEL || environment.ANTHROPIC_DEFAULT_SONNET_MODEL ||
+      environment.ANTHROPIC_DEFAULT_OPUS_MODEL || environment.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+      `CCS Provider '${label}' model`
+    );
+    let name = ccsSlug(label, `ccs-claude-${index + 1}`);
+    if (endpoint === "https://api.deepseek.com/anthropic") name = "deepseek";
+    if (endpoint === "https://api.minimaxi.com/anthropic") name = "minimax-cn";
+    if (endpoint === "https://api.minimax.io/anthropic") name = "minimax-global";
+    let imported;
+    if (isBuiltinProvider(name)) {
+      imported = builtinProviderProfile(name);
+      imported.targets.claude = { ...(imported.targets.claude || {}), model };
+    } else {
+      const reference = `${name.replaceAll("-", "_")}_claude_key`;
+      imported = {
+        schema: CURRENT_PROVIDER_SCHEMA,
+        name,
+        description: `Imported from CCS: ${label}`,
+        protocol: "anthropic_messages",
+        endpoint,
+        auth: {
+          mode: environment.ANTHROPIC_API_KEY ? "x-api-key" : "bearer",
+          secret: reference
+        },
+        models: { default: model, aliases: {} },
+        compaction: { upstream: "none", policy: "auto" },
+        targets: {
+          codex: { enabled: false },
+          opencode: { enabled: false },
+          pi: { enabled: false }
+        },
+        platforms: {}
+      };
+    }
+    validateProviderStore({ ...newProviderStore(), profiles: { [name]: imported } });
+    const resolved = resolveProviderProfile(imported, {
+      target: "claude",
+      platform: normalizeRuntimePlatform()
+    });
+    return {
+      profile: imported,
+      secret: token,
+      secretReference: resolved.auth.secret,
+      target: "claude",
+      label,
+      endpoint: resolved.endpoint,
+      model: resolved.outbound_model,
+      current: Boolean(row.is_current)
+    };
+  }
+  if (row.app_type === "codex") {
+    const auth = settings?.auth && typeof settings.auth === "object" ? settings.auth : {};
+    const parsed = ccsCodexToml(settings?.config || "");
+    const token = auth.OPENAI_API_KEY;
+    if (!parsed.endpoint || !token || /official/i.test(label) ||
+        auth.auth_mode === "chatgpt") {
+      return { skipped: true, reason: "official Identity or no portable API endpoint", label };
+    }
+    if (parsed.wireApi && parsed.wireApi !== "responses") {
+      return { skipped: true, reason: `unsupported Codex wire API '${parsed.wireApi}'`, label };
+    }
+    const endpoint = validateEndpoint(parsed.endpoint, `CCS Provider '${label}' endpoint`);
+    const model = validateModelId(parsed.model, `CCS Provider '${label}' model`);
+    let name = ccsSlug(label, `ccs-codex-${index + 1}`);
+    if (isBuiltinProvider(name) || name === "minimax") name = `${name}-codex`;
+    const reference = `${name.replaceAll("-", "_")}_codex_key`;
+    const imported = {
+      schema: CURRENT_PROVIDER_SCHEMA,
+      name,
+      description: `Imported from CCS: ${label}`,
+      protocol: "openai_responses",
+      endpoint,
+      auth: { mode: "bearer", secret: reference },
+      models: { default: model, aliases: {} },
+      compaction: { upstream: "none", policy: "auto" },
+      targets: {
+        claude: { enabled: false },
+        opencode: { enabled: false },
+        pi: { enabled: false }
+      },
+      platforms: {}
+    };
+    validateProviderStore({ ...newProviderStore(), profiles: { [name]: imported } });
+    return {
+      profile: imported,
+      secret: token,
+      secretReference: reference,
+      target: "codex",
+      label,
+      endpoint,
+      model,
+      current: Boolean(row.is_current)
+    };
+  }
+  return { skipped: true, reason: "unsupported CCS client", label };
+}
+
+async function migrateCcs(options) {
+  const databasePath = options.database || join(homedir(), ".cc-switch", "cc-switch.db");
+  const details = await pathState(databasePath);
+  if (!details || details.isSymbolicLink() || !details.isFile()) {
+    throw new ProviderClientError(`CCS database must be a regular, non-symlink file: ${databasePath}`);
+  }
+  if (details.size > 1024 * 1024 * 1024) {
+    throw new ProviderClientError("CCS database is unexpectedly large");
+  }
+  const requested = options.target || "all";
+  if (!["claude", "codex", "all"].includes(requested)) {
+    throw new ProviderClientError("CCS migration --target must be claude, codex, or all");
+  }
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    throw new ProviderClientError("CCS migration requires Node.js with node:sqlite support");
+  }
+  let database;
+  let rows;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    rows = database.prepare(
+      "SELECT app_type, name, settings_config, is_current " +
+      "FROM providers WHERE app_type IN ('claude', 'codex') ORDER BY app_type, sort_index, name"
+    ).all();
+  } catch {
+    throw new ProviderClientError("CCS database could not be read as a supported Provider catalog");
+  } finally {
+    database?.close();
+  }
+  const selectedRows = rows.filter((row) => requested === "all" || row.app_type === requested);
+  const imported = [];
+  const skipped = [];
+  for (const [index, row] of selectedRows.entries()) {
+    const item = importedCcsProfile(row, index);
+    if (item.skipped) skipped.push({
+      client: row.app_type,
+      name: item.label,
+      reason: item.reason
+    });
+    else imported.push(item);
+  }
+  const [store, secrets] = await Promise.all([
+    loadProviderStore(options.storePath, { allowMissing: true }),
+    loadProviderSecrets(options.secretsPath, { allowMissing: true })
+  ]);
+  const nextStore = structuredClone(store);
+  const nextSecrets = structuredClone(secrets);
+  for (const item of imported) {
+    const name = item.profile.name;
+    if (nextStore.profiles[name] && !options.force &&
+        JSON.stringify(nextStore.profiles[name]) !== JSON.stringify(item.profile)) {
+      throw new ProviderClientError(
+        `CCS migration conflicts with local profile '${name}'; use --force to replace it`
+      );
+    }
+    const previousSecret = nextSecrets.secrets[item.secretReference]?.value;
+    if (previousSecret && previousSecret !== item.secret && !options.force) {
+      throw new ProviderClientError(
+        `CCS migration conflicts with local Secret '${item.secretReference}'; use --force to replace it`
+      );
+    }
+    nextStore.profiles[name] = item.profile;
+    nextSecrets.secrets[item.secretReference] = {
+      value: item.secret,
+      updated_at: new Date().toISOString()
+    };
+  }
+  validateProviderStore(nextStore);
+  validateProviderSecrets(nextSecrets);
+  const output = {
+    ok: true,
+    preview: !options.yes,
+    source: databasePath,
+    imported: imported.map((item) => ({
+      client: item.target,
+      source_name: item.label,
+      profile: item.profile.name,
+      endpoint: item.endpoint,
+      model: item.model,
+      secret: "present (value hidden)",
+      was_current_in_ccs: item.current
+    })),
+    skipped,
+    secret_values: "hidden"
+  };
+  if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  else {
+    process.stdout.write(`${options.yes ? "[apply]" : "[preview]"} migrate CCS Providers\n`);
+    for (const item of output.imported) {
+      process.stdout.write(
+        `  ${item.client.padEnd(6)} ${item.profile.padEnd(24)} ${item.model}` +
+        `${item.was_current_in_ccs ? "  (CCS current)" : ""}\n`
+      );
+    }
+    for (const item of skipped) {
+      process.stdout.write(`  skip   ${item.client}/${item.name}: ${item.reason}\n`);
+    }
+    process.stdout.write("  Secret values: imported into the owner-only Store and never printed\n");
+    if (!options.yes) process.stdout.write("Re-run with --yes to apply.\n");
+  }
+  if (!options.yes) return output;
+  const snapshots = await snapshotManagedFiles([options.storePath, options.secretsPath]);
+  try {
+    await saveProviderStore(options.storePath, nextStore);
+    await saveProviderSecrets(options.secretsPath, nextSecrets);
+  } catch (error) {
+    try {
+      await restoreManagedFiles(snapshots);
+    } catch (rollback) {
+      throw new ProviderClientError(`${error.message}; CCS migration rollback failed: ${rollback.message}`);
+    }
+    throw error;
+  }
+  return output;
 }
 
 async function secretCommand(positional, options) {
@@ -1091,7 +1961,14 @@ export async function main(argv = process.argv.slice(2)) {
   if (action === "resolve" && positional.length === 1) return resolveProfile(positional[0], options);
   if (action === "plan" && positional.length === 1) return planApplication(positional[0], options);
   if (action === "apply" && positional.length === 1) return applyApplication(positional[0], options);
+  if (action === "use" && positional.length === 1) return useProvider(positional[0], options);
   if (action === "current" && positional.length === 0) return current(options);
+  if (action === "migrate" && positional.length === 1 && positional[0] === "ccs") {
+    return migrateCcs(options);
+  }
+  if (action === "migrate" && positional.length === 1 && positional[0] === "schema") {
+    return migrateSchema(options);
+  }
   if (action === "create" && positional.length === 1) return create(positional[0], options);
   if (action === "target" && positional.length === 2) {
     return mutateTarget(positional[0], positional[1], "", options);

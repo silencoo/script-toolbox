@@ -24,19 +24,13 @@ key is stored separately under `~/.config/opencode/provider-keys/` with mode
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/setup.sh | bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/opencode/mcp.sh | bash
+./agent/install-commands.sh --yes
+agentctl provider list --target opencode
+agentctl provider use google-gemini --target opencode \
+  --secret-file /secure/gemini-api-key --yes
 ```
 
-From a clone, use the shared controller from the repository root:
-
-```bash
-./agent/agentctl/agentctl setup opencode
-./agent/opencode/mcp.sh
-```
-
-The Raw URL above and `agent/opencode/setup.sh` remain supported compatibility
-entrypoints.
+`agent/opencode/setup.sh` is the private renderer used by `provider use`.
 
 No separate `opencode auth login` step is needed for keys configured by this
 script.
@@ -44,39 +38,19 @@ script.
 ## Automation and custom providers
 
 ```bash
-./agent/agentctl/agentctl providers opencode
+agentctl provider list --target opencode
+agentctl provider plan deepseek --target opencode
+agentctl provider use deepseek --target opencode \
+  --model deepseek-v4-pro --secret-file /secure/deepseek-api-key --yes
 
-GEMINI_API_KEY=... \
-  ./agent/agentctl/agentctl setup opencode \
-    --provider google --model gemini-3.6-flash
-
-DEEPSEEK_API_KEY=... \
-  ./agent/agentctl/agentctl setup opencode \
-    --provider deepseek --model deepseek-v4-pro
-
-./agent/agentctl/agentctl setup opencode \
-  --provider custom --protocol chat \
-  --base-url https://gateway.example.com/v1 \
-  --model my-model --key-env MY_API_KEY
-
-./agent/agentctl/agentctl setup opencode \
-  --provider custom --protocol anthropic \
-  --base-url https://gateway.example.com/anthropic/v1 \
-  --model my-model --key custom-secret
-
-./agent/agentctl/agentctl setup opencode \
-  --provider openai --model gpt-5.6 --dry-run
-
-./agent/agentctl/agentctl setup opencode \
-  --provider openai --model gpt-5.6 \
-  --key-file /secure/openai-api-key
+agentctl provider create work-gateway \
+  --protocol openai_chat --base-url https://gateway.example.com/v1 \
+  --model my-model --auth-mode bearer --secret work_gateway_key --yes
+agentctl provider use work-gateway --target opencode \
+  --secret-file /secure/work-gateway-key --skip-validate --yes
 ```
 
-`--region china|global` remains a MiniMax compatibility shortcut. Use
-`--skip-validate` for a custom gateway without a models endpoint. Dry-run does
-not require a key and performs no validation, install, migration, or file
-change. Key files must be non-symlinked, owner-only, and contain one non-empty
-line.
+Secret files must be non-symlinked, owner-only, and contain one non-empty line.
 
 ## MCP and uninstall
 

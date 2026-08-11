@@ -21,49 +21,57 @@ in TOML. The selected model and provider become user-level defaults, so a
 plain `codex` invocation uses them without opening OpenAI's login chooser.
 Any previous top-level model/provider defaults are restored on uninstall.
 
+The official ChatGPT login in `~/.codex/auth.json` is a separate Identity, not
+part of a Provider profile. Setup, Provider apply, rollback, and uninstall do
+not manage or rewrite that file. This allows the current ChatGPT Identity to
+remain available for Codex Remote Control while a Responses-compatible third
+party supplies the actual inference model. `agentctl status codex --json`
+reports these layers separately as `identity` and `inference`.
+
+Multiple official identities can be retained locally with `agentctl account`:
+
+```bash
+# Save the current ChatGPT login.
+./agent/agentctl/agentctl account save primary --yes
+
+# Use Codex's normal login flow for the second account, then save it too.
+./agent/agentctl/agentctl account save secondary --yes
+
+# Switch only the official Identity; inference config.toml is unchanged.
+./agent/agentctl/agentctl account use primary
+./agent/agentctl/agentctl account use primary --yes
+```
+
+The account Store contains the OAuth material required for a real switch, so it
+is device-local, owner-only, and deliberately excluded from Workspace sync.
+Status and the TUI expose labels only, never tokens or account IDs. A switch
+refreshes the outgoing saved snapshot and refuses to overwrite an unsafe,
+unrecognized, or not-yet-saved live login. Start a new Codex session afterward.
+
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/setup.sh | bash
-curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/codex/mcp.sh | bash
+./agent/install-commands.sh --yes
+agentctl provider list --target codex
+agentctl provider use openai-api --target codex \
+  --secret-file /secure/openai-api-key --yes
 ```
 
-From a clone, use the shared controller from the repository root:
-
-```bash
-./agent/agentctl/agentctl setup codex
-./agent/codex/mcp.sh
-```
-
-The Raw URL above and `agent/codex/setup.sh` remain supported compatibility
-entrypoints.
+`agent/codex/setup.sh` is the private renderer used by `provider use`.
 
 ## Automation and custom providers
 
 ```bash
-./agent/agentctl/agentctl providers codex
+agentctl provider list --target codex
+agentctl provider plan openrouter --target codex
+agentctl provider use openrouter --target codex \
+  --model openai/gpt-5.6 --secret-file /secure/openrouter-api-key --yes
 
-OPENAI_API_KEY=sk-... \
-  ./agent/agentctl/agentctl setup codex \
-    --provider openai --model gpt-5.6
-
-OPENROUTER_API_KEY=sk-or-... \
-  ./agent/agentctl/agentctl setup codex \
-    --provider openrouter --model openai/gpt-5.6
-
-./agent/agentctl/agentctl setup codex --provider custom \
-  --base-url https://gateway.example.com/v1 \
-  --models-url https://gateway.example.com/v1/models \
-  --model my-model --key-env MY_API_KEY
-
-# Preview without a key, validation request, install, or file change.
-./agent/agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 --dry-run
-
-# For automation, prefer a mode-0600 single-line file over --key.
-./agent/agentctl/agentctl setup codex \
-  --provider openai --model gpt-5.6 \
-  --key-file /secure/openai-api-key
+agentctl provider create work-gateway \
+  --protocol openai_responses --base-url https://gateway.example.com/v1 \
+  --model my-model --auth-mode bearer --secret work_gateway_key --yes
+agentctl provider use work-gateway --target codex \
+  --secret-file /secure/work-gateway-key --skip-validate --yes
 ```
 
 After setup:

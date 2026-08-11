@@ -75,7 +75,8 @@ uninstallers do not remove Promptctl state. This makes these operations safe to
 run independently:
 
 ```bash
-./agent/agentctl/agentctl setup codex --provider openai --model gpt-5.6
+./agent/agentctl/agentctl provider use openai-api --target codex \
+  --model gpt-5.6 --secret-file /secure/openai-api-key --yes
 ./agent/codex/mcp.sh --provider context7
 ./agent/promptctl/promptctl install codex --yes
 ```

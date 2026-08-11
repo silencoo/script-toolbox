@@ -37,7 +37,7 @@ Usage:
   agentctl preset rollback --target <claude|codex> --yes [--json]
   agentctl preset push --yes [--workspace-config <path>] [--json]
   agentctl preset pull --yes [--workspace-config <path>] [--json]
-  agentctl doctor [claude|codex|all] [--target <target>] [--json]
+  agentctl doctor [claude|codex|all] [--target <target>] [--local] [--json]
 
 Environment:
   AGENTCTL_PRESETS_FILE       Preset catalog path.
@@ -59,6 +59,7 @@ function parseArguments(argv) {
     description: "",
     yes: false,
     json: false,
+    local: false,
     catalog: resolve(process.env.AGENTCTL_PRESETS_FILE ||
       join(homedir(), ".config", "agentctl", "presets.json")),
     state: resolve(process.env.AGENTCTL_PRESET_STATE_FILE ||
@@ -76,6 +77,7 @@ function parseArguments(argv) {
       case "--description": options.description = takeValue(argv, argument); break;
       case "--yes": case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
+      case "--local": options.local = true; break;
       case "--workspace-config": options.workspaceConfig = resolve(takeValue(argv, argument)); break;
       case "--help": case "-h": options.help = true; break;
       default:
@@ -568,11 +570,16 @@ async function runDoctor(positional, options) {
     });
   }
   const secretStatus = safeCheck(tools.mcp, ["secrets", "status"]);
-  const remote = {
-    mcp: safeCheck(tools.mcp, ["remote", "status"]),
-    skills: safeCheck(tools.skills, ["remote", "status"]),
-    prompt: safeCheck(tools.prompt, ["remote", "status"])
-  };
+  const remote = options.local
+    ? Object.fromEntries(["mcp", "skills", "prompt"].map((name) => [
+        name,
+        { ok: false, skipped: true, summary: "deferred by local-first diagnostics" }
+      ]))
+    : {
+        mcp: safeCheck(tools.mcp, ["remote", "status"]),
+        skills: safeCheck(tools.skills, ["remote", "status"]),
+        prompt: safeCheck(tools.prompt, ["remote", "status"])
+      };
   const healthy = reports.every((report) =>
     report.provider.healthy && checkHealthy(report.mcp) && checkHealthy(report.skills) &&
     checkHealthy(report.prompt) &&
@@ -594,7 +601,7 @@ async function runDoctor(positional, options) {
     }
     process.stdout.write(`\nsecrets   ${secretStatus.ok ? "OK" : "WARN"}\n`);
     for (const [name, check] of Object.entries(remote)) {
-      process.stdout.write(`remote/${name.padEnd(6)} ${check.ok ? "OK" : "not configured or unreachable"}\n`);
+      process.stdout.write(`remote/${name.padEnd(6)} ${check.skipped ? "deferred" : check.ok ? "OK" : "not configured or unreachable"}\n`);
     }
   }
   if (!healthy) process.exitCode = 1;

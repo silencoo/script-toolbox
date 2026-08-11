@@ -3,11 +3,6 @@ import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRemoteWorkspace } from "./remote-workspace.mjs";
-import {
-  normalizeRuntimePlatform,
-  resolveProviderProfile
-} from "../../agentctl/provider-schema.mjs";
-import { renderProviderPlan } from "../../agentctl/provider-renderer.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 export const defaultAgentRoot = resolve(
@@ -15,8 +10,18 @@ export const defaultAgentRoot = resolve(
 );
 const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+const WORKSPACE_RETRY_DELAY_MS = 250;
 const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
 const PROMPT_CLIENTS = new Set(["claude", "codex"]);
+
+function transientWorkspaceError(error) {
+  return /could not reach|request timed out|HTTP (?:408|425|429|5\d\d)\b/i
+    .test(String(error?.message || error));
+}
+
+function wait(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
 
 export function sanitizeOutput(value) {
   return String(value || "")
@@ -124,6 +129,20 @@ export function createController({
     skills: join(agentRoot, "skillsctl", "skillsctl"),
     prompts: join(agentRoot, "promptctl", "promptctl")
   };
+  let cachedWorkspace = null;
+  let workspaceLastConnectedAt = "";
+  let workspaceLastError = "";
+  let workspaceFailureCount = 0;
+
+  async function refreshWorkspaceIndex() {
+    try {
+      return await remoteWorkspace.index({ refresh: true });
+    } catch (error) {
+      if (!transientWorkspaceError(error)) throw error;
+      await wait(WORKSPACE_RETRY_DELAY_MS);
+      return remoteWorkspace.index({ refresh: true });
+    }
+  }
 
   function agentctlCommand(args) {
     return process.platform === "win32"
@@ -148,62 +167,14 @@ export function createController({
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
     const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
       runAgentctlJson(["provider", "status", "--json"], "provider status"),
-      runAgentctlJson(["provider", "list", "--json"], "provider list"),
+      runAgentctlJson(["provider", "list", "--target", target, "--json"], "provider list"),
       runAgentctlJson(["failover", "status", "--json"], "failover status"),
       runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
       runAgentctlJson(["proxy", "status", "--json"], "proxy status")
     ]);
     const status = providerStatus.data || {};
-    const missing = new Set(Array.isArray(status.missing_secrets) ? status.missing_secrets : []);
-    const platform = status.platform || normalizeRuntimePlatform();
-    const profiles = (Array.isArray(providerList.data) ? providerList.data : []).map((profile) => {
-      try {
-        const resolved = resolveProviderProfile(profile, { target, platform });
-        const reference = resolved.auth.secret || "";
-        const secretPresent = resolved.auth.mode === "none" || Boolean(
-          providerStatus.ok && status.secrets_exists && reference && !missing.has(reference)
-        );
-        const plan = renderProviderPlan(resolved, { secretPresent, agentRoot });
-        const current = status.current?.[target];
-        const applied = current?.profile === profile.name &&
-          current.platform === plan.platform &&
-          current.protocol === plan.protocol &&
-          current.endpoint === plan.endpoint &&
-          current.requested_model === plan.requested_model &&
-          current.outbound_model === plan.outbound_model;
-        return {
-          name: profile.name,
-          description: profile.description,
-          target,
-          platform,
-          protocol: plan.protocol,
-          endpoint: plan.endpoint,
-          requested_model: plan.requested_model,
-          outbound_model: plan.outbound_model,
-          enabled: plan.enabled,
-          compatible: plan.compatible,
-          ready: plan.ready,
-          issue: plan.issue,
-          auth_mode: plan.auth.mode,
-          secret_reference: plan.auth.secret || "",
-          secret_present: plan.auth.present,
-          applied,
-          source: "local"
-        };
-      } catch (error) {
-        return {
-          name: String(profile?.name || "invalid"),
-          description: String(profile?.description || ""),
-          target,
-          platform,
-          enabled: true,
-          compatible: false,
-          ready: false,
-          issue: sanitizeOutput(error?.message || error),
-          source: "local"
-        };
-      }
-    });
+    const platform = status.platform || process.platform;
+    const profiles = Array.isArray(providerList.data) ? providerList.data : [];
     const errors = [
       ["Provider status", providerStatus],
       ["Provider catalog", providerList],
@@ -212,10 +183,6 @@ export function createController({
       ["Proxy", proxy]
     ].filter(([, result]) => !result.ok && !result.data)
       .map(([label, result]) => `${label}: ${result.error}`);
-    if (status.store_exists === false) {
-      const listError = errors.findIndex((value) => value.startsWith("Provider catalog:"));
-      if (listError >= 0) errors.splice(listError, 1);
-    }
     return {
       schema: 1,
       target,
@@ -229,23 +196,90 @@ export function createController({
     };
   }
 
-  async function snapshot() {
-    const remoteResult = remoteWorkspace.index({ refresh: true })
-      .then((data) => ({ data, connection: data, error: "" }))
-      .catch(async (error) => {
-        let connection = null;
-        if (typeof remoteWorkspace.connection === "function") {
-          connection = await remoteWorkspace.connection().catch(() => null);
-        }
-        return { data: null, connection, error: sanitizeOutput(error?.message || error) };
-      });
-    let [doctorResult, agentsResult, presetsResult, snippetsResult, remote] = await Promise.all([
-      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor"),
-      runAgentctlJson(["status", "all", "--json"], "agentctl status"),
-      runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
-      runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
-      remoteResult
+  async function localSnapshot() {
+    const connectionPromise = typeof remoteWorkspace.connection === "function"
+      ? remoteWorkspace.connection()
+          .then((data) => ({ data, error: "" }))
+          .catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) }))
+      : Promise.resolve({ data: null, error: "remote configuration not found" });
+    const [doctorResult, agentsResult, presetsResult, snippetsResult, accountsResult, connectionResult] =
+      await Promise.all([
+        runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
+        runAgentctlJson(["status", "all", "--json"], "agentctl status"),
+        runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
+        runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
+        runAgentctlJson(["account", "status", "--json"], "Codex account status"),
+        connectionPromise
+      ]);
+    const accounts = accountsResult.data?.kind === "agentctl-codex-account-store"
+      ? accountsResult.data
+      : {
+          schema: 1,
+          kind: "agentctl-codex-account-store",
+          active: { status: "unavailable", official_login: false, saved_as: null },
+          account_count: 0,
+          accounts: []
+        };
+    const accountLabel = typeof accounts.active?.saved_as === "string"
+      ? accounts.active.saved_as
+      : "";
+    const agents = Array.isArray(agentsResult.data)
+      ? agentsResult.data.map((agent) => agent?.client === "codex" && agent.identity && accountLabel
+        ? { ...agent, identity: { ...agent.identity, account: accountLabel } }
+        : agent)
+      : agentsResult.data;
+    const doctor = doctorResult.data ? structuredClone(doctorResult.data) : doctorResult.data;
+    const codexReport = doctor?.targets?.find((report) => report.target === "codex");
+    if (codexReport?.provider?.data?.identity && accountLabel) {
+      codexReport.provider.data.identity.account = accountLabel;
+    }
+    const workspaceConfigured = Boolean(connectionResult.data?.configured);
+    if (!workspaceConfigured) {
+      cachedWorkspace = null;
+      workspaceLastConnectedAt = "";
+      workspaceLastError = "";
+      workspaceFailureCount = 0;
+    }
+    return {
+      updatedAt: new Date().toISOString(),
+      phase: "local",
+      doctor,
+      doctorError: doctorResult.error,
+      agents,
+      agentsError: agentsResult.error,
+      accounts,
+      accountsError: accountsResult.ok ? "" : accountsResult.error,
+      presets: presetsResult.data || {},
+      presetsError: presetsResult.error,
+      presetSource: "local",
+      snippets: normalizeSnippetMetadata(snippetsResult.data),
+      snippetsError: snippetsResult.error,
+      workspace: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
+      workspaceConnection: connectionResult.data,
+      workspaceLoading: workspaceConfigured,
+      workspaceError: workspaceConfigured ? workspaceLastError : connectionResult.error,
+      workspaceStale: Boolean(cachedWorkspace && workspaceLastError),
+      workspaceLastConnectedAt,
+      workspaceFailureCount
+    };
+  }
+
+  async function hydrateSnapshot(local) {
+    const remoteResult = refreshWorkspaceIndex()
+      .then((data) => ({ data, connection: data, error: "", fresh: true }))
+      .catch((error) => ({
+        data: cachedWorkspace ? structuredClone(cachedWorkspace) : null,
+        connection: local.workspaceConnection,
+        error: sanitizeOutput(error?.message || error),
+        fresh: false
+      }));
+    let [remote, doctorResult] = await Promise.all([
+      remoteResult,
+      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor")
     ]);
+    if (!doctorResult.data) {
+      doctorResult = { data: local.doctor, error: local.doctorError };
+    }
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
       try {
         const availability = await remoteWorkspace.runtimeAvailability();
@@ -272,22 +306,43 @@ export function createController({
         // Local diagnostics remain useful if no selective runtime exists yet.
       }
     }
+    const activeAccount = local.accounts?.active?.saved_as;
+    const hydratedCodex = doctorResult.data?.targets?.find((report) => report.target === "codex");
+    if (hydratedCodex?.provider?.data?.identity && activeAccount) {
+      hydratedCodex.provider.data.identity.account = activeAccount;
+    }
+    if (remote.fresh) {
+      cachedWorkspace = structuredClone(remote.data);
+      workspaceLastConnectedAt = new Date().toISOString();
+      workspaceLastError = "";
+      workspaceFailureCount = 0;
+    } else {
+      workspaceLastError = remote.error;
+      workspaceFailureCount += 1;
+    }
     const cloudPresets = remote.data?.presets;
     return {
+      ...local,
       updatedAt: new Date().toISOString(),
+      phase: "workspace",
       doctor: doctorResult.data,
       doctorError: doctorResult.error,
-      agents: agentsResult.data,
-      agentsError: agentsResult.error,
-      presets: cloudPresets || presetsResult.data || {},
-      presetsError: cloudPresets ? "" : presetsResult.error,
+      presets: cloudPresets || local.presets || {},
+      presetsError: cloudPresets ? "" : local.presetsError,
       presetSource: cloudPresets ? "cloud" : "local",
-      snippets: normalizeSnippetMetadata(snippetsResult.data),
-      snippetsError: snippetsResult.error,
       workspace: remote.data,
       workspaceConnection: remote.connection,
-      workspaceError: remote.error
+      workspaceLoading: false,
+      workspaceError: remote.error,
+      workspaceStale: Boolean(remote.data && !remote.fresh),
+      workspaceLastConnectedAt,
+      workspaceFailureCount
     };
+  }
+
+  async function snapshot() {
+    const local = await localSnapshot();
+    return hydrateSnapshot(local);
   }
 
   async function remoteCatalog(type, target, options = {}) {
@@ -353,13 +408,18 @@ export function createController({
   function providerPlanDetail(plan, source) {
     const entries = Array.isArray(plan?.plans) ? plan.plans : [];
     const selected = entries[0] || {};
+    const sourceLabel = source === "cloud" ? "Workspace" : source === "builtin" ? "Built-in" : "Local";
     return [
-      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} · ${source === "cloud" ? "Workspace" : "Local"}`,
+      `${plan?.profile || selected.profile || "Provider"} for ${selected.target_label || selected.target || "target"} · ${sourceLabel}`,
       `State: ${selected.enabled === false ? "disabled" : selected.ready ? "ready" : "blocked"}`,
       `Protocol: ${selected.protocol || "unknown"}`,
       `Endpoint: ${selected.endpoint || "unknown"}`,
       `Model: ${selected.requested_model || "unknown"} -> ${selected.outbound_model || "unknown"}`,
+      `Context: ${selected.context?.label || "Client default"}`,
       `Secret: ${selected.auth?.secret || "none"} (${selected.auth?.present ? "ready" : "missing"})`,
+      ...(selected.official_identity
+        ? ["Official Identity: preserve current ChatGPT login; Provider does not manage auth.json"]
+        : []),
       ...(selected.issue ? [`Blocked by: ${selected.issue}`] : []),
       "No client file was changed."
     ].join("\n");
@@ -368,12 +428,14 @@ export function createController({
   async function providerAction(actionName, profile, target, source) {
     if (!profile) throw new Error("No Provider profile is selected.");
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
-    if (!["local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
-    const operation = actionName === "provider-apply" ? "apply" : "plan";
+    if (!["builtin", "local", "cloud"].includes(source)) throw new Error(`unsupported Provider source: ${source}`);
+    const operation = actionName === "provider-apply"
+      ? source === "cloud" ? "apply" : "use"
+      : "plan";
     const execute = async (paths = null) => {
       const args = ["provider", operation, profile, "--target", target, "--json"];
       if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
-      if (operation === "apply") args.push("--yes");
+      if (["apply", "use"].includes(operation)) args.push("--yes");
       return runAgentctlJson(args, `provider ${operation}`);
     };
     const result = source === "cloud"
@@ -385,24 +447,25 @@ export function createController({
     return {
       ok: result.ok,
       data: result.data,
-      detail: operation === "apply" && result.ok
-        ? `${profile} applied from ${source === "cloud" ? "Workspace" : "local catalog"} to ${target}; start a new agent session`
+      detail: ["apply", "use"].includes(operation) && result.ok
+        ? `${profile} applied from ${source === "cloud" ? "Workspace" : source === "builtin" ? "the built-in catalog" : "the local catalog"} to ${target}; start a new agent session`
         : detail
     };
   }
 
-  async function providerSync(actionName) {
+  async function providerSync(actionName, profile) {
+    if (!profile) throw new Error("No Provider profile is selected.");
     const direction = actionName === "provider-sync-push" ? "push" : "pull";
     const result = await runAgentctlJson(
-      ["workspace", "agent", direction, "--yes", "--json"],
+      ["workspace", "agent", direction, "--profile", profile, "--yes", "--json"],
       `Workspace agent ${direction}`
     );
-    const bundle = result.data?.bundle || {};
+    const secretCount = result.data?.secrets_copied || 0;
     return {
       ok: result.ok,
       data: result.data,
       detail: result.ok
-        ? `${direction === "push" ? "Backed up" : "Merged"} ${bundle.profiles || 0} profile(s), ${bundle.secrets || 0} hidden Secret value(s), ${bundle.failover_routes || 0} failover route(s), and ${bundle.pricing_rates || 0} pricing rate(s).`
+        ? `${direction === "push" ? "Used the local" : "Used the Workspace"} '${profile}' profile ${direction === "push" ? "in encrypted Workspace" : "in the local catalog"}; ${secretCount} referenced Secret value(s) copied without being printed. Every other profile and catalog was preserved.`
         : result.error || `Workspace agent ${direction} failed.`
     };
   }
@@ -487,13 +550,28 @@ export function createController({
       return providerAction(actionName, selection, target, source);
     }
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
-      return providerSync(actionName);
+      return providerSync(actionName, selection);
     }
-    if (actionName === "agent-providers" || actionName === "agent-uninstall") {
+    if (actionName === "account-use" || actionName === "account-delete") {
+      if (!selection) throw new Error("No Codex account is selected.");
+      const operation = actionName === "account-use" ? "use" : "delete";
+      const result = await runAgentctlJson(
+        ["account", operation, selection, "--yes", "--json"],
+        `Codex account ${operation}`
+      );
+      return {
+        ok: result.ok,
+        data: result.data,
+        detail: result.ok
+          ? operation === "use"
+            ? `${selection} is now the active Codex official account; inference Provider is unchanged; start a new Codex session`
+            : `${selection} was removed from the saved account Store; live auth is unchanged`
+          : result.error || `Codex account ${operation} failed.`
+      };
+    }
+    if (actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-      const args = actionName === "agent-providers"
-        ? ["providers", agent]
-        : ["uninstall", agent, "--yes"];
+      const args = ["uninstall", agent, "--yes"];
       const command = agentctlCommand(args);
       const result = await run(command.executable, command.args);
       return {
@@ -549,15 +627,11 @@ export function createController({
     };
   }
 
-  function interactiveCommand(agent) {
-    if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-    return agentctlCommand(["setup", agent]);
-  }
-
   return {
     snapshot,
+    localSnapshot,
+    hydrateSnapshot,
     action,
-    interactiveCommand,
     promptPreview,
     providerDashboard,
     remoteCatalog

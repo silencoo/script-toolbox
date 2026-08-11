@@ -106,6 +106,50 @@ for menu_function in \
 done
 pass "all nine English section menus are safe for non-UTF-8 terminals"
 
+english_operation_message="$(ui_log_info \
+    "English operational message" \
+    "中文运行消息")"
+assert_contains "$english_operation_message" "English operational message" \
+    "operational logs follow the English UI language"
+non_ascii_operation_bytes="$(printf '%s' "$english_operation_message" | LC_ALL=C tr -d '\000-\177')"
+[ -z "$non_ascii_operation_bytes" ] || \
+    fail "English operational logs should contain ASCII bytes only"
+pass "English operational logs are safe for non-UTF-8 terminals"
+
+original_dry_run="$DRY_RUN"
+quick_init_output="$({
+    TOOLKIT_EFFECTIVE_LANG="en"
+    DRY_RUN=1
+    task_init_no_mirror
+} 2>&1)"
+DRY_RUN="$original_dry_run"
+assert_contains "$quick_init_output" \
+    "Starting the initialization workflow (keeping current apt sources)" \
+    "standard quick initialization starts in English"
+assert_contains "$quick_init_output" \
+    "select and validate the SSH key account" \
+    "standard quick initialization keeps submodule status messages in English"
+non_ascii_quick_init_bytes="$(printf '%s' "$quick_init_output" | LC_ALL=C tr -d '\000-\177')"
+[ -z "$non_ascii_quick_init_bytes" ] || \
+    fail "English standard quick initialization should contain ASCII bytes only"
+pass "English standard quick initialization dry run is safe for non-UTF-8 terminals"
+
+quick_prompt_functions="$(
+    declare -f action_configure_ssh_transactional
+    declare -f action_configure_firewall
+)"
+assert_contains "$quick_prompt_functions" \
+    'New SSH port [current:' \
+    "standard quick initialization defines an English SSH-port prompt"
+assert_contains "$quick_prompt_functions" \
+    'Paste an SSH public key to append' \
+    "standard quick initialization defines an English public-key prompt"
+assert_contains "$quick_prompt_functions" \
+    'Allow HTTP (80) and HTTPS (443) ports?' \
+    "standard quick initialization defines an English firewall prompt"
+assert_not_contains "$quick_prompt_functions" 'read -r -p' \
+    "standard quick initialization routes prompts through ui_read"
+
 timezone_name_is_valid "Etc/UTC" || fail "Etc/UTC should be a valid timezone"
 pass "valid IANA timezone is accepted"
 if timezone_name_is_valid "../etc/passwd"; then
@@ -342,7 +386,11 @@ for preset in $(profile_presets); do
 
     plan_output="$(PLAN_ONLY=1 INIT_PROFILE="$preset" "$TOOLKIT")"
     assert_contains "$plan_output" "$preset" "$preset plan renders safely"
+    plan_non_ascii_bytes="$(printf '%s' "$plan_output" | LC_ALL=C tr -d '\000-\177')"
+    [ -z "$plan_non_ascii_bytes" ] || \
+        fail "$preset plan should contain ASCII bytes only in English mode"
 done
+pass "all built-in profile plans contain no untranslated non-ASCII text"
 
 quick_init_no_mirror="$(declare -f task_init_no_mirror)"
 quick_init_with_mirror="$(declare -f task_init_with_mirror)"
@@ -373,15 +421,15 @@ fi
 pass "unknown sysctl preset is rejected"
 
 assert_contains "$(network_family_status '192.0.2.10/24' 'default via 192.0.2.1' '1.1.1.1 via 192.0.2.1' '203.0.113.8')" \
-    "正常" "network status accepts a working public egress"
+    "healthy" "network status accepts a working public egress"
 assert_contains "$(network_family_status '' '' '' '')" \
-    "未配置" "network status distinguishes an unconfigured address family"
+    "not configured" "network status distinguishes an unconfigured address family"
 assert_contains "$(network_family_status '2001:db8::10/64' '' '' '')" \
-    "缺少默认路由" "network status detects a missing default route"
+    "default route missing" "network status detects a missing default route"
 assert_contains "$(network_family_status '2001:db8::10/64' 'default via fe80::1' 'RTNETLINK answers: Network is unreachable' '')" \
-    "无法选路" "network status detects an unusable route"
+    "route selection failed" "network status detects an unusable route"
 assert_contains "$(network_family_status '2001:db8::10/64' 'default via fe80::1' '2606:4700:4700::1111 via fe80::1' '')" \
-    "出口失败" "network status detects a broken routed egress"
+    "public egress failed" "network status detects a broken routed egress"
 main_action="$(declare -f main)"
 assert_contains "$main_action" "NETWORK_DIAGNOSTIC_ONLY=1" \
     "main exposes direct network diagnostic mode"
@@ -397,13 +445,13 @@ assert_contains "$direct_network_output" "direct-network-ok" \
 assert_not_contains "$direct_network_output" "unexpected-root-check" \
     "direct network diagnostic does not require root"
 
-assert_contains "$(overview_ssh_auth_summary yes no no)" "仅公钥认证" \
+assert_contains "$(overview_ssh_auth_summary yes no no)" "Public-key authentication only" \
     "system overview identifies public-key-only SSH"
-assert_contains "$(overview_ssh_auth_summary yes yes no)" "均允许" \
+assert_contains "$(overview_ssh_auth_summary yes yes no)" "both allowed" \
     "system overview identifies mixed SSH authentication"
-assert_contains "$(overview_ssh_auth_summary no yes no)" "仅密码" \
+assert_contains "$(overview_ssh_auth_summary no yes no)" "Password/interactive authentication only" \
     "system overview identifies password-only SSH"
-assert_contains "$(overview_ssh_auth_summary N/A N/A N/A)" "无法完整读取" \
+assert_contains "$(overview_ssh_auth_summary N/A N/A N/A)" "Unable to read the complete" \
     "system overview does not misclassify unreadable SSH settings"
 
 test_os_release="$TEST_TMP/os-release"
@@ -417,18 +465,18 @@ pass "system overview parses quoted PRETTY_NAME values containing equals signs"
 pass "system overview PRETTY_NAME parser emits no AWK escape warning"
 
 missing_service_text="$(overview_service_status_text not-found inactive not-found)"
-assert_contains "$missing_service_text" "未安装" \
+assert_contains "$missing_service_text" "not installed" \
     "system overview identifies a missing systemd unit as not installed"
 assert_not_contains "$missing_service_text" "inactive" \
     "missing systemd unit is not mislabeled inactive"
 assert_contains "$(overview_service_status_text loaded active enabled)" \
-    "运行中，开机启动已启用" \
+    "running, enabled at boot" \
     "system overview describes a running enabled service"
 assert_contains "$(overview_service_status_text loaded inactive disabled)" \
-    "已停止，开机启动未启用" \
+    "stopped, not enabled at boot" \
     "system overview distinguishes an installed stopped service"
 assert_contains "$(overview_service_status_text loaded failed enabled)" \
-    "启动失败" \
+    "failed" \
     "system overview exposes a failed service distinctly"
 
 overview_action="$(declare -f action_system_overview)"
@@ -483,11 +531,11 @@ broken_ipv6_diagnostic="$(
     log() { :; }
     check_network 2>&1
 )"
-assert_contains "$broken_ipv6_diagnostic" "路由存在但出口失败" \
+assert_contains "$broken_ipv6_diagnostic" "route present but public egress failed" \
     "dual-stack diagnostic identifies a broken IPv6 egress"
-assert_contains "$broken_ipv6_diagnostic" "DNS 返回 AAAA" \
+assert_contains "$broken_ipv6_diagnostic" "DNS returned AAAA" \
     "dual-stack diagnostic warns about AAAA with broken IPv6"
-assert_contains "$broken_ipv6_diagnostic" "IPv6 DNS 解析器" \
+assert_contains "$broken_ipv6_diagnostic" "IPv6 DNS resolver" \
     "dual-stack diagnostic warns about an IPv6 resolver on broken egress"
 
 if validate_profile_modules "essentials dd_reinstall" > /dev/null 2>&1; then
@@ -529,5 +577,44 @@ fi
 [ "$(cat "$safe_target")" = "known-good" ] || \
     fail "failed validation should preserve the original file"
 pass "failed atomic validation preserves the original file"
+
+extended_english_ui_output="$({
+    set +e
+    TOOLKIT_EFFECTIVE_LANG="en"
+    clear() { :; }
+    menu_pause() { :; }
+    curl() { :; }
+    docker() { :; }
+
+    for ui_function in \
+        action_install_runtime submenu_docker_manager submenu_app_market \
+        action_setup_cd2 action_toolbox action_backup_restore \
+        action_monitoring_alerts action_reverse_proxy_cert action_security_audit \
+        action_docker_compose_backup action_script_quality \
+        action_profile_plan_apply action_ops_enhancements task_custom_init \
+        action_run_test_scripts; do
+        "$ui_function" <<< "0" || true
+    done
+    show_recommended_modules
+    action_external_trust_inventory
+    show_nvm_usage
+    show_pyenv_usage
+    show_go_usage
+    show_php_usage "8.2"
+    show_java_usage
+    show_dotnet_usage
+    DRY_RUN=1 task_custom_init <<< $'1\ny\nn\n' || true
+    for profile_name in $(profile_presets); do
+        show_profile_plan "$profile_name" "$(profile_modules_for_preset "$profile_name")"
+    done
+    for trust_level in official service mirror remote-script unknown; do
+        external_trust_advice "$trust_level"
+        printf '\n'
+    done
+} 2>&1)"
+extended_non_ascii_bytes="$(printf '%s' "$extended_english_ui_output" | LC_ALL=C tr -d '\000-\177')"
+[ -z "$extended_non_ascii_bytes" ] || \
+    fail "extended English UI surfaces should contain ASCII bytes only"
+pass "extended English UI surfaces contain no untranslated non-ASCII text"
 
 printf '1..%d\n' "$TEST_COUNT"

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   PROVIDER_TARGETS,
+  effectiveProviderCompaction,
   normalizeRuntimePlatform,
   validatePlatform,
   validateProtocol,
@@ -57,8 +58,23 @@ function loopbackEndpoint(value) {
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
 }
 
+function officialOpenAiEndpoint(value) {
+  const endpoint = new URL(value);
+  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" &&
+    endpoint.port === "" && endpoint.pathname.replace(/\/$/, "") === "/v1" &&
+    endpoint.search === "";
+}
+
 function compatibilityIssue(resolved) {
   const { target, protocol, auth } = resolved;
+  const context = resolved.context || {
+    window_tokens: null,
+    auto_compact_tokens: null
+  };
+  if (target !== "claude" &&
+      (context.window_tokens !== null || context.auto_compact_tokens !== null)) {
+    return `${TARGET_LABELS[target]} does not yet support managed context policy`;
+  }
   if (target === "claude") {
     if (protocol !== "anthropic_messages") {
       return "Claude Code direct mode requires anthropic_messages";
@@ -76,14 +92,17 @@ function compatibilityIssue(resolved) {
     }
   }
   if (target === "opencode") {
-    if (!["anthropic_messages", "openai_responses", "openai_chat"].includes(protocol)) {
-      return "OpenCode custom providers support Anthropic Messages, OpenAI Responses, or OpenAI Chat";
+    if (!["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(protocol)) {
+      return "OpenCode custom providers support Anthropic Messages, OpenAI Responses, OpenAI Chat, or Google Generative AI";
     }
     if (protocol === "anthropic_messages" && auth.mode !== "x-api-key") {
       return "OpenCode Anthropic direct mode requires x-api-key authentication";
     }
     if (["openai_responses", "openai_chat"].includes(protocol) && auth.mode !== "bearer") {
       return "OpenCode OpenAI direct mode requires bearer authentication";
+    }
+    if (protocol === "google_generative" && auth.mode !== "x-goog-api-key") {
+      return "OpenCode Google direct mode requires x-goog-api-key authentication";
     }
   }
   if (target === "pi") {
@@ -120,7 +139,10 @@ export function targetPaths(target, { home = homedir() } = {}) {
     return {
       root,
       config_files: [join(root, "settings.json")],
-      state_files: [join(root, ".script-toolbox-provider")],
+      state_files: [
+        join(root, ".script-toolbox-provider"),
+        join(root, ".script-toolbox-provider-context.json")
+      ],
       key_dir: "",
       key_file: ""
     };
@@ -166,6 +188,31 @@ function backendPath(target, agentRoot) {
   return join(agentRoot, directory, file);
 }
 
+function tokenLabel(value) {
+  return value === null ? "auto" : new Intl.NumberFormat("en-US").format(value);
+}
+
+function renderContextPolicy(resolved) {
+  const context = structuredClone(resolved.context || {
+    window_tokens: null,
+    auto_compact_tokens: null
+  });
+  let label = "Client default";
+  if (context.window_tokens !== null && context.auto_compact_tokens !== null) {
+    label = `${tokenLabel(context.window_tokens)} max · compact at ${tokenLabel(context.auto_compact_tokens)}`;
+  } else if (context.window_tokens !== null) {
+    label = `${tokenLabel(context.window_tokens)} max · client auto-compact`;
+  } else if (context.auto_compact_tokens !== null) {
+    label = `Model default · compact at ${tokenLabel(context.auto_compact_tokens)}`;
+  }
+  return {
+    ...context,
+    label,
+    managed: resolved.target === "claude" &&
+      (context.window_tokens !== null || context.auto_compact_tokens !== null)
+  };
+}
+
 export function renderProviderPlan(resolved, {
   secretPresent = false,
   home = homedir(),
@@ -174,10 +221,17 @@ export function renderProviderPlan(resolved, {
   validateTarget(resolved.target);
   validatePlatform(resolved.platform);
   const paths = targetPaths(resolved.target, { home });
-  const issue = resolved.enabled ? compatibilityIssue(resolved) : "";
+  const directIssue = resolved.enabled ? compatibilityIssue(resolved) : "";
+  const compaction = effectiveProviderCompaction(resolved);
+  const context = renderContextPolicy(resolved);
+  const issue = resolved.enabled ? directIssue || compaction.issue : "";
   const needsSecret = resolved.auth.mode !== "none";
   const secretReady = !needsSecret || secretPresent;
   const compatible = !issue;
+  const providerName = resolved.target === "codex" &&
+      compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint)
+    ? "OpenAI"
+    : resolved.profile;
   return {
     schema: 1,
     profile: resolved.profile,
@@ -193,14 +247,25 @@ export function renderProviderPlan(resolved, {
       : ""),
     protocol: resolved.protocol,
     endpoint: resolved.endpoint,
+    provider_name: providerName,
     requested_model: resolved.requested_model,
     outbound_model: resolved.outbound_model,
+    compaction,
+    context,
     auth: {
       mode: resolved.auth.mode,
       secret: resolved.auth.secret || null,
       present: secretReady,
       synthetic: resolved.auth.mode === "none"
     },
+    official_identity: resolved.target === "codex"
+      ? {
+          policy: "preserve",
+          account: "current",
+          config_file: join(paths.root, "auth.json"),
+          managed: false
+        }
+      : null,
     backend: backendPath(resolved.target, agentRoot),
     config_files: paths.config_files,
     ownership_files: paths.state_files,
@@ -211,8 +276,10 @@ export function renderProviderPlan(resolved, {
 
 export function backendArguments(plan, {
   keyFile,
+  modelsUrl = "",
   skipValidate = false,
-  force = false
+  force = false,
+  forceContext = false
 } = {}) {
   if (!plan.enabled) throw new ProviderRendererError(`${plan.target} is disabled by the profile`);
   if (!plan.compatible) throw new ProviderRendererError(plan.issue);
@@ -224,21 +291,29 @@ export function backendArguments(plan, {
     "--key-file", keyFile
   ];
   if (plan.target !== "claude") {
-    args.push("--provider-name", plan.profile);
+    args.push("--provider-name", plan.provider_name);
   }
   if (["opencode", "pi"].includes(plan.target)) {
     args.push("--protocol", protocolArgument(plan.protocol));
   }
   if (plan.target === "claude") {
     args.push("--auth-mode", plan.auth.mode === "x-api-key" ? "api-key" : "auth-token");
+    args.push(
+      "--context-window-tokens",
+      plan.context.window_tokens === null ? "auto" : String(plan.context.window_tokens),
+      "--auto-compact-tokens",
+      plan.context.auto_compact_tokens === null ? "auto" : String(plan.context.auto_compact_tokens)
+    );
     args.push("--no-statusline");
   }
   if (plan.target === "pi") {
     const mode = plan.auth.mode === "none" ? "bearer" : authArgument(plan.auth.mode);
     args.push("--auth-mode", mode);
   }
+  if (modelsUrl) args.push("--models-url", modelsUrl);
   if (skipValidate) args.push("--skip-validate");
   if (force) args.push("--force");
+  if (plan.target === "claude" && forceContext) args.push("--force-context");
   return args;
 }
 

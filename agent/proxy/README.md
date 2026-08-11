@@ -18,13 +18,21 @@ The proxy is native pass-through only:
 | Store protocol | Local API route |
 | --- | --- |
 | `anthropic_messages` | `/v1/messages` |
-| `openai_responses` | `/v1/responses` |
+| `openai_responses` | `/v1/responses`; `/v1/responses/compact` only for a fully native-capable route |
 | `openai_chat` | `/v1/chat/completions` |
 | `google_generative` | `/v1beta/models/:model:generateContent` and streaming variant |
 
 The selected target must already support that native protocol. Upstream
 authentication belongs to each resolved Provider backend and can differ among
 backends. Protocol conversion and automatic target attachment are absent.
+
+Provider Store schema 2 declares compaction separately from protocol. The
+proxy's generated schema 4 config opens the compact route only when every
+selected backend resolves to `responses_v1` or `responses_v2` under an
+`auto`/`remote` policy for Codex. A mixed or unverified failover route stays on
+client-local compaction. Anthropic `anthropic-beta` and `context_management`
+data pass through `/v1/messages` unchanged; the daemon never translates them
+into an OpenAI request.
 
 ## Ordered failover
 

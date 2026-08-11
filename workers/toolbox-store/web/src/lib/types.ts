@@ -159,21 +159,35 @@ export type ProviderProtocol =
   | "google_generative"
 
 export type ProviderAuthMode = "bearer" | "x-api-key" | "x-goog-api-key" | "none"
+export type ProviderCompactionUpstream =
+  | "responses_v2"
+  | "responses_v1"
+  | "anthropic_messages_beta"
+  | "none"
+export type ProviderCompactionPolicy = "auto" | "remote" | "local"
 
 export interface ProviderProfile {
-  schema: 1
+  schema: 2
   name: string
   description: string
   protocol: ProviderProtocol
   endpoint: string
   auth: { mode: ProviderAuthMode; secret?: string }
   models: { default: string; aliases: Record<string, string> }
+  compaction: {
+    upstream: ProviderCompactionUpstream
+    policy: ProviderCompactionPolicy
+  }
+  context: {
+    window_tokens: number | null
+    auto_compact_tokens: number | null
+  }
   targets: Record<string, unknown>
   platforms: Record<string, unknown>
 }
 
 export interface ProviderStore {
-  schema: 1
+  schema: 2
   kind: "agentctl-provider-store"
   created_at: string
   updated_at: string
