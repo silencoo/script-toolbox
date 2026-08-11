@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // Compatibility-only deployment target for installations created before
+  // toolbox-store became the product-neutral default.
   "name": "mcp-store",
   "main": "worker.js",
   "compatibility_date": "2026-07-31",

@@ -18,12 +18,12 @@ import {
   setRemoteWebUiEnabled,
   uploadRemoteSnapshot
 } from "./remote-store.mjs";
-import worker from "../workers/mcp-store/worker.js";
-import { MemoryR2Bucket } from "../workers/mcp-store/test-memory-r2.mjs";
+import worker from "../workers/toolbox-store/worker.js";
+import { MemoryR2Bucket } from "../workers/toolbox-store/test-memory-r2.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "remote-store-test-"));
 const environment = {
-  MCP_STORE: new MemoryR2Bucket(),
+  TOOLBOX_STORE: new MemoryR2Bucket(),
   CREATE_TOKEN: "shared-create-token".padEnd(48, "C"),
   MAX_BLOB_BYTES: "5242880"
 };

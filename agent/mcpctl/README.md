@@ -251,14 +251,14 @@ behavior settings and is not treated as the user MCP registry.
 
 The optional remote mode does not use Git, Gist, or a GitHub login. A small
 Cloudflare Worker stores opaque, versioned ciphertext in a private R2 bucket.
-See the [Worker deployment guide](../../workers/mcp-store/README.md) to deploy
+See the [Worker deployment guide](../../workers/toolbox-store/README.md) to deploy
 the service and temporarily configure its `CREATE_TOKEN` bootstrap secret.
 
 Create the personal remote store and upload the first snapshot:
 
 ```bash
 mcpctl remote init \
-  --endpoint https://mcp-store.example.workers.dev
+  --endpoint https://toolbox-store.example.workers.dev
 ```
 
 `remote init` prompts without echo for the deployment's store-creation token,
@@ -268,7 +268,7 @@ bootstrap token in a mode-`0600` file and use:
 
 ```bash
 mcpctl remote init \
-  --endpoint https://mcp-store.example.workers.dev \
+  --endpoint https://toolbox-store.example.workers.dev \
   --create-token-file /secure/path/create-token
 ```
 

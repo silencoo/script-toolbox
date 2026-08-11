@@ -1,7 +1,7 @@
 # Toolbox Store Worker
 
-This directory retains the deployed `mcp-store` name and R2 binding for a
-no-migration upgrade, but the product-neutral service now backs:
+The product-neutral default deployment is named `toolbox-store` and uses the
+`TOOLBOX_STORE` R2 binding. It backs:
 
 - `mcpctl` catalogs, inherited profiles, and encrypted secret state; and
 - `skillsctl` skill directories, inherited packs, and target overrides;
@@ -132,10 +132,15 @@ A first upload sends a base version of `none`; later uploads send the current
 version. A stale upload receives `409 version_conflict`, preventing one tab or
 machine from silently replacing a newer backup.
 
+Existing installations created under the old `mcp-store` Worker and bucket
+remain supported through `wrangler.mcp-store.jsonc`; this compatibility target
+updates the original deployment without moving or duplicating its encrypted
+objects.
+
 ## Local development
 
 ```bash
-cd workers/mcp-store
+cd workers/toolbox-store
 cp .dev.vars.example .dev.vars
 npm ci
 npm run dev
@@ -148,40 +153,52 @@ API operations still require the full `npm run dev` Worker session.
 
 ## Deploy or upgrade
 
-The existing names in `wrangler.jsonc` intentionally remain `mcp-store` so an
-upgrade reuses the current Worker and bucket:
+For a new installation, use the product-neutral defaults:
 
 ```bash
-cd workers/mcp-store
+cd workers/toolbox-store
 npm ci
 npm run validate
-npm run deploy
-```
-
-For a first deployment only:
-
-```bash
-npx wrangler r2 bucket create mcp-store
+npx wrangler r2 bucket create toolbox-store
 npx wrangler secret put CREATE_TOKEN
 npm run deploy
+cd ../..
 ```
 
-Initialize independent logical stores with the same endpoint and bootstrap
-secret:
+This creates the `toolbox-store` Worker, the `toolbox-store` R2 bucket, and the
+`TOOLBOX_STORE` binding. Initialize every logical Store against its shared
+endpoint:
 
 ```bash
 ./agent/mcpctl/mcpctl remote init \
-  --endpoint https://mcp-store.<account-subdomain>.workers.dev
+  --endpoint https://toolbox-store.<account-subdomain>.workers.dev
 
 ./agent/skillsctl/skillsctl remote init \
-  --endpoint https://mcp-store.<account-subdomain>.workers.dev
+  --endpoint https://toolbox-store.<account-subdomain>.workers.dev
 
 ./agent/promptctl/promptctl remote init \
-  --endpoint https://mcp-store.<account-subdomain>.workers.dev
+  --endpoint https://toolbox-store.<account-subdomain>.workers.dev
 
 ./agent/agentctl/agentctl workspace init \
-  --endpoint https://mcp-store.<account-subdomain>.workers.dev
+  --endpoint https://toolbox-store.<account-subdomain>.workers.dev
 ```
+
+If the deployment already uses the historical `mcp-store` Worker and bucket,
+upgrade that deployment explicitly instead:
+
+```bash
+npm run validate
+npm run deploy:mcp-store
+```
+
+That command uses `wrangler.mcp-store.jsonc`, including the original
+`MCP_STORE` binding and bucket. Existing recovery codes and endpoint
+capabilities continue to work. Do not run the default deploy command expecting
+it to rename or migrate an old deployment: Cloudflare treats the new Worker and
+R2 bucket names as separate resources. The Worker runtime accepts both binding
+names so the default and compatibility targets run the same code. Pass
+`--config wrangler.mcp-store.jsonc` to direct any manual Wrangler secret command
+at the historical deployment.
 
 Each command prints its own recovery code and uploads an initial snapshot.
 Attach all child Stores to make the master code the normal login:
@@ -207,8 +224,8 @@ Confirm all backups before disabling new-Store creation:
 npx wrangler secret delete CREATE_TOKEN
 ```
 
-Changing the Worker or bucket names creates a separate deployment/data store;
-do so only when that separation is intentional. Keep the R2 bucket private.
+Keep the R2 bucket private. Neither deployment target sends snapshot
+decryption keys or recovery roots to Cloudflare.
 
 ## Verify
 

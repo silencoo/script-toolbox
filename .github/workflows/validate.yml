@@ -79,10 +79,10 @@ jobs:
         working-directory: workers/cloudflare-vless
       - name: Install Toolbox Store tooling
         run: npm ci
-        working-directory: workers/mcp-store
+        working-directory: workers/toolbox-store
       - name: Validate Toolbox Store Worker and Web UI
         run: npm run validate
-        working-directory: workers/mcp-store
+        working-directory: workers/toolbox-store
 
   validate-windows:
     runs-on: windows-latest

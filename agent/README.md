@@ -233,7 +233,7 @@ pack. For personal profiles and encrypted restoration, initialize a separate
 ./mcpctl/mcpctl server doctor --all
 ./mcpctl/mcpctl server install gdb
 ./mcpctl/mcpctl server enable gdb --target codex
-./mcpctl/mcpctl remote init --endpoint https://mcp-store.example.workers.dev
+./mcpctl/mcpctl remote init --endpoint https://toolbox-store.example.workers.dev
 ./mcpctl/mcpctl backup
 ```
 

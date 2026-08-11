@@ -27,8 +27,8 @@ import {
   restoreStore,
   SNAPSHOT_INFO
 } from "./remote-client.mjs";
-import worker from "../../workers/mcp-store/worker.js";
-import { MemoryR2Bucket } from "../../workers/mcp-store/test-memory-r2.mjs";
+import worker from "../../workers/toolbox-store/worker.js";
+import { MemoryR2Bucket } from "../../workers/toolbox-store/test-memory-r2.mjs";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TEST_DIR, "../..");
@@ -70,7 +70,7 @@ async function run(command, arguments_, options = {}) {
 
 function installWorkerFetch() {
   const env = {
-    MCP_STORE: new MemoryR2Bucket(),
+    TOOLBOX_STORE: new MemoryR2Bucket(),
     MAX_BLOB_BYTES: "5242880",
     CREATE_TOKEN
   };
@@ -280,7 +280,7 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
       }
     }
 
-    const storedCiphertext = [...service.env.MCP_STORE.records.entries()]
+    const storedCiphertext = [...service.env.TOOLBOX_STORE.records.entries()]
       .filter(([key]) => key.includes("/versions/"))
       .map(([, record]) => new TextDecoder().decode(record.bytes))
       .join("\n");

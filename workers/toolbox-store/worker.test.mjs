@@ -15,7 +15,7 @@ const WORKSPACE_SNAPSHOT_TYPE = "application/vnd.agentctl.workspace+json";
 
 function environment(overrides = {}) {
   return {
-    MCP_STORE: new MemoryR2Bucket(),
+    TOOLBOX_STORE: new MemoryR2Bucket(),
     MAX_BLOB_BYTES: "5242880",
     CREATE_TOKEN,
     ...overrides
@@ -70,6 +70,16 @@ test("health check is public and security headers are attached", async () => {
     ],
     status: "ok"
   });
+});
+
+test("legacy MCP_STORE binding remains accepted for in-place upgrades", async () => {
+  const response = await worker.fetch(request("/health"), {
+    MCP_STORE: new MemoryR2Bucket(),
+    MAX_BLOB_BYTES: "5242880",
+    CREATE_TOKEN
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).service, "toolbox-store");
 });
 
 test("non-API routes are delegated to the same-origin asset binding", async () => {
@@ -218,7 +228,7 @@ test("creates a store once and persists only the token digest", async () => {
   assert.equal(duplicate.status, 409);
 
   const metadataKey = `v1/stores/${STORE_ID}/meta.json`;
-  const metadata = JSON.parse(await (await env.MCP_STORE.get(metadataKey)).text());
+  const metadata = JSON.parse(await (await env.TOOLBOX_STORE.get(metadataKey)).text());
   assert.equal(metadata.auth.algorithm, "sha256");
   assert.equal(metadata.auth.digest, createHash("sha256").update(TOKEN).digest("hex"));
   assert.equal(JSON.stringify(metadata).includes(TOKEN), false);
@@ -240,7 +250,7 @@ test("store creation fails closed without the deployment bootstrap secret", asyn
     env
   );
   assert.equal(unauthorized.status, 401);
-  assert.equal(env.MCP_STORE.records.size, 0);
+  assert.equal(env.TOOLBOX_STORE.records.size, 0);
 });
 
 test("requires the correct capability for every private route", async () => {
@@ -321,14 +331,14 @@ test("rejects a stale base version without storing a new object", async () => {
   const first = await backup(env, "first");
   assert.equal(first.status, 201);
 
-  const before = [...env.MCP_STORE.records.keys()]
+  const before = [...env.TOOLBOX_STORE.records.keys()]
     .filter((key) => key.includes("/versions/")).length;
   const stale = await backup(
     env,
     "stale",
     "9999999999999-00000000-0000-4000-8000-000000000000"
   );
-  const after = [...env.MCP_STORE.records.keys()]
+  const after = [...env.TOOLBOX_STORE.records.keys()]
     .filter((key) => key.includes("/versions/")).length;
 
   assert.equal(stale.status, 409);
@@ -338,11 +348,11 @@ test("rejects a stale base version without storing a new object", async () => {
 test("cleans up an immutable object when the conditional head write loses", async () => {
   const env = environment();
   await createStore(env);
-  env.MCP_STORE.rejectNextHeadPut = true;
+  env.TOOLBOX_STORE.rejectNextHeadPut = true;
 
   const response = await backup(env, "will-conflict");
   assert.equal(response.status, 409);
-  const versions = [...env.MCP_STORE.records.keys()]
+  const versions = [...env.TOOLBOX_STORE.records.keys()]
     .filter((key) => key.includes("/versions/"));
   assert.deepEqual(versions, []);
 });

@@ -452,7 +452,7 @@ deleting their data:
 
 ```bash
 agentctl workspace init \
-  --endpoint https://mcp-store.example.workers.dev \
+  --endpoint https://toolbox-store.example.workers.dev \
   --create-token-file /secure/toolbox-create-token
 
 agentctl workspace attach mcp

@@ -27,7 +27,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
 | [`agent/`](./agent/) | Provider setup, MCP profiles, portable skill packs, and persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
-| [`workers/mcp-store/`](./workers/mcp-store/) | End-to-end encrypted Toolbox Workspace/Web UI for MCP profiles, skill packs, persistent prompts, and development presets |
+| [`workers/toolbox-store/`](./workers/toolbox-store/) | End-to-end encrypted Toolbox Workspace/Web UI for Provider profiles, MCP profiles, skill packs, persistent prompts, snippets, and development presets |
 | [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |

@@ -1,5 +1,18 @@
 # Changelog — agent/
 
+## 2026-08-11 — product-neutral Toolbox Store defaults
+
+- Renamed the shared Worker source directory from `workers/mcp-store` to
+  `workers/toolbox-store` now that the service backs Providers, MCP, Skills,
+  Prompts, Snippets, Presets, and the unified encrypted Workspace.
+- Changed new deployments to the `toolbox-store` Worker, `toolbox-store` R2
+  bucket, and `TOOLBOX_STORE` binding, including product-neutral endpoint
+  examples and CI paths.
+- Added `wrangler.mcp-store.jsonc` plus `dev:mcp-store` and
+  `deploy:mcp-store` commands for no-migration upgrades of existing deployments.
+  Legacy MCP recovery codes, request headers, compatibility identifiers, and
+  the old R2 binding remain supported.
+
 ## 2026-08-11 — four-client Providers terminal control plane
 
 - Added a dedicated Providers TUI section that combines local and encrypted

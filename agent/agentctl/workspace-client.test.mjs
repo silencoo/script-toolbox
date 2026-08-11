@@ -41,8 +41,8 @@ import {
 } from "./provider-schema.mjs";
 import { newFailoverStore, validateFailoverStore } from "./failover-schema.mjs";
 import { newPricingCatalog, validatePricingCatalog } from "../pricing/pricing.mjs";
-import worker from "../../workers/mcp-store/worker.js";
-import { MemoryR2Bucket } from "../../workers/mcp-store/test-memory-r2.mjs";
+import worker from "../../workers/toolbox-store/worker.js";
+import { MemoryR2Bucket } from "../../workers/toolbox-store/test-memory-r2.mjs";
 
 function providerProfile(name, secret) {
   return {
@@ -75,7 +75,7 @@ function workspaceAgentOptions(root, workspaceConfig, prefix = "local") {
 test("one Workspace capability attaches and controls all isolated Stores", async () => {
   const root = await mkdtemp(join(tmpdir(), "workspace-client-test-"));
   const environment = {
-    MCP_STORE: new MemoryR2Bucket(),
+    TOOLBOX_STORE: new MemoryR2Bucket(),
     CREATE_TOKEN: "workspace-test-create-token".padEnd(48, "C"),
     MAX_BLOB_BYTES: "5242880"
   };
@@ -185,7 +185,7 @@ test("one Workspace capability attaches and controls all isolated Stores", async
     assert.deepEqual(manifest.presets.dev, editableWorkspace.presets.dev);
     assert.equal(manifest.agent.providers, null);
 
-    const storedBlobs = [...environment.MCP_STORE.records.values()]
+    const storedBlobs = [...environment.TOOLBOX_STORE.records.values()]
       .filter((record) => record.httpMetadata?.contentType ===
         WORKSPACE_REMOTE_PROTOCOL.contentType)
       .map((record) => new TextDecoder().decode(record.bytes));
@@ -254,7 +254,7 @@ test("one Workspace capability attaches and controls all isolated Stores", async
 test("encrypted Workspace agent sync restores catalogs and Secrets without runtime state", async () => {
   const root = await mkdtemp(join(tmpdir(), "workspace-agent-sync-"));
   const environment = {
-    MCP_STORE: new MemoryR2Bucket(),
+    TOOLBOX_STORE: new MemoryR2Bucket(),
     CREATE_TOKEN: "workspace-agent-create-token".padEnd(48, "A"),
     MAX_BLOB_BYTES: "5242880"
   };
@@ -335,7 +335,7 @@ test("encrypted Workspace agent sync restores catalogs and Secrets without runti
     assert.equal(remote.agent.failover.routes.resilient.retry.mode, "next_request");
     assert.equal(remote.agent.pricing.version, "workspace-test");
 
-    const ciphertext = [...environment.MCP_STORE.records.values()]
+    const ciphertext = [...environment.TOOLBOX_STORE.records.values()]
       .map((record) => new TextDecoder().decode(record.bytes))
       .join("\n");
     assert.equal(ciphertext.includes(secretMarker), false);

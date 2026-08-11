@@ -377,7 +377,7 @@ run_interactive_remote_configuration() {
         "$0" versions --remote-config "$remote_config"
         ;;
       init)
-        prompt_value "Remote HTTPS endpoint" "https://mcp-store.example.workers.dev"
+        prompt_value "Remote HTTPS endpoint" "https://toolbox-store.example.workers.dev"
         endpoint="$PROMPT_REPLY"
         case "$endpoint" in
           https://*) ;;

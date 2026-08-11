@@ -118,10 +118,10 @@ protect them accordingly.
 ## Encrypted recovery
 
 Deploy the shared Worker in
-[`workers/mcp-store/`](../../workers/mcp-store/), then initialize and back up:
+[`workers/toolbox-store/`](../../workers/toolbox-store/), then initialize and back up:
 
 ```bash
-skillsctl remote init --endpoint https://mcp-store.example.workers.dev
+skillsctl remote init --endpoint https://toolbox-store.example.workers.dev
 skillsctl backup
 skillsctl versions
 skillsctl recovery

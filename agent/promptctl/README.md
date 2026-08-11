@@ -157,7 +157,7 @@ backs up `CLAUDE.md`, `config.toml`, provider credentials, or unrelated files.
 
 ```bash
 promptctl remote init \
-  --endpoint https://mcp-store.example.workers.dev \
+  --endpoint https://toolbox-store.example.workers.dev \
   --create-token-file /secure/toolbox-create-token
 promptctl backup
 promptctl remote status
