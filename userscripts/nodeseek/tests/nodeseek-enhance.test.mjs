@@ -145,6 +145,21 @@ test('CSS 配置拒绝声明注入并规范背景枚举', () => {
     });
 });
 
+test('夜间模式使用可读的已访问链接颜色，且不沿用日间深色配置', () => {
+    assert.deepEqual(structuredClone(helpers.normalizeVisitedLinkConfig({
+        visited_color: '#222222'
+    })), {
+        lightLink: '',
+        lightVisited: '#222222',
+        darkLink: '',
+        darkVisited: '#8b949e'
+    });
+    assert.equal(
+        helpers.normalizeVisitedLinkConfig({ dark_visited_color: '#c9d1d9' }).darkVisited,
+        '#c9d1d9'
+    );
+});
+
 test('脚本不再声明未使用的高权限 API，且作用域外无残留设置处理器', () => {
     assert.doesNotMatch(source, /^\/\/ @grant\s+GM_xmlhttpRequest$/m);
     assert.doesNotMatch(source, /^\/\/ @grant\s+GM_deleteValue$/m);
