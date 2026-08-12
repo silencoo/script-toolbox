@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -168,6 +170,11 @@ def parse_args() -> argparse.Namespace:
         help="Simple config only: route final traffic directly to the auto urltest group.",
     )
     parser.add_argument("--indent", type=int, default=2, help="JSON indentation. Default: 2.")
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Do not enable the sing-box cache file for downloaded remote rule sets.",
+    )
     return parser.parse_args()
 
 
@@ -182,7 +189,13 @@ def first_query_value(query: dict[str, list[str]], *names: str) -> str | None:
 def parse_bool(value: str | None, default: bool = False) -> bool:
     if value is None or value == "":
         return default
-    return value.lower() in {"1", "true", "yes", "on"}
+
+    normalized = value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"invalid boolean value: {value}")
 
 
 def parse_host_port(host_port: str, line_no: int) -> tuple[str, int]:
@@ -237,7 +250,10 @@ def parse_node_link(line: str, line_no: int) -> Node:
     server, server_port = parse_host_port(host_port, line_no)
     query = parse_qs(parsed.query, keep_blank_values=True)
     sni = first_query_value(query, "sni", "server_name") or server
-    insecure = parse_bool(first_query_value(query, "insecure"), default=False)
+    try:
+        insecure = parse_bool(first_query_value(query, "insecure"), default=False)
+    except ValueError as exc:
+        raise ComposeError(f"line {line_no}: {exc}") from exc
     tag = clean_tag(unquote(parsed.fragment), fallback=f"node-{line_no}")
 
     return Node(
@@ -294,6 +310,8 @@ def validate_options(args: argparse.Namespace) -> None:
         raise ComposeError("--tolerance must be >= 0")
     if args.country_threshold < 1:
         raise ComposeError("--country-threshold must be >= 1")
+    if not 0 <= args.indent <= 16:
+        raise ComposeError("--indent must be between 0 and 16")
 
     simple_tags = [args.selector_tag, args.auto_tag, args.direct_tag]
     if any(not tag for tag in simple_tags):
@@ -309,8 +327,15 @@ def validate_options(args: argparse.Namespace) -> None:
     if output_paths.count("-") > 1:
         raise ComposeError("only one output can use stdout")
     file_paths = [path for path in output_paths if path != "-"]
-    if len(file_paths) != len(set(file_paths)):
+    canonical_outputs = [canonical_path(path) for path in file_paths]
+    if len(canonical_outputs) != len(set(canonical_outputs)):
         raise ComposeError("output paths must be different")
+    if args.nodes != "-" and canonical_path(args.nodes) in canonical_outputs:
+        raise ComposeError("an output path must not overwrite the --nodes input file")
+
+
+def canonical_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
 
 
 def unique_list(items: list[str]) -> list[str]:
@@ -381,6 +406,12 @@ def make_cn_rule_sets(download_detour: str) -> list[dict]:
     ]
 
 
+def make_experimental(args: argparse.Namespace) -> dict | None:
+    if args.no_cache:
+        return None
+    return {"cache_file": {"enabled": True}}
+
+
 def base_route_rules(direct_tag: str) -> list[dict]:
     return [
         {
@@ -438,7 +469,7 @@ def build_simple_config(nodes: list[Node], args: argparse.Namespace) -> dict:
         },
     ]
 
-    return {
+    config = {
         "log": {
             "level": "info",
             "timestamp": True,
@@ -454,6 +485,10 @@ def build_simple_config(nodes: list[Node], args: argparse.Namespace) -> dict:
             "default_domain_resolver": "dns-local",
         },
     }
+    experimental = make_experimental(args)
+    if experimental:
+        config["experimental"] = experimental
+    return config
 
 
 def detect_country_groups(nodes: list[Node], threshold: int) -> dict[str, list[str]]:
@@ -905,6 +940,9 @@ def build_grouped_config(nodes: list[Node], args: argparse.Namespace) -> tuple[d
             "default_domain_resolver": "dns-local",
         },
     }
+    experimental = make_experimental(args)
+    if experimental:
+        config["experimental"] = experimental
 
     return config, country_names
 
@@ -918,7 +956,29 @@ def write_config(config: dict, output_path: str, indent: int, label: str) -> Non
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(data + "\n", encoding="utf-8")
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        os.chmod(temporary_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
+            fd = -1
+            output.write(data)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
     print(f"[sing-box-client] wrote {label} config: {path}", file=sys.stderr)
 
 

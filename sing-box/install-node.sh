@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 CONFIG_PATH="/etc/sing-box/config.json"
 CERT_PATH="/etc/sing-box/cert.crt"
@@ -7,6 +8,8 @@ KEY_PATH="/etc/sing-box/private.key"
 LINK_PATH="/root/sing-box-node.txt"
 CLIENT_CONFIG_PATH="/root/sing-box-client.json"
 BBR_SYSCTL_PATH="${BBR_SYSCTL_PATH:-/etc/sysctl.d/99-sing-box-bbr.conf}"
+INSTALLER_URL="${SING_BOX_INSTALLER_URL:-https://sing-box.app/install.sh}"
+MIN_SING_BOX_VERSION="1.12.0"
 
 SERVICE_NAME="sing-box"
 LISTEN_ADDR="::"
@@ -21,9 +24,18 @@ SKIP_BBR=0
 ASSUME_YES=0
 
 tmp_config=""
+tmp_validation_config=""
+tmp_cert=""
+tmp_key=""
+tmp_link=""
+tmp_client_config=""
 CONFIG_BACKUP_PATH=""
 CERT_BACKUP_PATH=""
 KEY_BACKUP_PATH=""
+CONFIG_EXISTED=0
+CERT_EXISTED=0
+KEY_EXISTED=0
+CONFIG_TRANSACTION_ACTIVE=0
 
 usage() {
   cat <<'EOF'
@@ -61,11 +73,34 @@ die() {
 }
 
 cleanup() {
-  if [[ -n "${tmp_config}" && -f "${tmp_config}" ]]; then
-    rm -f "${tmp_config}"
-  fi
+  local path
+  for path in \
+    "${tmp_config}" \
+    "${tmp_validation_config}" \
+    "${tmp_cert}" \
+    "${tmp_key}" \
+    "${tmp_link}" \
+    "${tmp_client_config}"
+  do
+    if [[ -n "${path}" && -f "${path}" ]]; then
+      rm -f "${path}"
+    fi
+  done
 }
 trap cleanup EXIT
+
+handle_error() {
+  local status=$?
+  trap - ERR
+  set +e
+  if (( CONFIG_TRANSACTION_ACTIVE )); then
+    log "An unexpected error occurred; restoring the previous sing-box files."
+    restore_backups
+    CONFIG_TRANSACTION_ACTIVE=0
+  fi
+  exit "${status}"
+}
+trap handle_error ERR
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -170,10 +205,18 @@ validate_host() {
     *[[:space:]]*)
       die "Server host must not contain spaces."
       ;;
-    *\"*|*\'*|*/*|*\\*|*\?*|*#*|*%*|*@*)
+    *\"*|*\'*|*/*|*\\*|*\?*|*#*|*%*|*@*|*\[*|*\]*)
       die "Server host contains unsupported URI characters."
       ;;
   esac
+}
+
+normalize_server_host() {
+  if [[ "${SERVER_HOST}" == \[*\] ]]; then
+    SERVER_HOST="${SERVER_HOST:1:${#SERVER_HOST}-2}"
+  elif [[ "${SERVER_HOST}" == \[* || "${SERVER_HOST}" == *\] ]]; then
+    die "Server host has mismatched IPv6 brackets."
+  fi
 }
 
 validate_sni() {
@@ -267,6 +310,7 @@ resolve_inputs() {
     SERVER_HOST="$(prompt_with_default "Public server host/IP" "${detected_host}")"
   fi
 
+  normalize_server_host
   validate_host
 
   if [[ -z "${NODE_NAME}" ]]; then
@@ -295,8 +339,46 @@ install_sing_box() {
     return 0
   fi
 
-  log "Installing sing-box with the official deb installer."
-  curl -fsSL https://sing-box.app/deb-install.sh | bash
+  log "Installing sing-box with the official universal installer."
+  curl -fsSL "${INSTALLER_URL}" | bash
+}
+
+version_at_least() {
+  local current="${1%%[-+]*}"
+  local required="${2%%[-+]*}"
+  local IFS=.
+  local -a current_parts required_parts
+  local index current_part required_part
+
+  read -r -a current_parts <<<"${current}"
+  read -r -a required_parts <<<"${required}"
+  for index in 0 1 2; do
+    current_part="${current_parts[${index}]:-0}"
+    required_part="${required_parts[${index}]:-0}"
+    [[ "${current_part}" =~ ^[0-9]+$ && "${required_part}" =~ ^[0-9]+$ ]] || return 1
+    if (( 10#${current_part} > 10#${required_part} )); then
+      return 0
+    fi
+    if (( 10#${current_part} < 10#${required_part} )); then
+      return 1
+    fi
+  done
+  return 0
+}
+
+check_sing_box_version() {
+  local version_line version
+
+  need_cmd sing-box
+  version_line="$(sing-box version 2>/dev/null | sed -n '1p')"
+  version="${version_line#sing-box version }"
+  if [[ -z "${version}" || "${version}" == "${version_line}" ]]; then
+    die "Unable to determine the installed sing-box version."
+  fi
+  if ! version_at_least "${version}" "${MIN_SING_BOX_VERSION}"; then
+    die "sing-box ${MIN_SING_BOX_VERSION}+ is required for AnyTLS; found ${version}."
+  fi
+  log "Using sing-box ${version}."
 }
 
 sysctl_value() {
@@ -405,51 +487,52 @@ backup_existing_files() {
   timestamp="$(date +%Y%m%d-%H%M%S)"
 
   if [[ -f "${CONFIG_PATH}" ]]; then
+    CONFIG_EXISTED=1
     CONFIG_BACKUP_PATH="${CONFIG_PATH}.bak.${timestamp}"
     cp -a "${CONFIG_PATH}" "${CONFIG_BACKUP_PATH}"
     log "Backed up existing config to ${CONFIG_BACKUP_PATH}"
   fi
 
   if [[ -f "${CERT_PATH}" ]]; then
+    CERT_EXISTED=1
     CERT_BACKUP_PATH="${CERT_PATH}.bak.${timestamp}"
     cp -a "${CERT_PATH}" "${CERT_BACKUP_PATH}"
   fi
 
   if [[ -f "${KEY_PATH}" ]]; then
+    KEY_EXISTED=1
     KEY_BACKUP_PATH="${KEY_PATH}.bak.${timestamp}"
     cp -a "${KEY_PATH}" "${KEY_BACKUP_PATH}"
   fi
 }
 
 restore_backups() {
-  if [[ -n "${CONFIG_BACKUP_PATH}" && -f "${CONFIG_BACKUP_PATH}" ]]; then
+  if (( CONFIG_EXISTED )) && [[ -f "${CONFIG_BACKUP_PATH}" ]]; then
     cp -a "${CONFIG_BACKUP_PATH}" "${CONFIG_PATH}"
     log "Restored previous config from ${CONFIG_BACKUP_PATH}"
+  elif (( ! CONFIG_EXISTED )); then
+    rm -f "${CONFIG_PATH}"
   fi
 
-  if [[ -n "${CERT_BACKUP_PATH}" && -f "${CERT_BACKUP_PATH}" ]]; then
+  if (( CERT_EXISTED )) && [[ -f "${CERT_BACKUP_PATH}" ]]; then
     cp -a "${CERT_BACKUP_PATH}" "${CERT_PATH}"
+  elif (( ! CERT_EXISTED )); then
+    rm -f "${CERT_PATH}"
   fi
 
-  if [[ -n "${KEY_BACKUP_PATH}" && -f "${KEY_BACKUP_PATH}" ]]; then
+  if (( KEY_EXISTED )) && [[ -f "${KEY_BACKUP_PATH}" ]]; then
     cp -a "${KEY_BACKUP_PATH}" "${KEY_PATH}"
+  elif (( ! KEY_EXISTED )); then
+    rm -f "${KEY_PATH}"
   fi
 }
 
-write_config() {
-  local service_group
+write_server_config() {
+  local output_path="$1"
+  local certificate_path="$2"
+  local key_path="$3"
 
-  mkdir -p "$(dirname "${CONFIG_PATH}")"
-  backup_existing_files
-
-  log "Generating self-signed certificate for SNI ${SNI}."
-  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout "${KEY_PATH}" \
-    -out "${CERT_PATH}" \
-    -subj "/CN=${SNI}"
-
-  tmp_config="${CONFIG_PATH}.tmp.$$"
-  cat >"${tmp_config}" <<EOF
+  cat >"${output_path}" <<EOF
 {
   "log": {
     "level": "info",
@@ -469,8 +552,8 @@ write_config() {
       ],
       "tls": {
         "enabled": true,
-        "certificate_path": "${CERT_PATH}",
-        "key_path": "${KEY_PATH}"
+        "certificate_path": "${certificate_path}",
+        "key_path": "${key_path}"
       }
     }
   ],
@@ -482,11 +565,43 @@ write_config() {
   ]
 }
 EOF
+}
+
+write_config() {
+  local service_group
+
+  mkdir -p "$(dirname "${CONFIG_PATH}")" "$(dirname "${CERT_PATH}")" "$(dirname "${KEY_PATH}")"
+  tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
+  tmp_validation_config="$(mktemp "${CONFIG_PATH}.validate.XXXXXX")"
+  tmp_cert="$(mktemp "${CERT_PATH}.tmp.XXXXXX")"
+  tmp_key="$(mktemp "${KEY_PATH}.tmp.XXXXXX")"
+
+  log "Generating a staged self-signed certificate for SNI ${SNI}."
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout "${tmp_key}" \
+    -out "${tmp_cert}" \
+    -subj "/CN=${SNI}"
+
+  write_server_config "${tmp_validation_config}" "${tmp_cert}" "${tmp_key}"
+  log "Checking staged sing-box config before replacing existing files."
+  sing-box check -c "${tmp_validation_config}"
+  rm -f "${tmp_validation_config}"
+  tmp_validation_config=""
+
+  write_server_config "${tmp_config}" "${CERT_PATH}" "${KEY_PATH}"
+  backup_existing_files
+  CONFIG_TRANSACTION_ACTIVE=1
+
+  mv "${tmp_key}" "${KEY_PATH}"
+  tmp_key=""
+  mv "${tmp_cert}" "${CERT_PATH}"
+  tmp_cert=""
 
   mv "${tmp_config}" "${CONFIG_PATH}"
   tmp_config=""
 
-  if service_group="$(id -gn sing-box 2>/dev/null)"; then
+  service_group="$(id -gn sing-box 2>/dev/null || true)"
+  if [[ -n "${service_group}" ]]; then
     chown root:"${service_group}" "${CONFIG_PATH}" "${KEY_PATH}" "${CERT_PATH}" || true
     chmod 640 "${CONFIG_PATH}" "${KEY_PATH}"
     chmod 644 "${CERT_PATH}"
@@ -498,10 +613,10 @@ EOF
 }
 
 check_config() {
-  need_cmd sing-box
   log "Checking sing-box config."
   if ! sing-box check -c "${CONFIG_PATH}"; then
     restore_backups
+    CONFIG_TRANSACTION_ACTIVE=0
     die "sing-box config check failed."
   fi
 }
@@ -509,18 +624,33 @@ check_config() {
 restart_service() {
   need_cmd systemctl
   log "Enabling and restarting ${SERVICE_NAME}."
-  systemctl enable --now "${SERVICE_NAME}"
-  systemctl restart "${SERVICE_NAME}"
+  if ! systemctl enable "${SERVICE_NAME}"; then
+    restore_backups
+    CONFIG_TRANSACTION_ACTIVE=0
+    die "Failed to enable ${SERVICE_NAME}."
+  fi
+  if ! systemctl restart "${SERVICE_NAME}"; then
+    systemctl status --no-pager "${SERVICE_NAME}" || true
+    restore_backups
+    CONFIG_TRANSACTION_ACTIVE=0
+    if (( CONFIG_EXISTED )); then
+      log "Trying to restart ${SERVICE_NAME} with the restored config."
+      systemctl restart "${SERVICE_NAME}" || true
+    fi
+    die "Failed to restart ${SERVICE_NAME}."
+  fi
 
   if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
     systemctl status --no-pager "${SERVICE_NAME}" || true
     restore_backups
-    if [[ -n "${CONFIG_BACKUP_PATH}" ]]; then
+    CONFIG_TRANSACTION_ACTIVE=0
+    if (( CONFIG_EXISTED )); then
       log "Trying to restart ${SERVICE_NAME} with the restored config."
       systemctl restart "${SERVICE_NAME}" || true
     fi
     die "${SERVICE_NAME} is not active after restart."
   fi
+  CONFIG_TRANSACTION_ACTIVE=0
 }
 
 uri_host() {
@@ -537,8 +667,11 @@ write_link() {
   node_link="anytls://${PASSWORD}@${host_for_uri}:${PORT}?sni=${SNI}&insecure=1#${NODE_NAME}"
 
   mkdir -p "$(dirname "${LINK_PATH}")"
-  printf '%s\n' "${node_link}" >"${LINK_PATH}"
-  chmod 600 "${LINK_PATH}" || true
+  tmp_link="$(mktemp "${LINK_PATH}.tmp.XXXXXX")"
+  printf '%s\n' "${node_link}" >"${tmp_link}"
+  chmod 600 "${tmp_link}"
+  mv "${tmp_link}" "${LINK_PATH}"
+  tmp_link=""
 
   log "Node link saved to ${LINK_PATH}"
   printf '\n%s\n\n' "${node_link}"
@@ -546,8 +679,9 @@ write_link() {
 
 write_client_config() {
   mkdir -p "$(dirname "${CLIENT_CONFIG_PATH}")"
+  tmp_client_config="$(mktemp "${CLIENT_CONFIG_PATH}.tmp.XXXXXX")"
 
-  cat >"${CLIENT_CONFIG_PATH}" <<EOF
+  cat >"${tmp_client_config}" <<EOF
 {
   "log": {
     "level": "info",
@@ -645,11 +779,18 @@ write_client_config() {
     "auto_detect_interface": true,
     "final": "anytls-out",
     "default_domain_resolver": "dns-local"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true
+    }
   }
 }
 EOF
 
-  chmod 600 "${CLIENT_CONFIG_PATH}" || true
+  chmod 600 "${tmp_client_config}"
+  mv "${tmp_client_config}" "${CLIENT_CONFIG_PATH}"
+  tmp_client_config=""
   log "Client config saved to ${CLIENT_CONFIG_PATH}"
 }
 
@@ -664,6 +805,7 @@ main() {
 
   resolve_inputs
   install_sing_box
+  check_sing_box_version
   if ! configure_bbr; then
     log "WARNING: BBR setup was unavailable or incomplete; continuing sing-box installation."
   fi

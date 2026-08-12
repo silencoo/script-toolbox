@@ -5,6 +5,16 @@ This folder contains a simple two-step workflow:
 1. Deploy one AnyTLS server node and export its single-node link.
 2. Compose multiple single-node links into simple and grouped sing-box client configs.
 
+## Requirements
+
+- sing-box 1.12.0 or newer. AnyTLS and the DNS server format used here were
+  introduced in sing-box 1.12.0.
+- Python 3.10 or newer for `generate-client-config.py`.
+- A systemd-based Linux server when using `install-node.sh`.
+
+The installer uses the current universal installer documented by sing-box,
+which supports deb/rpm-based Linux distributions, Arch Linux, and OpenWrt.
+
 ## Files
 
 - `install-node.sh`: deploys one sing-box AnyTLS server node.
@@ -49,6 +59,18 @@ queue discipline immediately and persists both settings in
 container produces a warning but does not abort the node installation. Use
 `--skip-bbr` to leave the host network settings untouched.
 
+The installer verifies the installed sing-box version and validates a staged
+server configuration before replacing existing files. Existing config,
+certificate, and key files are backed up and restored if validation or service
+startup fails. Generated credential files use owner-only permissions.
+
+> **TLS note:** the zero-setup default uses a self-signed certificate and emits
+> `insecure=1`, so the client does not authenticate the server certificate.
+> This is convenient for bootstrapping but is not appropriate where an active
+> man-in-the-middle attack is in scope. For that case, replace the server
+> certificate with a trusted certificate for a domain you control and use
+> `insecure=0` in the client link/config.
+
 The single-node link is also printed to the console.
 
 ## Compose Multiple Nodes
@@ -71,6 +93,14 @@ By default this writes two files:
 
 - `sing-box-client.json`: simple proxy config.
 - `sing-box-client-grouped.json`: grouped policy config.
+
+Files are written atomically with mode `0600` because they contain node
+passwords. Both configs also enable sing-box's cache file so downloaded remote
+rule sets survive restarts. To disable the cache-file configuration:
+
+```bash
+python3 generate-client-config.py --nodes nodes.txt --no-cache
+```
 
 ### Simple Config
 
@@ -194,7 +224,7 @@ Inline comments are not supported because `#` is already used by the node name f
 
 ## Validate Config
 
-On a machine with sing-box installed:
+On a machine with sing-box 1.12.0 or newer installed:
 
 ```bash
 sing-box check -c sing-box-client.json
@@ -207,4 +237,14 @@ Then run it as a client:
 sing-box run -c sing-box-client.json
 # or
 sing-box run -c sing-box-client-grouped.json
+```
+
+## Run Tests
+
+The test suite covers link parsing, tag collision handling, protected output
+permissions, atomic writes, cache options, and installer helper behavior:
+
+```bash
+python3 -m unittest discover -s tests -v
+bash -n install-node.sh
 ```
