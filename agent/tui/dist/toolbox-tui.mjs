@@ -22897,8 +22897,7 @@ async function readResponseTextLimited(response, maxBytes, label, { timeoutMs = 
   try {
     const contentLength = response.headers.get("Content-Length");
     if (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maxBytes)) {
-      await response.body?.cancel().catch(() => {
-      });
+      cancelResponseBody(response);
       throw new RemoteStoreError(`${label} exceeds the safe size limit`);
     }
     if (response.body === null) return "";
@@ -22922,16 +22921,28 @@ async function readResponseTextLimited(response, maxBytes, label, { timeoutMs = 
     }
     return Buffer.concat(chunks, total).toString("utf8");
   } finally {
-    if (reader) reader.releaseLock();
+    if (reader) {
+      try {
+        reader.releaseLock();
+      } catch {
+      }
+    }
     releaseResponseDeadline(response);
+  }
+}
+function cancelReader(reader) {
+  try {
+    const cancellation = reader.cancel();
+    cancellation?.catch?.(() => {
+    });
+  } catch {
   }
 }
 async function readChunkBeforeDeadline(reader, deadline, label, controller) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
     controller?.abort();
-    await reader.cancel().catch(() => {
-    });
+    cancelReader(reader);
     throw new RemoteStoreError(`${label} timed out`);
   }
   let timer;
@@ -22947,8 +22958,7 @@ async function readChunkBeforeDeadline(reader, deadline, label, controller) {
     ]);
   } catch (error) {
     if (error instanceof RemoteStoreError) {
-      await reader.cancel().catch(() => {
-      });
+      cancelReader(reader);
       throw error;
     }
     if (controller?.signal.aborted || error?.name === "AbortError") {
@@ -22966,9 +22976,16 @@ function releaseResponseDeadline(response) {
   responseDeadlines.delete(response);
 }
 async function discardResponse(response) {
-  await response.body?.cancel().catch(() => {
-  });
+  cancelResponseBody(response);
   releaseResponseDeadline(response);
+}
+function cancelResponseBody(response) {
+  try {
+    const cancellation = response.body?.cancel();
+    cancellation?.catch?.(() => {
+    });
+  } catch {
+  }
 }
 function sanitizeRemoteMessage(value) {
   return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300) || "remote request failed";
