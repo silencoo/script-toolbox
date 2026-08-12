@@ -7,6 +7,13 @@ FIXTURE_DIR="$ROOT_DIR/tests/fixtures"
 SHELL_KIT="$ROOT_DIR/kits/zsh-shell"
 SHELL_KIT_VERSION="$(sed -n '1p' \
   "$SHELL_KIT/files/home/.config/sbx-manager/zsh-shell.version")"
+SHELL_KIT_VERSION_SLUG="$(
+  printf '%s' "$SHELL_KIT_VERSION" \
+    | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//' \
+    | cut -c 1-33 \
+    | sed 's/-$//'
+)"
 TEST_TMP_DIR="$(mktemp -d /tmp/sbx-manager-test.XXXXXX)"
 trap 'rm -rf -- "$TEST_TMP_DIR"' EXIT
 
@@ -84,6 +91,43 @@ grep -Fq 'LANG: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LANG"
 grep -Fq 'LC_ALL: "C.UTF-8"' "$SHELL_KIT/spec.yaml" \
   || fail "default shell kit does not set a UTF-8 LC_ALL"
+grep -Fq 'env -u ANTHROPIC_API_KEY "$claude_command" "$@"' \
+  "$SHELL_KIT/files/home/.zshrc" \
+  || fail "default shell kit does not isolate SBX Anthropic API-key placeholders"
+grep -Fq 'env -u ANTHROPIC_AUTH_TOKEN "$claude_command" "$@"' \
+  "$SHELL_KIT/files/home/.zshrc" \
+  || fail "default shell kit does not follow Claude API-key provider switches"
+if command -v zsh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  mkdir -p "$TEST_TMP_DIR/claude-env/bin" "$TEST_TMP_DIR/claude-env/config"
+  sed -n '/^claude() {/,/^}$/p' "$SHELL_KIT/files/home/.zshrc" \
+    > "$TEST_TMP_DIR/claude-env/launcher.zsh"
+  cat > "$TEST_TMP_DIR/claude-env/bin/claude" <<'EOF'
+#!/bin/sh
+env | awk -F= '$1 ~ /^ANTHROPIC_(AUTH_TOKEN|API_KEY)$/ { print $1 }' | sort
+EOF
+  chmod +x "$TEST_TMP_DIR/claude-env/bin/claude"
+  printf '%s\n' '{"env":{"ANTHROPIC_AUTH_TOKEN":"managed-token"}}' \
+    > "$TEST_TMP_DIR/claude-env/config/settings.json"
+  PATH="$TEST_TMP_DIR/claude-env/bin:$PATH" \
+    CLAUDE_CONFIG_DIR="$TEST_TMP_DIR/claude-env/config" \
+    ANTHROPIC_API_KEY='sbx-proxy-placeholder' \
+    zsh -f -c 'source "$1"; claude' zsh \
+      "$TEST_TMP_DIR/claude-env/launcher.zsh" \
+      > "$TEST_TMP_DIR/claude-env/auth-token-output"
+  [ ! -s "$TEST_TMP_DIR/claude-env/auth-token-output" ] \
+    || fail "Claude launcher retained the conflicting SBX API-key placeholder"
+
+  printf '%s\n' '{"env":{"ANTHROPIC_API_KEY":"managed-key"}}' \
+    > "$TEST_TMP_DIR/claude-env/config/settings.json"
+  PATH="$TEST_TMP_DIR/claude-env/bin:$PATH" \
+    CLAUDE_CONFIG_DIR="$TEST_TMP_DIR/claude-env/config" \
+    ANTHROPIC_AUTH_TOKEN='stale-token' \
+    zsh -f -c 'source "$1"; claude' zsh \
+      "$TEST_TMP_DIR/claude-env/launcher.zsh" \
+      > "$TEST_TMP_DIR/claude-env/api-key-output"
+  [ ! -s "$TEST_TMP_DIR/claude-env/api-key-output" ] \
+    || fail "Claude launcher retained the conflicting inherited auth token"
+fi
 if grep -Eq '^[[:space:]]+(startup|initFiles):' "$SHELL_KIT/spec.yaml"; then
   fail "default shell kit uses lifecycle commands that sbx kit add cannot refresh"
 fi
@@ -621,7 +665,7 @@ diagnostic_log="$(
     -name 'kit-add-stale-shell-*.log' -print
 )"
 assert_text_contains "$diagnostic_log" 'hidden-test-command'
-grep -Fq 'kit-name zsh-shell-refresh-2026-08-01-4-' \
+grep -Fq "kit-name zsh-shell-refresh-${SHELL_KIT_VERSION_SLUG}-" \
   "$TEST_TMP_DIR/stale-kit/log" \
   || fail "refresh kit did not receive a unique versioned name"
 assert_contains "$TEST_TMP_DIR/stale-kit/log" 'kit-static-files absent'

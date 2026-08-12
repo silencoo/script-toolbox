@@ -663,6 +663,7 @@ clean_shell_auth_exports() {
 }
 
 for rc in \
+  "${ZDOTDIR:-$HOME}/.zshenv" \
   "${ZDOTDIR:-$HOME}/.zshrc" \
   "${ZDOTDIR:-$HOME}/.zprofile" \
   "$HOME/.bashrc" \

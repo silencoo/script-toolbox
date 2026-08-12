@@ -280,6 +280,9 @@ run_config_tests() {
   printf '%s\n' \
     'export ANTHROPIC_AUTH_TOKEN=stale-token' \
     'export KEEP_THIS_VALUE=yes' > "$test_home/.zshrc"
+  printf '%s\n' \
+    'export ANTHROPIC_API_KEY=stale-api-key' \
+    'export KEEP_ZSHENV_VALUE=yes' > "$test_home/.zshenv"
   HOME="$test_home" PATH="${fake_bin}:${system_path}" \
     "$SCRIPT_DIR/claude-code/setup.sh" \
       --provider deepseek --model deepseek-v4-pro --key test-claude \
@@ -292,7 +295,12 @@ run_config_tests() {
   ' "$test_home/.claude/settings.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -q 'ANTHROPIC_AUTH_TOKEN' "$test_home/.zshrc" || { rm -rf "$test_root"; return 1; }
   grep -q 'KEEP_THIS_VALUE=yes' "$test_home/.zshrc" || { rm -rf "$test_root"; return 1; }
+  ! grep -q 'ANTHROPIC_API_KEY' "$test_home/.zshenv" || { rm -rf "$test_root"; return 1; }
+  grep -q 'KEEP_ZSHENV_VALUE=yes' "$test_home/.zshenv" || { rm -rf "$test_root"; return 1; }
   find "$test_home" -maxdepth 1 -name '.zshrc.bak.*' -type f | grep -q . || {
+    rm -rf "$test_root"; return 1;
+  }
+  find "$test_home" -maxdepth 1 -name '.zshenv.bak.*' -type f | grep -q . || {
     rm -rf "$test_root"; return 1;
   }
   [ "$(stat -c '%a' "$test_home/.claude/settings.json" 2>/dev/null || stat -f '%Lp' "$test_home/.claude/settings.json")" = "600" ] || {

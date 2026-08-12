@@ -55,6 +55,42 @@ if ! grep -Fqx -- "$_sbx_claude_bypass" "$HISTFILE" 2>/dev/null; then
 fi
 unset _sbx_claude_bypass
 
+# Docker Sandboxes exposes proxy-managed provider credentials as placeholder
+# environment variables. When agentctl selects a different Claude credential
+# type in settings.json, passing the inherited placeholder through as well
+# makes Claude Code report that both authentication modes are configured.
+# Keep the SBX credential available to every other process and remove only the
+# conflicting variable from the Claude child process. This also follows
+# agentctl Provider switches automatically without rewriting the shell file.
+claude() {
+  local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  local claude_command="${commands[claude]:-}"
+
+  if [[ -z "$claude_command" ]]; then
+    print -u2 -- 'claude: command not found'
+    return 127
+  fi
+
+  if (( $+commands[jq] )) && [[ -r "$settings_file" ]]; then
+    if jq -e '
+      ((.env.ANTHROPIC_AUTH_TOKEN // "") | length) > 0
+      and ((.env.ANTHROPIC_API_KEY // "") | length) == 0
+    ' "$settings_file" >/dev/null 2>&1; then
+      env -u ANTHROPIC_API_KEY "$claude_command" "$@"
+      return $?
+    fi
+    if jq -e '
+      ((.env.ANTHROPIC_API_KEY // "") | length) > 0
+      and ((.env.ANTHROPIC_AUTH_TOKEN // "") | length) == 0
+    ' "$settings_file" >/dev/null 2>&1; then
+      env -u ANTHROPIC_AUTH_TOKEN "$claude_command" "$@"
+      return $?
+    fi
+  fi
+
+  "$claude_command" "$@"
+}
+
 # Selectable, case-insensitive completion menu.
 zstyle ':completion:*' menu select
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'

@@ -200,6 +200,14 @@ agent still starts through `bash -l`, so the kit adds an
 interactive-only bridge that switches that login session to zsh; set
 `SBX_KEEP_BASH=1` inside a sandbox when Bash is preferred.
 
+Docker's credential proxy can expose `ANTHROPIC_API_KEY` as an opaque
+placeholder inside a shell sandbox. If agentctl selects a Claude provider that
+uses `ANTHROPIC_AUTH_TOKEN` instead, Claude Code would normally see both
+credential types. The zsh kit wraps only the `claude` child process and removes
+the credential type that conflicts with `~/.claude/settings.json`; switching
+Provider profiles is detected dynamically. The host-side sbx Secret remains
+available to other commands and its value is never read or removed.
+
 The bundled kit targets the apt-based official sandbox templates. Disable it
 for an incompatible custom image:
 
