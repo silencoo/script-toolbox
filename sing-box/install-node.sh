@@ -484,7 +484,7 @@ configure_bbr() {
 
 backup_existing_files() {
   local timestamp
-  timestamp="$(date +%Y%m%d-%H%M%S)"
+  timestamp="$(date +%Y%m%d-%H%M%S).$$"
 
   if [[ -f "${CONFIG_PATH}" ]]; then
     CONFIG_EXISTED=1
