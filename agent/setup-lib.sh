@@ -108,12 +108,23 @@ file_mode() {
   printf '%s' "$mode"
 }
 
+is_windows_posix_shell() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_private_secret_file() {
   local path="$1" mode
   [ -n "$path" ] || die "--key-file requires a path"
   [ -f "$path" ] || die "API key file does not exist or is not a regular file: $path"
   [ ! -L "$path" ] || die "refusing symlinked API key file: $path"
   [ -r "$path" ] || die "API key file is not readable: $path"
+  # Git for Windows exposes synthesized POSIX mode bits that do not describe
+  # the file's NTFS ACL. Keep the regular-file/symlink/readability checks, but
+  # do not reject a private temporary key merely because stat reports 0644.
+  is_windows_posix_shell && return 0
   mode="$(file_mode "$path")"
   case "$mode" in
     ?00|??00) ;;
