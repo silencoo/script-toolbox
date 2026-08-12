@@ -101,6 +101,11 @@ install_files() {
   say "程序和 systemd 单元安装完成。"
 }
 
+configure_systemd_sandbox() {
+  [[ -f "$MANAGER_CONFIG" ]] || return
+  "$MANAGER_BIN" configure-systemd-sandbox
+}
+
 has_active_subscription() {
   python3 - "$MANAGER_CONFIG" <<'PY'
 import json
@@ -139,6 +144,7 @@ run_setup_wizard() {
     say "检测到已有 ${MANAGER_CONFIG}，将保留现有配置。"
   elif confirm "现在初始化订阅管理器吗" yes; then
     "$MANAGER_BIN" init
+    configure_systemd_sandbox
   else
     warn "尚未初始化；timer 不应在配置完成前启用。"
     return
@@ -210,6 +216,10 @@ fi
 require_sources
 ensure_python_yaml
 install_files
+
+# 兼容已有配置以及 --install-only：根据实际的配置、覆盖、备份和锁路径
+# 生成 ReadWritePaths，而不是只允许默认的 /etc/mihomo 和 /run/lock。
+configure_systemd_sandbox
 
 if [[ "$INSTALL_ONLY" == true ]]; then
   say "已按 --install-only 完成安装，没有修改订阅配置或 timer 状态。"

@@ -8,7 +8,7 @@
 2. 将 `/etc/mihomo/local-overrides.yaml` 深度合并到远端配置之上。
 3. 用 `mihomo -t` 校验生成的候选配置。
 4. 备份旧配置并原子替换 `/etc/mihomo/config.yaml`。
-5. 执行 `systemctl restart mihomo.service` 并确认服务进入 active。
+5. 执行 `systemctl restart mihomo.service` 并确认服务连续至少 3 秒保持 active。
 6. 如果启动失败，恢复备份并再次启动旧配置。
 
 本地覆盖默认负责 `external-controller`、`secret` 和 `external-controller-cors`，所以远端 YAML 是否包含这些字段都没有关系。覆盖文件也可以手动加入任意其他不希望被订阅覆盖的顶层配置。
@@ -55,6 +55,7 @@ sudo systemctl daemon-reload
 
 ```bash
 sudo mihomo-subscription-manager init
+sudo mihomo-subscription-manager configure-systemd-sandbox
 sudo mihomo-subscription-manager add
 sudo mihomo-subscription-manager update-active --dry-run
 sudo mihomo-subscription-manager update-active
@@ -105,11 +106,17 @@ sudo mihomo-subscription-manager activate NAME
 sudo mihomo-subscription-manager update NAME --dry-run
 sudo mihomo-subscription-manager update NAME
 sudo mihomo-subscription-manager configure-overlay
+sudo mihomo-subscription-manager configure-systemd-sandbox
 sudo mihomo-subscription-manager show-secret
 journalctl -u mihomo-subscription-update.service
 ```
 
 `activate` 只改变“当前订阅”指针，不会立即覆盖运行配置；随后执行 `update-active` 才会应用。
+
+如果修改了 `target_config`、`mihomo_home`、`overlay_file`、`backup_dir` 或
+`lock_file` 路径，请重新运行 `configure-systemd-sandbox`。它会根据当前管理配置
+生成 systemd drop-in 并执行 `daemon-reload`，使定时任务能够写入自定义目录。
+`setup.sh` 会自动完成这一步。自定义目录必须使用绝对路径。
 
 ## 文件与安全边界
 
@@ -122,3 +129,20 @@ journalctl -u mihomo-subscription-update.service
 如果 `external-controller` 使用 `0.0.0.0:9090`，Secret 只是第一层保护；仍建议用主机防火墙把 9090 只开放给可信局域网地址。CORS 的 Origin 必须包含协议和前端端口，例如 `http://192.168.1.10:3000`，不是 Zashboard 页面路径。
 
 订阅提供方通常会让 URL 自身携带令牌。不要把管理配置、备份或日志上传到 Git 仓库，也不要把 URL 放到 systemd unit 的命令行参数中。
+
+## 开发与测试
+
+建议在虚拟环境中安装明确声明的 Python 依赖：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest -v
+```
+
+另外可执行不依赖运行环境的静态检查：
+
+```bash
+python3 -m py_compile mihomo_subscription_manager.py test_manager.py
+bash -n setup.sh
+```

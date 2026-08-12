@@ -11,8 +11,7 @@ UMask=0077
 ExecStart=/usr/local/sbin/mihomo-subscription-manager update-active
 PrivateTmp=true
 NoNewPrivileges=true
-ProtectHome=true
+ProtectHome=read-only
 ProtectSystem=strict
 ReadWritePaths=/etc/mihomo /run/lock
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-
