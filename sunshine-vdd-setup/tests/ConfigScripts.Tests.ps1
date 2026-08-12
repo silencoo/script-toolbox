@@ -51,11 +51,11 @@ native_pen_touch = enabled
         -HdrToggleDelay 500
 
     Assert-True ($sunshineResult.Mode -eq 'DryRun') 'Sunshine preview must be a dry run.'
-    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^adapter_name = Existing Encoder GPU$') 'Omitting AdapterName must preserve the existing encoder adapter.'
-    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^output_name = \{new-guid\}$') 'Sunshine output GUID must be updated.'
+    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^adapter_name = Existing Encoder GPU\r?$') 'Omitting AdapterName must preserve the existing encoder adapter.'
+    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^output_name = \{new-guid\}\r?$') 'Sunshine output GUID must be updated.'
     Assert-True ($sunshineResult.RenderedConfig -notmatch '(?m)^dd_manual_(resolution|refresh_rate)\s*=') 'Auto modes must remove stale manual keys.'
-    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_hdr_option = auto$') 'HDR policy must be rendered.'
-    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_wa_hdr_toggle_delay = 500$') 'HDR workaround delay must be rendered when explicitly requested.'
+    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_hdr_option = auto\r?$') 'HDR policy must be rendered.'
+    Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_wa_hdr_toggle_delay = 500\r?$') 'HDR workaround delay must be rendered when explicitly requested.'
     Assert-True ((Get-Content -LiteralPath $sunshinePath -Raw) -match 'output_name = \{old-guid\}') 'A Sunshine dry run must not mutate the source file.'
 
     $vddPath = Join-Path $temp 'vdd_settings.xml'
