@@ -51,7 +51,7 @@ Options:
   --user USER         AnyTLS user name in sing-box config. Default: default.
   --link-file PATH    File path for the generated share link. Default: /root/sing-box-node.txt.
   --client-file PATH  File path for the generated client config. Default: /root/sing-box-client.json.
-  --skip-install      Skip the official sing-box deb installer.
+  --skip-install      Skip the official sing-box universal installer.
   --skip-bbr          Do not check or enable BBR congestion control.
   -y, --yes           Non-interactive mode. Use detected/default values.
   -h, --help          Show this help.
