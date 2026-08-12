@@ -19,6 +19,21 @@ param(
 
     [bool]$HardwareCursor = $true,
 
+    [ValidateSet('preserve', 'enabled', 'disabled')]
+    [string]$Sdr10Bit = 'preserve',
+
+    [ValidateSet('preserve', 'enabled', 'disabled')]
+    [string]$HdrPlus = 'preserve',
+
+    [ValidateSet('preserve', 'enabled', 'disabled')]
+    [string]$CustomEdid = 'preserve',
+
+    [ValidateSet('preserve', 'enabled', 'disabled')]
+    [string]$PreventSpoof = 'preserve',
+
+    [ValidateSet('preserve', 'enabled', 'disabled')]
+    [string]$EdidCeaOverride = 'preserve',
+
     [string]$BackupDirectory,
 
     [switch]$Apply
@@ -76,6 +91,35 @@ function ConvertTo-XmlText {
     finally {
         $memory.Dispose()
     }
+}
+
+function Get-EffectiveBooleanOption {
+    param(
+        [Parameter(Mandatory)][System.Xml.XmlElement]$Options,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Setting
+    )
+
+    if ($Setting -eq 'enabled') { return $true }
+    if ($Setting -eq 'disabled') { return $false }
+    $node = $Options.SelectSingleNode($Name)
+    if (-not $node) { return $false }
+    $parsed = $false
+    if ([bool]::TryParse([string]$node.InnerText, [ref]$parsed)) { return $parsed }
+    throw "VDD option <$Name> must contain true or false before it can be preserved."
+}
+
+function Set-OptionalBooleanOption {
+    param(
+        [Parameter(Mandatory)][xml]$Document,
+        [Parameter(Mandatory)][System.Xml.XmlElement]$Options,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Setting
+    )
+
+    if ($Setting -eq 'preserve') { return }
+    $node = Get-OrAddChild -Document $Document -Parent $Options -Name $Name
+    $node.InnerText = if ($Setting -eq 'enabled') { 'true' } else { 'false' }
 }
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
@@ -143,8 +187,30 @@ foreach ($resolution in $parsedResolutions) {
 }
 
 $options = Get-OrAddChild -Document $document -Parent $root -Name 'options'
+$effectiveSdr10Bit = Get-EffectiveBooleanOption -Options $options -Name 'SDR10bit' -Setting $Sdr10Bit
+$effectiveHdrPlus = Get-EffectiveBooleanOption -Options $options -Name 'HDRPlus' -Setting $HdrPlus
+$effectiveCustomEdid = Get-EffectiveBooleanOption -Options $options -Name 'CustomEdid' -Setting $CustomEdid
+$effectivePreventSpoof = Get-EffectiveBooleanOption -Options $options -Name 'PreventSpoof' -Setting $PreventSpoof
+$effectiveCeaOverride = Get-EffectiveBooleanOption -Options $options -Name 'EdidCeaOverride' -Setting $EdidCeaOverride
+if ($effectiveSdr10Bit -and $effectiveHdrPlus) {
+    throw 'SDR10bit and HDRPlus cannot both be enabled. Explicitly disable the conflicting option.'
+}
+if (($effectivePreventSpoof -or $effectiveCeaOverride) -and -not $effectiveCustomEdid) {
+    throw 'PreventSpoof and EdidCeaOverride require CustomEdid to be enabled.'
+}
+if ($effectiveCustomEdid) {
+    $edidPath = Join-Path (Split-Path -Parent $ConfigPath) 'user_edid.bin'
+    if (-not (Test-Path -LiteralPath $edidPath)) {
+        throw "CustomEdid is enabled but the required EDID file was not found: $edidPath"
+    }
+}
 $cursor = Get-OrAddChild -Document $document -Parent $options -Name 'HardwareCursor'
 $cursor.InnerText = $HardwareCursor.ToString().ToLowerInvariant()
+Set-OptionalBooleanOption -Document $document -Options $options -Name 'SDR10bit' -Setting $Sdr10Bit
+Set-OptionalBooleanOption -Document $document -Options $options -Name 'HDRPlus' -Setting $HdrPlus
+Set-OptionalBooleanOption -Document $document -Options $options -Name 'CustomEdid' -Setting $CustomEdid
+Set-OptionalBooleanOption -Document $document -Options $options -Name 'PreventSpoof' -Setting $PreventSpoof
+Set-OptionalBooleanOption -Document $document -Options $options -Name 'EdidCeaOverride' -Setting $EdidCeaOverride
 
 $rendered = ConvertTo-XmlText -Document $document
 $backupPath = $null
@@ -167,5 +233,10 @@ if ($Apply) {
     RefreshRates         = @($normalizedRates | ForEach-Object { Format-Rate $_ })
     PreferredRefreshRate = Format-Rate $preferred
     HardwareCursor       = $HardwareCursor
+    Sdr10Bit             = $effectiveSdr10Bit
+    HdrPlus              = $effectiveHdrPlus
+    CustomEdid           = $effectiveCustomEdid
+    PreventSpoof         = $effectivePreventSpoof
+    EdidCeaOverride      = $effectiveCeaOverride
     ProposedXml          = if ($Apply) { $null } else { $rendered }
 }

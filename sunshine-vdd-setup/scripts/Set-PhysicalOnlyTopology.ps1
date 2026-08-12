@@ -1,11 +1,13 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\\\\\.\\DISPLAY\d+$')]
-    [string]$PhysicalDisplayName,
+    [Alias('PhysicalDisplayName')]
+    [string[]]$PhysicalDisplayNames,
 
     [string]$BackupDirectory = 'C:\VirtualDisplayDriver',
 
     [switch]$ConfirmNoActiveStream,
+
+    [switch]$AllowUnknownStreamState,
 
     [switch]$RecoveryConfirmed,
 
@@ -22,30 +24,43 @@ function Test-Administrator {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-$before = @(Get-VddDisplayInventory)
+$inventoryScript = Join-Path $PSScriptRoot 'Get-SunshineVddState.ps1'
+$state = & $inventoryScript -AsObject
+$before = @($state.Displays)
 $attached = @($before | Where-Object Attached)
 $physical = @($attached | Where-Object { -not $_.IsMttVdd -and -not $_.IsOtherVirtual })
 
-if ($PhysicalDisplayName) {
-    $target = @($physical | Where-Object DeviceName -ieq $PhysicalDisplayName)
-    if ($target.Count -ne 1) {
-        throw "The requested physical display '$PhysicalDisplayName' is not one uniquely attached physical display."
+if ($PhysicalDisplayNames) {
+    foreach ($name in $PhysicalDisplayNames) {
+        if ($name -notmatch '^\\\\\.\\DISPLAY\d+$') {
+            throw "Invalid physical display name '$name'. Use a current GDI name such as \\\\.\\DISPLAY3."
+        }
     }
-    $target = $target[0]
+    $requestedNames = @($PhysicalDisplayNames | Sort-Object -Unique)
+    if ($requestedNames.Count -ne $PhysicalDisplayNames.Count) {
+        throw 'PhysicalDisplayNames contains a duplicate display name.'
+    }
+    $targets = @($physical | Where-Object { $requestedNames -icontains $_.DeviceName })
+    if ($targets.Count -ne $requestedNames.Count) {
+        $foundNames = @($targets.DeviceName)
+        $missing = @($requestedNames | Where-Object { $foundNames -inotcontains $_ })
+        throw "The requested display is not one uniquely attached physical display: $($missing -join ', ')."
+    }
 }
 else {
-    $primary = @($physical | Where-Object Primary)
-    if ($primary.Count -ne 1) {
-        throw 'Could not choose one attached physical primary display. Supply -PhysicalDisplayName explicitly.'
+    $targets = @($physical | Where-Object Primary)
+    if ($targets.Count -ne 1) {
+        throw 'Could not choose one attached physical primary display. Supply -PhysicalDisplayNames explicitly.'
     }
-    $target = $primary[0]
+    $requestedNames = @($targets.DeviceName)
 }
 
-if (-not $target.Primary) {
-    throw "The selected physical display '$($target.DeviceName)' is not currently primary. Make it primary before saving a physical-only baseline."
+$selectedPrimary = @($targets | Where-Object Primary)
+if ($selectedPrimary.Count -ne 1) {
+    throw 'The selected physical display set must include the current primary display. Make one selected display primary before saving the baseline.'
 }
 
-$operation = Set-VddSingleDisplayTopology -DisplayName $target.DeviceName -Apply:$false
+$operation = Set-VddSelectedDisplayTopology -DisplayNames $requestedNames
 $validationMessage = switch ($operation.ValidationCode) {
     0 { 'Validated' }
     5 { 'ElevationRequiredForValidation' }
@@ -54,14 +69,16 @@ $validationMessage = switch ($operation.ValidationCode) {
 
 if (-not $Apply) {
     [pscustomobject][ordered]@{
-        Mode               = 'DryRun'
-        Target             = $target
-        AttachedBefore     = $attached
-        ValidationCode     = $operation.ValidationCode
-        ValidationStatus   = $validationMessage
-        RecoveryConfirmed  = $RecoveryConfirmed.IsPresent
-        StreamConfirmedOff = $ConfirmNoActiveStream.IsPresent
-        BackupDirectory    = $BackupDirectory
+        Mode                    = 'DryRun'
+        Targets                 = $targets
+        AttachedBefore          = $attached
+        ValidationCode          = $operation.ValidationCode
+        ValidationStatus        = $validationMessage
+        StreamingState          = $state.Sunshine.Streaming
+        RecoveryConfirmed       = $RecoveryConfirmed.IsPresent
+        StreamConfirmedOff      = $ConfirmNoActiveStream.IsPresent
+        AllowUnknownStreamState = $AllowUnknownStreamState.IsPresent
+        BackupDirectory         = $BackupDirectory
     }
     return
 }
@@ -69,37 +86,57 @@ if (-not $Apply) {
 if (-not $ConfirmNoActiveStream) {
     throw 'Disconnect Moonlight, confirm no stream is active, then rerun with -ConfirmNoActiveStream.'
 }
+if ($state.Sunshine.Streaming.Status -eq 'Active') {
+    throw 'Sunshine log evidence shows an active Moonlight stream. Disconnect every client before changing the idle topology.'
+}
+if ($state.Sunshine.Streaming.Status -eq 'Unknown' -and -not $AllowUnknownStreamState) {
+    throw 'Sunshine stream state could not be proven inactive. Inspect Streaming.LastRelevantEvents, then rerun with -AllowUnknownStreamState only after independently confirming every client is disconnected.'
+}
 if (-not $RecoveryConfirmed) {
     throw 'Confirm local or alternate recovery access, then rerun with -RecoveryConfirmed.'
 }
 if (-not (Test-Administrator)) {
     throw 'Persisting the display topology requires an elevated PowerShell session.'
 }
-
-[void](New-Item -ItemType Directory -Path $BackupDirectory -Force)
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$snapshotPath = Join-Path $BackupDirectory "display-topology-before-physical-only-$stamp.json"
-$snapshot = [pscustomobject][ordered]@{
-    CapturedAt              = (Get-Date).ToString('o')
-    SelectedPhysicalDisplay = $target.DeviceName
-    Displays                = $before
+if ($operation.ValidationCode -ne 0) {
+    throw "Windows rejected the proposed physical-only topology during validation (error $($operation.ValidationCode))."
 }
-$snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $snapshotPath -Encoding utf8
 
-$applied = Set-VddSingleDisplayTopology -DisplayName $target.DeviceName -Apply
-Start-Sleep -Seconds 2
-$after = @(Get-VddDisplayInventory)
-$attachedAfter = @($after | Where-Object Attached)
-$unexpected = @($attachedAfter | Where-Object DeviceName -ine $target.DeviceName)
-if ($attachedAfter.Count -ne 1 -or $unexpected.Count -gt 0 -or $attachedAfter[0].IsMttVdd -or $attachedAfter[0].IsOtherVirtual) {
-    throw "Windows accepted the topology call, but verification failed. The pre-change record is $snapshotPath."
+$snapshotPath = New-VddDisplayTopologyBackup -Directory $BackupDirectory -Reason 'physical-only'
+$rollbackStatus = 'NotNeeded'
+try {
+    $applied = Set-VddSelectedDisplayTopology -DisplayNames $requestedNames -Apply
+    Start-Sleep -Seconds 2
+    $after = @(Get-VddDisplayInventory)
+    $attachedAfter = @($after | Where-Object Attached)
+    $attachedNames = @($attachedAfter.DeviceName)
+    $missingAfter = @($requestedNames | Where-Object { $attachedNames -inotcontains $_ })
+    $unexpected = @($attachedAfter | Where-Object { $requestedNames -inotcontains $_.DeviceName })
+    $nonPhysical = @($attachedAfter | Where-Object { $_.IsMttVdd -or $_.IsOtherVirtual })
+    if ($missingAfter.Count -gt 0 -or $unexpected.Count -gt 0 -or $nonPhysical.Count -gt 0 -or $attachedAfter.Count -ne $requestedNames.Count) {
+        throw 'Windows accepted the topology call, but the resulting attached display set did not match the selected physical displays.'
+    }
+}
+catch {
+    $applyError = $_.Exception.Message
+    try {
+        [void](Restore-VddDisplayTopology -SnapshotPath $snapshotPath -Apply)
+        Start-Sleep -Seconds 2
+        $rollbackStatus = 'RestoredOriginalTopology'
+    }
+    catch {
+        $rollbackStatus = "RollbackFailed: $($_.Exception.Message)"
+    }
+    throw "Physical-only topology failed: $applyError Rollback status: $rollbackStatus. Recovery snapshot: $snapshotPath"
 }
 
 [pscustomobject][ordered]@{
-    Mode          = 'Applied'
-    Target        = $target.DeviceName
-    SnapshotPath  = $snapshotPath
-    Operation     = $applied
-    AttachedAfter = $attachedAfter
-    Verified      = $true
+    Mode             = 'Applied'
+    Targets          = $requestedNames
+    SnapshotPath     = $snapshotPath
+    Operation        = $applied
+    AttachedAfter    = $attachedAfter
+    Verified         = $true
+    RollbackStatus   = $rollbackStatus
+    StreamingState   = $state.Sunshine.Streaming
 }

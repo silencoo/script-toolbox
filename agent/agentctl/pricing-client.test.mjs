@@ -193,7 +193,8 @@ test("pricing CLI previews mutations and calculates without floating point", asy
     await assert.rejects(() => lstat(path), { code: "ENOENT" });
 
     run(["init", "--version", "2026.08", ...common, "--yes", "--json"]);
-    assert.equal((await lstat(path)).mode & 0o077, 0);
+    if (process.platform === "win32") assert.equal((await lstat(path)).isFile(), true);
+    else assert.equal((await lstat(path)).mode & 0o077, 0);
     assert.equal(JSON.parse(run(["status", ...common, "--json"]).stdout).rates, 0);
 
     const setPreview = JSON.parse(run([

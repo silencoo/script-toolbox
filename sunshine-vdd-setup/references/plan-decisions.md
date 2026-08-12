@@ -40,10 +40,17 @@ If more than one physical monitor exists, ask which monitor(s) must remain activ
 
 Ask:
 
-- SDR or HDR; whether 10-bit modes or a custom EDID are required.
+- SDR or HDR; 8-bit, SDR 10-bit, or VDD HDR+; whether a custom `user_edid.bin`, spoof prevention, or CEA override is required. Do not enable conflicting VDD `SDR10bit` and `HDRPlus` options.
 - Mouse/keyboard only, or native pen/touch passthrough.
 - Whether the user has a physical monitor, alternate remote-control path, or safe-mode access for recovery.
 - Whether unrelated virtual-display products may be stopped or disabled if they conflict.
+
+Then collect the two GPU choices independently:
+
+- **Sunshine encoder adapter:** leave automatic unless live encoder testing identifies an exact adapter that must be pinned.
+- **VDD render GPU:** use the exact live VDD-supported friendly name only when the driver configuration should pin it.
+
+On hybrid-GPU systems, never copy the VDD GPU name into Sunshine or vice versa merely because both settings accept a friendly name.
 
 Do not schedule a VDD restart, topology change, or driver install without a usable recovery path.
 
@@ -57,11 +64,15 @@ Sunshine resolution:
 Sunshine refresh rate:
 VDD published resolutions:
 VDD published refresh rates:
+Sunshine encoder adapter:
+VDD render GPU:
 Idle topology:
 Streaming topology:
-HDR/SDR:
+HDR/SDR and color depth:
+Custom EDID options:
 Input requirements:
 Recovery path:
+Unknown-stream-state override approved: no/yes
 Expected connection interruption:
 ```
 

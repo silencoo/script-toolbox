@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   chmod,
@@ -14,6 +13,7 @@ import {
   unlink
 } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { platformConfigHome } from "../platform-paths.mjs";
 import {
   MCP_REMOTE_PROTOCOL,
   PROMPT_REMOTE_PROTOCOL,
@@ -134,7 +134,7 @@ included. Existing isolated recovery codes remain valid.
 }
 
 function defaults() {
-  const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const configHome = platformConfigHome();
   const providers = providerDefaults();
   const failover = failoverDefaults();
   const pricing = pricingDefaults();

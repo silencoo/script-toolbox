@@ -20,6 +20,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import { platformConfigHome } from "../platform-paths.mjs";
 import {
   RemoteStoreError,
   SKILLS_REMOTE_PROTOCOL,
@@ -36,7 +37,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.1";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -68,7 +69,7 @@ Usage:
   skillsctl tui
   skillsctl update [--check|--yes]
   skillsctl init [--store <dir>] [--yes]
-  skillsctl list [--store <dir>]
+  skillsctl list [--store <dir>] [--json]
   skillsctl status [--store <dir>]
   skillsctl current --target <target> [--store <dir>] [--json]
   skillsctl doctor [--store <dir>]
@@ -76,10 +77,13 @@ Usage:
   skillsctl skill add <directory> [--name <name>] [--store <dir>] --yes
   skillsctl skill remove <name> [--store <dir>] [--force] --yes
   skillsctl skill enable|disable <name> --target <target> [--store <dir>] [--yes]
+  skillsctl skill set --target <target> [--enable <name>] [--disable <name>]
+                      [--store <dir>] [--json] [--yes]
 
   skillsctl pack list [--store <dir>]
   skillsctl pack show <name> [--target <target>] [--store <dir>]
   skillsctl pack create <name> [--description <text>] [--extends <pack>]... --yes
+  skillsctl pack save <name> --target <target> [--force] --yes
   skillsctl pack add <pack> <skill> [--store <dir>] --yes
   skillsctl pack disable <pack> <skill> [--store <dir>] --yes
   skillsctl pack remove <pack> <skill> [--store <dir>] --yes
@@ -109,10 +113,11 @@ Writes require --yes or --write. Project-scoped skills remain outside this store
 
 function parseArguments(argv) {
   const positional = [];
+  const configHome = platformConfigHome();
   const options = {
-    store: process.env.SKILLSCTL_STORE || join(homedir(), ".config", "skillsctl", "store"),
+    store: process.env.SKILLSCTL_STORE || join(configHome, "skillsctl", "store"),
     remoteConfig: process.env.SKILLSCTL_REMOTE_CONFIG ||
-      join(homedir(), ".config", "skillsctl", "remote.json"),
+      join(configHome, "skillsctl", "remote.json"),
     target: "",
     pack: "",
     name: "",
@@ -127,7 +132,9 @@ function parseArguments(argv) {
     write: false,
     force: false,
     json: false,
-    extends: []
+    extends: [],
+    enable: [],
+    disable: []
   };
 
   while (argv.length > 0) {
@@ -153,6 +160,12 @@ function parseArguments(argv) {
         break;
       case "--extends":
         options.extends.push(takeValue(argv, argument));
+        break;
+      case "--enable":
+        options.enable.push(takeValue(argv, argument));
+        break;
+      case "--disable":
+        options.disable.push(takeValue(argv, argument));
         break;
       case "--endpoint":
         options.endpoint = takeValue(argv, argument);
@@ -346,7 +359,7 @@ async function loadStore(store) {
   validateCatalog(catalog);
   const packs = await loadPacks(store);
   await validateStoreSkillDirectories(store, catalog);
-  return { catalog, packs };
+  return { store, catalog, packs };
 }
 
 function validateCatalog(catalog) {
@@ -431,6 +444,13 @@ async function validateStoreSkillDirectories(store, catalog) {
 async function listSkills(options) {
   const { catalog } = await loadStore(options.store);
   const names = Object.keys(catalog.skills).sort();
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(names.map((name) => ({
+      name,
+      description: catalog.skills[name].description || ""
+    })), null, 2)}\n`);
+    return;
+  }
   if (names.length === 0) {
     process.stdout.write("(no skills)\n");
     return;
@@ -456,31 +476,41 @@ async function showStatus(options) {
   }
 }
 
-async function showCurrent(options) {
-  validateTarget(options.target, false);
-  const store = await loadStore(options.store);
-  const state = await readTargetState(options.store, options.target);
+async function currentPayload(store, target) {
+  const state = await readTargetState(store.store, target);
   const drift = new Set();
   for (const [name, record] of Object.entries(state.links)) {
     if (!await managedLinkMatches(record.link, record.target)) drift.add(name);
   }
   if (state.selection_mode === "pack" && state.pack) {
-    const expected = resolvePack(store, state.pack, options.target);
+    const expected = resolvePack(store, state.pack, target);
     const actual = new Set(Object.keys(state.links));
     for (const name of new Set([...expected, ...actual])) {
       if (expected.has(name) !== actual.has(name)) drift.add(name);
     }
   }
-  const payload = {
+  let baseSkills = [];
+  const basePack = state.selection_mode === "manual" ? state.base_pack || "" : state.pack || "";
+  if (basePack && store.packs.has(basePack)) {
+    baseSkills = [...resolvePack(store, basePack, target)].sort();
+  }
+  return {
     schema: SCHEMA,
-    target: options.target,
+    target,
     selection_mode: state.selection_mode || "unknown",
     pack: state.pack || null,
     base_pack: state.base_pack || null,
+    base_skills: baseSkills,
     skills: Object.keys(state.links).sort(),
     drift: [...drift].sort(),
     healthy: drift.size === 0
   };
+}
+
+async function showCurrent(options) {
+  validateTarget(options.target, false);
+  const store = await loadStore(options.store);
+  const payload = await currentPayload(store, options.target);
   if (options.json) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
@@ -545,10 +575,26 @@ async function runSkillCommand(positional, options) {
         `usage: skillsctl skill ${action} <name> --target <target> [--yes]`
       );
     }
-    await toggleTargetSkill(name, options, action === "enable");
+    await setTargetSkills(options, [{ name, enabled: action === "enable" }], {
+      singleAction: action
+    });
     return;
   }
-  throw new SkillsError("skill command must be add, remove, enable, or disable");
+  if (action === "set") {
+    if (positional.length > 0 || !options.target ||
+        (options.enable.length === 0 && options.disable.length === 0)) {
+      throw new SkillsError(
+        "usage: skillsctl skill set --target <target> [--enable <name>] [--disable <name>] [--yes]"
+      );
+    }
+    const changes = [
+      ...options.enable.map((name) => ({ name, enabled: true })),
+      ...options.disable.map((name) => ({ name, enabled: false }))
+    ];
+    await setTargetSkills(options, changes);
+    return;
+  }
+  throw new SkillsError("skill command must be add, remove, enable, disable, or set");
 }
 
 async function addSkill(source, options) {
@@ -635,40 +681,62 @@ async function removeSkill(name, options) {
   process.stdout.write(`Removed skill '${name}' (recoverable at ${backup})\n`);
 }
 
-async function toggleTargetSkill(name, options, enable) {
-  validateName(name, "skill");
+async function setTargetSkills(options, changes, { singleAction = "" } = {}) {
   validateTarget(options.target, false);
   const store = await loadStore(options.store);
-  if (!store.catalog.skills[name]) throw new SkillsError(`unknown skill: ${name}`);
+  for (const change of changes) {
+    validateName(change.name, "skill");
+    if (!store.catalog.skills[change.name]) {
+      throw new SkillsError(`unknown skill: ${change.name}`);
+    }
+  }
 
   const state = await readTargetState(options.store, options.target);
   const desired = new Set(Object.keys(state.links));
-  if (enable) {
-    desired.add(name);
-  } else if (!desired.delete(name)) {
-    const unmanagedPath = join(targetRoot(options.target), name);
-    if (await pathExists(unmanagedPath, true)) {
-      throw new SkillsError(
-        `skill '${name}' exists for ${options.target} but is not managed by skillsctl; ` +
-        `run 'skillsctl import --target ${options.target} --write' first`
-      );
+  for (const change of changes) {
+    if (change.enabled) {
+      desired.add(change.name);
+    } else if (!desired.delete(change.name)) {
+      const unmanagedPath = join(targetRoot(options.target), change.name);
+      if (await pathExists(unmanagedPath, true)) {
+        throw new SkillsError(
+          `skill '${change.name}' exists for ${options.target} but is not managed by skillsctl; ` +
+          `run 'skillsctl import --target ${options.target} --write' first`
+        );
+      }
     }
-    process.stdout.write(`Skill '${name}' is already disabled for ${options.target}\n`);
-    return;
   }
 
   const plan = await buildTargetPlan(options.store, options.target, desired);
-  printTargetPlan(options.target, plan);
+  if (!options.json) printTargetPlan(options.target, plan);
   if (plan.conflicts > 0) {
     throw new SkillsError(`${options.target} has ${plan.conflicts} unowned conflict(s)`);
   }
   const changed = plan.items.some((item) => item.action !== "keep");
   if (!changed) {
-    process.stdout.write(`Skill '${name}' is already enabled for ${options.target}\n`);
+    const payload = await currentPayload(store, options.target);
+    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else if (singleAction) {
+      process.stdout.write(
+        `Skill '${changes[0].name}' is already ${changes[0].enabled ? "enabled" : "disabled"} for ${options.target}\n`
+      );
+    } else {
+      process.stdout.write(`Skill selection is already current for ${options.target}\n`);
+    }
     return;
   }
   if (!options.yes) {
-    process.stdout.write("\n[preview] re-run with --yes to change managed links\n");
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        schema: SCHEMA,
+        target: options.target,
+        apply: false,
+        changes,
+        plan: plan.items.map(({ action, name }) => ({ action, name }))
+      }, null, 2)}\n`);
+    } else {
+      process.stdout.write("\n[preview] re-run with --yes to change managed links\n");
+    }
     return;
   }
 
@@ -678,10 +746,18 @@ async function toggleTargetSkill(name, options, enable) {
   await applyTargetPlan(options.store, options.target, plan, {
     selection_mode: "manual",
     ...(basePack ? { base_pack: basePack } : {})
-  });
-  process.stdout.write(
-    `${enable ? "Enabled" : "Disabled"} skill '${name}' for ${options.target}\n`
-  );
+  }, { quiet: options.json });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(
+      await currentPayload(await loadStore(options.store), options.target), null, 2
+    )}\n`);
+  } else if (singleAction) {
+    process.stdout.write(
+      `${changes[0].enabled ? "Enabled" : "Disabled"} skill '${changes[0].name}' for ${options.target}\n`
+    );
+  } else {
+    process.stdout.write(`Applied ${changes.length} Skill selection change(s) for ${options.target}\n`);
+  }
 }
 
 async function runPackCommand(positional, options) {
@@ -695,6 +771,9 @@ async function runPackCommand(positional, options) {
       return;
     case "create":
       await createPack(positional.shift(), options);
+      return;
+    case "save":
+      await saveCurrentPack(positional.shift(), options);
       return;
     case "add":
     case "enable":
@@ -711,7 +790,7 @@ async function runPackCommand(positional, options) {
       return;
     default:
       throw new SkillsError(
-        "pack command must be list, show, create, add, enable, disable, remove, or delete"
+        "pack command must be list, show, create, save, add, enable, disable, remove, or delete"
       );
   }
 }
@@ -748,6 +827,40 @@ async function createPack(name, options) {
   const pack = packDocument(name, options.description || `${name} skill pack`, options.extends);
   await writeJsonAtomic(packPath(options.store, name), pack);
   process.stdout.write(`Created pack '${name}'\n`);
+}
+
+async function saveCurrentPack(name, options) {
+  validateName(name, "pack");
+  validateTarget(options.target, false);
+  const store = await loadStore(options.store);
+  const existing = store.packs.get(name);
+  if (existing && !options.force) {
+    throw new SkillsError(`pack already exists: ${name} (use --force to update this target)`);
+  }
+  requireApply(options, "--yes");
+  const state = await readTargetState(options.store, options.target);
+  const enabled = Object.keys(state.links).sort();
+  const enabledSet = new Set(enabled);
+  const disabled = Object.keys(store.catalog.skills)
+    .filter((skill) => !enabledSet.has(skill))
+    .sort();
+  let pack;
+  if (existing) {
+    pack = structuredClone(existing);
+  } else {
+    let parent = state.selection_mode === "manual"
+      ? state.base_pack || "base"
+      : state.pack || "base";
+    if (parent === name || !store.packs.has(parent)) parent = "base";
+    pack = packDocument(name, `Saved from the current ${options.target} Skill selection`, [parent]);
+  }
+  pack.target_overrides = pack.target_overrides || {};
+  pack.target_overrides[options.target] = { enable: enabled, disable: disabled };
+  validatePack(name, pack);
+  await writeJsonAtomic(packPath(options.store, name), pack);
+  process.stdout.write(
+    `${existing ? "Updated" : "Saved"} current ${options.target} Skill selection as pack '${name}'\n`
+  );
 }
 
 async function mutatePackSkill(packName, skillName, options, mode) {
@@ -1088,21 +1201,52 @@ async function buildTargetPlan(store, target, desired) {
   return { root, items, conflicts };
 }
 
-async function applyTargetPlan(store, target, plan, selection = {}) {
+async function applyTargetPlan(store, target, plan, selection = {}, { quiet = false } = {}) {
   await mkdir(plan.root, { recursive: true, mode: 0o700 });
   const nextLinks = {};
-  for (const item of plan.items) {
-    if (item.action === "create") {
-      await symlink(item.target, item.link, process.platform === "win32" ? "junction" : "dir");
-      nextLinks[item.name] = { link: item.link, target: item.target };
-    } else if (item.action === "keep") {
-      nextLinks[item.name] = { link: item.link, target: item.target };
-    } else if (item.action === "remove") {
-      await rm(item.link);
+  const completed = [];
+  try {
+    for (const item of plan.items) {
+      if (item.action === "create") {
+        await symlink(item.target, item.link, process.platform === "win32" ? "junction" : "dir");
+        completed.push(item);
+        nextLinks[item.name] = { link: item.link, target: item.target };
+      } else if (item.action === "keep") {
+        nextLinks[item.name] = { link: item.link, target: item.target };
+      } else if (item.action === "remove") {
+        await rm(item.link);
+        completed.push(item);
+      }
     }
+    await writeTargetState(store, target, nextLinks, selection);
+  } catch (error) {
+    let rollbackError = null;
+    for (const item of completed.reverse()) {
+      try {
+        if (item.action === "create") {
+          if (await managedLinkMatches(item.link, item.target)) await rm(item.link);
+          else if (await pathExists(item.link, true)) {
+            throw new SkillsError(`created link changed during rollback: ${item.link}`);
+          }
+        } else if (item.action === "remove") {
+          if (await pathExists(item.link, true)) {
+            throw new SkillsError(`removed link path was reused during rollback: ${item.link}`);
+          }
+          await symlink(item.target, item.link, process.platform === "win32" ? "junction" : "dir");
+        }
+      } catch (caught) {
+        rollbackError ||= caught;
+      }
+    }
+    if (rollbackError) {
+      throw new SkillsError(
+        `${error instanceof Error ? error.message : String(error)}; rollback needs attention (` +
+        `${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)})`
+      );
+    }
+    throw error;
   }
-  await writeTargetState(store, target, nextLinks, selection);
-  process.stdout.write(`Applied ${target} skill links\n`);
+  if (!quiet) process.stdout.write(`Applied ${target} skill links\n`);
 }
 
 async function writeTargetState(store, target, links, selection = {}) {
@@ -1454,7 +1598,7 @@ async function inspectSkillDirectory(directory, expectedName, includeContent = f
       }
       files.push({
         path: relativePath,
-        mode: sanitizeMode(details.mode),
+        mode: sanitizeMode(details.mode, content),
         content: includeContent ? content : content
       });
     }
@@ -1538,8 +1682,12 @@ function validateSafeSkillFilename(name, relativePath) {
   }
 }
 
-function sanitizeMode(mode) {
-  return (mode & 0o111) !== 0 ? 0o700 : 0o600;
+function sanitizeMode(mode, content = Buffer.alloc(0)) {
+  // Windows does not expose Unix execute bits. Preserve portable script
+  // intent from a shebang so a later Linux/macOS restore remains runnable.
+  const portableShebang = process.platform === "win32" &&
+    content.length >= 2 && content[0] === 0x23 && content[1] === 0x21;
+  return (mode & 0o111) !== 0 || portableShebang ? 0o700 : 0o600;
 }
 
 function validateRelativeFilePath(path) {

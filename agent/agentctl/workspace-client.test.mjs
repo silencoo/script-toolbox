@@ -352,7 +352,11 @@ test("encrypted Workspace agent sync restores catalogs and Secrets without runti
         .secrets.primary_key.value,
       secretMarker
     );
-    assert.equal((await lstat(fresh.providerSecrets)).mode & 0o077, 0);
+    if (process.platform === "win32") {
+      assert.equal((await lstat(fresh.providerSecrets)).isFile(), true);
+    } else {
+      assert.equal((await lstat(fresh.providerSecrets)).mode & 0o077, 0);
+    }
     await assert.rejects(
       () => lstat(join(root, "fresh", "generated-proxy-config.json")),
       { code: "ENOENT" }

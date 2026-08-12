@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.6.4
+// @version      0.7.0
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -30,6 +30,9 @@
   const FULL_SIZE_BUTTON_SELECTOR =
     'button[aria-label="Download full size image"]';
   const IMAGE_EXPORT_DOWNLOAD_DELAY = 750;
+  const IMAGE_EXPORT_MAX_ATTEMPTS = 3;
+  const IMAGE_EXPORT_RETRY_DELAY = 900;
+  const IMAGE_CAPTURE_DELAY = 80;
   const FULL_SIZE_REDIRECT_HOPS = 4;
   const CORNER_CROP_EDGE = 384;
   const MODE_BUTTON_SELECTOR =
@@ -224,10 +227,147 @@
     return "jpg";
   }
 
+  class ImageDownloadError extends Error {
+    constructor(
+      message,
+      { retryable = false, status = 0, code = "", cause } = {},
+    ) {
+      super(message);
+      this.name = "ImageDownloadError";
+      this.retryable = Boolean(retryable);
+      this.status = Number(status) || 0;
+      this.code = code;
+      if (cause !== undefined) this.cause = cause;
+    }
+  }
+
+  function isRetryableHttpStatus(status) {
+    const value = Number(status) || 0;
+    return value === 408 || value === 429 || value >= 500;
+  }
+
+  function isRetryableImageExportError(error) {
+    if (!error || error.name === "AbortError") return false;
+    if (typeof error.retryable === "boolean") return error.retryable;
+    if (error instanceof TypeError) return true;
+    return isRetryableHttpStatus(error.status);
+  }
+
+  function imageRecordAvailability(record) {
+    const refs = record?.fullSizeRefs;
+    if (
+      refs?.responseId &&
+      refs?.conversationId &&
+      refs?.responseCandidateId &&
+      refs?.imageId
+    ) {
+      return { ready: true, reason: "Original-size metadata available" };
+    }
+    if (classifyGeminiAssetUrl(record?.sourceUrl)?.original === true) {
+      return { ready: true, reason: "Original-size asset available" };
+    }
+    return {
+      ready: false,
+      reason: "Original-size metadata is unavailable",
+    };
+  }
+
+  function stableStringHash(value) {
+    let hash = 0x811c9dc5;
+    for (const character of String(value || "")) {
+      hash ^= character.codePointAt(0);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+
+  function generatedImageFilenameForRecord(
+    record,
+    mimeType,
+    fallbackConversationId = "",
+  ) {
+    const refs = record?.fullSizeRefs || {};
+    const conversation = String(
+      record?.conversationId || refs.conversationId || fallbackConversationId,
+    )
+      .replace(/^c_/u, "")
+      .replace(/[^a-z0-9_-]/giu, "")
+      .slice(0, 12) || "conversation";
+    const response = String(record?.responseId || refs.responseId || "")
+      .replace(/^r_/u, "")
+      .replace(/[^a-z0-9_-]/giu, "")
+      .slice(0, 10) || "image";
+    const candidate = String(refs.responseCandidateId || "")
+      .replace(/^rc_/u, "")
+      .replace(/[^a-z0-9_-]/giu, "")
+      .slice(0, 8) || "candidate";
+    const attachmentMatch = String(
+      record?.attachmentIndex ?? refs.imageId ?? "",
+    ).match(/(\d+)$/u);
+    const attachment = String(
+      Math.max(0, Number.parseInt(attachmentMatch?.[1] || "0", 10)),
+    ).padStart(2, "0");
+    const fingerprint = stableStringHash(
+      `${record?.sourceUrl || ""}|${refs.responseCandidateId || ""}|${refs.imageId || ""}`,
+    ).slice(0, 8);
+    return `gemini-${conversation}-${response}-${candidate}-i${attachment}-${fingerprint}.${extensionForMimeType(mimeType)}`;
+  }
+
+  function rememberGeneratedImageRecord(registry, record) {
+    if (!(registry instanceof Map) || !record?.sourceUrl) return null;
+    const existing = registry.get(record.sourceUrl);
+    const remembered = {
+      sourceUrl: record.sourceUrl,
+      responseId: record.responseId || existing?.responseId || "",
+      fullSizeRefs: record.fullSizeRefs
+        ? { ...record.fullSizeRefs }
+        : existing?.fullSizeRefs || null,
+      attachmentIndex:
+        record.attachmentIndex ?? existing?.attachmentIndex ?? 0,
+      conversationId:
+        record.conversationId || existing?.conversationId || "",
+      discoveryIndex: existing?.discoveryIndex || registry.size + 1,
+    };
+    registry.set(record.sourceUrl, remembered);
+    return remembered;
+  }
+
   async function forEachSequential(items, callback) {
     for (const [index, item] of items.entries()) {
       await callback(item, index);
     }
+  }
+
+  async function retryOperation(
+    operation,
+    {
+      attempts = 3,
+      shouldRetry = () => true,
+      onRetry = () => {},
+      wait = async () => {},
+    } = {},
+  ) {
+    const maximumAttempts = Math.max(1, Number(attempts) || 1);
+    let lastError;
+
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      try {
+        return await operation(attempt);
+      } catch (error) {
+        lastError = error;
+        if (
+          error?.name === "AbortError" ||
+          attempt === maximumAttempts ||
+          !shouldRetry(error)
+        ) {
+          throw error;
+        }
+        onRetry(error, attempt + 1);
+        await wait(attempt, error);
+      }
+    }
+
+    throw lastError;
   }
 
   function normalizeModeLabel(value) {
@@ -274,12 +414,18 @@
       forEachSequential,
       fullSizeImageUrlFromRpc,
       fullSizeImageUrlsFromRpcText,
+      generatedImageFilenameForRecord,
+      imageRecordAvailability,
+      isRetryableHttpStatus,
+      isRetryableImageExportError,
       modelLabelMatches,
       modeLabelHasExtended,
       normalizeModeLabel,
       normalizeGeneratedImageUrl,
       normalizeOriginalImageUrl,
       parseFullSizeImageRefs,
+      rememberGeneratedImageRecord,
+      retryOperation,
       rewriteGoogleusercontentGgToRdGg,
     };
     return;
@@ -868,6 +1014,9 @@
 
   const activeImageDownloads = new WeakSet();
   let watermarkEnginePromise = null;
+  const capturedGeneratedImages = new Map();
+  let capturedImageConversationKey = "";
+  let imageCaptureTimer = 0;
 
   function getResponseHeader(headers, name) {
     const pattern = new RegExp(`^${name}:\\s*(.+)$`, "imu");
@@ -916,7 +1065,11 @@
   function requestArrayBuffer(url, signal) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== "function") {
-        reject(new Error("GM_xmlhttpRequest is unavailable."));
+        reject(
+          new ImageDownloadError("GM_xmlhttpRequest is unavailable.", {
+            code: "manager-api-unavailable",
+          }),
+        );
         return;
       }
 
@@ -948,8 +1101,22 @@
           Referer: "https://gemini.google.com/",
         },
         onload: (response) => finish(resolve, response),
-        onerror: () => finish(reject, new Error("The image request failed.")),
-        ontimeout: () => finish(reject, new Error("The image request timed out.")),
+        onerror: () =>
+          finish(
+            reject,
+            new ImageDownloadError("The image request failed.", {
+              retryable: true,
+              code: "network-error",
+            }),
+          ),
+        ontimeout: () =>
+          finish(
+            reject,
+            new ImageDownloadError("The image request timed out.", {
+              retryable: true,
+              code: "timeout",
+            }),
+          ),
         onabort: () =>
           finish(
             reject,
@@ -966,6 +1133,7 @@
 
   async function fetchImageBlobFromProbes(probes, signal) {
     let lastError = null;
+    let retryableError = null;
 
     for (const probe of probes) {
       let currentUrl = probe;
@@ -973,11 +1141,21 @@
         try {
           const response = await requestArrayBuffer(currentUrl, signal);
           if (response.status < 200 || response.status >= 400) {
-            throw new Error(`Image request returned HTTP ${response.status}.`);
+            throw new ImageDownloadError(
+              `Image request returned HTTP ${response.status}.`,
+              {
+                retryable: isRetryableHttpStatus(response.status),
+                status: response.status,
+                code: "http-error",
+              },
+            );
           }
           const buffer = response.response;
           if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
-            throw new Error("Gemini returned an empty image response.");
+            throw new ImageDownloadError(
+              "Gemini returned an empty image response.",
+              { retryable: true, code: "empty-response" },
+            );
           }
           const declaredType = getResponseHeader(
             response.responseHeaders,
@@ -989,18 +1167,28 @@
           }
           const nextUrl = firstHttpUrlInBuffer(buffer);
           if (!nextUrl || nextUrl === currentUrl) {
-            throw new Error("Gemini did not return an image URL.");
+            throw new ImageDownloadError(
+              "Gemini did not return an image URL.",
+              { code: "missing-redirect-url" },
+            );
           }
           currentUrl = nextUrl;
         } catch (error) {
           if (error?.name === "AbortError") throw error;
           lastError = error;
+          if (isRetryableImageExportError(error)) retryableError = error;
           break;
         }
       }
     }
 
-    throw lastError || new Error("No full-size image source was found.");
+    throw (
+      retryableError ||
+      lastError ||
+      new ImageDownloadError("No full-size image source was found.", {
+        code: "missing-source",
+      })
+    );
   }
 
   async function fetchFullSizeImageBlob(record, signal) {
@@ -1013,7 +1201,10 @@
         );
         const resolvedUrls = fullSizeImageUrlsFromRpcText(rpcText);
         if (resolvedUrls.length === 0) {
-          throw new Error("Gemini returned no original-size image URL.");
+          throw new ImageDownloadError(
+            "Gemini returned no original-size image URL.",
+            { code: "missing-original-url" },
+          );
         }
         return await fetchImageBlobFromProbes(
           resolvedUrls.flatMap(buildFullSizeProbeUrls),
@@ -1025,8 +1216,14 @@
           "[Gemini Toolkit] Native full-size image lookup failed",
           error,
         );
-        throw new Error(
+        throw new ImageDownloadError(
           `Could not resolve Gemini's original-size image. The preview was not downloaded. ${error?.message || ""}`.trim(),
+          {
+            retryable: isRetryableImageExportError(error),
+            status: error?.status,
+            code: error?.code || "original-lookup-failed",
+            cause: error,
+          },
         );
       }
     }
@@ -1037,8 +1234,9 @@
         signal,
       );
     }
-    throw new Error(
+    throw new ImageDownloadError(
       "Gemini did not expose an original-size image URL. The preview was not downloaded.",
+      { code: "missing-original-metadata" },
     );
   }
 
@@ -1067,12 +1265,16 @@
     const normalizedSource = normalizeGeneratedImageUrl(sourceUrl);
     if (!normalizedSource) return null;
     const jslog = button.getAttribute("jslog") || "";
-    const imageIndex =
-      button
-        .closest("single-image")
-        ?.getAttribute("data-image-attachment-index") ||
-      0;
-    const fullSizeRefs = parseFullSizeImageRefs(jslog, imageIndex);
+    const attachmentIndex = Math.max(
+      0,
+      Number.parseInt(
+        button
+          .closest("single-image")
+          ?.getAttribute("data-image-attachment-index") || "0",
+        10,
+      ) || 0,
+    );
+    const fullSizeRefs = parseFullSizeImageRefs(jslog, attachmentIndex);
     const responseId = fullSizeRefs?.responseId || "";
     return {
       button,
@@ -1080,20 +1282,81 @@
       sourceUrl: normalizedSource,
       responseId,
       fullSizeRefs,
+      attachmentIndex,
+      conversationId:
+        fullSizeRefs?.conversationId || getCurrentConversationId(),
       index,
     };
   }
 
-  function collectGeneratedImageRecords() {
-    const records = [];
-    const seen = new Set();
-    for (const button of document.querySelectorAll(FULL_SIZE_BUTTON_SELECTOR)) {
-      const record = imageRecordFromButton(button, records.length + 1);
-      if (!record || seen.has(record.sourceUrl)) continue;
-      seen.add(record.sourceUrl);
-      records.push(record);
+  function currentImageCaptureConversationKey() {
+    return (
+      getCurrentConversationId() ||
+      `${pageWindow.location.pathname}${pageWindow.location.search}`
+    );
+  }
+
+  function resetCapturedGeneratedImages() {
+    pageWindow.clearTimeout(imageCaptureTimer);
+    imageCaptureTimer = 0;
+    capturedGeneratedImages.clear();
+    capturedImageConversationKey = currentImageCaptureConversationKey();
+  }
+
+  function captureCurrentGeneratedImages() {
+    const liveRecords = [
+      ...document.querySelectorAll(FULL_SIZE_BUTTON_SELECTOR),
+    ]
+      .map((button) => imageRecordFromButton(button))
+      .filter(Boolean);
+    const inferredConversationId =
+      getCurrentConversationId() ||
+      [...liveRecords]
+        .reverse()
+        .find((record) => record.conversationId)?.conversationId ||
+      "";
+    const conversationKey =
+      inferredConversationId || currentImageCaptureConversationKey();
+    if (conversationKey !== capturedImageConversationKey) {
+      capturedGeneratedImages.clear();
+      capturedImageConversationKey = conversationKey;
     }
-    return records;
+
+    for (const record of liveRecords) {
+      if (
+        inferredConversationId &&
+        record.conversationId &&
+        record.conversationId !== inferredConversationId
+      ) {
+        continue;
+      }
+      rememberGeneratedImageRecord(capturedGeneratedImages, {
+        ...record,
+        conversationId: record.conversationId || inferredConversationId,
+      });
+    }
+    return capturedGeneratedImages.size;
+  }
+
+  function scheduleGeneratedImageCapture({ delay = IMAGE_CAPTURE_DELAY } = {}) {
+    if (imageCaptureTimer) return;
+    imageCaptureTimer = pageWindow.setTimeout(() => {
+      imageCaptureTimer = 0;
+      captureCurrentGeneratedImages();
+    }, delay);
+  }
+
+  function collectGeneratedImageRecords() {
+    captureCurrentGeneratedImages();
+    return [...capturedGeneratedImages.values()]
+      .sort((first, second) => first.discoveryIndex - second.discoveryIndex)
+      .map((record, index) => ({
+        ...record,
+        fullSizeRefs: record.fullSizeRefs
+          ? { ...record.fullSizeRefs }
+          : null,
+        index: index + 1,
+      }));
   }
 
   async function decodeImageBlob(blob) {
@@ -1144,72 +1407,84 @@
     return watermarkEnginePromise;
   }
 
+  function releaseCanvas(canvas) {
+    if (!canvas || typeof canvas.width !== "number") return;
+    canvas.width = 1;
+    canvas.height = 1;
+  }
+
   async function removeWatermarkFromImageBlob(blob) {
     const image = await decodeImageBlob(blob);
-    const width = image.naturalWidth || image.width;
-    const height = image.naturalHeight || image.height;
-    const edge = Math.min(width, height, CORNER_CROP_EDGE);
-    const cropX = width - edge;
-    const cropY = height - edge;
-    const cropCanvas = document.createElement("canvas");
-    cropCanvas.width = edge;
-    cropCanvas.height = edge;
-    const cropContext = cropCanvas.getContext("2d", {
-      willReadFrequently: true,
-    });
-    if (!cropContext) {
-      image.close?.();
-      throw new Error("Canvas processing is unavailable.");
-    }
-    cropContext.drawImage(
-      image,
-      cropX,
-      cropY,
-      edge,
-      edge,
-      0,
-      0,
-      edge,
-      edge,
-    );
+    let cropCanvas = null;
+    let processedCrop = null;
+    let output = null;
 
-    const engine = await getWatermarkEngine();
-    const processedCrop = await engine.removeWatermarkFromImage(cropCanvas, {
-      adaptiveMode: "always",
-    });
-    if (processedCrop.__watermarkMeta?.applied !== true) {
-      image.close?.();
-      return { blob, removed: false };
-    }
+    try {
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      const edge = Math.min(width, height, CORNER_CROP_EDGE);
+      const cropX = width - edge;
+      const cropY = height - edge;
+      cropCanvas = document.createElement("canvas");
+      cropCanvas.width = edge;
+      cropCanvas.height = edge;
+      const cropContext = cropCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+      if (!cropContext) {
+        throw new Error("Canvas processing is unavailable.");
+      }
+      cropContext.drawImage(
+        image,
+        cropX,
+        cropY,
+        edge,
+        edge,
+        0,
+        0,
+        edge,
+        edge,
+      );
 
-    const output = document.createElement("canvas");
-    output.width = width;
-    output.height = height;
-    const outputContext = output.getContext("2d");
-    if (!outputContext) {
+      const engine = await getWatermarkEngine();
+      processedCrop = await engine.removeWatermarkFromImage(cropCanvas, {
+        adaptiveMode: "always",
+      });
+      if (processedCrop.__watermarkMeta?.applied !== true) {
+        return { blob, removed: false };
+      }
+
+      output = document.createElement("canvas");
+      output.width = width;
+      output.height = height;
+      const outputContext = output.getContext("2d");
+      if (!outputContext) {
+        throw new Error("Canvas export is unavailable.");
+      }
+      outputContext.drawImage(image, 0, 0);
+      outputContext.drawImage(processedCrop, cropX, cropY);
+      const outputType = ["image/png", "image/jpeg", "image/webp"].includes(
+        blob.type,
+      )
+        ? blob.type
+        : "image/png";
+      const processedBlob = await canvasToBlob(output, outputType, 0.92);
+      return { blob: processedBlob, removed: true };
+    } finally {
       image.close?.();
-      throw new Error("Canvas export is unavailable.");
+      image.removeAttribute?.("src");
+      releaseCanvas(output);
+      if (processedCrop !== cropCanvas) releaseCanvas(processedCrop);
+      releaseCanvas(cropCanvas);
     }
-    outputContext.drawImage(image, 0, 0);
-    outputContext.drawImage(processedCrop, cropX, cropY);
-    image.close?.();
-    const outputType = ["image/png", "image/jpeg", "image/webp"].includes(
-      blob.type,
-    )
-      ? blob.type
-      : "image/png";
-    return {
-      blob: await canvasToBlob(output, outputType, 0.92),
-      removed: true,
-    };
   }
 
   function generatedImageFilename(record, mimeType) {
-    const conversation =
-      getCurrentConversationId().replace(/^c_/u, "") || "conversation";
-    const response = record.responseId.replace(/^r_/u, "").slice(0, 10);
-    const suffix = response ? `-${response}` : "";
-    return `gemini-${conversation.slice(0, 12)}-${String(record.index).padStart(3, "0")}${suffix}.${extensionForMimeType(mimeType)}`;
+    return generatedImageFilenameForRecord(
+      record,
+      mimeType,
+      getCurrentConversationId(),
+    );
   }
 
   function saveBlob(blob, filename, revokeDelay = 60_000) {
@@ -1274,12 +1549,16 @@
           top: 50%;
           right: 16px;
           transform: translateY(-50%);
+          visibility: hidden;
+          pointer-events: none;
         }
         :host(.header-docked) .launchers {
           position: static;
           top: auto;
           right: auto;
           transform: none;
+          visibility: visible;
+          pointer-events: auto;
         }
         .launcher-menu {
           position: absolute;
@@ -1348,6 +1627,9 @@
         }
         .export-panel {
           width: min(520px, 100%);
+          max-height: calc(100vh - 48px);
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr) auto;
           overflow: hidden;
           color: var(--text);
           background: var(--background);
@@ -1358,12 +1640,82 @@
         .export-body {
           display: grid;
           gap: 14px;
+          overflow: auto;
           padding: 20px;
           color: var(--muted);
           font-size: 14px;
           line-height: 1.5;
         }
         .export-body p { margin: 0; }
+        .export-inventory {
+          max-height: 190px;
+          overflow: auto;
+          color: var(--text);
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 7px;
+        }
+        .export-inventory ol {
+          display: grid;
+          gap: 0;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+          counter-reset: export-image;
+        }
+        .export-inventory li {
+          counter-increment: export-image;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 8px;
+          min-height: 34px;
+          padding: 7px 10px;
+          border-bottom: 1px solid var(--border);
+          font-size: 12px;
+        }
+        .export-inventory li:last-child { border-bottom: 0; }
+        .export-inventory li::before {
+          content: counter(export-image) ".";
+          color: var(--muted);
+          font-variant-numeric: tabular-nums;
+        }
+        .export-filename {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .export-readiness {
+          padding: 1px 6px;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          color: var(--muted);
+          white-space: nowrap;
+        }
+        .export-readiness.unavailable {
+          color: var(--text);
+          border-style: dashed;
+          font-weight: 700;
+        }
+        .export-failures {
+          max-height: 150px;
+          overflow: auto;
+          padding: 10px 12px;
+          color: var(--text);
+          background: var(--surface-muted);
+          border: 1px solid var(--border);
+          border-radius: 7px;
+          font-size: 12px;
+        }
+        .export-failures summary { cursor: pointer; font-weight: 700; }
+        .export-failures ul {
+          display: grid;
+          gap: 6px;
+          margin: 10px 0 0;
+          padding-left: 20px;
+          overflow-wrap: anywhere;
+        }
         .export-actions {
           display: flex;
           align-items: center;
@@ -1579,6 +1931,15 @@
             border: 0;
             border-radius: 0;
           }
+          .export-panel {
+            width: 100%;
+            max-height: 100dvh;
+            border: 0;
+            border-radius: 0;
+          }
+          .export-body { padding: 16px; }
+          .export-actions { flex-wrap: wrap; padding: 12px 16px; }
+          .export-progress { min-width: 100%; }
           .launchers {
             right: 12px;
             max-width: calc(100vw - 28px);
@@ -1960,6 +2321,10 @@
       id: "export-description",
       text: "Scanning generated images in the current conversation…",
     });
+    const exportInventory = addElement(exportBody, "div", {
+      className: "export-inventory hidden",
+      attributes: { "aria-label": "Detected image export list" },
+    });
     const exportWatermarkLabel = addElement(exportBody, "label", {
       className: "check-label",
     });
@@ -1977,6 +2342,9 @@
     exportWatermarkLabel.append("Remove watermark before export");
     addElement(exportBody, "p", {
       text: "Images are fetched and downloaded one at a time without creating a ZIP file. Keep this tab open and allow multiple downloads if your browser asks.",
+    });
+    const exportFailures = addElement(exportBody, "details", {
+      className: "export-failures hidden",
     });
     const exportActions = addElement(exportPanel, "footer", {
       className: "export-actions",
@@ -2035,7 +2403,9 @@
       exportOverlay,
       closeExport,
       exportDescription,
+      exportInventory,
       exportRemoveWatermark,
+      exportFailures,
       exportProgress,
       cancelExport,
       confirmExport,
@@ -2050,6 +2420,7 @@
 
   let imageToastTimer = 0;
   let pendingImageRecords = [];
+  let imageExportSession = null;
 
   function mountLauncherNearConversationActions() {
     const conversationActions = document.querySelector(
@@ -2064,12 +2435,11 @@
       conversationActions ||
       nativeButton?.closest("gem-icon-button") ||
       nativeButton;
-    if (anchor) {
+    const anchorRect = anchor?.getBoundingClientRect();
+    if (anchor && anchorRect?.width > 0 && anchorRect.height > 0) {
       if (ui.host.parentElement !== document.documentElement) {
         document.documentElement.append(ui.host);
       }
-      ui.host.classList.add("header-docked");
-      const anchorRect = anchor.getBoundingClientRect();
       const launcherRect = ui.launcherToggle.getBoundingClientRect();
       const launcherWidth = launcherRect.width || 84;
       const launcherHeight = launcherRect.height || anchorRect.height;
@@ -2078,6 +2448,7 @@
         8,
         anchorRect.top + (anchorRect.height - launcherHeight) / 2,
       )}px`;
+      ui.host.classList.add("header-docked");
       return;
     }
     if (!ui.host.isConnected) {
@@ -2130,10 +2501,14 @@
       setImageToast("This image download is already running.");
       return;
     }
+    const liveRecord = imageRecordFromButton(button, 1);
     const allRecords = collectGeneratedImageRecords();
-    const record =
-      allRecords.find((candidate) => candidate.button === button) ||
-      imageRecordFromButton(button, 1);
+    const capturedRecord = allRecords.find(
+      (candidate) => candidate.sourceUrl === liveRecord?.sourceUrl,
+    );
+    const record = capturedRecord
+      ? { ...capturedRecord, button, image: liveRecord?.image }
+      : liveRecord;
     if (!record) {
       setImageToast("Could not locate the full-size source for this image.", true);
       return;
@@ -2148,9 +2523,19 @@
         : "Downloading full-size image…",
     );
     try {
-      const result = await prepareDownloadedImage(
-        record,
-        state.removeWatermark,
+      const result = await retryOperation(
+        () => prepareDownloadedImage(record, state.removeWatermark),
+        {
+          attempts: IMAGE_EXPORT_MAX_ATTEMPTS,
+          shouldRetry: isRetryableImageExportError,
+          onRetry: (_error, nextAttempt) => {
+            setImageToast(
+              `Temporary download failure. Retrying ${nextAttempt}/${IMAGE_EXPORT_MAX_ATTEMPTS}…`,
+            );
+          },
+          wait: (attempt) =>
+            sleep(IMAGE_EXPORT_RETRY_DELAY * 2 ** (attempt - 1)),
+        },
       );
       saveBlob(
         result.blob,
@@ -2183,19 +2568,74 @@
     }
   }
 
+  function renderImageExportInventory(records) {
+    ui.exportInventory.replaceChildren();
+    ui.exportInventory.classList.toggle("hidden", records.length === 0);
+    if (records.length === 0) return;
+
+    const list = document.createElement("ol");
+    for (const record of records) {
+      const availability = imageRecordAvailability(record);
+      const item = document.createElement("li");
+      const filename = document.createElement("span");
+      filename.className = "export-filename";
+      filename.textContent = generatedImageFilename(
+        record,
+        "image/jpeg",
+      ).replace(/\.jpg$/u, ".{format}");
+      filename.title = filename.textContent;
+      const readiness = document.createElement("span");
+      readiness.className = `export-readiness${availability.ready ? "" : " unavailable"}`;
+      readiness.textContent = availability.ready ? "Ready" : "Missing metadata";
+      readiness.title = availability.reason;
+      item.append(filename, readiness);
+      list.append(item);
+    }
+    ui.exportInventory.append(list);
+  }
+
   function openExportDialog() {
-    pendingImageRecords = collectGeneratedImageRecords();
-    const count = pendingImageRecords.length;
+    const records = collectGeneratedImageRecords();
+    const readyRecords = records.filter(
+      (record) => imageRecordAvailability(record).ready,
+    );
+    pendingImageRecords = readyRecords;
+    const count = records.length;
+    const unavailable = count - readyRecords.length;
+    imageExportSession = {
+      records,
+      downloaded: new Set(),
+      watermarkFallbacks: new Set(),
+      failures: new Map(),
+    };
+    for (const record of records) {
+      const availability = imageRecordAvailability(record);
+      if (availability.ready) continue;
+      imageExportSession.failures.set(imageExportRecordKey(record), {
+        record,
+        message: availability.reason,
+        retryable: false,
+        attempts: 0,
+      });
+    }
     ui.exportDescription.textContent = count
-      ? `Found ${count} generated image${count === 1 ? "" : "s"} in the current conversation. Confirm to fetch every full-size image.`
+      ? `Captured ${count} generated image${count === 1 ? "" : "s"} while this conversation was loaded: ${readyRecords.length} ready${unavailable > 0 ? `, ${unavailable} missing original-size metadata` : ""}.`
       : "No generated images with a full-size download button were found in the loaded conversation.";
-    ui.exportProgress.textContent = count ? "Ready." : "Nothing to export.";
-    ui.confirmExport.disabled = count === 0;
+    ui.exportProgress.textContent = count
+      ? `Ready ${readyRecords.length} · Unavailable ${unavailable}`
+      : "Nothing to export.";
+    renderImageExportInventory(records);
+    ui.exportFailures.replaceChildren();
+    ui.exportFailures.classList.add("hidden");
+    ui.confirmExport.classList.remove("hidden");
+    ui.confirmExport.textContent = `Download images (${readyRecords.length})`;
+    ui.cancelExport.textContent = "Cancel";
+    ui.confirmExport.disabled = readyRecords.length === 0;
     ui.exportRemoveWatermark.checked = state.removeWatermark;
     ui.exportOverlay.classList.remove("hidden");
     ui.exportLauncher.disabled = true;
     ui.launcher.disabled = true;
-    (count ? ui.confirmExport : ui.closeExport).focus();
+    (readyRecords.length > 0 ? ui.confirmExport : ui.closeExport).focus();
   }
 
   function closeExportDialog() {
@@ -2203,6 +2643,8 @@
     ui.exportOverlay.classList.add("hidden");
     ui.exportLauncher.disabled = false;
     ui.launcher.disabled = false;
+    pendingImageRecords = [];
+    imageExportSession = null;
     ui.exportLauncher.focus();
   }
 
@@ -2211,32 +2653,131 @@
     ui.confirmExport.disabled = busy || pendingImageRecords.length === 0;
     ui.closeExport.disabled = busy;
     ui.exportRemoveWatermark.disabled = busy;
-    ui.cancelExport.textContent = busy ? "Stop" : "Cancel";
+    if (busy) ui.cancelExport.textContent = "Stop";
+  }
+
+  function imageExportRecordKey(record) {
+    return record.sourceUrl || String(record.index);
+  }
+
+  function imageExportSummary(session) {
+    const downloaded = session?.downloaded.size || 0;
+    const failed = session?.failures.size || 0;
+    const total = session?.records.length || 0;
+    const skipped = Math.max(0, total - downloaded - failed);
+    const watermarkFallbacks = session?.watermarkFallbacks.size || 0;
+    const parts = [
+      `Downloaded ${downloaded}`,
+      `Failed ${failed}`,
+      `Not processed ${skipped}`,
+    ];
+    if (watermarkFallbacks > 0) {
+      parts.push(`Watermark kept ${watermarkFallbacks}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function renderImageExportFailures(session) {
+    ui.exportFailures.replaceChildren();
+    const failures = [...session.failures.values()];
+    ui.exportFailures.classList.toggle("hidden", failures.length === 0);
+    if (failures.length === 0) return;
+
+    const summary = document.createElement("summary");
+    summary.textContent = `${failures.length} image${failures.length === 1 ? "" : "s"} could not be exported`;
+    const list = document.createElement("ul");
+    for (const { record, message, attempts = 0 } of failures) {
+      const item = document.createElement("li");
+      const attemptLabel = attempts > 0
+        ? ` (${attempts} attempt${attempts === 1 ? "" : "s"})`
+        : "";
+      item.textContent = `${generatedImageFilename(record, "image/jpeg")}${attemptLabel}: ${message}`;
+      list.append(item);
+    }
+    ui.exportFailures.append(summary, list);
+  }
+
+  function prepareImageExportFollowUp(session, { cancelled = false } = {}) {
+    pendingImageRecords = session.records.filter(
+      (record) => {
+        const recordKey = imageExportRecordKey(record);
+        const failure = session.failures.get(recordKey);
+        return (
+          !session.downloaded.has(recordKey) &&
+          imageRecordAvailability(record).ready &&
+          failure?.retryable !== false
+        );
+      },
+    );
+    const failed = session.failures.size;
+    const remaining = pendingImageRecords.length;
+    ui.exportProgress.textContent = imageExportSummary(session);
+    renderImageExportFailures(session);
+
+    if (remaining === 0) {
+      ui.exportDescription.textContent =
+        failed === 0
+          ? "Export complete. Every detected full-size image was downloaded."
+          : `Export finished. ${failed} image${failed === 1 ? "" : "s"} could not be exported and cannot be retried.`;
+      ui.confirmExport.classList.add("hidden");
+      ui.cancelExport.textContent = "Close";
+      return;
+    }
+
+    ui.exportDescription.textContent = cancelled
+      ? "Export stopped. You can resume the images that were not downloaded."
+      : `${failed} image${failed === 1 ? "" : "s"} could not be downloaded. ${remaining} transient failure${remaining === 1 ? "" : "s"} can be retried.`;
+    ui.confirmExport.classList.remove("hidden");
+    ui.confirmExport.textContent = cancelled
+      ? `Resume remaining (${remaining})`
+      : `Retry failed (${remaining})`;
+    ui.confirmExport.disabled = false;
+    ui.cancelExport.textContent = "Close";
   }
 
   async function exportAllGeneratedImages() {
     if (state.exportingImages || pendingImageRecords.length === 0) return;
 
     persistWatermarkSetting(ui.exportRemoveWatermark.checked);
+    const session = imageExportSession;
+    if (!session) return;
+    const records = [...pendingImageRecords];
     const controller = new pageWindow.AbortController();
     state.imageExportAbortController = controller;
     setExportBusy(true);
-    const errors = [];
-    let exported = 0;
-    let watermarkFallbacks = 0;
 
     try {
-      await forEachSequential(pendingImageRecords, async (record, index) => {
+      await forEachSequential(records, async (record, index) => {
         if (controller.signal.aborted) {
           throw new pageWindow.DOMException("Cancelled", "AbortError");
         }
+        const recordKey = imageExportRecordKey(record);
+        let attemptsMade = 0;
         ui.exportProgress.textContent =
-          `Downloading ${index + 1}/${pendingImageRecords.length}…`;
+          `Downloading ${index + 1}/${records.length}…`;
         try {
-          const result = await prepareDownloadedImage(
-            record,
-            state.removeWatermark,
-            controller.signal,
+          const result = await retryOperation(
+            (attempt) => {
+              attemptsMade = attempt;
+              return prepareDownloadedImage(
+                record,
+                state.removeWatermark,
+                controller.signal,
+              );
+            },
+            {
+              attempts: IMAGE_EXPORT_MAX_ATTEMPTS,
+              shouldRetry: isRetryableImageExportError,
+              onRetry: (_error, nextAttempt) => {
+                ui.exportProgress.textContent =
+                  `Retrying ${index + 1}/${records.length} · Attempt ${nextAttempt}/${IMAGE_EXPORT_MAX_ATTEMPTS}…`;
+              },
+              wait: (attempt) =>
+                sleep(
+                  IMAGE_EXPORT_RETRY_DELAY * 2 ** (attempt - 1),
+                  controller.signal,
+                ),
+            },
           );
           if (controller.signal.aborted) {
             throw new pageWindow.DOMException("Cancelled", "AbortError");
@@ -2244,48 +2785,52 @@
           saveBlob(
             result.blob,
             generatedImageFilename(record, result.blob.type),
-            10_000,
+            3_000,
           );
-          exported += 1;
-          if (result.watermarkError) watermarkFallbacks += 1;
+          session.downloaded.add(recordKey);
+          session.failures.delete(recordKey);
+          if (result.watermarkError) {
+            session.watermarkFallbacks.add(recordKey);
+          } else {
+            session.watermarkFallbacks.delete(recordKey);
+          }
         } catch (error) {
           if (error?.name === "AbortError") throw error;
-          const message =
-            `${generatedImageFilename(record, "image/jpeg")}: ${error?.message || "Download failed"}`;
-          errors.push(message);
-          console.warn(`[Gemini Toolkit] ${message}`, error);
+          const message = error?.message || "Download failed";
+          session.failures.set(recordKey, {
+            record,
+            message,
+            retryable: isRetryableImageExportError(error),
+            attempts: attemptsMade,
+          });
+          console.warn(
+            `[Gemini Toolkit] ${generatedImageFilename(record, "image/jpeg")}: ${message}`,
+            error,
+          );
         }
         ui.exportProgress.textContent =
-          `Processed ${index + 1}/${pendingImageRecords.length} · Downloaded ${exported}`;
-        if (index + 1 < pendingImageRecords.length) {
+          `Processed ${index + 1}/${records.length} · ${imageExportSummary(session)}`;
+        if (index + 1 < records.length) {
           await sleep(IMAGE_EXPORT_DOWNLOAD_DELAY, controller.signal);
         }
       });
-      if (exported === 0) {
-        throw new Error(errors[0] || "No images could be exported.");
-      }
-      const details = [
-        `Downloaded ${exported} full-size image${exported === 1 ? "" : "s"}`,
-      ];
-      if (errors.length > 0) details.push(`${errors.length} failed`);
-      if (watermarkFallbacks > 0) {
-        details.push(`${watermarkFallbacks} kept the original watermark`);
-      }
-      setImageToast(
-        `${details.join(" · ")}.`,
-        errors.length > 0 || watermarkFallbacks > 0,
-      );
       setExportBusy(false);
-      closeExportDialog();
+      prepareImageExportFollowUp(session);
+      setImageToast(
+        `${imageExportSummary(session)}.`,
+        session.failures.size > 0 || session.watermarkFallbacks.size > 0,
+      );
     } catch (error) {
       const cancelled = error?.name === "AbortError";
-      ui.exportProgress.textContent = cancelled
-        ? "Export stopped."
-        : error?.message || "Export failed.";
-      setImageToast(
-        cancelled ? "Image export stopped." : ui.exportProgress.textContent,
-        !cancelled,
-      );
+      if (cancelled) {
+        setExportBusy(false);
+        prepareImageExportFollowUp(session, { cancelled: true });
+        setImageToast(`Image export stopped. ${imageExportSummary(session)}.`);
+      } else {
+        ui.exportProgress.textContent = error?.message || "Export failed.";
+        ui.cancelExport.textContent = "Close";
+        setImageToast(ui.exportProgress.textContent, true);
+      }
     } finally {
       state.imageExportAbortController = null;
       setExportBusy(false);
@@ -2651,7 +3196,7 @@
     if (!dialogSelector) return;
 
     const focusable = [...ui.shadow.querySelectorAll(
-      `${dialogSelector} button:not(:disabled), ${dialogSelector} input:not(:disabled), ${dialogSelector} select:not(:disabled), ${dialogSelector} a[href]`,
+      `${dialogSelector} button:not(:disabled), ${dialogSelector} input:not(:disabled), ${dialogSelector} select:not(:disabled), ${dialogSelector} a[href], ${dialogSelector} summary`,
     )].filter((element) => element.getClientRects().length > 0);
     if (focusable.length === 0) {
       return;
@@ -2827,6 +3372,8 @@
       }
       if (target.closest('a[href="/app"], a[href="/"]')) {
         manualModeOverride = false;
+        resetCapturedGeneratedImages();
+        scheduleGeneratedImageCapture();
         scheduleModeDefaults({ delay: 600 });
       }
     },
@@ -2870,6 +3417,24 @@
     attributeFilter: ["aria-label"],
   });
 
+  const imageObserver = new pageWindow.MutationObserver(() => {
+    scheduleGeneratedImageCapture();
+  });
+  imageObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: [
+      "aria-label",
+      "src",
+      "jslog",
+      "data-gwr-stable-source",
+      "data-gwr-source-url",
+      "data-gwr-page-image-source",
+      "data-image-attachment-index",
+    ],
+  });
+
   pageWindow.setInterval(() => {
     const locationKey = `${pageWindow.location.pathname}${pageWindow.location.search}`;
     if (locationKey === lastLocationKey) {
@@ -2877,9 +3442,13 @@
     }
     lastLocationKey = locationKey;
     manualModeOverride = false;
+    resetCapturedGeneratedImages();
+    scheduleGeneratedImageCapture();
     scheduleModeDefaults({ delay: 500 });
   }, 500);
 
   mountLauncherNearConversationActions();
+  resetCapturedGeneratedImages();
+  captureCurrentGeneratedImages();
   scheduleModeDefaults({ delay: 250 });
 })();

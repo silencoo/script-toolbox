@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek Enhance
 // @namespace    http://www.nodeseek.com/
-// @version      1.3
+// @version      1.4.6
 // @description  【NodeSeek增强脚本】全面增强 NodeSeek/DeepFlood 论坛体验。核心功能：自动签到（支持随机/固定鸡腿）、无缝翻页（帖子列表和评论自动加载）、快捷回复（浮动编辑器）、代码高亮（支持亮色/暗色主题）、图片滑动查看。内容管理：屏蔽用户/帖子/分类（支持关键词和正则）、帖子排序（按回复数/查看数/已访问置底）、隐藏元素（页脚/分类标签/帖子信息/推荐轮播/用户统计面板）。界面优化：紧凑模式（1-4列多栏布局，自定义间距/字体/头像大小）、自定义背景图（支持URL/本地上传）、Header/Frame透明度（支持模糊和饱和度）、字体排版自定义（标题/Tag/元数据/内容）、已访问链接标记（可隐藏/置底）、默认头像替换（自动识别系统头像）。增强功能：用户卡片扩展（显示@我/私信/回复通知）、等级标签显示（楼主等级和统计信息）、浏览历史记录（下拉菜单快速访问）、键盘快捷键（左右箭头翻页、Ctrl+Enter提交）、强制新标签页打开帖子、自动跳转外部链接、平滑滚动、即时页面预加载。设置管理：可视化设置面板（集成到导航栏）、设置导入导出、一键恢复默认样式。支持深色模式自动适配。
 // @author       silencoo
 // @match        *://www.nodeseek.com/*
@@ -10,10 +10,8 @@
 // @require      https://s4.zstatic.net/ajax/libs/layui/2.9.9/layui.min.js
 // @resource     highlightStyle https://s4.zstatic.net/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css
 // @resource     highlightStyle_dark https://s4.zstatic.net/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css
-// @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_deleteValue
 // @grant        GM_notification
 // @grant        GM_getResourceURL
 // @grant        GM_addElement
@@ -27,7 +25,243 @@
 (function () {
     'use strict';
 
-    const { version, author, name, icon } = GM_info.script;
+    const SETTINGS_SCHEMA_VERSION = 3;
+    const SETTINGS_BACKUP_KEY = 'settings_backup_before_schema_3';
+    const MAX_VISITED_POSTS = 1000;
+    const MAX_HISTORY_ITEMS = 1000;
+    const NOTIFICATION_POLL_INTERVAL = 30000;
+
+    const isPlainObject = value => Object.prototype.toString.call(value) === '[object Object]';
+
+    const deepClone = value => {
+        if (value == null || typeof value !== 'object') return value;
+        if (typeof structuredClone === 'function') return structuredClone(value);
+        return JSON.parse(JSON.stringify(value));
+    };
+
+    const safeJsonParse = (value, fallback) => {
+        if (typeof value !== 'string' || !value.trim()) return deepClone(fallback);
+        try {
+            return JSON.parse(value);
+        } catch (_) {
+            return deepClone(fallback);
+        }
+    };
+
+    const getPathValue = (source, path) => path.split('.').reduce(
+        (value, key) => value == null ? undefined : value[key],
+        source
+    );
+
+    const setPathValue = (target, path, value) => {
+        const keys = path.split('.');
+        const lastKey = keys.pop();
+        const parent = keys.reduce((object, key) => {
+            if (!isPlainObject(object[key])) object[key] = {};
+            return object[key];
+        }, target);
+        parent[lastKey] = value;
+        return target;
+    };
+
+    const mergeKnownConfig = (stored, defaults) => {
+        const source = isPlainObject(stored) ? stored : {};
+        const result = {};
+        Object.entries(defaults).forEach(([key, defaultValue]) => {
+            const storedValue = source[key];
+            if (isPlainObject(defaultValue)) {
+                result[key] = mergeKnownConfig(storedValue, defaultValue);
+            } else if (Array.isArray(defaultValue)) {
+                result[key] = Array.isArray(storedValue) ? deepClone(storedValue) : deepClone(defaultValue);
+            } else if (typeof defaultValue === 'number') {
+                const number = Number(storedValue);
+                result[key] = Number.isFinite(number) ? number : defaultValue;
+            } else if (typeof defaultValue === 'boolean') {
+                result[key] = typeof storedValue === 'boolean' ? storedValue : defaultValue;
+            } else if (typeof defaultValue === 'string') {
+                result[key] = typeof storedValue === 'string' ? storedValue : defaultValue;
+            } else {
+                result[key] = storedValue === undefined ? defaultValue : storedValue;
+            }
+        });
+        return result;
+    };
+
+    const debounce = (fn, delay = 100) => {
+        let timer = null;
+        const wrapped = (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), delay);
+        };
+        wrapped.cancel = () => clearTimeout(timer);
+        return wrapped;
+    };
+
+    const createAsyncLimiter = (limit = 4) => {
+        let active = 0;
+        const queue = [];
+        const drain = () => {
+            while (active < limit && queue.length) {
+                const { task, resolve, reject } = queue.shift();
+                active += 1;
+                Promise.resolve().then(task).then(resolve, reject).finally(() => {
+                    active -= 1;
+                    drain();
+                });
+            }
+        };
+        return task => new Promise((resolve, reject) => {
+            queue.push({ task, resolve, reject });
+            drain();
+        });
+    };
+
+    const escapeHtmlAttribute = value => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const normalizeRegexFlags = flags => Array.from(new Set(String(flags || '').split('')))
+        .filter(flag => 'imsu'.includes(flag))
+        .join('');
+
+    const parseRuleInput = inputValue => {
+        if (!inputValue) return [];
+        return inputValue.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+            if (line.startsWith('/') && line.lastIndexOf('/') > 0) {
+                const lastSlash = line.lastIndexOf('/');
+                const pattern = line.slice(1, lastSlash);
+                const flags = normalizeRegexFlags(line.slice(lastSlash + 1));
+                if (!pattern || pattern.length > 200) return null;
+                try {
+                    new RegExp(pattern, flags || 'i');
+                    return { type: 'regex', value: pattern, flags };
+                } catch (_) {
+                    return null;
+                }
+            }
+            return { type: 'text', value: line };
+        }).filter(Boolean);
+    };
+
+    const normalizeKeywordCollection = value => {
+        if (Array.isArray(value)) return deepClone(value);
+        if (typeof value === 'string') return parseRuleInput(value);
+        if (!isPlainObject(value)) return [];
+        if ('keywords' in value) return normalizeKeywordCollection(value.keywords);
+        if ('value' in value || 'pattern' in value) return [deepClone(value)];
+        const values = Object.values(value);
+        if (values.length > 0 && values.every(item => typeof item === 'string' || isPlainObject(item))) {
+            return deepClone(values);
+        }
+        return [];
+    };
+
+    const migrateLegacyKeywordSettings = value => {
+        const source = isPlainObject(value) ? deepClone(value) : {};
+        const migrate = (targetPath, candidatePaths) => {
+            const candidates = [targetPath, ...candidatePaths]
+                .map(path => normalizeKeywordCollection(getPathValue(source, path)));
+            const recovered = candidates.find(list => list.length > 0) || [];
+            setPathValue(source, targetPath, recovered);
+        };
+        migrate('block_posts.keywords', [
+            'block_posts.keyword',
+            'block_post_keywords',
+            'block_keywords',
+            'blocked_keywords'
+        ]);
+        migrate('right_panel_highlight.keywords', [
+            'right_panel_highlight.keyword',
+            'right_panel_highlight_keywords',
+            'right_panel_keywords',
+            'highlight_keywords'
+        ]);
+        return source;
+    };
+
+    const normalizePostUrl = (value, base = 'https://www.nodeseek.com/') => {
+        try {
+            const url = new URL(value, base);
+            const match = url.pathname.match(/^\/post-(\d+)(?:-\d+)?\/?$/);
+            if (!match) return null;
+            return `${url.origin}/post-${match[1]}-1`;
+        } catch (_) {
+            return null;
+        }
+    };
+
+    const normalizeHttpUrl = (value, base) => {
+        try {
+            const normalized = String(value || '').trim();
+            if (!normalized) return null;
+            const url = new URL(normalized, base);
+            return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+        } catch (_) {
+            return null;
+        }
+    };
+
+    const sanitizeImageUrl = (value, base) => {
+        const input = String(value || '').trim();
+        if (!input || input.length > 7 * 1024 * 1024) return null;
+        if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i.test(input)) return input;
+        if (input.length > 8192) return null;
+        return normalizeHttpUrl(input, base);
+    };
+
+    const sanitizeCssValue = (property, value, fallback = '') => {
+        const normalized = String(value ?? '').trim();
+        if (!normalized || normalized.length > 200 || /[;{}<>\r\n]/.test(normalized)) return fallback;
+        if (typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && !CSS.supports(property, normalized)) {
+            return fallback;
+        }
+        return normalized;
+    };
+
+    const normalizeBackgroundConfig = (config, base) => {
+        if (!isPlainObject(config)) return null;
+        const url = sanitizeImageUrl(config.url, base);
+        if (!url) return null;
+        const repeats = new Set(['repeat', 'no-repeat', 'repeat-x', 'repeat-y', 'space', 'round']);
+        const attachments = new Set(['scroll', 'fixed', 'local']);
+        return {
+            url,
+            repeat: repeats.has(config.repeat) ? config.repeat : 'repeat',
+            position: sanitizeCssValue('background-position', config.position, 'center'),
+            size: sanitizeCssValue('background-size', config.size, 'cover'),
+            attachment: attachments.has(config.attachment) ? config.attachment : 'scroll'
+        };
+    };
+
+    const TEST_HOOK = typeof process === 'object' && process?.release?.name === 'node'
+        ? globalThis.__NSX_TEST_HOOK__
+        : null;
+    if (typeof TEST_HOOK === 'function') {
+        TEST_HOOK({
+            deepClone,
+            safeJsonParse,
+            getPathValue,
+            setPathValue,
+            mergeKnownConfig,
+            createAsyncLimiter,
+            escapeHtmlAttribute,
+            parseRuleInput,
+            normalizeKeywordCollection,
+            migrateLegacyKeywordSettings,
+            normalizeRegexFlags,
+            normalizePostUrl,
+            normalizeHttpUrl,
+            sanitizeImageUrl,
+            sanitizeCssValue,
+            normalizeBackgroundConfig
+        });
+        return;
+    }
+
+    const { version, name } = GM_info.script;
 
     const BASE_URL = location.origin;
 
@@ -58,10 +292,10 @@
         content: 'nsx-typography-content-style'
     };
 
-    const escapeCssValue = (value = '') => `${value}`.replace(/"/g, '\\"');
+    const escapeCssUrl = value => JSON.stringify(String(value || '')).replace(/</g, '\\3c ');
 
     const INITIAL_OVERLAY_CLASS = 'nsx-initial-hide';
-    const INITIAL_OVERLAY_DURATION_DEFAULT = 1200;
+    const INITIAL_OVERLAY_DURATION_DEFAULT = 300;
     let initialOverlayTimer = null;
 
     const toggleRootClass = (className, enabled = true) => {
@@ -122,7 +356,7 @@
         const overlay = stored && stored.loading_overlay ? stored.loading_overlay : {};
         return {
             enabled: overlay.enabled !== false,
-            duration: parseInt(overlay.duration, 10) || INITIAL_OVERLAY_DURATION_DEFAULT
+            duration: clampNumber(parseInt(overlay.duration, 10), 0, 3000, INITIAL_OVERLAY_DURATION_DEFAULT)
         };
     };
 
@@ -137,6 +371,11 @@
                     html.${INITIAL_OVERLAY_CLASS} body {
                         opacity: 0 !important;
                         transition: opacity 0.4s ease;
+                    }
+                    @media (prefers-reduced-motion: reduce) {
+                        html.${INITIAL_OVERLAY_CLASS} body {
+                            transition: none !important;
+                        }
                     }
                 `);
                 cssInjected = true;
@@ -213,14 +452,19 @@
             if (existing) existing.remove();
             return;
         }
+        const normalized = normalizeBackgroundConfig(config, location.href);
+        if (!normalized) {
+            document.getElementById(CUSTOM_BACKGROUND_STYLE_ID)?.remove();
+            return;
+        }
         const style = ensureStyleElement(CUSTOM_BACKGROUND_STYLE_ID);
         style.textContent = `
             body {
-                background-image: url("${escapeCssValue(config.url)}") !important;
-                background-repeat: ${config.repeat} !important;
-                background-position: ${config.position} !important;
-                background-size: ${config.size} !important;
-                background-attachment: ${config.attachment} !important;
+                background-image: url(${escapeCssUrl(normalized.url)}) !important;
+                background-repeat: ${normalized.repeat} !important;
+                background-position: ${normalized.position} !important;
+                background-size: ${normalized.size} !important;
+                background-attachment: ${normalized.attachment} !important;
             }
         `;
     };
@@ -234,11 +478,15 @@
         const { lightLink, lightVisited, darkLink, darkVisited } = config;
         const style = ensureStyleElement(VISITED_LINK_STYLE_ID);
         const lightVars = [];
-        if (lightLink) lightVars.push(`    --link-color: ${lightLink};`);
-        lightVars.push(`    --link-visited-color: ${lightVisited};`);
+        const safeLightLink = sanitizeCssValue('color', lightLink);
+        const safeLightVisited = sanitizeCssValue('color', lightVisited, '#afb9c1');
+        const safeDarkLink = sanitizeCssValue('color', darkLink);
+        const safeDarkVisited = sanitizeCssValue('color', darkVisited, '#393f4e');
+        if (safeLightLink) lightVars.push(`    --link-color: ${safeLightLink};`);
+        lightVars.push(`    --link-visited-color: ${safeLightVisited};`);
         const darkVars = [];
-        if (darkLink) darkVars.push(`    --link-color: ${darkLink};`);
-        darkVars.push(`    --link-visited-color: ${darkVisited};`);
+        if (safeDarkLink) darkVars.push(`    --link-color: ${safeDarkLink};`);
+        darkVars.push(`    --link-visited-color: ${safeDarkVisited};`);
         style.textContent = `
 :root {
 ${lightVars.join('\n')}
@@ -327,12 +575,12 @@ ${effectCSS}}
             if (!selector) return '';
             const declarations = [];
             const normalize = (val) => typeof val === 'string' ? val.trim() : '';
-            const fontFamily = normalize(config.fontFamily);
-            const fontSize = normalize(config.fontSize);
-            const color = normalize(config.color);
-            const fontStyle = normalize(config.fontStyle);
-            const letterSpacing = normalize(config.letterSpacing);
-            const ligatures = normalize(config.ligatures);
+            const fontFamily = sanitizeCssValue('font-family', normalize(config.fontFamily));
+            const fontSize = sanitizeCssValue('font-size', normalize(config.fontSize));
+            const color = sanitizeCssValue('color', normalize(config.color));
+            const fontStyle = sanitizeCssValue('font-style', normalize(config.fontStyle));
+            const letterSpacing = sanitizeCssValue('letter-spacing', normalize(config.letterSpacing));
+            const ligatures = sanitizeCssValue('font-variant-ligatures', normalize(config.ligatures));
             if (fontFamily) declarations.push(`font-family: ${fontFamily} !important;`);
             if (fontSize) declarations.push(`font-size: ${fontSize} !important;`);
             if (color) declarations.push(`color: ${color} !important;`);
@@ -363,14 +611,19 @@ const applyTypographyStyle = (type, config) => {
         style.textContent = css;
     };
 
+    const clampNumber = (value, min, max, fallback) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+    };
+
     const normalizeCompactConfig = (config = {}) => ({
         enabled: config.enabled !== false,
-        columns: parseInt(config.columns, 10) || DEFAULT_COMPACT_MODE.columns,
-        padding: config.padding || DEFAULT_COMPACT_MODE.padding,
-        avatarSize: parseInt(config.avatarSize, 10) || DEFAULT_COMPACT_MODE.avatarSize,
-        titleFontSize: parseInt(config.titleFontSize, 10) || DEFAULT_COMPACT_MODE.titleFontSize,
-        infoFontSize: parseInt(config.infoFontSize, 10) || DEFAULT_COMPACT_MODE.infoFontSize,
-        marginBottom: parseInt(config.marginBottom, 10) || DEFAULT_COMPACT_MODE.marginBottom
+        columns: clampNumber(parseInt(config.columns, 10), 1, 4, DEFAULT_COMPACT_MODE.columns),
+        padding: sanitizeCssValue('padding', config.padding, DEFAULT_COMPACT_MODE.padding),
+        avatarSize: clampNumber(parseInt(config.avatarSize, 10), 16, 40, DEFAULT_COMPACT_MODE.avatarSize),
+        titleFontSize: clampNumber(parseInt(config.titleFontSize, 10), 10, 16, DEFAULT_COMPACT_MODE.titleFontSize),
+        infoFontSize: clampNumber(parseInt(config.infoFontSize, 10), 8, 12, DEFAULT_COMPACT_MODE.infoFontSize),
+        marginBottom: clampNumber(parseInt(config.marginBottom, 10), 0, 10, DEFAULT_COMPACT_MODE.marginBottom)
     });
 
     const buildCompactModeCSS = (config) => {
@@ -404,13 +657,17 @@ const applyTypographyStyle = (type, config) => {
             }
             html.nsx-compact-mode #nsk-head {
                 position: relative !important;
+                box-sizing: border-box !important;
+                padding-right: 130px !important;
+                overflow: hidden !important;
             }
             html.nsx-compact-mode #nsk-head .search-box {
-                position: absolute !important;
-                left: 50% !important;
-                transform: translateX(-50%) !important;
-                margin-left: 0 !important;
-                flex: 0 1 170px !important;
+                position: relative !important;
+                left: auto !important;
+                transform: none !important;
+                margin-left: 8px !important;
+                flex: 0 1 175px !important;
+                min-width: 140px !important;
                 max-width: 290px !important;
                 z-index: 2 !important;
                 pointer-events: auto !important;
@@ -493,11 +750,12 @@ const applyTypographyStyle = (type, config) => {
                     grid-template-columns: 1fr !important;
                 }
                 html.nsx-compact-mode #nsk-head .search-box {
-                    position: static !important;
+                    position: relative !important;
                     transform: none !important;
                     left: auto !important;
-                    margin-left: auto !important;
-                    flex: 0 1 auto !important;
+                    margin-left: 6px !important;
+                    flex: 1 1 0 !important;
+                    min-width: 0 !important;
                     transition: none !important;
                 }
             }
@@ -619,19 +877,43 @@ const applyTypographyStyle = (type, config) => {
                     background-color: rgba(255, 255, 255, 0.1);
                     color: #ff6b9d;
                 }
+                #nsx-loading-overlay {
+                    position: fixed;
+                    right: 20px;
+                    bottom: 20px;
+                    z-index: 10000;
+                    padding: 8px 12px;
+                    border-radius: 6px;
+                    background: rgba(20, 20, 20, 0.82);
+                    color: #fff;
+                    opacity: 0;
+                    transform: translateY(8px);
+                    pointer-events: none;
+                    transition: opacity .16s ease, transform .16s ease;
+                }
+                #nsx-loading-overlay.show {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+                @media (prefers-reduced-motion: reduce) {
+                    #nsx-loading-overlay { transition: none; }
+                }
             `);
         };
     })();
 
     // 早期注入紧凑模式样式，避免页面闪烁
     // 在脚本最开始就读取配置并注入样式
+    let earlyStoredSettings;
     const getStoredSettings = () => {
+        if (earlyStoredSettings !== undefined) return earlyStoredSettings;
         try {
             const stored = GM_getValue('settings');
-            return stored || null;
+            earlyStoredSettings = stored || null;
         } catch (e) {
-            return null;
+            earlyStoredSettings = null;
         }
+        return earlyStoredSettings;
     };
 
     const getCompactModeConfig = () => {
@@ -758,6 +1040,26 @@ const applyTypographyStyle = (type, config) => {
         }
     };
 
+    const waitForElement = (selector, timeout = 5000) => new Promise(resolve => {
+        const existing = document.querySelector(selector);
+        if (existing) {
+            resolve(existing);
+            return;
+        }
+        const observer = new MutationObserver(() => {
+            const element = document.querySelector(selector);
+            if (!element) return;
+            clearTimeout(timer);
+            observer.disconnect();
+            resolve(element);
+        });
+        const timer = setTimeout(() => {
+            observer.disconnect();
+            resolve(null);
+        }, timeout);
+        observer.observe(document.body, { childList: true, subtree: true });
+    });
+
     class BroadcastManager {
         static instances = new Map();
 
@@ -768,7 +1070,8 @@ const applyTypographyStyle = (type, config) => {
 
             this.channelName = channelName;
             this.myId = `${Date.now()}-${Math.random()}`;
-            this.receivers = [];
+            this.receivers = new Set();
+            this.taskStops = new Set();
             this.ch = new BroadcastChannel(channelName);
             this.KEY = `only_last_tab_${channelName}`;
 
@@ -799,7 +1102,8 @@ const applyTypographyStyle = (type, config) => {
         }
 
         registerReceiver(fn) {
-            this.receivers.push(fn);
+            this.receivers.add(fn);
+            return () => this.receivers.delete(fn);
         }
 
         broadcast(data) {
@@ -808,28 +1112,65 @@ const applyTypographyStyle = (type, config) => {
             this.receivers.forEach(fn => fn(message));
         }
 
-        startTask(taskFn, interval) {
-            setInterval(async () => {
-                if (this.active) {
-                    try {
-                        this.broadcast(await taskFn());
-                    } catch (err) {
-                        // console.error(`[Tab ${this.myId}] 任务出错:`, err);
-                    }
+        startTask(taskFn, interval, options = {}) {
+            const { pauseWhenHidden = true } = options;
+            let stopped = false;
+            let timer = null;
+            let failures = 0;
+            const schedule = delay => {
+                if (!stopped) timer = setTimeout(run, delay);
+            };
+            const run = async () => {
+                if (stopped) return;
+                if (!this.active || (pauseWhenHidden && document.hidden)) {
+                    schedule(interval);
+                    return;
                 }
-            }, interval);
+                try {
+                    const data = await taskFn();
+                    failures = 0;
+                    if (data != null) this.broadcast(data);
+                } catch (err) {
+                    failures += 1;
+                    util.clog(`[Tab ${this.myId}] 任务出错: ${err?.message || err}`);
+                } finally {
+                    const backoff = Math.min(interval * (2 ** failures), 5 * 60 * 1000);
+                    schedule(backoff);
+                }
+            };
+            const onVisibilityChange = () => {
+                if (!document.hidden && this.active) {
+                    clearTimeout(timer);
+                    schedule(250);
+                }
+            };
+            document.addEventListener('visibilitychange', onVisibilityChange);
+            schedule(interval);
+            const stop = () => {
+                stopped = true;
+                clearTimeout(timer);
+                document.removeEventListener('visibilitychange', onVisibilityChange);
+                this.taskStops.delete(stop);
+            };
+            this.taskStops.add(stop);
+            return stop;
+        }
+
+        destroy() {
+            this.taskStops.forEach(stop => stop());
+            this.taskStops.clear();
+            this.receivers.clear();
+            this.ch.close();
+            BroadcastManager.instances.delete(this.channelName);
         }
     }
 
     const util = {
         clog:(c) => {
-            // console.group(`%c %c [${name}]-v${version} by ${author}`, `background:url(${icon}) center/12px no-repeat;padding:3px`, "");
-            // console.log(c);
-            // console.groupEnd();
+            console.debug(`[${name} v${version}]`, c);
         },
         getValue: (name, defaultValue) => GM_getValue(name, defaultValue),
         setValue: (name, value) => GM_setValue(name, value),
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         addStyle(id, tag, css) {
             tag = tag || 'style';
             let doc = document, styleDom = doc.head.querySelector(`#${id}`);
@@ -837,13 +1178,13 @@ const applyTypographyStyle = (type, config) => {
             let style = doc.createElement(tag);
             style.rel = 'stylesheet';
             style.id = id;
-            tag === 'style' ? style.innerHTML = css : style.href = css;
+            tag === 'style' ? style.textContent = css : style.href = css;
             doc.head.appendChild(style);
         },
         removeStyle(id,tag){
             tag = tag || 'style';
             let doc = document, styleDom = doc.head.querySelector(`#${id}`);
-            if (styleDom) { doc.head.removeChild(styleDom) };
+            if (styleDom) doc.head.removeChild(styleDom);
         },
         getAttrsByPrefix(element, prefix) {
             return Array.from(element.attributes).reduce((acc, { name, value }) => {
@@ -862,15 +1203,34 @@ const applyTypographyStyle = (type, config) => {
         async get(url, headers, responseType = 'json') {
             return this.fetchData(url, 'GET', null, headers, responseType);
         },
-        async fetchData(url, method='GET', data=null, headers={}, responseType='json') {
+        async fetchData(url, method='GET', data=null, headers={}, responseType='json', timeout = 15000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
             const options = {
                 method,
-                headers: { 'Content-Type':'application/json',...headers},
-                body: data ? JSON.stringify(data) : undefined
+                credentials: 'same-origin',
+                headers: { 'Accept': responseType === 'json' ? 'application/json' : 'text/html', ...headers },
+                body: data == null ? undefined : JSON.stringify(data),
+                signal: controller.signal
             };
-            const response = await fetch(url.startsWith("http") ? url : BASE_URL + url, options);
-            const result = await response[responseType]().catch(() => null);
-            return response.ok ? result : Promise.reject(result);
+            if (data != null && !Object.keys(options.headers).some(key => key.toLowerCase() === 'content-type')) {
+                options.headers['Content-Type'] = 'application/json';
+            }
+            try {
+                const requestUrl = new URL(url, BASE_URL).href;
+                const response = await fetch(requestUrl, options);
+                const parser = typeof response[responseType] === 'function' ? response[responseType].bind(response) : response.text.bind(response);
+                const result = await parser().catch(() => null);
+                if (!response.ok) {
+                    const error = new Error(result?.message || `请求失败：HTTP ${response.status}`);
+                    error.status = response.status;
+                    error.detail = result;
+                    throw error;
+                }
+                return result;
+            } finally {
+                clearTimeout(timeoutId);
+            }
         },
         getCurrentDate() {
             const localTimezoneOffset = (new Date()).getTimezoneOffset();
@@ -950,6 +1310,7 @@ const applyTypographyStyle = (type, config) => {
         },
         settings:{
             "version": version,
+            "schema_version": SETTINGS_SCHEMA_VERSION,
             "sign_in": {"ns":{ "enabled": false, "method": 0, "last_date": "", "ignore_date": "" },"df":{ "enabled": false, "method": 0, "last_date": "", "ignore_date": "" }},
             "signin_tips": { "enabled": true },
             "re_signin": { "enabled": true },
@@ -987,7 +1348,8 @@ const applyTypographyStyle = (type, config) => {
             "header_opacity": {
                 "enabled": false,
                 "value": 0.92,
-                "effect": true,
+                "blur_enabled": true,
+                "saturate_enabled": true,
                 "blur": 16,
                 "saturate": 180
             },
@@ -1084,89 +1446,126 @@ const applyTypographyStyle = (type, config) => {
             __msg: (text, style) => { let index = layer.msg(text, { offset: 't', area: ['100%', 'auto'], anim: 'slideDown' }); layer.style(index, Object.assign({ opacity: 0.9 }, style)); }
         };
 
+        const sanitizeSettings = value => {
+            const previousSchemaVersion = Number(value?.schema_version) || 0;
+            const migratedValue = migrateLegacyKeywordSettings(value);
+            const settings = mergeKnownConfig(migratedValue, opts.settings);
+            settings.compact_mode = {
+                ...settings.compact_mode,
+                ...normalizeCompactConfig(settings.compact_mode)
+            };
+            settings.loading_overlay.duration = clampNumber(
+                settings.loading_overlay.duration,
+                0,
+                3000,
+                INITIAL_OVERLAY_DURATION_DEFAULT
+            );
+            if (previousSchemaVersion < 2 && settings.loading_overlay.duration === 1200) {
+                settings.loading_overlay.duration = INITIAL_OVERLAY_DURATION_DEFAULT;
+            }
+            ['header_opacity', 'frame_opacity'].forEach(key => {
+                const config = settings[key];
+                config.value = clampNumber(config.value, 0, 1, opts.settings[key].value);
+                config.blur = clampNumber(config.blur, 0, 100, opts.settings[key].blur);
+                config.saturate = clampNumber(config.saturate, 0, 500, opts.settings[key].saturate);
+            });
+            const background = normalizeBackgroundConfig(settings.custom_background, BASE_URL);
+            if (background) Object.assign(settings.custom_background, background);
+            else settings.custom_background.url = '';
+            const avatarUrl = sanitizeImageUrl(settings.default_avatar.url, BASE_URL);
+            settings.default_avatar.url = avatarUrl || '';
+            ['title', 'tag', 'meta', 'content'].forEach(type => {
+                const typography = settings.typography[type];
+                typography.fontFamily = sanitizeCssValue('font-family', typography.fontFamily);
+                typography.fontSize = sanitizeCssValue('font-size', typography.fontSize);
+                typography.color = sanitizeCssValue('color', typography.color);
+                typography.fontStyle = sanitizeCssValue('font-style', typography.fontStyle);
+                typography.letterSpacing = sanitizeCssValue('letter-spacing', typography.letterSpacing);
+                typography.ligatures = sanitizeCssValue('font-variant-ligatures', typography.ligatures);
+            });
+            ['link_color', 'visited_color', 'dark_link_color', 'dark_visited_color'].forEach(key => {
+                settings.visited_links[key] = sanitizeCssValue('color', settings.visited_links[key]);
+            });
+            ['block_posts', 'right_panel_highlight'].forEach(key => {
+                settings[key].keywords = settings[key].keywords.slice(0, 100).filter(rule => {
+                    if (typeof rule === 'string') return rule.length <= 500;
+                    return isPlainObject(rule) && String(rule.value || rule.pattern || '').length <= 500;
+                });
+            });
+            settings.block_categories.categories = settings.block_categories.categories
+                .filter(value => typeof value === 'string')
+                .slice(0, 100)
+                .map(value => value.slice(0, 100));
+            settings.schema_version = SETTINGS_SCHEMA_VERSION;
+            settings.version = version;
+            return settings;
+        };
+
         const Config = {
-            // 初始化配置数据
+            cache: null,
+            persistTimer: null,
             initializeConfig() {
-                const defaultConfig = opts.settings;
-                if (!util.getValue('settings')) {
-                    util.setValue('settings', defaultConfig);
-                    return;
+                const stored = util.getValue('settings');
+                const storedSchemaVersion = Number(stored?.schema_version) || 0;
+                if (isPlainObject(stored) && storedSchemaVersion < SETTINGS_SCHEMA_VERSION) {
+                    const existingBackup = util.getValue(SETTINGS_BACKUP_KEY);
+                    if (!existingBackup) util.setValue(SETTINGS_BACKUP_KEY, deepClone(stored));
                 }
-                if(this.getConfig('version')===version) return;
-                // 从存储中获取当前配置
-                let storedConfig = util.getValue('settings');
-
-                // 递归地删除不在默认配置中的项
-                const cleanDefaults = (stored, defaults) => {
-                    Object.keys(stored).forEach(key => {
-                        if (defaults[key] === undefined) {
-                            delete stored[key]; // 如果默认配置中没有这个键，删除它
-                        } else if (typeof stored[key] === 'object' && stored[key] !== null && !(stored[key] instanceof Array)) {
-                            cleanDefaults(stored[key], defaults[key]); // 递归检查
-                        }
-                    });
-                };
-
-                // 递归地将默认配置中的新项合并到存储的配置中
-                const mergeDefaults = (stored, defaults) => {
-                    Object.keys(defaults).forEach(key => {
-                        if (typeof defaults[key] === 'object' && defaults[key] !== null && !(defaults[key] instanceof Array)) {
-                            if (!stored[key]) stored[key] = {};
-                            mergeDefaults(stored[key], defaults[key]);
-                        } else {
-                            if (stored[key] === undefined) {
-                                stored[key] = defaults[key];
-                            }
-                        }
-                    });
-                };
-
-                mergeDefaults(storedConfig, defaultConfig);
-                //...这里将旧设置项的值迁移到新设置项
-                cleanDefaults(storedConfig, defaultConfig);
-                storedConfig.version = version;
-                util.setValue('settings',storedConfig);
-            },updateConfig(path, value) {
-                let config = util.getValue('settings');
-                if (!config) {
-                    config = opts.settings;
-                    util.setValue('settings', config);
+                this.cache = sanitizeSettings(stored);
+                this.persistNow();
+                return this.cache;
+            },
+            getAll() {
+                if (!this.cache) this.initializeConfig();
+                return this.cache;
+            },
+            getConfig(path) {
+                return getPathValue(this.getAll(), path);
+            },
+            updateConfig(path, value, options = {}) {
+                setPathValue(this.getAll(), path, value);
+                if (options.immediate) return this.persistNow();
+                this.schedulePersist();
+                return true;
+            },
+            replaceConfig(value, options = {}) {
+                this.cache = sanitizeSettings(value);
+                if (options.immediate !== false) this.persistNow();
+                else this.schedulePersist();
+                return this.cache;
+            },
+            schedulePersist() {
+                clearTimeout(this.persistTimer);
+                this.persistTimer = setTimeout(() => this.persistNow(), 150);
+            },
+            persistNow() {
+                clearTimeout(this.persistTimer);
+                this.persistTimer = null;
+                if (!this.cache) return true;
+                try {
+                    util.setValue('settings', deepClone(this.cache));
+                    return true;
+                } catch (error) {
+                    util.clog(`配置保存失败：${error.message}`);
+                    return false;
                 }
-                let keys = path.split('.');
-                let lastKey = keys.pop();
-                let lastObj = keys.reduce((obj, key) => {
-                    if (!obj[key]) {
-                        obj[key] = {};
-                    }
-                    return obj[key];
-                }, config);
-                lastObj[lastKey] = value;
-                util.setValue('settings', config);
-            },            getConfig(path) {
-                let config = GM_getValue('settings');
-                if (!config) return undefined;
-                let keys = path.split('.');
-                let result = keys.reduce((obj, key) => {
-                    if (obj === null || obj === undefined) return undefined;
-                    return obj[key];
-                }, config);
-                return result;
             }
         };
 
         const getRuntimeOverlaySettings = () => ({
             enabled: Config.getConfig('loading_overlay.enabled') !== false,
-            duration: parseInt(Config.getConfig('loading_overlay.duration'), 10) || INITIAL_OVERLAY_DURATION_DEFAULT
+            duration: clampNumber(
+                parseInt(Config.getConfig('loading_overlay.duration'), 10),
+                0,
+                3000,
+                INITIAL_OVERLAY_DURATION_DEFAULT
+            )
         });
 
         const FeatureFlags={
             isEnabled(featureName) {
-                if (Config.getConfig(featureName)) {
-                    return Config.getConfig(`${featureName}.enabled`);
-                } else {
-                    // console.error(`Feature '${featureName}' does not exist.`);
-                    return false;
-                }
+                const feature = Config.getConfig(featureName);
+                return isPlainObject(feature) && feature.enabled === true;
             }
         };
 
@@ -1176,8 +1575,11 @@ const applyTypographyStyle = (type, config) => {
             blockedCategorySet: new Set(),
             rightPanelHighlightRules: [],
             rightPanelHighlightObserver: null,
+            pendingHighlightRoots: new Set(),
             avatarObserver: null,
             avatarDefaultCache: new Map(),
+            userInfoLimiter: createAsyncLimiter(4),
+            signInInFlight: false,
             //检查是否登陆
             checkLogin() {
                 if (unsafeWindow.__config__ && unsafeWindow.__config__.user) {
@@ -1186,19 +1588,28 @@ const applyTypographyStyle = (type, config) => {
                 }
             },
             // 自动签到
-            autoSignIn(rand) {
+            async autoSignIn(rand) {
                 if(!FeatureFlags.isEnabled(`sign_in.${opts.curSite.code}`)) return;
 
                 if (!this.loginStatus) return
                 if (Config.getConfig(`sign_in.${opts.curSite.code}.enabled`) !== true) return;
+                if (this.signInInFlight) return;
 
-                rand = rand || (Config.getConfig(`sign_in.${opts.curSite.code}.method`) === 1);
+                const random = rand == null
+                    ? Config.getConfig(`sign_in.${opts.curSite.code}.method`) === 1
+                    : rand === true || rand === 'true';
 
                 let timeNow = util.getCurrentDate(),
                     timeOld = Config.getConfig(`sign_in.${opts.curSite.code}.last_date`);
                 if (!timeOld || timeOld != timeNow) { // 是新的一天
-                    Config.updateConfig(`sign_in.${opts.curSite.code}.last_date`, timeNow);
-                    this.signInRequest(rand);
+                    this.signInInFlight = true;
+                    try {
+                        if (await this.signInRequest(random)) {
+                            Config.updateConfig(`sign_in.${opts.curSite.code}.last_date`, timeNow, { immediate: true });
+                        }
+                    } finally {
+                        this.signInInFlight = false;
+                    }
                 }
             },
             // 重新签到
@@ -1223,6 +1634,7 @@ const applyTypographyStyle = (type, config) => {
                 const timeOld = Config.getConfig(`sign_in.${opts.curSite.code}.last_date`);
 
                 if (timeNow === timeIgnore || timeNow === timeOld) return;
+                if (document.querySelector('.nsplus-tip')) return;
 
                 const _this = this;
                 let tip = util.createElement("div", { staticClass: 'nsplus-tip' });
@@ -1230,11 +1642,13 @@ const applyTypographyStyle = (type, config) => {
                 tip_p.innerHTML = '今天你还没有签到哦！&emsp;【<a class="sign_in_btn" data-rand="true" href="javascript:;">随机抽个鸡腿</a>】&emsp;【<a class="sign_in_btn" data-rand="false" href="javascript:;">只要5个鸡腿</a>】&emsp;【<a id="sign_in_ignore" href="javascript:;">今天不再提示</a>】';
                 tip.appendChild(tip_p);
                 tip.querySelectorAll('.sign_in_btn').forEach(function (item) {
-                    item.addEventListener("click", function (e) {
+                    item.addEventListener("click", async function (e) {
+                        e.preventDefault();
                         const rand = util.data(this, 'rand');
-                        _this.signInRequest(rand);
-                        tip.remove();
-                        Config.updateConfig(`sign_in.${opts.curSite.code}.last_date`, timeNow);
+                        if (await _this.signInRequest(rand)) {
+                            tip.remove();
+                            Config.updateConfig(`sign_in.${opts.curSite.code}.last_date`, timeNow, { immediate: true });
+                        }
                     })
                 });
                 tip.querySelector('#sign_in_ignore').addEventListener("click", function (e) {
@@ -1242,26 +1656,31 @@ const applyTypographyStyle = (type, config) => {
                     Config.updateConfig(`sign_in.${opts.curSite.code}.ignore_date`, timeNow);
                 });
 
-                document.querySelector('header').append(tip);
+                document.querySelector('header')?.append(tip);
             },
             async signInRequest(rand) {
-                await util.post('/api/attendance?random=' + (rand || false), {}, { "Content-Type": "application/json" }).then(json => {
+                const random = rand === true || rand === 'true';
+                return util.post('/api/attendance?random=' + random, {}, { "Content-Type": "application/json" }).then(json => {
                     if (json.success) {
                         message.success(`签到成功！今天午饭+${json.gain}个鸡腿; 积攒了${json.current}个鸡腿了`);
+                        return true;
                     }
                     else {
                         message.info(json.message);
+                        return /已经|已签到|already/i.test(json.message || '');
                     }
                 }).catch(error => {
                     message.info(error.message || "发生未知错误");
                     util.clog(error);
+                    return false;
+                }).finally(() => {
+                    util.clog(`[${name}] 签到完成`);
                 });
-                util.clog(`[${name}] 签到完成`);
             },
             is_show_quick_comment: false,
             quickComment() {
                 if (!this.loginStatus || !opts.comment.pathPattern.test(location.pathname)) return;
-                if (Config.getConfig('loading_comment.enabled') === false) return;
+                if (!FeatureFlags.isEnabled('quick_comment')) return;
 
                 const _this = this;
 
@@ -1273,40 +1692,75 @@ const applyTypographyStyle = (type, config) => {
                     e.preventDefault();
 
                     const mdEditor = document.querySelector('.md-editor');
+                    if (!mdEditor) return;
+                    _this.quickCommentOriginalStyle = mdEditor.getAttribute('style');
+                    _this.quickCommentTrigger = e.target instanceof Element ? e.target : null;
                     const clientHeight = document.documentElement.clientHeight, clientWidth = document.documentElement.clientWidth;
                     const mdHeight = mdEditor.clientHeight, mdWidth = mdEditor.clientWidth;
                     const top = (clientHeight / 2) - (mdHeight / 2), left = (clientWidth / 2) - (mdWidth / 2);
                     mdEditor.style.cssText = `position: fixed; top: ${top}px; left: ${left}px; margin: 30px 0px; width: 100%; max-width: ${mdWidth}px; z-index: 999;`;
+                    mdEditor.setAttribute('role', 'dialog');
+                    mdEditor.setAttribute('aria-label', '快捷回复编辑器');
                     const moveEl = mdEditor.querySelector('.tab-select.window_header');
                     moveEl.style.cursor = "move";
                     moveEl.addEventListener('mousedown', startDrag);
                     addEditorCloseButton();
                     _this.is_show_quick_comment = true;
                 };
-                const commentDiv = document.querySelector('#fast-nav-button-group #back-to-parent').cloneNode(true);
+                const backToParent = document.querySelector('#fast-nav-button-group #back-to-parent');
+                if (!backToParent || document.querySelector('#back-to-comment')) return;
+                const commentDiv = backToParent.cloneNode(true);
                 commentDiv.id = 'back-to-comment';
                 commentDiv.innerHTML = '<svg class="iconpark-icon" style="width: 24px; height: 24px;"><use href="#comments"></use></svg>';
                 commentDiv.addEventListener("click", onClick);
-                document.querySelector('#back-to-parent').before(commentDiv);
-                document.querySelectorAll('.nsk-post .comment-menu,.comment-container .comments').forEach(x=>x.addEventListener("click",(event) =>{ if(!["引用", "回复", "编辑"].includes(event.target.textContent)) return; onClick(event);},true));//使用冒泡法给按钮引用、回复添加事件
+                backToParent.before(commentDiv);
+                if (!this.quickCommentDelegate) {
+                    this.quickCommentDelegate = event => {
+                        if (!FeatureFlags.isEnabled('quick_comment')) return;
+                        if (!event.target.closest('.nsk-post .comment-menu, .comment-container .comments')) return;
+                        if (!["引用", "回复", "编辑"].includes(event.target.textContent?.trim())) return;
+                        onClick(event);
+                    };
+                    document.addEventListener('click', this.quickCommentDelegate, true);
+                }
 
                 function addEditorCloseButton() {
                     const fullScreenToolbar = document.querySelector('#editor-body .window_header > :last-child');
+                    if (!fullScreenToolbar || fullScreenToolbar.parentElement.querySelector('[data-nsx-editor-close]')) return;
                     const cloneToolbar = fullScreenToolbar.cloneNode(true);
+                    cloneToolbar.dataset.nsxEditorClose = '1';
                     cloneToolbar.setAttribute('title', '关闭');
+                    cloneToolbar.setAttribute('role', 'button');
+                    cloneToolbar.setAttribute('tabindex', '0');
+                    cloneToolbar.setAttribute('aria-label', '关闭快捷回复编辑器');
                     cloneToolbar.querySelector('span').classList.replace('i-icon-full-screen-one', 'i-icon-close');
                     cloneToolbar.querySelector('span').innerHTML = '<svg width="16" height="16" viewBox="0 0 48 48" fill="none"><path d="M8 8L40 40" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path><path d="M8 40L40 8" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
-                    cloneToolbar.addEventListener("click", function (e) {
+                    const closeEditor = () => {
                         const mdEditor = document.querySelector('.md-editor');
-                        mdEditor.style = "";
+                        if (!mdEditor) return;
+                        if (_this.quickCommentOriginalStyle == null) mdEditor.removeAttribute('style');
+                        else mdEditor.setAttribute('style', _this.quickCommentOriginalStyle);
+                        mdEditor.removeAttribute('role');
+                        mdEditor.removeAttribute('aria-label');
                         const moveEl = mdEditor.querySelector('.tab-select.window_header');
-                        moveEl.style.cursor = "";
-                        moveEl.removeEventListener('mousedown', startDrag);
+                        if (moveEl) {
+                            moveEl.style.cursor = "";
+                            moveEl.removeEventListener('mousedown', startDrag);
+                        }
 
-                        this.remove();
+                        cloneToolbar.remove();
                         _this.is_show_quick_comment = false;
+                        _this.quickCommentTrigger?.focus?.();
+                    };
+                    cloneToolbar.addEventListener("click", closeEditor);
+                    cloneToolbar.addEventListener('keydown', event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            closeEditor();
+                        }
                     });
                     fullScreenToolbar.after(cloneToolbar);
+                    cloneToolbar.focus();
                 }
                 function startDrag(event) {
                     if (event.button !== 0) return;
@@ -1315,35 +1769,59 @@ const applyTypographyStyle = (type, config) => {
                     const parentMarginTop = parseInt(window.getComputedStyle(draggableElement).marginTop);
                     const initialX = event.clientX - draggableElement.offsetLeft;
                     const initialY = event.clientY - draggableElement.offsetTop + parentMarginTop;
-                    document.onmousemove = function (event) {
+                    const onMouseMove = event => {
                         const newX = event.clientX - initialX;
                         const newY = event.clientY - initialY;
                         draggableElement.style.left = newX + 'px';
                         draggableElement.style.top = newY + 'px';
                     };
-                    document.onmouseup = function () {
-                        document.onmousemove = null;
-                        document.onmouseup = null;
+                    const onMouseUp = () => {
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
                     };
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp, { once: true });
                 }
             },
             // 切换官方打开链接设置
-            async switchOpenPostInNewTab(stateName, states){
-                try {
-                    unsafeWindow.indexedDB.open('ns-preference-db').onsuccess = e => {
-                        const db = e.target.result;
-                        const store = db.transaction('ns-preference-store', 'readwrite').objectStore('ns-preference-store');
-                        store.get('configuration').onsuccess = e => {
-                            const cfg = e.target.result || { openPostInNewPage: false };
-                            cfg.openPostInNewPage = !cfg.openPostInNewPage;
-                            store.put(cfg, 'configuration');
-                            Config.updateConfig(`${stateName}.enabled`, cfg.openPostInNewPage);
-                            unsafeWindow.mscAlert(`已${cfg.openPostInNewPage?'开启':'关闭'}新标签页打开链接`);
+            async switchOpenPostInNewTab(stateName, enabled){
+                const desiredState = Boolean(enabled);
+                return new Promise((resolve, reject) => {
+                    try {
+                        const request = unsafeWindow.indexedDB.open('ns-preference-db');
+                        request.onerror = () => reject(request.error || new Error('无法打开站点偏好数据库'));
+                        request.onsuccess = event => {
+                            const db = event.target.result;
+                            if (!db.objectStoreNames.contains('ns-preference-store')) {
+                                db.close();
+                                reject(new Error('站点偏好存储不存在'));
+                                return;
+                            }
+                            const transaction = db.transaction('ns-preference-store', 'readwrite');
+                            transaction.oncomplete = () => {
+                                db.close();
+                                Config.updateConfig(`${stateName}.enabled`, desiredState, { immediate: true });
+                                resolve(desiredState);
+                            };
+                            transaction.onerror = () => reject(transaction.error || new Error('站点偏好保存失败'));
+                            const store = transaction.objectStore('ns-preference-store');
+                            const getRequest = store.get('configuration');
+                            getRequest.onsuccess = () => {
+                                const cfg = isPlainObject(getRequest.result) ? getRequest.result : {};
+                                cfg.openPostInNewPage = desiredState;
+                                store.put(cfg, 'configuration');
+                            };
+                            getRequest.onerror = () => reject(getRequest.error || new Error('读取站点偏好失败'));
                         };
-                    };
-                } catch (error) {
-                    // console.error(error);
-                }
+                    } catch (error) {
+                        reject(error);
+                    }
+                }).catch(error => {
+                    util.clog(error);
+                    message.warning('无法同步站点的新标签页设置，脚本设置仍然有效');
+                    Config.updateConfig(`${stateName}.enabled`, desiredState, { immediate: true });
+                    return desiredState;
+                });
             },
             // 强制新标签页打开帖子链接
             enforceNewTabForPosts() {
@@ -1351,6 +1829,7 @@ const applyTypographyStyle = (type, config) => {
                 const clickHandler = function(e) {
                     // 检查配置是否启用（每次检查以确保实时性，但只在启用时才进行后续处理）
                     if (!Config.getConfig('open_post_in_new_tab.enabled')) return;
+                    if (e.button !== 0 || e.defaultPrevented) return;
 
                     const link = e.target.closest('a');
                     if (!link || !link.href) return;
@@ -1371,27 +1850,34 @@ const applyTypographyStyle = (type, config) => {
                     if (isPostLink) {
                         e.preventDefault();
                         e.stopPropagation();
-                        window.open(link.href, '_blank');
+                        GM_openInTab(link.href, { active: !e.ctrlKey && !e.metaKey, insert: true });
                     }
                 };
                 document.addEventListener('click', clickHandler, true); // 使用捕获阶段确保优先执行
             },
             //自动点击跳转页链接
             autoJump() {
+                if (!FeatureFlags.isEnabled('auto_jump_external_links')) return;
                 document.querySelectorAll('a[href*="/jump?to="]').forEach(link => {
                     try {
                         const urlObj = new URL(link.href);
                         const encodedUrl = urlObj.searchParams.get('to');
                         if (encodedUrl) {
-                            const decodedUrl = decodeURIComponent(encodedUrl);
-                            link.href = decodedUrl;
+                            const safeUrl = normalizeHttpUrl(encodedUrl, BASE_URL);
+                            if (safeUrl) {
+                                link.href = safeUrl;
+                                link.rel = 'noopener noreferrer';
+                            }
                         }
                     } catch (e) {
                         // console.error('处理链接时出错:', e);
                     }
                 });
                 if (!/^\/jump/.test(location.pathname)) return;
-                document.querySelector('.btn').click();
+                const destination = new URL(location.href).searchParams.get('to');
+                if (destination && normalizeHttpUrl(destination, BASE_URL)) {
+                    document.querySelector('.btn')?.click();
+                }
             },
             refreshBlockKeywordRules() {
                 const stored = Config.getConfig('block_posts.keywords');
@@ -1406,8 +1892,8 @@ const applyTypographyStyle = (type, config) => {
                     const type = rule.type || 'text';
                     if (type === 'regex') {
                         const pattern = rule.value || rule.pattern || '';
-                        if (!pattern) return null;
-                        const flags = rule.flags || '';
+                        if (!pattern || pattern.length > 200) return null;
+                        const flags = normalizeRegexFlags(rule.flags);
                         try {
                             const regex = new RegExp(pattern, flags || 'i');
                             return { type: 'regex', regex, value: pattern, flags };
@@ -1435,22 +1921,7 @@ const applyTypographyStyle = (type, config) => {
                 }).filter(Boolean).join('\n');
             },
             parseBlockKeywordInput(inputValue) {
-                if (!inputValue) return [];
-                return inputValue.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
-                    if (line.startsWith('/') && line.lastIndexOf('/') > 0) {
-                        const lastSlash = line.lastIndexOf('/');
-                        const pattern = line.slice(1, lastSlash);
-                        const flags = line.slice(lastSlash + 1);
-                        try {
-                            new RegExp(pattern, flags || 'i');
-                            return { type: 'regex', value: pattern, flags };
-                        } catch (err) {
-                            // console.warn('[NodeSeek X] 忽略无效正则：', line, err);
-                            return null;
-                        }
-                    }
-                    return { type: 'text', value: line };
-                }).filter(Boolean);
+                return parseRuleInput(inputValue);
             },
             shouldBlockTitle(title) {
                 if (!this.blockKeywordRules || this.blockKeywordRules.length === 0) return false;
@@ -1458,6 +1929,7 @@ const applyTypographyStyle = (type, config) => {
                 return this.blockKeywordRules.some(rule => {
                     if (rule.type === 'regex') {
                         try {
+                            rule.regex.lastIndex = 0;
                             return rule.regex.test(title);
                         } catch (err) {
                             // console.warn('[NodeSeek X] 正则匹配失败：', rule, err);
@@ -1467,20 +1939,23 @@ const applyTypographyStyle = (type, config) => {
                     return lowerTitle.includes(rule.lower);
                 });
             },
+            setPostBlocked(item, reason, blocked) {
+                if (!item) return;
+                const attribute = `data-nsx-block-${reason}`;
+                if (blocked) item.setAttribute(attribute, '1');
+                else item.removeAttribute(attribute);
+                const hasReason = ['keyword', 'category', 'view'].some(key => item.hasAttribute(`data-nsx-block-${key}`));
+                item.classList.toggle('blocked-post', hasReason);
+            },
             blockPost(ele) {
-                if (Config.getConfig('block_posts.enabled') === false) return;
-                if (!this.blockKeywordRules || this.blockKeywordRules.length === 0) return;
                 ele = ele || document;
+                const enabled = Config.getConfig('block_posts.enabled') !== false;
                 ele.querySelectorAll('.post-title a[href], .post-list-item a.post-title').forEach(item => {
                     const title = (item.textContent || '').trim();
-                    if (!title || !this.shouldBlockTitle(title)) return;
-                    const li = item.closest('.post-list-item');
-                    if (li) {
-                        li.classList.add('blocked-post');
-                    } else {
-                        const fallback = item.closest('li, article, .post-card, .post-item, .post, .post-list-content') || item.parentElement;
-                        fallback?.classList.add('blocked-post');
-                    }
+                    const container = item.closest('.post-list-item') ||
+                        item.closest('li, article, .post-card, .post-item, .post, .post-list-content') ||
+                        item.parentElement;
+                    this.setPostBlocked(container, 'keyword', enabled && Boolean(title) && this.shouldBlockTitle(title));
                 });
             },
             refreshBlockedCategories() {
@@ -1498,17 +1973,12 @@ const applyTypographyStyle = (type, config) => {
                 return inputValue.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
             },
             blockPostsByCategory(ele) {
-                if (Config.getConfig('block_categories.enabled') === false) return;
-                if (!this.blockedCategorySet || this.blockedCategorySet.size === 0) return;
                 ele = ele || document;
+                const enabled = Config.getConfig('block_categories.enabled') === true;
                 ele.querySelectorAll('.post-list-item').forEach(item => {
-                    if (item.classList.contains('blocked-post')) return;
                     const categoryAnchor = item.querySelector('.post-category');
-                    if (!categoryAnchor) return;
-                    const text = (categoryAnchor.textContent || '').trim().toLowerCase();
-                    if (this.blockedCategorySet.has(text)) {
-                        item.classList.add('blocked-post');
-                    }
+                    const text = (categoryAnchor?.textContent || '').trim().toLowerCase();
+                    this.setPostBlocked(item, 'category', enabled && this.blockedCategorySet.has(text));
                 });
             },
             togglePromotions() {
@@ -1522,23 +1992,46 @@ const applyTypographyStyle = (type, config) => {
                 if (this.avatarDefaultCache.has(src)) {
                     return this.avatarDefaultCache.get(src);
                 }
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
                 try {
-                    const response = await fetch(src, { credentials: 'include', headers: { 'Accept': 'text/html' } });
+                    const response = await fetch(src, {
+                        credentials: 'include',
+                        headers: { 'Accept': 'image/svg+xml,image/*;q=0.8' },
+                        signal: controller.signal
+                    });
                     if (!response.ok) throw new Error(response.status);
+                    const contentType = response.headers.get('content-type') || '';
+                    const contentLength = Number(response.headers.get('content-length')) || 0;
+                    if (contentLength > 256 * 1024 || (!/svg|text/i.test(contentType) && contentType)) {
+                        this.avatarDefaultCache.set(src, false);
+                        return false;
+                    }
                     const text = await response.text();
                     const isDefault = /vue-color-avatar/i.test(text);
+                    if (this.avatarDefaultCache.size >= 500) {
+                        this.avatarDefaultCache.delete(this.avatarDefaultCache.keys().next().value);
+                    }
                     this.avatarDefaultCache.set(src, isDefault);
                     return isDefault;
                 } catch (err) {
                     // console.warn('[NodeSeek X] avatar detect failed', err);
                     this.avatarDefaultCache.set(src, false);
                     return false;
+                } finally {
+                    clearTimeout(timeoutId);
                 }
             },
             replaceDefaultAvatars(target = document) {
                 const config = Config.getConfig('default_avatar');
+                const getAvatars = selector => {
+                    const avatars = [];
+                    if (target.matches?.(selector)) avatars.push(target);
+                    avatars.push(...(target.querySelectorAll?.(selector) || []));
+                    return avatars;
+                };
                 if (!config || config.enabled !== true) {
-                    target.querySelectorAll('img.avatar-normal[data-nsx-original-avatar]').forEach(img => {
+                    getAvatars('img.avatar-normal[data-nsx-original-avatar]').forEach(img => {
                         img.src = img.dataset.nsxOriginalAvatar;
                         delete img.dataset.nsxOriginalAvatar;
                         delete img.dataset.nsxAvatarProcessed;
@@ -1550,7 +2043,9 @@ const applyTypographyStyle = (type, config) => {
                 const autoDetect = config.auto_detect !== false;
                 const process = (img) => {
                     if (img.dataset.nsxAvatarProcessed) return;
+                    const originalSrc = img.currentSrc || img.src;
                     const finalize = (shouldReplace) => {
+                        if (!img.isConnected || (img.currentSrc || img.src) !== originalSrc) return;
                         if (shouldReplace) {
                             if (!img.dataset.nsxOriginalAvatar) {
                                 img.dataset.nsxOriginalAvatar = img.src;
@@ -1574,7 +2069,7 @@ const applyTypographyStyle = (type, config) => {
                         img.addEventListener('load', runDetect, { once: true });
                     }
                 };
-                target.querySelectorAll('img.avatar-normal').forEach(process);
+                getAvatars('img.avatar-normal').forEach(process);
             },
             startAvatarObserver() {
                 if (this.avatarObserver) this.avatarObserver.disconnect();
@@ -1617,14 +2112,16 @@ const applyTypographyStyle = (type, config) => {
                 ele = ele || document;
                 let level=0;
                 if (this.loginStatus) level = unsafeWindow.__config__.user.rank;
-                [...ele.querySelectorAll('.post-list-item use[href="#lock"]')].forEach(el => {
-                    const n = +el.closest('span')?.textContent.match(/\d+/)?.[0] || 0;
-                    if (n > level) el.closest('.post-list-item')?.classList.add('blocked-post');
+                [...ele.querySelectorAll('.post-list-item')].forEach(item => {
+                    const lock = item.querySelector('use[href="#lock"]');
+                    const n = +lock?.closest('span')?.textContent.match(/\d+/)?.[0] || 0;
+                    this.setPostBlocked(item, 'view', n > level);
                 });
             },
             //屏蔽用户
             blockMemberDOMInsert() {
                 if (!this.loginStatus) return;
+                if (!FeatureFlags.isEnabled('block_members')) return;
 
                 const _this = this;
 
@@ -1637,7 +2134,6 @@ const applyTypographyStyle = (type, config) => {
 
                     // 如果卡片底部超出视口，调整位置
                     if (cardBottom > viewportHeight - 20) {
-                        const currentTop = parseInt(userCard.style.top) || rect.top;
                         const cardHeight = rect.height;
                         const newTop = viewportHeight - cardHeight - 20;
 
@@ -1654,14 +2150,14 @@ const applyTypographyStyle = (type, config) => {
 
                 Array.from(document.querySelectorAll(".post-list .post-list-item,.content-item")).forEach((function (t, n) {
                     const r = t.querySelector('.avatar-normal');
-                    if (!r) return;
-                    r.addEventListener("click", (function (n) {
+                    if (!r || r.dataset.nsxBlockBound === '1') return;
+                    r.dataset.nsxBlockBound = '1';
+                    r.addEventListener("click", (async function (n) {
+                        if (!FeatureFlags.isEnabled('block_members')) return;
                         n.preventDefault();
-                        let intervalId = setInterval(() => {
-                            const userCard = document.querySelector('div.user-card.hover-user-card');
-                            const pmButton = document.querySelector('div.user-card.hover-user-card a.btn');
-                            if (userCard && pmButton) {
-                                clearInterval(intervalId);
+                        const userCard = await waitForElement('div.user-card.hover-user-card');
+                        const pmButton = userCard?.querySelector('a.btn');
+                        if (userCard && pmButton) {
 
                                 // 调整用户卡片位置
                                 adjustUserCardPosition(userCard);
@@ -1669,9 +2165,10 @@ const applyTypographyStyle = (type, config) => {
                                 // 监听窗口大小变化和滚动，动态调整位置
                                 const adjustHandler = () => adjustUserCardPosition(userCard);
                                 window.addEventListener('resize', adjustHandler);
-                                window.addEventListener('scroll', adjustHandler);
+                                window.addEventListener('scroll', adjustHandler, { passive: true });
 
                                 // 当用户卡片消失时，移除监听器
+                                const cardParent = userCard.parentNode;
                                 const observer = new MutationObserver(() => {
                                     if (!document.contains(userCard)) {
                                         window.removeEventListener('resize', adjustHandler);
@@ -1679,11 +2176,14 @@ const applyTypographyStyle = (type, config) => {
                                         observer.disconnect();
                                     }
                                 });
-                                observer.observe(document.body, { childList: true, subtree: true });
+                                if (cardParent) observer.observe(cardParent, { childList: true });
 
+                                if (userCard.querySelector('[data-nsx-block-member]')) return;
                                 const dataVAttrs = util.getAttrsByPrefix(userCard, 'data-v');
-                                const userName = userCard.querySelector('a.Username').textContent;
+                                const userName = userCard.querySelector('a.Username')?.textContent?.trim();
+                                if (!userName) return;
                                 dataVAttrs.style = "float:left; background-color:rgba(0,0,0,.3)";
+                                dataVAttrs['data-nsx-block-member'] = '1';
                                 const blockBtn = util.createElement("a", {
                                     staticClass: "btn", attrs: dataVAttrs, on: {
                                         click: function (e) {
@@ -1696,10 +2196,7 @@ const applyTypographyStyle = (type, config) => {
 
                                 // 添加屏蔽按钮后，再次调整位置（因为按钮可能增加了卡片高度）
                                 setTimeout(() => adjustUserCardPosition(userCard), 100);
-                            }
-                        }, 50);
-                        // 添加超时保护，5秒后自动清理
-                        setTimeout(() => clearInterval(intervalId), 5000);
+                        }
                     }))
                 }))
                 function blockMember(userName) {
@@ -1719,34 +2216,36 @@ const applyTypographyStyle = (type, config) => {
                 }
             },
             addImageSlide() {
+                if (!FeatureFlags.isEnabled('image_slide')) return;
                 if (!opts.comment.pathPattern.test(location.pathname)) return;
-
-                const posts = document.querySelectorAll('article.post-content');
-                posts.forEach(function (post, i) {
-                    const images = post.querySelectorAll('img:not(.sticker)');
-                    if (images.length === 0) return;
-
-                    images.forEach(function (image, i) {
-                        const newImg = image.cloneNode(true);
-                        image.parentNode.replaceChild(newImg, image);
-                        newImg.addEventListener('click', function (e) {
-                            e.preventDefault();
-                            const imgArr = Array.from(post.querySelectorAll('img:not(.sticker)'));
-                            const clickedIndex = imgArr.indexOf(this);
-                            const photoData = imgArr.map((img, i) => ({ alt: img.alt, pid: i + 1, src: img.src }));
-                            layer.photos({ photos: { "title": "图片预览", "start": clickedIndex, "data": photoData } });
-                        }, true);
-                    });
-                });
+                if (this.imageSlideHandler) return;
+                this.imageSlideHandler = event => {
+                    if (!FeatureFlags.isEnabled('image_slide')) return;
+                    const image = event.target.closest('article.post-content img:not(.sticker)');
+                    if (!image) return;
+                    const post = image.closest('article.post-content');
+                    if (!post) return;
+                    event.preventDefault();
+                    const imgArr = Array.from(post.querySelectorAll('img:not(.sticker)'));
+                    const clickedIndex = imgArr.indexOf(image);
+                    const photoData = imgArr.map((img, index) => ({ alt: img.alt || '', pid: index + 1, src: img.currentSrc || img.src }));
+                    layer.photos({ photos: { title: "图片预览", start: clickedIndex, data: photoData } });
+                };
+                document.addEventListener('click', this.imageSlideHandler, true);
             },
             addLevelTag() {//添加等级标签
                 if (!this.loginStatus) return;
+                if (!FeatureFlags.isEnabled('level_tag')) return;
                 if (!opts.comment.pathPattern.test(location.pathname)) return;
                 let _this=this;
-                this.getUserInfo(unsafeWindow.__config__.postData.op.uid).then((user) => {
+                const uid = unsafeWindow.__config__?.postData?.op?.uid;
+                if (!uid) return;
+                return this.getUserInfo(uid).then((user) => {
                     let warningInfo = '';
                     const daysDiff = Math.floor((new Date() - new Date(user.created_at)) / (1000 * 60 * 60 * 24));
-                    if (daysDiff < 30) {
+                    const lowLevelAlarm = Config.getConfig('level_tag.low_lv_alarm') === true;
+                    const maxDays = clampNumber(Config.getConfig('level_tag.low_lv_max_days'), 1, 3650, 30);
+                    if (lowLevelAlarm && Number.isFinite(daysDiff) && daysDiff < maxDays) {
                         warningInfo = `⚠️`;
                     }
                     // console.log(user);
@@ -1754,7 +2253,7 @@ const applyTypographyStyle = (type, config) => {
                     const span = util.createElement("span", { staticClass: `nsk-badge role-tag user-level user-lv${rank}` }, [util.createElement("span", [`${warningInfo}Lv ${rank}`])]);
 
                     const authorLink = document.querySelector('#nsk-body .nsk-post .nsk-content-meta-info .author-info>a');
-                    if (authorLink != null) {
+                    if (authorLink != null && !authorLink.parentElement.querySelector('.user-level')) {
                         authorLink.after(span);
                     }
 
@@ -1763,7 +2262,7 @@ const applyTypographyStyle = (type, config) => {
                     const mainPost = document.querySelector('#nsk-body .nsk-post');
                     if (contentInfo) {
                         // 检查是否已添加过统计信息，避免重复
-                        if (contentInfo.querySelector('.nsx-user-stats')) return;
+                        if (mainPost?.querySelector('.nsx-user-stats')) return;
 
                         // 获取位置设置
                         const position = Config.getConfig('show_all_users_stats.position') || 'below';
@@ -1801,18 +2300,15 @@ const applyTypographyStyle = (type, config) => {
                             contentInfo.appendChild(statsContainer);
                         }
                     }
-                });
+                }).catch(error => util.clog(error));
             },
             getUserInfo(uid) {
-                return new Promise((resolve, reject) => {
-                    util.get(`/api/account/getInfo/${uid}`, {}, 'json').then((data) => {
-                        if (!data.success) {
-                            util.clog(data);
-                            return;
-                        }
-                        resolve(data.detail);
-                    }).catch((err) => reject(err));
-                })
+                return this.userInfoLimiter(() => util.get(`/api/account/getInfo/${uid}`, {}, 'json').then(data => {
+                    if (!data?.success || !data.detail) {
+                        throw new Error(data?.message || '获取用户信息失败');
+                    }
+                    return data.detail;
+                }));
             },
             // 为所有用户显示统计信息
             showAllUsersStats() {
@@ -1840,7 +2336,7 @@ const applyTypographyStyle = (type, config) => {
                     const position = Config.getConfig('show_all_users_stats.position') || 'below';
 
                     // 检查是否已添加过统计信息
-                    const existingStats = contentInfo.querySelector('.nsx-user-stats');
+                    const existingStats = item?.querySelector('.nsx-user-stats') || contentInfo.querySelector('.nsx-user-stats');
                     if (existingStats) {
                         // 如果位置设置改变，需要移除旧的并重新添加
                         existingStats.remove();
@@ -1908,7 +2404,7 @@ const applyTypographyStyle = (type, config) => {
                     if (!contentInfo) return;
 
                     // 如果已经有统计信息，跳过
-                    if (contentInfo.querySelector('.nsx-user-stats')) return;
+                    if (item.querySelector('.nsx-user-stats')) return;
 
                     // 尝试从头像获取 UID
                     const avatar = item.querySelector('.avatar-normal');
@@ -2049,15 +2545,9 @@ const applyTypographyStyle = (type, config) => {
                 const level = Math.floor(Math.sqrt(coin) / 10);
                 return Math.min(6, level);
             },
-            fakeLevel(){
-                let coin = unsafeWindow.__config__.user.coin;
-                if(coin < 4900) return;//不足7级直接返回
-                let rank = this.getRankByCoin(coin);
-                const userCard = document.querySelector(".user-card .user-stat");
-                userCard.querySelector('use[href="#level"]').closest('svg').nextElementSibling.innerText='等级 Lv '+ rank;
-            },
             userCardEx() {
                 if (!this.loginStatus) return;
+                if (!FeatureFlags.isEnabled('user_card_ext')) return;
                 if (!(opts.post.pathPattern.test(location.pathname)|| opts.comment.pathPattern.test(location.pathname))) return;
 
                 const bn = new BroadcastManager("notification_sync");
@@ -2070,53 +2560,81 @@ const applyTypographyStyle = (type, config) => {
                     const countEl = element.querySelector("a > :last-child");
                     countEl.classList.toggle("notify-count", count > 0);
 
-                    // 通知（只在主控标签页且有新消息时发送）
-                    if (count > 0 && bn.active) {
-                        GM_notification({
-                            text: `你有 ${count} 条新 ${text === '我' ? '@' : text}，点击查看`,
-                            tag: 'notice_count',
-                            onclick: e => (e.preventDefault(), GM_openInTab(`${BASE_URL}${href}`, {active: true}))
-                        });
-                    }
-
                     return element;
                 };
 
                 const userCard = document.querySelector(".user-card .user-stat");
+                if (!userCard || userCard.dataset.nsxExtended === '1') return;
                 const lastElement = userCard.querySelector(".stat-block:first-child > :last-child");
+                const lastBlock = userCard.querySelector(".stat-block:last-child");
+                if (!lastElement || !lastBlock) return;
+                this.userCardOriginalReplyNode = lastElement.cloneNode(true);
+                userCard.dataset.nsxExtended = '1';
 
                 const atMeElement = lastElement.cloneNode(true);
                 const msgElement = lastElement.cloneNode(true);
+                atMeElement.dataset.nsxNotificationExtension = '1';
+                msgElement.dataset.nsxNotificationExtension = '1';
 
                 lastElement.after(atMeElement);
-                userCard.querySelector(".stat-block:last-child").append(msgElement);
+                lastBlock.append(msgElement);
 
-                // 初始化通知显示
-                const updateAllCounts = (counts) => {
-                    updateNotificationElement(atMeElement, "/notification#/atMe", "#at-sign", "我", counts.atMe);
-                    updateNotificationElement(msgElement, "/notification#/message?mode=list", "#envelope-one", "私信", counts.message);
-                    updateNotificationElement(lastElement, "/notification#/reply", "#remind-6nce9p47", "回复", counts.reply);
+                const initialCounts = unsafeWindow.__config__.user.unViewedCount || {};
+                let previousCounts = {
+                    atMe: Number(initialCounts.atMe) || 0,
+                    message: Number(initialCounts.message) || 0,
+                    reply: Number(initialCounts.reply) || 0
+                };
+
+                const updateAllCounts = (counts, notify = true) => {
+                    const normalized = {
+                        atMe: Number(counts.atMe) || 0,
+                        message: Number(counts.message) || 0,
+                        reply: Number(counts.reply) || 0
+                    };
+                    updateNotificationElement(atMeElement, "/notification#/atMe", "#at-sign", "我", normalized.atMe);
+                    updateNotificationElement(msgElement, "/notification#/message?mode=list", "#envelope-one", "私信", normalized.message);
+                    updateNotificationElement(lastElement, "/notification#/reply", "#remind-6nce9p47", "回复", normalized.reply);
+
+                    if (notify && bn.active) {
+                        [
+                            ['atMe', '@我', '/notification#/atMe'],
+                            ['message', '私信', '/notification#/message?mode=list'],
+                            ['reply', '回复', '/notification#/reply']
+                        ].forEach(([key, label, href]) => {
+                            const increase = normalized[key] - previousCounts[key];
+                            if (increase <= 0) return;
+                            GM_notification({
+                                text: `你有 ${increase} 条新${label}通知`,
+                                tag: `nsx-notice-${key}`,
+                                onclick: event => {
+                                    event?.preventDefault?.();
+                                    GM_openInTab(`${BASE_URL}${href}`, { active: true });
+                                }
+                            });
+                        });
+                    }
+                    previousCounts = normalized;
                 };
 
                 // 注册数据接收器
-                bn.registerReceiver(({ sender, data }) => {
+                this.notificationReceiverStop?.();
+                this.notificationReceiverStop = bn.registerReceiver(({ sender, data }) => {
                     if (data.type === 'unreadCount' && data.counts) {
                         // console.log(`接收到来自 ${sender} 的广播数据：${JSON.stringify(data.counts)}`, new Date(data.timestamp).toLocaleString());
-                        updateAllCounts(data.counts);
+                        updateAllCounts(data.counts, true);
                     }
                 });
 
                 // 首次加载
-                bn.broadcast({ type: 'unreadCount', counts: unsafeWindow.__config__.user.unViewedCount, timestamp: Date.now() });
+                updateAllCounts(initialCounts, false);
+                bn.broadcast({ type: 'unreadCount', counts: initialCounts, timestamp: Date.now() });
 
-                let interval = 5000;
                 // 启动定时任务（只在主控标签页执行）
-                bn.startTask(async () => {
-                    const response = await fetch("/api/notification/unread-count", { credentials: "include" });
-
-                    if (!response.ok) throw new Error(response.status);
-
-                    const data = await response.json();
+                this.notificationTaskStop?.();
+                this.notificationTaskStop = bn.startTask(async () => {
+                    if (!FeatureFlags.isEnabled('user_card_ext')) return null;
+                    const data = await util.get('/api/notification/unread-count', {}, 'json');
                     if (data.success && data.unreadCount) {
                         // console.log(`${bn.myId} 发送一条广播数据：${JSON.stringify(data.unreadCount)}`);
                         return {
@@ -2126,128 +2644,126 @@ const applyTypographyStyle = (type, config) => {
                         };
                     }
                     throw new Error('Invalid response');
-                }, interval);
+                }, NOTIFICATION_POLL_INTERVAL, { pauseWhenHidden: true });
             },
             // 自动翻页
             autoLoading() {
-                if (Config.getConfig('loading_post.enabled') === false && Config.getConfig('loading_comment.enabled') === false) return;
-                let opt = {};
-                if (opts.post.pathPattern.test(location.pathname)) { opt = opts.post; }
-                else if (opts.comment.pathPattern.test(location.pathname)) { opt = opts.comment; }
-                else { return; }
-                let is_requesting = false;
-                let _this = this;
-                this.windowScroll(function (direction, e) {
-                    if (direction === 'down') { // 下滑才准备翻页
-                        let scrollTop = document.documentElement.scrollTop || window.pageYOffset || document.body.scrollTop;
-                        if (document.documentElement.scrollHeight <= document.documentElement.clientHeight + scrollTop + opt.scrollThreshold && !is_requesting) {
-                            if (!document.querySelector(opt.nextPagerSelector)) return;
-                            let nextUrl = document.querySelector(opt.nextPagerSelector).attributes.href.value;
-                            is_requesting = true;
+                const isPostList = opts.post.pathPattern.test(location.pathname);
+                const isCommentList = opts.comment.pathPattern.test(location.pathname);
+                if (!isPostList && !isCommentList) return;
+                const opt = isPostList ? opts.post : opts.comment;
+                const settingPath = isPostList ? 'loading_post.enabled' : 'loading_comment.enabled';
+                if (Config.getConfig(settingPath) === false) return;
+                this.autoLoadingObserver?.disconnect();
+                this.autoLoadingObserver = null;
+                if (this.autoLoadingScrollHandler) {
+                    window.removeEventListener('scroll', this.autoLoadingScrollHandler);
+                    this.autoLoadingScrollHandler = null;
+                }
 
-                            // 显示加载遮罩（无缝翻页时）
-                            const overlay = document.getElementById('nsx-loading-overlay');
-                            if (overlay) overlay.classList.add('show');
+                let isRequesting = false;
+                const loadNextPage = async () => {
+                    if (Config.getConfig(settingPath) === false) return;
+                    if (isRequesting) return;
+                    const nextLink = document.querySelector(opt.nextPagerSelector);
+                    if (!nextLink?.href) return;
+                    const nextUrl = normalizeHttpUrl(nextLink.href, BASE_URL);
+                    if (!nextUrl || new URL(nextUrl).origin !== BASE_URL) return;
+                    isRequesting = true;
+                    document.getElementById('nsx-loading-overlay')?.classList.add('show');
+                    try {
+                        const html = await util.get(nextUrl, {}, 'text');
+                        const doc = new DOMParser().parseFromString(html, 'text/html');
+                        const sourceList = doc.querySelector(opt.postListSelector);
+                        const targetList = document.querySelector(opt.postListSelector);
+                        if (!sourceList || !targetList) throw new Error('下一页内容结构不完整');
 
-                            util.get(nextUrl, {}, 'text').then(function (data) {
-                                let doc = new DOMParser().parseFromString(data, "text/html");
-                                _this.blockPost(doc);//过滤帖子
-                                _this.blockPostsByViewLevel(doc);
-                                _this.blockPostsByCategory(doc);
-                                if (opts.comment.pathPattern.test(location.pathname)){
-                                    // 取加载页的评论数据追加到原评论数据
-                                    let el = doc.getElementById('temp-script')
-                                    let jsonText = el.textContent;
-                                    if (jsonText) {
-                                        let conf = JSON.parse(util.b64DecodeUnicode(jsonText))
-                                        unsafeWindow.__config__.postData.comments.push(...conf.postData.comments);
+                        this.blockPost(doc);
+                        this.blockPostsByViewLevel(doc);
+                        this.blockPostsByCategory(doc);
+
+                        if (isCommentList) {
+                            const encodedConfig = doc.getElementById('temp-script')?.textContent;
+                            if (encodedConfig) {
+                                try {
+                                    const pageConfig = JSON.parse(util.b64DecodeUnicode(encodedConfig));
+                                    const comments = pageConfig?.postData?.comments;
+                                    if (Array.isArray(comments) && Array.isArray(unsafeWindow.__config__?.postData?.comments)) {
+                                        unsafeWindow.__config__.postData.comments.push(...comments);
                                     }
+                                } catch (error) {
+                                    util.clog(`评论配置解析失败：${error.message}`);
                                 }
-                                if (name === 'block_posts') {
-                                    const keywordsBox = layero[0].querySelector('#block_post_keywords_box');
-                                    if (keywordsBox) keywordsBox.style.display = data.elem.checked ? '' : 'none';
-                                    if (data.elem.checked) {
-                                        _this.refreshBlockKeywordRules();
-                                        _this.blockPost();
-                                    }
-                                }
-                                document.querySelector(opt.postListSelector).append(...doc.querySelector(opt.postListSelector).childNodes);
-                                document.querySelector(opt.topPagerSelector).innerHTML = doc.querySelector(opt.topPagerSelector).innerHTML;
-                                document.querySelector(opt.bottomPagerSelector).innerHTML = doc.querySelector(opt.bottomPagerSelector).innerHTML;
-                                history.pushState(null, null, nextUrl);
-                                _this.replaceDefaultAvatars(doc);
-
-                                // 确保新加载的内容也应用紧凑模式样式
-                                if (Config.getConfig('compact_mode.enabled') !== false) {
-                                    _this.updateCompactModeStyle();
-                                }
-
-                                // 确保新加载的内容也应用隐藏设置
-                                _this.togglePostCategory();
-                                _this.togglePostInfo();
-
-                                // 应用关键词高亮
-                                if (Config.getConfig('right_panel_highlight.enabled') === true) {
-                                    _this.applyRightPanelHighlight();
-                                }
-
-                                // 应用排序
-                                _this.sortPostList();
-
-                                // 如果启用了显示所有用户统计，为新加载的内容添加统计信息
-                                if (Config.getConfig('show_all_users_stats.enabled') === true) {
-                                    setTimeout(() => {
-                                        _this.showAllUsersStats();
-                                    }, 300);
-                                }
-
-                                // 隐藏加载遮罩
-                                const overlay = document.getElementById('nsx-loading-overlay');
-                                if (overlay) overlay.classList.remove('show');
-
-                                // 评论菜单条
-                                if (opts.comment.pathPattern.test(location.pathname)){
-                                    const vue = document.querySelector('.comment-menu').__vue__;
-                                    Array.from(document.querySelectorAll(".content-item")).forEach(function (t,e) {
-                                        const n = t.querySelector(".comment-menu-mount");
-                                        if(!n) return;
-                                        const o = new vue.$root.constructor(vue.$options);
-                                        o.setIndex(e);
-                                        o.$mount(n);
-                                    });
-
-                                    // 如果启用了显示所有用户统计，为新加载的评论添加统计信息
-                                    if (Config.getConfig('show_all_users_stats.enabled') === true) {
-                                        setTimeout(() => {
-                                            _this.showAllUsersStats();
-                                        }, 500);
-                                    }
-                                }
-                                is_requesting = false;
-                            }).catch(function (err) {
-                                // 出错时也隐藏遮罩
-                                const overlay = document.getElementById('nsx-loading-overlay');
-                                if (overlay) overlay.classList.remove('show');
-                                is_requesting = false;
-                                util.clog(err);
-                            });
+                            }
                         }
+
+                        const appendedNodes = Array.from(sourceList.children);
+                        targetList.append(...appendedNodes);
+                        const sourceTopPager = doc.querySelector(opt.topPagerSelector);
+                        const sourceBottomPager = doc.querySelector(opt.bottomPagerSelector);
+                        const targetTopPager = document.querySelector(opt.topPagerSelector);
+                        const targetBottomPager = document.querySelector(opt.bottomPagerSelector);
+                        if (sourceTopPager && targetTopPager) targetTopPager.replaceChildren(...sourceTopPager.childNodes);
+                        if (sourceBottomPager && targetBottomPager) targetBottomPager.replaceChildren(...sourceBottomPager.childNodes);
+                        history.pushState(null, '', nextUrl);
+
+                        this.replaceDefaultAvatars(targetList);
+                        this.blockMemberDOMInsert();
+                        this.addCodeHighlight(targetList);
+                        this.togglePostCategory();
+                        this.togglePostInfo();
+                        this.sortPostList();
+
+                        if (Config.getConfig('right_panel_highlight.enabled') === true) {
+                            this.highlightInContainer(targetList);
+                        }
+                        if (Config.getConfig('show_all_users_stats.enabled') === true) {
+                            this.showAllUsersStats();
+                        }
+
+                        if (isCommentList) {
+                            const vue = document.querySelector('.comment-menu')?.__vue__;
+                            if (vue?.$root?.constructor) {
+                                Array.from(document.querySelectorAll('.content-item')).forEach((item, index) => {
+                                    const mount = item.querySelector('.comment-menu-mount');
+                                    if (!mount || mount.childNodes.length > 0) return;
+                                    const instance = new vue.$root.constructor(vue.$options);
+                                    instance.setIndex(index);
+                                    instance.$mount(mount);
+                                });
+                            }
+                        }
+                    } catch (error) {
+                        util.clog(error);
+                        message.error(error?.message || '自动加载下一页失败');
+                    } finally {
+                        isRequesting = false;
+                        document.getElementById('nsx-loading-overlay')?.classList.remove('show');
                     }
-                });
-            },
-            // 滚动条事件
-            windowScroll(fn1) {
-                let beforeScrollTop = document.documentElement.scrollTop || window.pageYOffset || document.body.scrollTop,
-                    fn = fn1 || function () { };
-                setTimeout(function () { // 延时执行，避免刚载入到页面就触发翻页事件
-                    window.addEventListener('scroll', function (e) {
-                        const afterScrollTop = document.documentElement.scrollTop || window.pageYOffset || document.body.scrollTop,
-                              delta = afterScrollTop - beforeScrollTop;
-                        if (delta == 0) return false;
-                        fn(delta > 0 ? 'down' : 'up', e);
-                        beforeScrollTop = afterScrollTop;
-                    }, false);
-                }, 1000)
+                };
+
+                const pager = document.querySelector(opt.bottomPagerSelector);
+                if (!pager) return;
+                if (typeof IntersectionObserver === 'function') {
+                    this.autoLoadingObserver?.disconnect();
+                    this.autoLoadingObserver = new IntersectionObserver(entries => {
+                        if (entries.some(entry => entry.isIntersecting)) loadNextPage();
+                    }, { rootMargin: `0px 0px ${opt.scrollThreshold}px 0px` });
+                    this.autoLoadingObserver.observe(pager);
+                    return;
+                }
+
+                let ticking = false;
+                this.autoLoadingScrollHandler = () => {
+                    if (ticking) return;
+                    ticking = true;
+                    requestAnimationFrame(() => {
+                        ticking = false;
+                        const rect = pager.getBoundingClientRect();
+                        if (rect.top <= window.innerHeight + opt.scrollThreshold) loadNextPage();
+                    });
+                };
+                window.addEventListener('scroll', this.autoLoadingScrollHandler, { passive: true });
             },
             // 平滑滚动
             smoothScroll(){
@@ -2261,10 +2777,11 @@ const applyTypographyStyle = (type, config) => {
                         btn.addEventListener('click', e => {
                             e.preventDefault();
                             e.stopImmediatePropagation();
-                            if(e.target.querySelector('use[href="#down"]')){
+                            if (selector === '#back-to-bottom') {
                                 top = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
                             }
-                            window.scrollTo({ top, behavior: 'smooth' });
+                            const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                            window.scrollTo({ top, behavior: reduceMotion ? 'auto' : 'smooth' });
                         }, true);
                     }
                 };
@@ -2273,31 +2790,29 @@ const applyTypographyStyle = (type, config) => {
             },
             history: ()=>{
                 const STORAGE_KEY = 'nsx_browsing_history';
-                const PAGE_SIZE = 10;
-                let saveLimit = 'all';
                 let sortedCache = null; // 缓存排序后的数据
-
-                const POST_URL_PATTERN = /\/post-(\d+)-\d+.*$/;
                 const getCurrentTime = () => layui.util.toDateString(new Date(),"yyyy-MM-ddTHH:mm:ss.SSS");
 
                 const getBrowsingHistory = () => {
-                    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                    const parsed = safeJsonParse(localStorage.getItem(STORAGE_KEY), []);
+                    return Array.isArray(parsed)
+                        ? parsed.filter(item => item && typeof item.url === 'string' && typeof item.title === 'string')
+                        : [];
                 };
 
                 const saveBrowsingHistory = (history) => {
-                    if (saveLimit !== 'all') {
-                        history = history.slice(-saveLimit);
-                    }
                     // 保存时排序，并清除缓存
                     sortedCache = null;
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+                    try {
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(-MAX_HISTORY_ITEMS)));
+                    } catch (error) {
+                        util.clog(`浏览历史保存失败：${error.message}`);
+                    }
                 };
 
                 const addOrUpdateHistory = (url, title) => {
-                    const match = url.match(POST_URL_PATTERN);
-                    if (!match) return; // 只保存匹配的帖子记录
-
-                    const normalizedUrl = `/post-${match[1]}-1`; // 只判断第1页，即不区分页码
+                    const normalizedUrl = normalizePostUrl(url, BASE_URL);
+                    if (!normalizedUrl) return;
                     const history = getBrowsingHistory();
                     const index = history.findIndex(item => item.url === normalizedUrl);
                     const entry = { url: normalizedUrl, title, time: getCurrentTime() };
@@ -2313,35 +2828,12 @@ const applyTypographyStyle = (type, config) => {
                 const getHistory = (page = 1) => {
                     // 使用缓存或重新排序
                     if (!sortedCache) {
-                    const history = getBrowsingHistory();
-                        sortedCache = history.sort((a, b) => new Date(b.time) - new Date(a.time));
+                        const history = getBrowsingHistory();
+                        sortedCache = [...history].sort((a, b) => new Date(b.time) - new Date(a.time));
                     }
                     if(page===0) return sortedCache;
-                    return sortedCache.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-                };
-
-                const showHistory = (page = 1) => {
-                    const history = getBrowsingHistory();
-                    const totalPages = Math.ceil(history.length / PAGE_SIZE);
-                    const pageHistory = getHistory(page);
-                    // console.clear();
-                    // console.log(`浏览历史 - 第 ${page} 页，共 ${totalPages} 页`);
-                    pageHistory.forEach((item, i) => {
-                        // console.log(`${(page - 1) * PAGE_SIZE + i + 1}. [${item.time}] ${item.title} - ${item.url}`);
-                    });
-                    if (page < totalPages) {
-                        // console.log(`输入 showHistory(${page + 1}) 查看下一页`);
-                    }
-                };
-
-                const setSaveLimit = (limit) => {
-                    if (typeof limit === 'number' && limit > 0 || limit === 'all') {
-                        saveLimit = limit;
-                        // console.log(`保存限制已设置为：${limit === 'all' ? '全部' : `最近 ${limit} 条`}`);
-                    }
-                    else {
-                        // console.error('无效的保存限制。请输入正整数或 "all"');
-                    }
+                    const pageSize = 10;
+                    return sortedCache.slice((page - 1) * pageSize, page * pageSize);
                 };
 
                 const injectDom=()=>{
@@ -2403,9 +2895,9 @@ const applyTypographyStyle = (type, config) => {
                 injectDom();
             },
             initInstantPage:() => {
+                if (navigator.connection?.saveData) return;
                 const prefetchedUrls = new Set(); // 用于存储已经尝试预加载的 URL
-                let prefetcher = document.createElement('link');
-                prefetcher.rel = 'prefetch';
+                const pendingUrls = new Set();
 
                 document.body.addEventListener('mouseover', (event) => {
                     const target = event.target.closest('a');
@@ -2414,19 +2906,24 @@ const applyTypographyStyle = (type, config) => {
                         return;
                     }
 
-                    const href = target.href;
+                    const href = normalizeHttpUrl(target.href, BASE_URL);
 
-                    if (!href.startsWith(`${BASE_URL}/post-`)) {
+                    if (!href || !href.startsWith(`${BASE_URL}/post-`)) {
                         return;
                     }
 
-                    if (prefetchedUrls.has(href)) {
+                    if (prefetchedUrls.has(href) || pendingUrls.has(href)) {
                         // console.log('跳过已预加载链接：', href);
                         return;
                     }
 
+                    pendingUrls.add(href);
                     setTimeout(() => {
+                        pendingUrls.delete(href);
                         if (target.matches(':hover')) {
+                            const prefetcher = document.createElement('link');
+                            prefetcher.rel = 'prefetch';
+                            prefetcher.as = 'document';
                             prefetcher.href = href;
                             document.head.appendChild(prefetcher);
                             prefetchedUrls.add(href);
@@ -2450,6 +2947,7 @@ const applyTypographyStyle = (type, config) => {
                 settingsBtn.classList.remove('color-theme-switcher');
                 settingsBtn.classList.add('nsx-settings-btn');
                 settingsBtn.setAttribute('title', 'NodeSeek X 设置');
+                settingsBtn.dataset.nsxVersion = version;
                 settingsBtn.querySelector('use').setAttribute('href', '#setting');
                 settingsBtn.addEventListener('click', (e) => {
                     e.preventDefault();
@@ -2458,12 +2956,21 @@ const applyTypographyStyle = (type, config) => {
 
                 colorSwitcher.insertAdjacentElement('beforebegin', settingsBtn);
             },
-            moveSearchBoxToCenter() {
-                // 搜索框定位逻辑已提前通过紧凑模式样式处理，避免运行时闪烁
+            createLoadingOverlay() {
+                if (document.getElementById('nsx-loading-overlay')) return;
+                const overlay = util.createElement('div', {
+                    attrs: {
+                        id: 'nsx-loading-overlay',
+                        role: 'status',
+                        'aria-live': 'polite',
+                        'aria-label': '正在加载下一页'
+                    }
+                }, ['正在加载下一页…']);
+                document.body?.appendChild(overlay);
             },
             advancedSettings() {
                 const _this = this;
-                const layerWidth = layui.device().mobile ? '100%' : '700px';
+                const layerWidth = window.matchMedia('(max-width: 768px)').matches ? '100%' : '700px';
                 const siteCode = opts.curSite ? opts.curSite.code : 'ns';
 
                 // 生成设置内容
@@ -2484,7 +2991,7 @@ const applyTypographyStyle = (type, config) => {
                 const typographyTag = Config.getConfig('typography.tag') || {};
                 const typographyMeta = Config.getConfig('typography.meta') || {};
                 const typographyContent = Config.getConfig('typography.content') || {};
-                const escape = (val) => (val || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const escape = escapeHtmlAttribute;
 
                 return `
 <div class="layui-row" style="display:flex;height:100%">
@@ -2543,7 +3050,7 @@ const applyTypographyStyle = (type, config) => {
       <div class="layui-form-item" id="loading_overlay_box" style="${(Config.getConfig('loading_overlay.enabled') ?? true) !== false ? '' : 'display:none;'}">
         <label class="layui-form-label">显示时长</label>
         <div class="layui-input-block">
-          <input type="range" name="loading_overlay_duration" min="300" max="3000" step="100" value="${Config.getConfig('loading_overlay.duration') ?? INITIAL_OVERLAY_DURATION_DEFAULT}" style="width:200px;">
+          <input type="range" name="loading_overlay_duration" min="0" max="3000" step="100" value="${escape(Config.getConfig('loading_overlay.duration') ?? INITIAL_OVERLAY_DURATION_DEFAULT)}" style="width:200px;">
           <span class="layui-form-mid" id="loading_overlay_duration_display">${(Config.getConfig('loading_overlay.duration') ?? INITIAL_OVERLAY_DURATION_DEFAULT)}ms</span>
         </div>
       </div>
@@ -2705,23 +3212,23 @@ const applyTypographyStyle = (type, config) => {
         <div class="layui-input-block">
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">内边距 (px):</label>
-            <input type="text" name="compact_padding" value="${Config.getConfig('compact_mode.padding') || '6px 10px'}" placeholder="如: 6px 10px" style="width: 150px; display: inline-block;">
+            <input type="text" name="compact_padding" value="${escape(Config.getConfig('compact_mode.padding') || '6px 10px')}" placeholder="如: 6px 10px" style="width: 150px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">头像大小 (px):</label>
-            <input type="number" name="compact_avatarSize" value="${Config.getConfig('compact_mode.avatarSize') || 26}" min="16" max="40" style="width: 150px; display: inline-block;">
+            <input type="number" name="compact_avatarSize" value="${escape(Config.getConfig('compact_mode.avatarSize') || 26)}" min="16" max="40" style="width: 150px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">标题字体 (px):</label>
-            <input type="number" name="compact_titleFontSize" value="${Config.getConfig('compact_mode.titleFontSize') || 13}" min="10" max="16" style="width: 150px; display: inline-block;">
+            <input type="number" name="compact_titleFontSize" value="${escape(Config.getConfig('compact_mode.titleFontSize') || 13)}" min="10" max="16" style="width: 150px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">信息字体 (px):</label>
-            <input type="number" name="compact_infoFontSize" value="${Config.getConfig('compact_mode.infoFontSize') || 10}" min="8" max="12" style="width: 150px; display: inline-block;">
+            <input type="number" name="compact_infoFontSize" value="${escape(Config.getConfig('compact_mode.infoFontSize') || 10)}" min="8" max="12" style="width: 150px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">间距 (px):</label>
-            <input type="number" name="compact_marginBottom" value="${Config.getConfig('compact_mode.marginBottom') || 2}" min="0" max="10" style="width: 150px; display: inline-block;">
+            <input type="number" name="compact_marginBottom" value="${escape(Config.getConfig('compact_mode.marginBottom') ?? 2)}" min="0" max="10" style="width: 150px; display: inline-block;">
           </div>
         </div>
       </div>
@@ -2742,16 +3249,16 @@ const applyTypographyStyle = (type, config) => {
       <div class="layui-form-item" id="header_opacity_box" style="${Config.getConfig('header_opacity.enabled') === true ? '' : 'display: none;'}">
         <label class="layui-form-label">透明度</label>
         <div class="layui-input-block">
-          <input type="range" name="header_opacity_value" min="0" max="1" step="0.01" value="${Config.getConfig('header_opacity.value') ?? 0.92}" style="width: 200px;">
+          <input type="range" name="header_opacity_value" min="0" max="1" step="0.01" value="${escape(Config.getConfig('header_opacity.value') ?? 0.92)}" style="width: 200px;">
           <span class="layui-form-mid" id="header_opacity_value_display">${(Config.getConfig('header_opacity.value') ?? 0.92).toFixed(2)}</span>
         </div>
         <div class="layui-input-block" style="margin-top:10px;">
           <input type="checkbox" name="header_opacity_blur_toggle" lay-skin="primary" lay-filter="header_opacity_blur_toggle" title="开启模糊" ${(Config.getConfig('header_opacity.blur_enabled') ?? true) !== false ? 'checked' : ''}>
-          <input type="number" name="header_opacity_blur" class="layui-input" style="width:100px;display:inline-block;margin-left:10px;" placeholder="blur(px)" value="${Config.getConfig('header_opacity.blur') ?? 16}">
+          <input type="number" name="header_opacity_blur" class="layui-input" style="width:100px;display:inline-block;margin-left:10px;" placeholder="blur(px)" value="${escape(Config.getConfig('header_opacity.blur') ?? 16)}">
         </div>
         <div class="layui-input-block" style="margin-top:10px;">
           <input type="checkbox" name="header_opacity_saturate_toggle" lay-skin="primary" lay-filter="header_opacity_saturate_toggle" title="开启饱和度" ${(Config.getConfig('header_opacity.saturate_enabled') ?? true) !== false ? 'checked' : ''}>
-          <input type="number" name="header_opacity_saturate" class="layui-input" style="width:120px;display:inline-block;margin-left:10px;" placeholder="saturate(%)" value="${Config.getConfig('header_opacity.saturate') ?? 180}">
+          <input type="number" name="header_opacity_saturate" class="layui-input" style="width:120px;display:inline-block;margin-left:10px;" placeholder="saturate(%)" value="${escape(Config.getConfig('header_opacity.saturate') ?? 180)}">
         </div>
       </div>
       <div class="layui-form-item">
@@ -2764,16 +3271,16 @@ const applyTypographyStyle = (type, config) => {
       <div class="layui-form-item" id="frame_opacity_box" style="${Config.getConfig('frame_opacity.enabled') === true ? '' : 'display: none;'}">
         <label class="layui-form-label">透明度</label>
         <div class="layui-input-block">
-          <input type="range" name="frame_opacity_value" min="0" max="1" step="0.01" value="${Config.getConfig('frame_opacity.value') ?? 0.95}" style="width: 200px;">
+          <input type="range" name="frame_opacity_value" min="0" max="1" step="0.01" value="${escape(Config.getConfig('frame_opacity.value') ?? 0.95)}" style="width: 200px;">
           <span class="layui-form-mid" id="frame_opacity_value_display">${(Config.getConfig('frame_opacity.value') ?? 0.95).toFixed(2)}</span>
         </div>
         <div class="layui-input-block" style="margin-top:10px;">
           <input type="checkbox" name="frame_opacity_blur_toggle" lay-skin="primary" lay-filter="frame_opacity_blur_toggle" title="开启模糊" ${(Config.getConfig('frame_opacity.blur_enabled') ?? true) !== false ? 'checked' : ''}>
-          <input type="number" name="frame_opacity_blur" class="layui-input" style="width:100px;display:inline-block;margin-left:10px;" placeholder="blur(px)" value="${Config.getConfig('frame_opacity.blur') ?? 12}">
+          <input type="number" name="frame_opacity_blur" class="layui-input" style="width:100px;display:inline-block;margin-left:10px;" placeholder="blur(px)" value="${escape(Config.getConfig('frame_opacity.blur') ?? 12)}">
         </div>
         <div class="layui-input-block" style="margin-top:10px;">
           <input type="checkbox" name="frame_opacity_saturate_toggle" lay-skin="primary" lay-filter="frame_opacity_saturate_toggle" title="开启饱和度" ${(Config.getConfig('frame_opacity.saturate_enabled') ?? true) !== false ? 'checked' : ''}>
-          <input type="number" name="frame_opacity_saturate" class="layui-input" style="width:120px;display:inline-block;margin-left:10px;" placeholder="saturate(%)" value="${Config.getConfig('frame_opacity.saturate') ?? 180}">
+          <input type="number" name="frame_opacity_saturate" class="layui-input" style="width:120px;display:inline-block;margin-left:10px;" placeholder="saturate(%)" value="${escape(Config.getConfig('frame_opacity.saturate') ?? 180)}">
         </div>
       </div>
       <div class="layui-form-item">
@@ -2853,12 +3360,12 @@ const applyTypographyStyle = (type, config) => {
             <button type="button" id="custom_bg_upload_btn" class="layui-btn layui-btn-sm" style="margin-right: 10px;">选择图片</button>
             <button type="button" id="custom_bg_clear_btn" class="layui-btn layui-btn-sm layui-btn-danger" style="display: ${Config.getConfig('custom_background.url') ? 'inline-block' : 'none'};">清除图片</button>
             <div id="custom_bg_preview" style="margin-top: 10px; ${Config.getConfig('custom_background.url') && Config.getConfig('custom_background.url').startsWith('data:') ? '' : 'display: none;'}">
-              <img id="custom_bg_preview_img" src="${Config.getConfig('custom_background.url') || ''}" style="max-width: 300px; max-height: 200px; border: 1px solid #ddd; border-radius: 4px; display: block;">
+              <img id="custom_bg_preview_img" src="${escape(Config.getConfig('custom_background.url') || '')}" alt="自定义背景预览" style="max-width: 300px; max-height: 200px; border: 1px solid #ddd; border-radius: 4px; display: block;">
             </div>
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">或输入URL:</label>
-            <input type="text" name="custom_bg_url" value="${Config.getConfig('custom_background.url') && !Config.getConfig('custom_background.url').startsWith('data:') ? Config.getConfig('custom_background.url') : ''}" placeholder="输入图片URL" style="width: 400px; display: inline-block;">
+            <input type="text" name="custom_bg_url" value="${escape(Config.getConfig('custom_background.url') && !Config.getConfig('custom_background.url').startsWith('data:') ? Config.getConfig('custom_background.url') : '')}" placeholder="输入图片URL" style="width: 400px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">重复方式:</label>
@@ -2871,11 +3378,11 @@ const applyTypographyStyle = (type, config) => {
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">位置:</label>
-            <input type="text" name="custom_bg_position" value="${Config.getConfig('custom_background.position') || 'center'}" placeholder="如: center, top left, 50% 50%" style="width: 200px; display: inline-block;">
+            <input type="text" name="custom_bg_position" value="${escape(Config.getConfig('custom_background.position') || 'center')}" placeholder="如: center, top left, 50% 50%" style="width: 200px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">大小:</label>
-            <input type="text" name="custom_bg_size" value="${Config.getConfig('custom_background.size') || 'cover'}" placeholder="如: auto, cover, contain, 100% 100%" style="width: 200px; display: inline-block;">
+            <input type="text" name="custom_bg_size" value="${escape(Config.getConfig('custom_background.size') || 'cover')}" placeholder="如: auto, cover, contain, 100% 100%" style="width: 200px; display: inline-block;">
           </div>
           <div style="margin-bottom: 10px;">
             <label style="display: inline-block; width: 120px;">滚动方式:</label>
@@ -3020,7 +3527,7 @@ const applyTypographyStyle = (type, config) => {
                     scrollbar: false,
                     shade: 0.1,
                     shadeClose: true,
-                    btn: ["保存设置", "取消"],
+                    btn: ["保存设置", "关闭"],
                     btnAlign: 'r',
                     title: '<i class="layui-icon layui-icon-set"></i> NodeSeek X 设置',
                     id: 'nsx-settings-layer',
@@ -3028,6 +3535,21 @@ const applyTypographyStyle = (type, config) => {
                     success: function(layero, index) {
                         // 初始化表单
                         layui.form.render();
+                        const settingsSession = Symbol('settings-session');
+                        _this.settingsFormSession = settingsSession;
+                        _this.settingsFormDispatchers ||= new Set();
+                        _this.activeSettingsFormHandlers ||= new Map();
+                        const registerFormHandler = (eventName, handler) => {
+                            _this.activeSettingsFormHandlers.set(eventName, { session: settingsSession, handler });
+                            if (_this.settingsFormDispatchers.has(eventName)) return;
+                            _this.settingsFormDispatchers.add(eventName);
+                            layui.form.on(eventName, data => {
+                                const active = _this.activeSettingsFormHandlers.get(eventName);
+                                if (!active || _this.settingsFormSession !== active.session) return;
+                                if (!data?.elem?.closest?.('#nsx-settings-layer')) return;
+                                active.handler(data);
+                            });
+                        };
 
                         // 菜单导航事件处理
                         const menuLinks = layero[0].querySelectorAll('#nsx-settings-menu a');
@@ -3053,27 +3575,30 @@ const applyTypographyStyle = (type, config) => {
                             });
                         });
 
-                        // 滚动时高亮菜单
+                        // 滚动时高亮菜单。使用视口相对位置，避免 fieldset 的 offsetParent
+                        // 与滚动容器不一致时最后一个菜单项无法激活。
                         const docContent = layero[0].querySelector('#nsx-settings-content');
                         if (docContent) {
-                            docContent.addEventListener('scroll', function() {
-                                const scrollPos = docContent.scrollTop;
+                            let scrollFrame = 0;
+                            const updateActiveMenu = () => {
+                                scrollFrame = 0;
+                                const activationLine = docContent.getBoundingClientRect().top + Math.min(120, docContent.clientHeight * 0.2);
+                                let activeId = 'basic';
                                 layero[0].querySelectorAll('#nsx-settings-content fieldset').forEach(function(el) {
-                                    const topPos = el.offsetTop - 30;
-      if (scrollPos >= topPos) {
-                                        const id = el.getAttribute('id');
-                                        layero[0].querySelectorAll('#nsx-settings-menu li').forEach(li => li.classList.remove('layui-menu-item-checked'));
-                                        const navItem = layero[0].querySelector('#nsx-settings-menu a[data-target="' + id + '"]');
-                                        if (navItem) {
-                                            navItem.closest('li').classList.add('layui-menu-item-checked');
-                                        }
-                                    }
+                                    if (el.getBoundingClientRect().top <= activationLine) activeId = el.id;
                                 });
-                            });
+                                layero[0].querySelectorAll('#nsx-settings-menu li').forEach(li => li.classList.remove('layui-menu-item-checked'));
+                                const navItem = layero[0].querySelector('#nsx-settings-menu a[data-target="' + activeId + '"]');
+                                navItem?.closest('li')?.classList.add('layui-menu-item-checked');
+                            };
+                            docContent.addEventListener('scroll', function() {
+                                if (scrollFrame) return;
+                                scrollFrame = requestAnimationFrame(updateActiveMenu);
+                            }, { passive: true });
                         }
 
                         // 处理签到方式切换
-                        layui.form.on('radio(sign_in_method)', function(data) {
+                        registerFormHandler('radio(sign_in_method)', function(data) {
                             const value = parseInt(data.value, 10);
                             if (value === 0) {
                                 Config.updateConfig(`sign_in.${siteCode}.enabled`, false);
@@ -3101,9 +3626,17 @@ const applyTypographyStyle = (type, config) => {
                             'hide_post_category', 'hide_post_info', 'hide_topic_carousel', 'right_panel_highlight', 'show_all_users_stats'
                         ];
 
+                        const switchConfigPaths = {
+                            typography_title: 'typography.title',
+                            typography_tag: 'typography.tag',
+                            typography_meta: 'typography.meta',
+                            typography_content: 'typography.content'
+                        };
+
                         switchNames.forEach(name => {
-                            layui.form.on('switch(' + name + ')', function(data) {
-                                Config.updateConfig(`${name}.enabled`, data.elem.checked);
+                            registerFormHandler('switch(' + name + ')', function(data) {
+                                const configPath = switchConfigPaths[name] || name;
+                                Config.updateConfig(`${configPath}.enabled`, data.elem.checked);
                                 // 紧凑模式实时切换，无需刷新
                                 if (name === 'compact_mode') {
                                     const optionsDiv = layero[0].querySelector('#compact_mode_options');
@@ -3112,21 +3645,30 @@ const applyTypographyStyle = (type, config) => {
                                     if (customDiv) customDiv.style.display = data.elem.checked ? '' : 'none';
                                     _this.updateCompactModeStyle();
                                 }
+                                if (name === 'loading_post') {
+                                    Config.updateConfig('loading_comment.enabled', data.elem.checked);
+                                    if (data.elem.checked) {
+                                        _this.autoLoading();
+                                    } else {
+                                        _this.autoLoadingObserver?.disconnect();
+                                        _this.autoLoadingObserver = null;
+                                        if (_this.autoLoadingScrollHandler) {
+                                            window.removeEventListener('scroll', _this.autoLoadingScrollHandler);
+                                            _this.autoLoadingScrollHandler = null;
+                                        }
+                                    }
+                                }
                                 if (name === 'block_posts') {
                                     const keywordsBox = layero[0].querySelector('#block_post_keywords_box');
                                     if (keywordsBox) keywordsBox.style.display = data.elem.checked ? '' : 'none';
-                                    if (data.elem.checked) {
-                                        _this.refreshBlockKeywordRules();
-                                        _this.blockPost();
-                                    }
+                                    _this.refreshBlockKeywordRules();
+                                    _this.blockPost();
                                 }
                                 if (name === 'block_categories') {
                                     const categoriesBox = layero[0].querySelector('#block_categories_box');
                                     if (categoriesBox) categoriesBox.style.display = data.elem.checked ? '' : 'none';
-                                    if (data.elem.checked) {
-                                        _this.refreshBlockedCategories();
-                                        _this.blockPostsByCategory();
-                                    }
+                                    _this.refreshBlockedCategories();
+                                    _this.blockPostsByCategory();
                                 }
                                 if (name === 'remove_promotions') {
                                     _this.togglePromotions();
@@ -3135,6 +3677,12 @@ const applyTypographyStyle = (type, config) => {
                                     const box = layero[0].querySelector('#default_avatar_box');
                                     if (box) box.style.display = data.elem.checked ? '' : 'none';
                                     _this.replaceDefaultAvatars();
+                                    if (data.elem.checked) {
+                                        _this.startAvatarObserver();
+                                    } else if (_this.avatarObserver) {
+                                        _this.avatarObserver.disconnect();
+                                        _this.avatarObserver = null;
+                                    }
                                 }
                                 if (name === 'loading_overlay') {
                                     const box = layero[0].querySelector('#loading_overlay_box');
@@ -3155,7 +3703,6 @@ const applyTypographyStyle = (type, config) => {
                                 }
                                 if (name === 'typography_title' || name === 'typography_tag' || name === 'typography_meta' || name === 'typography_content') {
                                     const type = name.split('_')[1];
-                                    Config.updateConfig(`typography.${type}.enabled`, data.elem.checked);
                                     _this.updateTypography(type);
                                 }
                                 // 自定义背景图实时切换
@@ -3171,6 +3718,9 @@ const applyTypographyStyle = (type, config) => {
                                 }
                                 if (name === 'visited_links') {
                                     _this.updateVisitedLinkStyle();
+                                }
+                                if (name === 'open_post_in_new_tab') {
+                                    _this.switchOpenPostInNewTab('open_post_in_new_tab', data.elem.checked);
                                 }
                                 if (name === 'show_all_users_stats') {
                                     const positionBox = document.getElementById('show_all_users_stats_position_box');
@@ -3227,7 +3777,13 @@ const applyTypographyStyle = (type, config) => {
                                         }
                                     }
                                 }
+                                _this.applyFeatureToggle(name, data.elem.checked);
                             });
+                        });
+
+                        registerFormHandler('checkbox(hide_visited_links)', function(data) {
+                            Config.updateConfig('visited_links.hide_visited', data.elem.checked);
+                            _this.updateVisitedLinkStyle();
                         });
 
                         const blockKeywordTextarea = layero[0].querySelector('textarea[name="block_post_keywords"]');
@@ -3276,7 +3832,7 @@ const applyTypographyStyle = (type, config) => {
                             });
                         }
 
-                        layui.form.on('checkbox(header_opacity_blur_toggle)', function(data) {
+                        registerFormHandler('checkbox(header_opacity_blur_toggle)', function(data) {
                             Config.updateConfig('header_opacity.blur_enabled', data.elem.checked);
                             _this.updateHeaderOpacityStyle();
                         });
@@ -3313,17 +3869,17 @@ const applyTypographyStyle = (type, config) => {
                             });
                         }
 
-                        layui.form.on('checkbox(frame_opacity_blur_toggle)', function(data) {
+                        registerFormHandler('checkbox(frame_opacity_blur_toggle)', function(data) {
                             Config.updateConfig('frame_opacity.blur_enabled', data.elem.checked);
                             _this.updateFrameOpacityStyle();
                         });
 
-                        layui.form.on('checkbox(header_opacity_saturate_toggle)', function(data) {
+                        registerFormHandler('checkbox(header_opacity_saturate_toggle)', function(data) {
                             Config.updateConfig('header_opacity.saturate_enabled', data.elem.checked);
                             _this.updateHeaderOpacityStyle();
                         });
 
-                        layui.form.on('checkbox(frame_opacity_saturate_toggle)', function(data) {
+                        registerFormHandler('checkbox(frame_opacity_saturate_toggle)', function(data) {
                             Config.updateConfig('frame_opacity.saturate_enabled', data.elem.checked);
                             _this.updateFrameOpacityStyle();
                         });
@@ -3351,7 +3907,12 @@ const applyTypographyStyle = (type, config) => {
                         const loadingOverlayRange = layero[0].querySelector('input[name="loading_overlay_duration"]');
                         if (loadingOverlayRange) {
                             const handler = () => {
-                                const value = parseInt(loadingOverlayRange.value, 10) || INITIAL_OVERLAY_DURATION_DEFAULT;
+                                const value = clampNumber(
+                                    parseInt(loadingOverlayRange.value, 10),
+                                    0,
+                                    3000,
+                                    INITIAL_OVERLAY_DURATION_DEFAULT
+                                );
                                 const display = layero[0].querySelector('#loading_overlay_duration_display');
                                 if (display) display.textContent = `${value}ms`;
                                 Config.updateConfig('loading_overlay.duration', value);
@@ -3363,13 +3924,18 @@ const applyTypographyStyle = (type, config) => {
                         const defaultAvatarUrlInput = layero[0].querySelector('input[name="default_avatar_url"]');
                         if (defaultAvatarUrlInput) {
                             const handler = () => {
-                                Config.updateConfig('default_avatar.url', defaultAvatarUrlInput.value.trim());
+                                const rawUrl = defaultAvatarUrlInput.value.trim();
+                                const safeUrl = rawUrl ? sanitizeImageUrl(rawUrl, BASE_URL) : '';
+                                if (rawUrl && !safeUrl) {
+                                    message.warning('头像地址必须是 HTTP(S) 图片 URL');
+                                    return;
+                                }
+                                Config.updateConfig('default_avatar.url', safeUrl);
                                 _this.replaceDefaultAvatars();
                             };
-                            defaultAvatarUrlInput.addEventListener('input', handler);
                             defaultAvatarUrlInput.addEventListener('blur', handler);
                         }
-                        layui.form.on('checkbox(default_avatar_auto)', function(data) {
+                        registerFormHandler('checkbox(default_avatar_auto)', function(data) {
                             Config.updateConfig('default_avatar.auto_detect', data.elem.checked);
                             _this.replaceDefaultAvatars();
                         });
@@ -3377,7 +3943,8 @@ const applyTypographyStyle = (type, config) => {
                         const exportBtn = layero[0].querySelector('#nsx-export-settings');
                         if (exportBtn) {
                             exportBtn.addEventListener('click', () => {
-                                const settings = util.getValue('settings') || {};
+                                Config.persistNow();
+                                const settings = Config.getAll();
                                 const json = JSON.stringify(settings, null, 2);
                                 navigator.clipboard.writeText(json).then(() => {
                                     message.success('设置已复制到剪贴板');
@@ -3397,32 +3964,19 @@ const applyTypographyStyle = (type, config) => {
                                     message.warning('请先粘贴配置 JSON');
                                     return;
                                 }
+                                if (text.length > 8 * 1024 * 1024) {
+                                    message.error('配置文件过大，无法导入');
+                                    return;
+                                }
                                 try {
                                     const parsed = JSON.parse(text);
-                                    // 合并默认配置，确保所有配置项都存在
-                                    const defaultConfig = opts.settings;
-                                    const mergeDefaults = (stored, defaults) => {
-                                        Object.keys(defaults).forEach(key => {
-                                            if (typeof defaults[key] === 'object' && defaults[key] !== null && !(defaults[key] instanceof Array)) {
-                                                if (!stored[key]) stored[key] = {};
-                                                mergeDefaults(stored[key], defaults[key]);
-                                            } else {
-                                                if (stored[key] === undefined) {
-                                                    stored[key] = defaults[key];
-                                                }
-                                            }
-                                        });
-                                    };
-                                    mergeDefaults(parsed, defaultConfig);
-                                    // 保留version字段
-                                    const currentSettings = util.getValue('settings') || {};
-                                    parsed.version = currentSettings.version || version;
-                                    util.setValue('settings', parsed);
+                                    if (!isPlainObject(parsed)) throw new Error('配置必须是 JSON 对象');
+                                    Config.replaceConfig(parsed, { immediate: true });
                                     message.success('配置导入成功，正在刷新...');
                                     setTimeout(() => location.reload(), 800);
                                 } catch (err) {
                                     // console.error(err);
-                                    message.error('导入失败：JSON 格式不正确');
+                                    message.error(`导入失败：${err.message || 'JSON 格式不正确'}`);
                                 }
                             });
                         }
@@ -3623,7 +4177,7 @@ const applyTypographyStyle = (type, config) => {
 
                                 // 确认对话框
                                 unsafeWindow.mscConfirm('确定要恢复默认样式吗？', '这将覆盖您当前的所有设置（除了版本号），是否继续？', function() {
-                                    util.setValue('settings', defaultConfig);
+                                    Config.replaceConfig(defaultConfig, { immediate: true });
                                     message.success('默认样式已应用，正在刷新页面...');
                                     setTimeout(() => location.reload(), 800);
                                 });
@@ -3632,12 +4186,23 @@ const applyTypographyStyle = (type, config) => {
 
                         const typographyFields = ['fontFamily','fontSize','color','fontStyle','letterSpacing','ligatures'];
                         const typographyTypes = ['title','tag','meta','content'];
+                        const typographyProperties = {
+                            fontFamily: 'font-family',
+                            fontSize: 'font-size',
+                            color: 'color',
+                            fontStyle: 'font-style',
+                            letterSpacing: 'letter-spacing',
+                            ligatures: 'font-variant-ligatures'
+                        };
                         typographyTypes.forEach(type => {
                             typographyFields.forEach(field => {
                                 const input = layero[0].querySelector(`input[name="typography_${type}_${field}"]`);
                                 if (input) {
                                     const handler = () => {
-                                        Config.updateConfig(`typography.${type}.${field}`, input.value);
+                                        Config.updateConfig(
+                                            `typography.${type}.${field}`,
+                                            sanitizeCssValue(typographyProperties[field], input.value)
+                                        );
                                         _this.updateTypography(type);
                                     };
                                     input.addEventListener('input', handler);
@@ -3647,7 +4212,7 @@ const applyTypographyStyle = (type, config) => {
                         });
 
                         // 紧凑模式列数切换
-                        layui.form.on('radio(compact_columns)', function(data) {
+                        registerFormHandler('radio(compact_columns)', function(data) {
                             const columns = parseInt(data.value);
                             Config.updateConfig('compact_mode.columns', columns);
                             _this.updateCompactModeStyle();
@@ -3665,7 +4230,7 @@ const applyTypographyStyle = (type, config) => {
                         });
 
                         // 帖子排序模式切换
-                        layui.form.on('radio(post_sort_mode)', function(data) {
+                        registerFormHandler('radio(post_sort_mode)', function(data) {
                             const mode = data.value;
                             Config.updateConfig('post_sort.mode', mode);
                             Config.updateConfig('post_sort.enabled', mode !== 'none');
@@ -3673,7 +4238,7 @@ const applyTypographyStyle = (type, config) => {
                         });
 
                         // 用户统计信息位置切换
-                        layui.form.on('radio(show_all_users_stats_position)', function(data) {
+                        registerFormHandler('radio(show_all_users_stats_position)', function(data) {
                             const position = data.value;
                             Config.updateConfig('show_all_users_stats.position', position);
                             // 如果功能已启用，重新渲染所有统计信息
@@ -3686,7 +4251,7 @@ const applyTypographyStyle = (type, config) => {
                         });
 
                         // 已访问帖子置底切换
-                        layui.form.on('checkbox(visited_to_bottom)', function(data) {
+                        registerFormHandler('checkbox(visited_to_bottom)', function(data) {
                             Config.updateConfig('post_sort.visited_to_bottom', data.elem.checked);
                             _this.sortPostList();
                         });
@@ -3699,7 +4264,7 @@ const applyTypographyStyle = (type, config) => {
                                 input.addEventListener('input', function() {
                                     let value = this.value;
                                     if (inputName === 'compact_padding') {
-                                        Config.updateConfig('compact_mode.padding', value);
+                                        Config.updateConfig('compact_mode.padding', sanitizeCssValue('padding', value, DEFAULT_COMPACT_MODE.padding));
                                     } else if (inputName === 'compact_avatarSize') {
                                         Config.updateConfig('compact_mode.avatarSize', parseInt(value));
                                     } else if (inputName === 'compact_titleFontSize') {
@@ -3732,18 +4297,16 @@ const applyTypographyStyle = (type, config) => {
                                 if (!file) return;
 
                                 // 检查文件类型
-                                if (!file.type.startsWith('image/')) {
-                                    message.warning('请选择图片文件');
+                                if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) {
+                                    message.warning('请选择 PNG、JPEG、GIF 或 WebP 图片');
                                     return;
                                 }
 
-                                // 提示：大图片可能会因为GM存储限制而保存失败
+                                // 避免把过大的 base64 数据写入脚本存储
                                 if (file.size > 5 * 1024 * 1024) {
-                                    const proceed = confirm(`图片较大（${(file.size / 1024 / 1024).toFixed(2)}MB），转换为base64后可能超过GM存储限制（通常5-10MB），是否继续？\n\n建议：使用小于3MB的图片以获得最佳体验。`);
-                                    if (!proceed) {
-                                        fileInput.value = '';
-                                        return;
-                                    }
+                                    message.error('图片过大，请选择不超过 5MB 的图片（建议小于 3MB）');
+                                    fileInput.value = '';
+                                    return;
                                 }
 
                                 const reader = new FileReader();
@@ -3751,9 +4314,7 @@ const applyTypographyStyle = (type, config) => {
                                     const base64 = e.target.result;
 
                                     // 尝试保存，如果失败会抛出错误
-                                    try {
-                                        Config.updateConfig('custom_background.url', base64);
-                                    } catch (err) {
+                                    if (!sanitizeImageUrl(base64, BASE_URL) || !Config.updateConfig('custom_background.url', base64, { immediate: true })) {
                                         message.error('图片数据过大，无法保存。请使用较小的图片（建议小于3MB）。');
                                         fileInput.value = '';
                                         return;
@@ -3823,7 +4384,9 @@ const applyTypographyStyle = (type, config) => {
                                     if (inputName === 'custom_bg_url') {
                                         // 如果输入了URL，清除base64预览
                                         if (value && !value.startsWith('data:')) {
-                                            Config.updateConfig('custom_background.url', value);
+                                            const safeUrl = sanitizeImageUrl(value, BASE_URL);
+                                            if (!safeUrl) return;
+                                            Config.updateConfig('custom_background.url', safeUrl);
                                             if (previewDiv) {
                                                 previewDiv.style.display = 'none';
                                             }
@@ -3832,9 +4395,9 @@ const applyTypographyStyle = (type, config) => {
                                             }
                                         }
                                     } else if (inputName === 'custom_bg_position') {
-                                        Config.updateConfig('custom_background.position', value);
+                                        Config.updateConfig('custom_background.position', sanitizeCssValue('background-position', value, 'center'));
                                     } else if (inputName === 'custom_bg_size') {
-                                        Config.updateConfig('custom_background.size', value);
+                                        Config.updateConfig('custom_background.size', sanitizeCssValue('background-size', value, 'cover'));
                                     }
                                     if (Config.getConfig('custom_background.enabled')) {
                                         _this.updateCustomBackground();
@@ -3875,7 +4438,7 @@ const applyTypographyStyle = (type, config) => {
                         }
                         const compactPadding = layero.find('input[name="compact_padding"]').val();
                         if (compactPadding) {
-                            Config.updateConfig('compact_mode.padding', compactPadding);
+                            Config.updateConfig('compact_mode.padding', sanitizeCssValue('padding', compactPadding, DEFAULT_COMPACT_MODE.padding));
                         }
                         const compactAvatarSize = layero.find('input[name="compact_avatarSize"]').val();
                         if (compactAvatarSize) {
@@ -3898,7 +4461,12 @@ const applyTypographyStyle = (type, config) => {
                         const customBgUrl = layero.find('input[name="custom_bg_url"]').val();
                         // 如果URL输入框有值，使用输入框的值；否则保留已保存的base64数据
                         if (customBgUrl && customBgUrl.trim() !== '') {
-                            Config.updateConfig('custom_background.url', customBgUrl.trim());
+                            const safeUrl = sanitizeImageUrl(customBgUrl.trim(), BASE_URL);
+                            if (!safeUrl) {
+                                message.error('背景地址必须是 HTTP(S) 图片 URL');
+                                return false;
+                            }
+                            Config.updateConfig('custom_background.url', safeUrl);
                         } else {
                             // 如果URL输入框为空，检查是否已有base64数据，如果有则保留
                             const currentUrl = Config.getConfig('custom_background.url');
@@ -3915,11 +4483,11 @@ const applyTypographyStyle = (type, config) => {
                         }
                         const customBgPosition = layero.find('input[name="custom_bg_position"]').val();
                         if (customBgPosition !== undefined) {
-                            Config.updateConfig('custom_background.position', customBgPosition);
+                            Config.updateConfig('custom_background.position', sanitizeCssValue('background-position', customBgPosition, 'center'));
                         }
                         const customBgSize = layero.find('input[name="custom_bg_size"]').val();
                         if (customBgSize !== undefined) {
-                            Config.updateConfig('custom_background.size', customBgSize);
+                            Config.updateConfig('custom_background.size', sanitizeCssValue('background-size', customBgSize, 'cover'));
                         }
                         const customBgAttachment = layero.find('select[name="custom_bg_attachment"]').val();
                         if (customBgAttachment) {
@@ -3932,47 +4500,71 @@ const applyTypographyStyle = (type, config) => {
                         // 更新自定义背景图
                         main.updateCustomBackground();
 
-                        // 同步新标签页设置到 IndexedDB
-                        const openInNewTab = layero.find('input[name="open_post_in_new_tab"]').prop('checked');
-                        if (openInNewTab !== Config.getConfig('open_post_in_new_tab.enabled')) {
-                            _this.switchOpenPostInNewTab('open_post_in_new_tab', []);
-                        }
-
                         // 保存用户统计信息位置设置
                         const statsPosition = layero.find('input[name="show_all_users_stats_position"]:checked').val();
                         if (statsPosition) {
                             Config.updateConfig('show_all_users_stats.position', statsPosition);
                         }
 
+                        Config.persistNow();
                         message.success('设置已保存');
                         layer.close(index);
+                    },
+                    end: function() {
+                        const endedSession = _this.settingsFormSession;
+                        _this.settingsFormSession = null;
+                        _this.activeSettingsFormHandlers?.forEach((entry, eventName) => {
+                            if (entry.session === endedSession) {
+                                _this.activeSettingsFormHandlers.delete(eventName);
+                            }
+                        });
                     }
                 });
             },
-            addCodeHighlight() {
-                const codes = document.querySelectorAll(".post-content pre code");
-                if (codes) {
-                    codes.forEach(function (code) {
-                        const copyBtn = util.createElement("span", { staticClass: "copy-code", attrs: { title: "复制代码" }, on: { click: copyCode } }, [util.createElement("svg", { staticClass: 'iconpark-icon' }, [util.createElement("use", { attrs: { href: "#copy" } }, [], document, "http://www.w3.org/2000/svg")], document, "http://www.w3.org/2000/svg")]);
-                        code.after(copyBtn);
-                    });
-                }
-                function copyCode(e) {
-                    const pre = this.closest('pre');
-                    const selection = window.getSelection();
-                    const range = document.createRange();
-                    range.selectNodeContents(pre.querySelector("code"));
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-                    document.execCommand('copy');
-                    selection.removeAllRanges();
-                    updateCopyButton(this);
-                    layer.tips(`复制成功`, this, { tips: 4, time: 1000 })
-                }
-                function updateCopyButton(ele) {
-                    ele.querySelector("use").setAttribute("href", "#check");
-                    util.sleep(1000).then(() => ele.querySelector("use").setAttribute("href", "#copy"));
-                }
+            addCodeHighlight(target = document) {
+                if (!FeatureFlags.isEnabled('code_highlight')) return;
+                const codes = [];
+                if (target.matches?.('.post-content pre code')) codes.push(target);
+                codes.push(...(target.querySelectorAll?.('.post-content pre code') || []));
+                codes.forEach(code => {
+                    if (unsafeWindow.hljs && !code.dataset.highlighted) {
+                        try {
+                            unsafeWindow.hljs.highlightElement(code);
+                        } catch (error) {
+                            util.clog(error);
+                        }
+                    }
+                    const pre = code.closest('pre');
+                    if (!pre || pre.querySelector(':scope > .copy-code')) return;
+                    const copyBtn = util.createElement('button', {
+                        staticClass: 'copy-code',
+                        attrs: { type: 'button', title: '复制代码', 'aria-label': '复制代码' },
+                        on: {
+                            click: async function () {
+                                const text = code.textContent || '';
+                                try {
+                                    await navigator.clipboard.writeText(text);
+                                } catch (_) {
+                                    const textarea = document.createElement('textarea');
+                                    textarea.value = text;
+                                    textarea.style.position = 'fixed';
+                                    textarea.style.opacity = '0';
+                                    document.body.appendChild(textarea);
+                                    textarea.select();
+                                    document.execCommand('copy');
+                                    textarea.remove();
+                                }
+                                const use = this.querySelector('use');
+                                use?.setAttribute('href', '#check');
+                                setTimeout(() => use?.setAttribute('href', '#copy'), 1000);
+                                layer.tips('复制成功', this, { tips: 4, time: 1000 });
+                            }
+                        }
+                    }, [util.createElement('svg', { staticClass: 'iconpark-icon', attrs: { 'aria-hidden': 'true' } }, [
+                        util.createElement('use', { attrs: { href: '#copy' } }, [], document, 'http://www.w3.org/2000/svg')
+                    ], document, 'http://www.w3.org/2000/svg')]);
+                    pre.appendChild(copyBtn);
+                });
             },
 
             updateCompactModeStyle() {
@@ -4194,22 +4786,7 @@ const applyTypographyStyle = (type, config) => {
             },
             // 解析右侧面板高亮关键词输入
             parseRightPanelHighlightKeywords(inputValue) {
-                if (!inputValue) return [];
-                return inputValue.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
-                    if (line.startsWith('/') && line.lastIndexOf('/') > 0) {
-                        const lastSlash = line.lastIndexOf('/');
-                        const pattern = line.slice(1, lastSlash);
-                        const flags = line.slice(lastSlash + 1);
-                        try {
-                            new RegExp(pattern, flags || 'i');
-                            return { type: 'regex', value: pattern, flags };
-                        } catch (err) {
-                            // console.warn('[NodeSeek X] 忽略无效正则：', line, err);
-                            return null;
-                        }
-                    }
-                    return { type: 'text', value: line };
-                }).filter(Boolean);
+                return parseRuleInput(inputValue);
             },
             // 刷新右侧面板高亮关键词规则
             refreshRightPanelHighlightRules() {
@@ -4225,8 +4802,8 @@ const applyTypographyStyle = (type, config) => {
                     const type = rule.type || 'text';
                     if (type === 'regex') {
                         const pattern = rule.value || rule.pattern || '';
-                        if (!pattern) return null;
-                        const flags = rule.flags || '';
+                        if (!pattern || pattern.length > 200) return null;
+                        const flags = normalizeRegexFlags(rule.flags);
                         try {
                             const regex = new RegExp(pattern, flags || 'i');
                             return { type: 'regex', regex, value: pattern, flags };
@@ -4250,7 +4827,7 @@ const applyTypographyStyle = (type, config) => {
 
                 // 检查是否已经高亮过（避免重复处理）
                 // 如果父元素已经包含高亮标记，说明已经处理过
-                if (textNode.parentElement && textNode.parentElement.querySelector('.nsx-right-panel-highlight')) {
+                if (textNode.parentElement?.closest('.nsx-right-panel-highlight')) {
                     return;
                 }
 
@@ -4262,9 +4839,13 @@ const applyTypographyStyle = (type, config) => {
                 rules.forEach(rule => {
                     if (rule.type === 'regex') {
                         try {
-                            const regex = new RegExp(rule.regex.source, rule.regex.flags + 'g');
+                            const regex = new RegExp(rule.regex.source, `${normalizeRegexFlags(rule.regex.flags)}g`);
                             let match;
                             while ((match = regex.exec(text)) !== null) {
+                                if (match[0].length === 0) {
+                                    regex.lastIndex += 1;
+                                    continue;
+                                }
                                 matches.push({
                                     start: match.index,
                                     end: match.index + match[0].length,
@@ -4331,7 +4912,7 @@ const applyTypographyStyle = (type, config) => {
                     fragments.push(document.createTextNode(text.substring(lastIndex)));
                 }
 
-                if (fragments.length > 1) {
+                if (fragments.some(fragment => fragment.nodeType === Node.ELEMENT_NODE)) {
                     // 替换文本节点
                     const parent = textNode.parentNode;
                     const markCount = fragments.filter(f => f.tagName === 'MARK').length;
@@ -4345,7 +4926,8 @@ const applyTypographyStyle = (type, config) => {
                 }
             },
             // 应用右侧面板关键词高亮
-            applyRightPanelHighlight() {
+            applyRightPanelHighlight(options = {}) {
+                const { reset = true } = options;
                 const enabled = Config.getConfig('right_panel_highlight.enabled');
                 if (enabled !== true) {
                     // 移除所有高亮
@@ -4361,8 +4943,7 @@ const applyTypographyStyle = (type, config) => {
                     return;
                 }
 
-                // 先移除已存在的高亮标记（避免重复）
-                this.removeAllHighlights();
+                if (reset) this.removeAllHighlights();
 
                 // 处理右侧面板
                 const rightPanel = document.querySelector('#nsk-right-panel-container');
@@ -4434,11 +5015,8 @@ const applyTypographyStyle = (type, config) => {
                             )) {
                                 return NodeFilter.FILTER_REJECT;
                             }
-                            // 如果父元素已经包含高亮标记，跳过（避免重复处理）
-                            // 注意：这里检查的是父元素是否包含高亮标记，而不是当前节点
                             const parent = node.parentElement;
-                            if (parent && parent.querySelector && parent.querySelector('.nsx-right-panel-highlight')) {
-                                // 如果父元素已经包含高亮标记，说明已经处理过，跳过
+                            if (parent?.closest('.nsx-right-panel-highlight')) {
                                 return NodeFilter.FILTER_REJECT;
                             }
                             // 特别处理帖子标题：确保处理 .post-title 内的文本节点
@@ -4456,7 +5034,7 @@ const applyTypographyStyle = (type, config) => {
 
                 const textNodes = [];
                 let node;
-                while (node = walker.nextNode()) {
+                while ((node = walker.nextNode())) {
                     textNodes.push(node);
                 }
 
@@ -4468,16 +5046,9 @@ const applyTypographyStyle = (type, config) => {
                 }
 
                 // 处理文本节点（从后往前，避免位置偏移）
-                let processedCount = 0;
                 for (let i = textNodes.length - 1; i >= 0; i--) {
-                    const beforeLength = textNodes[i].textContent.length;
                     this.highlightTextNode(textNodes[i], this.rightPanelHighlightRules);
-                    // 检查是否被处理了（如果被处理，文本节点会被替换）
-                    if (textNodes[i].parentNode && textNodes[i].parentNode.querySelector('.nsx-right-panel-highlight')) {
-                        processedCount++;
-                    }
                 }
-                // console.log('[NodeSeek X] 处理完成，处理了', processedCount, '个文本节点');
             },
             // 启动右侧面板高亮观察器
             startRightPanelHighlightObserver() {
@@ -4487,6 +5058,8 @@ const applyTypographyStyle = (type, config) => {
                         this.rightPanelHighlightObserver.disconnect();
                         this.rightPanelHighlightObserver = null;
                     }
+                    this.flushPendingHighlights?.cancel();
+                    this.pendingHighlightRoots.clear();
                     return;
                 }
 
@@ -4494,7 +5067,6 @@ const applyTypographyStyle = (type, config) => {
                     this.rightPanelHighlightObserver.disconnect();
                 }
 
-                const _this = this;
                 const containers = [
                     document.querySelector('#nsk-right-panel-container'),
                     document.querySelector('#nsk-body-left .post-list')
@@ -4502,11 +5074,30 @@ const applyTypographyStyle = (type, config) => {
 
                 if (containers.length === 0) return;
 
-                this.rightPanelHighlightObserver = new MutationObserver(() => {
-                    // 延迟应用高亮，避免频繁触发
-                    setTimeout(() => {
-                        _this.applyRightPanelHighlight();
-                    }, 100);
+                if (!this.flushPendingHighlights) {
+                    this.flushPendingHighlights = debounce(() => {
+                        const roots = Array.from(this.pendingHighlightRoots).filter(root => root?.isConnected);
+                        this.pendingHighlightRoots.clear();
+                        this.refreshRightPanelHighlightRules();
+                        roots.forEach(root => this.highlightInContainer(root));
+                    }, 120);
+                }
+
+                this.rightPanelHighlightObserver = new MutationObserver(mutations => {
+                    mutations.forEach(mutation => {
+                        mutation.addedNodes.forEach(node => {
+                            if (node.nodeType === Node.TEXT_NODE) {
+                                if (!node.parentElement?.closest('.nsx-right-panel-highlight')) {
+                                    this.pendingHighlightRoots.add(node.parentElement);
+                                }
+                                return;
+                            }
+                            if (node.nodeType !== Node.ELEMENT_NODE) return;
+                            if (node.matches('.nsx-right-panel-highlight') || node.closest('.nsx-right-panel-highlight')) return;
+                            this.pendingHighlightRoots.add(node);
+                        });
+                    });
+                    this.flushPendingHighlights();
                 });
 
                 // 观察所有容器
@@ -4514,12 +5105,13 @@ const applyTypographyStyle = (type, config) => {
                     this.rightPanelHighlightObserver.observe(container, {
                         childList: true,
                         subtree: true,
-                        characterData: true
+                        characterData: false
                     });
                 });
             },
             mergeCategoryToNav() {
                 const enabled = Config.getConfig('merge_category_to_nav.enabled');
+                const useNativeMobileLayout = window.matchMedia('(max-width: 800px)').matches;
                 const navMenu = document.querySelector('#nsk-head .nav-menu');
                 const categoryPanel = document.querySelector('#nsk-right-panel-container .category-list');
                 const leftCategoryPanel = document.querySelector('#nsk-left-panel-container .category-list');
@@ -4536,7 +5128,7 @@ const applyTypographyStyle = (type, config) => {
                     existingMerged.remove();
                 }
 
-                if (!enabled) {
+                if (!enabled || useNativeMobileLayout) {
                     // 恢复右侧面板显示
                     if (categoryPanel) {
                         categoryPanel.style.display = '';
@@ -4596,10 +5188,10 @@ const applyTypographyStyle = (type, config) => {
                 // 只有在紧凑模式且列数>=2时才允许换行，否则单行显示
                 if (isCompactMode && compactColumns >= 2) {
                     // 紧凑模式多列：允许换行
-                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 5px; flex-wrap: wrap;';
+                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 2px; flex-wrap: wrap;';
                 } else {
                     // 单列模式或紧凑模式单列：不换行，隐藏超出部分
-                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 5px; flex-wrap: nowrap; overflow: hidden;';
+                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 2px; flex-wrap: nowrap; overflow: hidden;';
                 }
 
                 categoryItems.forEach((item) => {
@@ -4617,7 +5209,7 @@ const applyTypographyStyle = (type, config) => {
                     }
 
                     const clonedLink = link.cloneNode(true);
-                    clonedLink.style.cssText = 'display: flex; align-items: center; padding: 4px 8px; border-radius: 4px; transition: background-color 0.2s, color 0.2s; white-space: nowrap;';
+                    clonedLink.style.cssText = 'display: flex; align-items: center; padding: 4px 5px; border-radius: 4px; transition: background-color 0.2s, color 0.2s; white-space: nowrap;';
 
                     // 保持当前分类的样式
                     if (item.classList.contains('current-category')) {
@@ -4671,41 +5263,39 @@ const applyTypographyStyle = (type, config) => {
                     #nsk-head .nsx-merged-categories {
                         display: flex;
                         align-items: center;
-                        flex-wrap: nowrap;
-                        gap: 5px;
+                        flex-wrap: nowrap !important;
+                        gap: 2px;
                         margin-left: 10px;
-                        flex-shrink: 0;
+                        flex: 1 1 0;
+                        min-width: 0;
                         overflow: hidden;
                     }
-                    /* 单列模式下，分类链接从搜索框右边开始，限制最大宽度避免覆盖设置按钮 */
-                    html:not(.nsx-compact-mode) #nsk-head .nsx-merged-categories {
-                        position: absolute;
-                        left: calc(50% + 180px);
-                        right: 120px;
-                        top: 50%;
-                        transform: translateY(-50%);
-                        max-width: calc(50% - 300px);
-                        z-index: 0;
-                    }
-                    /* 紧凑模式多列：分类链接在搜索框右侧 */
-                    html.nsx-compact-mode #nsk-head .nsx-merged-categories {
-                        position: absolute;
-                        left: calc(50% + 150px);
-                        top: 50%;
-                        transform: translateY(-50%);
-                        max-width: calc(50% - 150px);
-                        z-index: 0;
-                    }
-                    @media screen and (max-width: 1200px) {
-                        html:not(.nsx-compact-mode) #nsk-head .nsx-merged-categories {
-                            left: calc(50% + 150px) !important;
-                            right: 120px !important;
-                            max-width: calc(50% - 270px) !important;
+                    @media screen and (min-width: 801px) {
+                        #nsk-head {
+                            box-sizing: border-box !important;
+                            padding-right: 130px !important;
+                            overflow: hidden !important;
                         }
-                        html.nsx-compact-mode #nsk-head .nsx-merged-categories {
-                            left: calc(50% + 150px) !important;
-                            right: 120px !important;
-                            max-width: calc(50% - 270px) !important;
+                        #nsk-head .nav-menu {
+                            min-width: 0 !important;
+                            flex-wrap: nowrap !important;
+                            overflow-x: auto !important;
+                            overflow-y: hidden !important;
+                            scrollbar-width: none;
+                        }
+                        #nsk-head .nav-menu::-webkit-scrollbar {
+                            display: none;
+                        }
+                        #nsk-head .nsx-merged-categories {
+                            position: static !important;
+                            left: auto !important;
+                            right: auto !important;
+                            top: auto !important;
+                            transform: none !important;
+                            max-width: none !important;
+                            flex: 1 1 0 !important;
+                            min-width: 0 !important;
+                            z-index: auto !important;
                         }
                     }
                     @media screen and (max-width: 800px) {
@@ -4725,7 +5315,7 @@ const applyTypographyStyle = (type, config) => {
                         color: var(--link-color);
                         display: flex;
                         align-items: center;
-                        padding: 4px 8px;
+                        padding: 4px 5px;
                         border-radius: 4px;
                         transition: background-color 0.2s, color 0.2s;
                         white-space: nowrap;
@@ -4742,6 +5332,14 @@ const applyTypographyStyle = (type, config) => {
                 `;
                 document.head.appendChild(style);
             },
+            initCategoryNavResponsive() {
+                if (this.categoryNavMediaQuery) return;
+                const mediaQuery = window.matchMedia('(max-width: 800px)');
+                const handleLayoutChange = () => this.mergeCategoryToNav();
+                mediaQuery.addEventListener?.('change', handleLayoutChange);
+                this.categoryNavMediaQuery = mediaQuery;
+                this.categoryNavMediaQueryHandler = handleLayoutChange;
+            },
             addPluginStyle() {
                 let style = `
             .nsplus-tip { background-color: rgba(255, 217, 0, 0.8); border: 0px solid black;  padding: 3px; text-align: center;animation: blink 5s cubic-bezier(.68,.05,.46,.96) infinite;}
@@ -4757,7 +5355,7 @@ const applyTypographyStyle = (type, config) => {
                 cursor: pointer;
                 padding: 0 5px;
                 position: absolute;
-                right: 70px;
+                right: 95px;
                 transition: color 0.3s;
                 z-index: 10 !important;
                 pointer-events: auto !important;
@@ -4777,6 +5375,122 @@ const applyTypographyStyle = (type, config) => {
             }
             body.dark-layout #nsk-head .nav-menu a:hover {
                 background-color: rgba(255, 255, 255, 0.1);
+            }
+
+            @media screen and (max-width: 800px) {
+                #nsk-head {
+                    box-sizing: border-box !important;
+                    min-width: 0 !important;
+                    max-width: 100% !important;
+                    padding-right: 130px !important;
+                    overflow: hidden !important;
+                    align-items: center !important;
+                    flex-wrap: wrap !important;
+                }
+                #nsk-head strong {
+                    flex: 0 0 auto !important;
+                    min-width: 0 !important;
+                }
+                #nsk-head strong a {
+                    white-space: nowrap !important;
+                }
+                #nsk-head .nav-menu {
+                    order: 10 !important;
+                    flex: 0 0 calc(100% + 130px) !important;
+                    width: calc(100% + 130px) !important;
+                    min-width: 0 !important;
+                    max-width: calc(100% + 130px) !important;
+                    margin-right: -130px !important;
+                    flex-wrap: nowrap !important;
+                    overflow-x: auto !important;
+                    overflow-y: hidden !important;
+                    scrollbar-width: none;
+                    -webkit-overflow-scrolling: touch;
+                }
+                #nsk-head .nav-menu::-webkit-scrollbar {
+                    display: none;
+                }
+                #nsk-head .nav-menu > li {
+                    flex: 0 0 auto !important;
+                }
+                #nsk-head .search-box {
+                    flex: 1 1 0 !important;
+                    min-width: 0 !important;
+                }
+                header div.nsx-settings-btn {
+                    right: 95px;
+                }
+                #nsk-head .nsx-settings-btn,
+                #nsk-head .history-dropdown-on,
+                #nsk-head .color-theme-switcher {
+                    top: 9px !important;
+                }
+            }
+
+            @media screen and (max-width: 600px) {
+                #nsx-settings-layer {
+                    overflow: hidden !important;
+                }
+                #nsx-settings-layer > .layui-row {
+                    display: flex !important;
+                    flex-direction: column !important;
+                    min-width: 0 !important;
+                    height: 100% !important;
+                }
+                #nsx-settings-menu {
+                    width: 100% !important;
+                    flex: 0 0 auto !important;
+                    height: auto !important;
+                    min-height: 0 !important;
+                    overflow-x: auto !important;
+                    overflow-y: hidden !important;
+                    border-radius: 0 !important;
+                    scrollbar-width: none;
+                }
+                #nsx-settings-menu::-webkit-scrollbar {
+                    display: none;
+                }
+                #nsx-settings-menu .layui-menu {
+                    display: flex !important;
+                    width: max-content !important;
+                    min-width: 100% !important;
+                }
+                #nsx-settings-menu .layui-menu > li {
+                    flex: 1 0 auto !important;
+                    white-space: nowrap !important;
+                }
+                #nsx-settings-menu .layui-menu-body-title {
+                    padding: 0 12px !important;
+                }
+                #nsx-settings-content {
+                    box-sizing: border-box !important;
+                    width: 100% !important;
+                    min-width: 0 !important;
+                    min-height: 0 !important;
+                    flex: 1 1 auto !important;
+                    padding: 12px !important;
+                }
+                #nsx-settings-layer .layui-form-label {
+                    float: none !important;
+                    width: auto !important;
+                    padding: 9px 0 !important;
+                    text-align: left !important;
+                }
+                #nsx-settings-layer .layui-input-block {
+                    margin-left: 0 !important;
+                    min-width: 0 !important;
+                }
+                #nsx-settings-layer input[type="text"],
+                #nsx-settings-layer input[type="number"],
+                #nsx-settings-layer textarea,
+                #nsx-settings-layer table {
+                    box-sizing: border-box !important;
+                    max-width: 100% !important;
+                }
+                #nsx-settings-layer table {
+                    display: block;
+                    overflow-x: auto;
+                }
             }
 
             .user-card .close,
@@ -4891,40 +5605,64 @@ const applyTypographyStyle = (type, config) => {
             .role-tag.user-level.user-lv15 {background-color: #000000; border: 1px solid #000000; color: #ffd700;}
 
             .post-content pre { position: relative; }
-            .post-content pre span.copy-code { position: absolute; right: .5em; top: .5em; cursor: pointer;color: #c1c7cd;  }
+            .post-content pre .copy-code { position: absolute; right: .5em; top: .5em; cursor: pointer; color: #c1c7cd; background: transparent; border: 0; padding: 2px; }
+            .post-content pre .copy-code:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
             .post-content pre .iconpark-icon {width:16px;height:16px;margin:3px;}
             .post-content pre .iconpark-icon:hover {color:var(--link-hover-color)}
             .dark-layout .post-content pre code.hljs { padding: 1em !important; }
 
-            html.nsx-hide-visited .post-list .post-title a:visited,
-            html.nsx-hide-visited .post-list-item .post-title a:visited {
+            html.nsx-hide-visited .post-list-item:has(.post-title a:visited),
+            html.nsx-hide-visited .post-list .post-list-item:has(.post-title a:visited) {
                 display: none !important;
             }
 `;
                 if (document.head) {
                     util.addStyle('nsplus-style', 'style', style);
-                    util.addStyle('layui-style', 'link', 'https://s.cfn.pp.ua/layui/2.9.9/css/layui.css');
-                    util.addStyle('hightlight-style', 'link', GM_getResourceURL("highlightStyle"));
+                    util.addStyle('layui-style', 'link', 'https://s4.zstatic.net/ajax/libs/layui/2.9.9/css/layui.min.css');
+                    if (FeatureFlags.isEnabled('code_highlight')) {
+                        util.addStyle('highlight-style', 'link', GM_getResourceURL("highlightStyle"));
+                    }
                 }
             },
             addPluginScript() {
-                GM_addElement(document.body, 'script', {
-                    src: 'https://s4.zstatic.net/ajax/libs/highlight.js/11.9.0/highlight.min.js'
-                });
-                GM_addElement(document.body, 'script', {
-                    textContent: 'window.onload = function(){hljs.highlightAll();}'
-                });
+                if (FeatureFlags.isEnabled('code_highlight') && !this.highlightScriptRequested) {
+                    this.highlightScriptRequested = true;
+                    if (unsafeWindow.hljs) {
+                        this.addCodeHighlight();
+                    } else {
+                        const highlightScript = GM_addElement(document.body, 'script', {
+                            src: 'https://s4.zstatic.net/ajax/libs/highlight.js/11.9.0/highlight.min.js',
+                            referrerpolicy: 'no-referrer'
+                        });
+                        highlightScript?.addEventListener('load', () => this.addCodeHighlight(), { once: true });
+                        highlightScript?.addEventListener('error', () => {
+                            this.highlightScriptRequested = false;
+                            util.clog('highlight.js 加载失败');
+                        }, { once: true });
+                    }
+                }
+                if (this.iconSpriteRequested) return;
+                this.iconSpriteRequested = true;
                 GM_addElement(document.body, "script", { textContent: `!function(e){var t,n,d,o,i,a,r='<svg><symbol id="envelope-one" viewBox="0 0 48 48" fill="none"><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M36 16V8H4v24h8" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-width="4" stroke="currentColor" d="M12 40h32V16H12v24Z" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="m12 16 16 12 16-12" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M32 16H12v15" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M44 31V16H24" data-follow-stroke="currentColor"/></symbol><symbol id="at-sign" viewBox="0 0 48 48" fill="none"><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M44 24c0-11.046-8.954-20-20-20S4 12.954 4 24s8.954 20 20 20v0c4.989 0 9.55-1.827 13.054-4.847" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-width="4" stroke="currentColor" d="M24 32a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M32 24a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6m-12 1v-9" data-follow-stroke="currentColor"/></symbol><symbol id="copy" viewBox="0 0 48 48" fill="none"><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M13 12.432v-4.62A2.813 2.813 0 0 1 15.813 5h24.374A2.813 2.813 0 0 1 43 7.813v24.375A2.813 2.813 0 0 1 40.187 35h-4.67" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-width="4" stroke="currentColor" d="M32.188 13H7.811A2.813 2.813 0 0 0 5 15.813v24.374A2.813 2.813 0 0 0 7.813 43h24.375A2.813 2.813 0 0 0 35 40.187V15.814A2.813 2.813 0 0 0 32.187 13Z" data-follow-stroke="currentColor"/></symbol><symbol id="history" viewBox="0 0 48 48" fill="none"><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M5.818 6.727V14h7.273" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M4 24c0 11.046 8.954 20 20 20v0c11.046 0 20-8.954 20-20S35.046 4 24 4c-7.402 0-13.865 4.021-17.323 9.998" data-follow-stroke="currentColor"/><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="m24.005 12-.001 12.009 8.48 8.48" data-follow-stroke="currentColor"/></symbol><symbol id="setting" viewBox="0 0 48 48" fill="none"><path stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="currentColor" d="M36.34 14.34L38.86 12 34 7.14l-2.34 2.52c-.8-.3-1.66-.52-2.56-.66L28 6H20l-1.1 3.2c-.9.14-1.76.36-2.56.66L14 7.14 9.14 12l2.52 2.34c-.3.8-.52 1.66-.66 2.56L6 20v8l3.2 1.1c.14.9.36 1.76.66 2.56L7.14 34 12 38.86l2.34-2.52c.8.3 1.66.52 2.56.66L20 42h8l1.1-3.2c.9-.14 1.76-.36 2.56-.66L34 38.86 38.86 34l-2.52-2.34c.3-.8.52-1.66.66-2.56L42 28v-8l-3.2-1.1c-.14-.9-.36-1.76-.66-2.56ZM24 32a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" data-follow-stroke="currentColor"/></symbol></svg>';function c(){i||(i=!0,d())}t=function(){var e,t,n;(n=document.createElement("div")).innerHTML=r,r=null,(t=n.getElementsByTagName("svg")[0])&&(t.setAttribute("aria-hidden","true"),t.style.position="absolute",t.style.width=0,t.style.height=0,t.style.overflow="hidden",e=t,(n=document.body).firstChild?(t=n.firstChild).parentNode.insertBefore(e,t):n.appendChild(e))},document.addEventListener?["complete","loaded","interactive"].indexOf(document.readyState)>-1?setTimeout(t,0):(n=function(){document.removeEventListener("DOMContentLoaded",n,!1),t()},document.addEventListener("DOMContentLoaded",n,!1)):document.attachEvent&&(d=t,o=e.document,i=!1,(a=function(){try{o.documentElement.doScroll("left")}catch(e){return void setTimeout(a,50)}c()})(),o.onreadystatechange=function(){"complete"==o.readyState&&(o.onreadystatechange=null,c())})}(window);` });
             },
             darkMode(){
                 // 选择要监视的目标元素（body元素）
                 const targetNode = document.querySelector('body');
+                if (!targetNode) return;
+                const updateTheme = () => {
+                    const dark = targetNode.classList.contains('dark-layout');
+                    if (dark) {
+                        util.addStyle('layuicss-theme-dark','link','https://s.cfn.pp.ua/layui/theme-dark/2.9.7/css/layui-theme-dark.css');
+                    } else {
+                        util.removeStyle('layuicss-theme-dark');
+                    }
+                    util.removeStyle('highlight-style');
+                    if (FeatureFlags.isEnabled('code_highlight')) {
+                        util.addStyle('highlight-style', 'link', GM_getResourceURL(dark ? 'highlightStyle_dark' : 'highlightStyle'));
+                    }
+                };
                 // 进入页面时判断是否是深色模式
-                if(targetNode.classList.contains('dark-layout')){
-                    util.addStyle('layuicss-theme-dark','link','https://s.cfn.pp.ua/layui/theme-dark/2.9.7/css/layui-theme-dark.css');
-                    util.removeStyle('hightlight-style');
-                    util.addStyle('hightlight-style', 'link', GM_getResourceURL("highlightStyle_dark"));
-                }
+                updateTheme();
 
                 // 配置MutationObserver的选项
                 const observerConfig = {
@@ -4936,15 +5674,7 @@ const applyTypographyStyle = (type, config) => {
                 const observer = new MutationObserver((mutationsList, observer) => {
                     for(let mutation of mutationsList) {
                         if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-                            if(targetNode.classList.contains('dark-layout')){
-                                util.addStyle('layuicss-theme-dark','link','https://s.cfn.pp.ua/layui/theme-dark/2.9.7/css/layui-theme-dark.css');
-                                util.removeStyle('hightlight-style');
-                                util.addStyle('hightlight-style', 'link', GM_getResourceURL("highlightStyle_dark"));
-                            }else{
-                                util.removeStyle('layuicss-theme-dark');
-                                util.removeStyle('hightlight-style');
-                                util.addStyle('hightlight-style', 'link', GM_getResourceURL("highlightStyle"));
-                            }
+                            updateTheme();
                         }
                     }
                 });
@@ -4955,13 +5685,13 @@ const applyTypographyStyle = (type, config) => {
             // 键盘快捷键翻页
             initKeyboardNavigation() {
                 document.addEventListener('keydown', (e) => {
+                    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
                     // 如果用户在输入框中（input, textarea, contenteditable），不触发快捷键
                     const activeElement = document.activeElement;
                     const isInputFocused = activeElement && (
-                        activeElement.tagName === 'INPUT' ||
-                        activeElement.tagName === 'TEXTAREA' ||
+                        activeElement.matches?.('input, textarea, select, button, a[href], [role="button"], [role="slider"]') ||
                         activeElement.isContentEditable ||
-                        activeElement.closest('.CodeMirror') // CodeMirror 编辑器
+                        activeElement.closest?.('.CodeMirror, [role="dialog"]') // 编辑器或弹层
                     );
 
                     if (isInputFocused) return;
@@ -5073,8 +5803,13 @@ const applyTypographyStyle = (type, config) => {
                     try {
                         const visited = localStorage.getItem('nsx_visited_posts');
                         if (visited) {
-                            const visitedArray = JSON.parse(visited);
-                            visitedArray.forEach(url => visitedLinks.add(url));
+                            const visitedArray = safeJsonParse(visited, []);
+                            if (Array.isArray(visitedArray)) {
+                                visitedArray.forEach(url => {
+                                    const normalized = normalizePostUrl(url, BASE_URL);
+                                    if (normalized) visitedLinks.add(normalized);
+                                });
+                            }
                         }
                     } catch (e) {
                         // console.warn('[NodeSeek X] 读取访问记录失败:', e);
@@ -5089,25 +5824,12 @@ const applyTypographyStyle = (type, config) => {
                     let isVisited = false;
                     if (visitedToBottom && href) {
                         // 标准化 URL（移除查询参数和锚点）
-                        const normalizedUrl = href.split('?')[0].split('#')[0];
-                        isVisited = visitedLinks.has(normalizedUrl);
+                        const normalizedUrl = normalizePostUrl(href, BASE_URL);
+                        isVisited = normalizedUrl ? visitedLinks.has(normalizedUrl) : false;
                     }
-                    // 如果 localStorage 中没有，尝试使用 :visited 伪类（作为后备）
-                    if (!isVisited && titleLink) {
-                        try {
-                            // 注意：浏览器安全限制，无法直接读取 :visited 状态
-                            // 但可以通过计算样式来检测（虽然不总是可靠）
-                            const computedStyle = window.getComputedStyle(titleLink);
-                            // 如果链接颜色与未访问链接不同，可能是已访问
-                            // 这里我们主要依赖 localStorage
-                        } catch (e) {
-                            // 忽略错误
-                        }
-                    }
-
                     // 提取回复数
                     let comments = 0;
-                    const commentsEl = item.querySelector('.info-comments-count span[title]');
+                    const commentsEl = item.querySelector('.info-comments-count span[title], .info-comments-count');
                     if (commentsEl) {
                         const title = commentsEl.getAttribute('title') || '';
                         const match = title.match(/(\d+)\s*comments?/i);
@@ -5125,7 +5847,7 @@ const applyTypographyStyle = (type, config) => {
 
                     // 提取查看数
                     let views = 0;
-                    const viewsEl = item.querySelector('.info-views span[title]');
+                    const viewsEl = item.querySelector('.info-views span[title], .info-views');
                     if (viewsEl) {
                         const title = viewsEl.getAttribute('title') || '';
                         const match = title.match(/(\d+)\s*views?/i);
@@ -5178,16 +5900,19 @@ const applyTypographyStyle = (type, config) => {
             recordPostVisit(url) {
                 if (!url) return;
                 try {
-                    const normalizedUrl = url.split('?')[0].split('#')[0];
+                    const normalizedUrl = normalizePostUrl(url, BASE_URL);
+                    if (!normalizedUrl) return;
                     const visited = localStorage.getItem('nsx_visited_posts');
-                    let visitedArray = visited ? JSON.parse(visited) : [];
+                    let visitedArray = safeJsonParse(visited, []);
+                    if (!Array.isArray(visitedArray)) visitedArray = [];
+                    visitedArray = visitedArray.map(item => normalizePostUrl(item, BASE_URL)).filter(Boolean);
 
                     // 如果不存在，添加到数组
                     if (!visitedArray.includes(normalizedUrl)) {
                         visitedArray.push(normalizedUrl);
                         // 限制数组大小，避免占用过多存储空间（保留最近1000条）
-                        if (visitedArray.length > 1000) {
-                            visitedArray = visitedArray.slice(-1000);
+                        if (visitedArray.length > MAX_VISITED_POSTS) {
+                            visitedArray = visitedArray.slice(-MAX_VISITED_POSTS);
                         }
                         localStorage.setItem('nsx_visited_posts', JSON.stringify(visitedArray));
                     }
@@ -5197,13 +5922,11 @@ const applyTypographyStyle = (type, config) => {
             },
             // 初始化帖子访问监听，用于自动重新排序
             initPostVisitListener() {
-                const visitedToBottom = Config.getConfig('post_sort.visited_to_bottom') === true;
-                if (!visitedToBottom) return;
-
                 const _this = this;
 
                 // 监听帖子链接点击
                 document.addEventListener('click', (e) => {
+                    if (Config.getConfig('post_sort.visited_to_bottom') !== true) return;
                     const link = e.target.closest('a');
                     if (!link || !link.href) return;
 
@@ -5223,7 +5946,7 @@ const applyTypographyStyle = (type, config) => {
 
                 // 监听页面可见性变化（从新标签页返回时重新排序）
                 document.addEventListener('visibilitychange', () => {
-                    if (!document.hidden) {
+                    if (!document.hidden && Config.getConfig('post_sort.visited_to_bottom') === true) {
                         // 页面重新可见时，延迟重新排序
                         setTimeout(() => {
                             _this.sortPostList();
@@ -5233,137 +5956,166 @@ const applyTypographyStyle = (type, config) => {
 
                 // 监听焦点变化（切换标签页返回时）
                 window.addEventListener('focus', () => {
+                    if (Config.getConfig('post_sort.visited_to_bottom') !== true) return;
                     setTimeout(() => {
                         _this.sortPostList();
                     }, 200);
                 });
+
+                window.addEventListener('storage', event => {
+                    if (event.key === 'nsx_visited_posts') _this.sortPostList();
+                });
+            },
+            applyFeatureToggle(featureName, enabled) {
+                if (enabled) {
+                    const initializers = {
+                        signin_tips: this.addSignTips,
+                        auto_jump_external_links: this.autoJump,
+                        quick_comment: this.quickComment,
+                        block_members: this.blockMemberDOMInsert,
+                        user_card_ext: this.userCardEx,
+                        level_tag: this.addLevelTag,
+                        code_highlight: () => {
+                            this.addPluginScript();
+                            const resource = document.body.classList.contains('dark-layout') ? 'highlightStyle_dark' : 'highlightStyle';
+                            util.addStyle('highlight-style', 'link', GM_getResourceURL(resource));
+                            this.addCodeHighlight();
+                        },
+                        image_slide: this.addImageSlide
+                    };
+                    if (initializers[featureName]) this.safeInit(featureName, initializers[featureName]);
+                    return;
+                }
+
+                if (featureName === 'quick_comment') {
+                    document.getElementById('back-to-comment')?.remove();
+                } else if (featureName === 'signin_tips') {
+                    document.querySelectorAll('.nsplus-tip').forEach(element => element.remove());
+                } else if (featureName === 'block_members') {
+                    document.querySelectorAll('[data-nsx-block-member]').forEach(element => element.remove());
+                } else if (featureName === 'user_card_ext') {
+                    this.notificationTaskStop?.();
+                    this.notificationTaskStop = null;
+                    this.notificationReceiverStop?.();
+                    this.notificationReceiverStop = null;
+                    const userCard = document.querySelector('.user-card .user-stat');
+                    userCard?.querySelectorAll('[data-nsx-notification-extension]').forEach(element => element.remove());
+                    const replyElement = userCard?.querySelector('.stat-block:first-child > :last-child');
+                    if (replyElement && this.userCardOriginalReplyNode) {
+                        replyElement.replaceWith(this.userCardOriginalReplyNode.cloneNode(true));
+                    }
+                    userCard?.removeAttribute('data-nsx-extended');
+                } else if (featureName === 'level_tag') {
+                    document.querySelectorAll('#nsk-body .nsk-post .user-level, #nsk-body .nsk-post .nsx-user-stats').forEach(element => element.remove());
+                } else if (featureName === 'code_highlight') {
+                    document.querySelectorAll('.copy-code').forEach(element => element.remove());
+                    util.removeStyle('highlight-style');
+                }
+            },
+            safeInit(featureName, initializer) {
+                try {
+                    const result = initializer.call(this);
+                    if (result && typeof result.catch === 'function') {
+                        result.catch(error => console.error(`[NodeSeek Enhance] ${featureName} 初始化失败`, error));
+                    }
+                    return result;
+                } catch (error) {
+                    console.error(`[NodeSeek Enhance] ${featureName} 初始化失败`, error);
+                    return undefined;
+                }
+            },
+            initEditorShortcut() {
+                const codeMirrorInstance = document.querySelector('.CodeMirror')?.CodeMirror;
+                const submitButton = document.querySelector('.md-editor button.submit.btn');
+                if (!codeMirrorInstance || !submitButton || submitButton.dataset.nsxShortcut === '1') return;
+                submitButton.dataset.nsxShortcut = '1';
+                if (!submitButton.textContent.includes('Ctrl+Enter')) {
+                    submitButton.textContent = `${submitButton.textContent}(Ctrl+Enter)`;
+                }
+                codeMirrorInstance.addKeyMap({ 'Ctrl-Enter': () => submitButton.click() });
             },
             init() {
                 Config.initializeConfig();
-                this.addPluginStyle();
-                this.checkLogin();
-                this.refreshBlockKeywordRules();
-                this.refreshBlockedCategories();
-                this.refreshRightPanelHighlightRules();
-                // 应用紧凑模式（类名已在早期添加，这里只需要更新样式）
-                this.updateCompactModeStyle();
-                const codeMirrorElement = document.querySelector('.CodeMirror');
-                if (codeMirrorElement) {
-                    const codeMirrorInstance = codeMirrorElement.CodeMirror;
-                    if (codeMirrorInstance) {
-                        let btnSubmit = document.querySelector('.md-editor button.submit.btn.focus-visible');
-                        btnSubmit.innerText=btnSubmit.innerText+'(Ctrl+Enter)';
-                        codeMirrorInstance.addKeyMap({"Ctrl-Enter":function(cm){ btnSubmit.click();}});
-                    }
+                document.documentElement.dataset.nsxVersion = version;
+                const initializers = [
+                    ['plugin styles', this.addPluginStyle],
+                    ['loading status', this.createLoadingOverlay],
+                    ['login state', this.checkLogin],
+                    ['block keyword rules', this.refreshBlockKeywordRules],
+                    ['blocked categories', this.refreshBlockedCategories],
+                    ['highlight rules', this.refreshRightPanelHighlightRules],
+                    ['compact mode', this.updateCompactModeStyle],
+                    ['editor shortcut', this.initEditorShortcut],
+                    ['auto sign-in', this.autoSignIn],
+                    ['sign-in tip', this.addSignTips],
+                    ['new-tab navigation', this.enforceNewTabForPosts],
+                    ['external-link redirect', this.autoJump],
+                    ['infinite loading', this.autoLoading],
+                    ['member blocking', this.blockMemberDOMInsert],
+                    ['post keyword blocking', this.blockPost],
+                    ['post category blocking', this.blockPostsByCategory],
+                    ['post level blocking', this.blockPostsByViewLevel],
+                    ['quick comment', this.quickComment],
+                    ['level tag', this.addLevelTag],
+                    ['user-card notifications', this.userCardEx],
+                    ['plugin scripts', this.addPluginScript],
+                    ['code highlighting', this.addCodeHighlight],
+                    ['image viewer', this.addImageSlide],
+                    ['dark mode', this.darkMode],
+                    ['history', this.history],
+                    ['instant-page prefetch', this.initInstantPage],
+                    ['smooth scroll', this.smoothScroll],
+                    ['settings button', this.addSettingsButton],
+                    ['custom background', this.updateCustomBackground],
+                    ['visited-link style', this.updateVisitedLinkStyle],
+                    ['typography', this.updateAllTypography],
+                    ['promotions', this.togglePromotions],
+                    ['header opacity', this.updateHeaderOpacityStyle],
+                    ['frame opacity', this.updateFrameOpacityStyle],
+                    ['default avatars', this.replaceDefaultAvatars],
+                    ['category navigation', this.mergeCategoryToNav],
+                    ['category navigation responsive', this.initCategoryNavResponsive],
+                    ['user stats panel', this.toggleUserStatsPanel],
+                    ['footer visibility', this.toggleFooter],
+                    ['post category visibility', this.togglePostCategory],
+                    ['post info visibility', this.togglePostInfo],
+                    ['carousel visibility', this.toggleTopicCarousel],
+                    ['highlight input', this.addRightPanelHighlightInput],
+                    ['highlight content', this.applyRightPanelHighlight],
+                    ['highlight observer', this.startRightPanelHighlightObserver],
+                    ['keyboard navigation', this.initKeyboardNavigation],
+                    ['visited post tracking', this.initPostVisitListener],
+                    ['post sorting', this.sortPostList]
+                ];
+                if (Config.getConfig('default_avatar.enabled') === true) {
+                    initializers.push(['avatar observer', this.startAvatarObserver]);
                 }
-                this.autoSignIn();//自动签到
-                this.addSignTips();//签到提示
-                this.enforceNewTabForPosts();//强制新标签页打开帖子
-                this.autoJump();//自动点击跳转页
-                this.autoLoading();//无缝加载帖子和评论
-                this.blockMemberDOMInsert();//屏蔽用户
-                this.blockPost();//屏蔽帖子
-                this.blockPostsByCategory();
-                this.blockPostsByViewLevel();
-                this.quickComment();//快捷评论
-                this.addLevelTag();//添加等级标签
-                this.userCardEx();//用户卡片扩展
-                //this.fakeLevel();
-                this.addPluginScript();
-                this.addCodeHighlight();
-                this.addImageSlide();
-                this.darkMode();
-                this.history();
-                this.initInstantPage();
-                this.smoothScroll();
-                this.addSettingsButton();
-                this.updateCustomBackground();
-                this.updateVisitedLinkStyle();
-                this.updateAllTypography();
-                this.togglePromotions();
-                this.updateHeaderOpacityStyle();
-                this.updateFrameOpacityStyle();
-                this.replaceDefaultAvatars();
-                this.startAvatarObserver();
-                this.moveSearchBoxToCenter();
-                this.mergeCategoryToNav();
-                this.toggleUserStatsPanel();
-                this.toggleFooter(); // 应用页脚隐藏设置
-                this.togglePostCategory(); // 应用分类标签隐藏设置
-                this.togglePostInfo(); // 应用帖子信息隐藏设置
-                this.toggleTopicCarousel(); // 应用推荐轮播隐藏设置
-                this.addRightPanelHighlightInput(); // 在右侧面板添加关键词输入框
-                // 延迟应用高亮，确保DOM完全加载
-                setTimeout(() => {
-                    this.applyRightPanelHighlight();
-                }, 200);
-                this.startRightPanelHighlightObserver(); // 启动右侧面板高亮观察器
-                this.initKeyboardNavigation(); // 初始化键盘快捷键
-                this.initPostVisitListener(); // 初始化访问监听，用于自动重新排序
-
-                // 延迟执行排序，确保DOM完全加载
-                // 使用多种方式确保排序能执行
-                setTimeout(() => {
-                    this.sortPostList();
-                    // 同时重新应用高亮
-                    this.applyRightPanelHighlight();
-                }, 100);
-
-                // 如果页面还在加载，等待load事件
-                if (document.readyState === 'loading') {
-                    window.addEventListener('load', () => {
-                        setTimeout(() => {
-                            this.sortPostList();
-                            // 同时重新应用高亮
-                            this.applyRightPanelHighlight();
-                        }, 200);
-                    }, { once: true });
-                }
-
-                // 使用MutationObserver监听帖子列表的出现
-                const postListObserver = new MutationObserver(() => {
-                    const postList = document.querySelector(opts.post.postListSelector);
-                    if (postList && postList.children.length > 0) {
-                        setTimeout(() => {
-                            this.sortPostList();
-                            // 同时重新应用高亮
-                            this.applyRightPanelHighlight();
-                        }, 100);
-                        postListObserver.disconnect();
-                    }
-                });
-
-                // 如果帖子列表还不存在，开始观察
-                const postList = document.querySelector(opts.post.postListSelector);
-                if (!postList || postList.children.length === 0) {
-                    if (document.body) {
-                        postListObserver.observe(document.body, {
-                            childList: true,
-                            subtree: true
-                        });
-                        // 5秒后自动停止观察
-                        setTimeout(() => postListObserver.disconnect(), 5000);
-                    }
-                } else {
-                    // 如果帖子列表已经存在，立即应用高亮
-                    setTimeout(() => {
-                        this.applyRightPanelHighlight();
-                    }, 300);
-                }
-
-                // 如果启用了显示所有用户统计，则执行
                 if (Config.getConfig('show_all_users_stats.enabled') === true) {
-                    setTimeout(() => {
-                        this.showAllUsersStats();
-                    }, 500);
+                    initializers.push(['all-user statistics', this.showAllUsersStats]);
+                }
+                initializers.forEach(([featureName, initializer]) => this.safeInit(featureName, initializer));
+
+                const postList = document.querySelector(opts.post.postListSelector);
+                if (!postList && document.body) {
+                    const postListObserver = new MutationObserver((_, observer) => {
+                        const discoveredList = document.querySelector(opts.post.postListSelector);
+                        if (!discoveredList) return;
+                        observer.disconnect();
+                        this.safeInit('late post sorting', this.sortPostList);
+                        this.safeInit('late highlighting', this.applyRightPanelHighlight);
+                    });
+                    postListObserver.observe(document.body, { childList: true, subtree: true });
+                    setTimeout(() => postListObserver.disconnect(), 5000);
                 }
             }
         };
-        main.init();
+        try {
+            main.init();
+        } catch (error) {
+            console.error('[NodeSeek Enhance] 初始化失败', error);
+            removeInitialOverlay();
+            removeCompactPendingClass();
+        }
         });
     });
 })();
-                        layui.form.on('checkbox(hide_visited_links)', function(data) {
-                            Config.updateConfig('visited_links.hide_visited', data.elem.checked);
-                            _this.updateVisitedLinkStyle();
-                        });

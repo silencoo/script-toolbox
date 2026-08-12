@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { platformConfigHome } from "../platform-paths.mjs";
 import {
   PROMPT_REMOTE_PROTOCOL,
   RemoteStoreError,
@@ -64,7 +65,7 @@ Options:
 }
 
 function defaults() {
-  const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const configHome = platformConfigHome();
   return {
     home: process.env.PROMPTCTL_HOME || homedir(),
     remoteConfig: process.env.PROMPTCTL_REMOTE_CONFIG ||

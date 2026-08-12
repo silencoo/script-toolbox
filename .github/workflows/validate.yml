@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   validate:
+    name: Linux · full repository and agent suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -23,7 +24,7 @@ jobs:
       - name: Install Python test dependencies
         run: python -m pip install pytest pyyaml
       - name: Check JavaScript syntax
-        run: find . -type f -name '*.js' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
+        run: find . -type f -name '*.js' -not -path './node_modules/*' -not -path './userscripts/sht-helper/src/modules/*' -print0 | xargs -0 -n1 node --check
       - name: Validate Cookie Exporter extension
         run: |
           npm ci
@@ -33,6 +34,13 @@ jobs:
         run: node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
       - name: Test Gemini Toolkit
         run: node --test userscripts/gemini-toolkit/tests/*.test.cjs
+      - name: Test NodeSeek enhancer
+        run: node --test userscripts/nodeseek/tests/*.test.mjs
+      - name: Validate SHT Helper
+        run: |
+          npm ci
+          npm run check
+        working-directory: userscripts/sht-helper
       - name: Test Sub-Store profile conversion
         run: node --test sub-store/*.test.mjs
       - name: Validate generated proxy rules
@@ -85,6 +93,7 @@ jobs:
         working-directory: workers/toolbox-store
 
   validate-windows:
+    name: Windows · portable controllers and Git Bash integration
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
@@ -98,14 +107,48 @@ jobs:
           python-version: "3.12"
       - name: Install Python test dependencies
         run: python -m pip install pytest
+      - name: Install Windows agent test dependencies
+        shell: pwsh
+        run: |
+          if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
+            choco install jq -y --no-progress
+          }
+          bash --version
+          jq --version
+      - name: Test portable controller backends on Windows
+        shell: bash
+        run: |
+          node --test \
+            agent/platform-command.test.mjs \
+            agent/platform-paths.test.mjs \
+            agent/remote-store.test.mjs \
+            agent/mcpctl/import-client.test.mjs \
+            agent/mcpctl/remote-client.test.mjs \
+            agent/promptctl/prompt-remote.test.mjs \
+            agent/agentctl/workspace-client.test.mjs \
+            agent/agentctl/provider-client.test.mjs \
+            agent/agentctl/account-client.test.mjs \
+            agent/agentctl/provider-renderer.test.mjs \
+            agent/agentctl/failover-client.test.mjs \
+            agent/agentctl/proxy-client.test.mjs \
+            agent/agentctl/pricing-client.test.mjs \
+            agent/agentctl/proxy-observability.test.mjs
+          node agent/skillsctl/test.mjs
+          node agent/agentctl/orchestrator-client.test.mjs
+      - name: Test controller entrypoints through Git Bash on Windows
+        shell: bash
+        run: ./agent/tests/windows-git-bash-smoke.sh
       - name: Test Promptctl on Windows
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
       - name: Test Promptctl advanced Codex deployer on Windows
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
       - name: Test portable agent TUI bundle on Windows
         run: |
-          node --test agent/tui/test/model.test.mjs agent/tui/test/controller.test.mjs agent/tui/test/remote-workspace.test.mjs
+          node --test agent/tui/test/*.test.mjs
           node agent/tui/dist/toolbox-tui.mjs --help
+      - name: Test Sunshine VDD configuration scripts
+        shell: pwsh
+        run: ./sunshine-vdd-setup/tests/ConfigScripts.Tests.ps1
       - name: Test workstation utilities with Windows PowerShell 5.1
         shell: powershell
         run: ./workstation-utils/tests/windows-test.ps1
@@ -118,6 +161,7 @@ jobs:
           ./windows-dev-setup/tests/wsl-test.ps1
 
   validate-agent-bash-3:
+    name: macOS · system Bash 3.2 agent suite
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6

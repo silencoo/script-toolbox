@@ -10,7 +10,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -24,6 +24,10 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLIENT = join(HERE, "provider-client.mjs");
 const AGENT_ROOT = resolve(HERE, "..");
+
+function bashHome(path) {
+  return process.platform === "win32" ? path.replaceAll("\\", "/") : path;
+}
 
 function storeArgs(root) {
   return [
@@ -43,7 +47,8 @@ function run(root, args, {
     encoding: "utf8",
     env: {
       ...process.env,
-      HOME: home,
+      HOME: bashHome(home),
+      ...(process.platform === "win32" ? { USERPROFILE: home } : {}),
       AGENTCTL_AGENT_ROOT: agentRoot,
       PATH: path,
       NO_COLOR: "1"
@@ -65,7 +70,7 @@ async function fakeAgentBins(root) {
     await writeFile(path, "#!/usr/bin/env sh\nprintf 'test-version\\n'\n", { mode: 0o700 });
     await chmod(path, 0o700);
   }
-  return `${bin}:${process.env.PATH}`;
+  return `${bin}${delimiter}${process.env.PATH || ""}`;
 }
 
 async function createSharedProfile(root, secretFile) {
@@ -268,7 +273,8 @@ test("one portable profile applies native configs to Claude, Codex, OpenCode, an
       "NATIVE-CONFIG-SECRET"
     );
     assert.equal(await readFile(officialAuthPath, "utf8"), officialAuth);
-    assert.equal((await stat(officialAuthPath)).mode & 0o077, 0);
+    if (process.platform === "win32") assert.equal((await stat(officialAuthPath)).isFile(), true);
+    else assert.equal((await stat(officialAuthPath)).mode & 0o077, 0);
 
     const opencode = JSON.parse(await readFile(
       join(home, ".config", "opencode", "opencode.json"), "utf8"

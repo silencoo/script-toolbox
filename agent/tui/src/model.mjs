@@ -13,6 +13,7 @@ export const SECTIONS = Object.freeze([
 
 export const TARGETS = Object.freeze(["codex", "claude"]);
 export const PROVIDER_TARGETS = Object.freeze(["claude", "codex", "opencode", "pi"]);
+export const SKILL_TARGETS = Object.freeze(["codex", "claude", "opencode", "pi"]);
 
 export function targetLabel(target) {
   if (target === "claude") return "Claude Code";
@@ -69,6 +70,7 @@ export function componentTargetState(snapshot, component, target) {
     check,
     data,
     selection,
+    baseSelection: typeof data.base_profile === "string" ? data.base_profile : "",
     items: [...items],
     suppressed: component === "mcp" ? [...(data.suppressed_servers || [])] : [],
     drift: Array.isArray(data.drift) ? [...data.drift] : data.drift === true ? ["configuration"] : [],
@@ -311,6 +313,100 @@ export function mcpTargetComparison(snapshot) {
   };
 }
 
+export function mcpServerEntries(catalogItems, snapshot, target) {
+  const comparison = mcpTargetComparison(snapshot);
+  const active = comparison.targets[target];
+  const other = comparison.targets[otherTarget(target)];
+  const enabled = new Set(active.items);
+  const otherEnabled = new Set(other.items);
+  const suppressed = new Set(active.suppressed);
+  return (Array.isArray(catalogItems) ? catalogItems : [])
+    .filter((item) => item && typeof item.name === "string" && item.name.length > 0)
+    .map((item) => ({
+      name: item.name,
+      category: typeof item.category === "string" ? item.category : "",
+      description: typeof item.description === "string" ? item.description : "",
+      setup: typeof item.setup === "string" ? item.setup : "",
+      variantGroup: typeof item.variant_group === "string" ? item.variant_group : "",
+      checked: item.checked === true,
+      ready: typeof item.ready === "boolean" ? item.ready : null,
+      issues: Array.isArray(item.issues) ? item.issues.filter((issue) => typeof issue === "string") : [],
+      checkDetails: typeof item.check_details === "string" ? item.check_details : "",
+      enabled: enabled.has(item.name),
+      otherEnabled: otherEnabled.has(item.name),
+      suppressed: suppressed.has(item.name)
+    }))
+    .sort((left, right) => Number(right.enabled) - Number(left.enabled) ||
+      Number(right.otherEnabled) - Number(left.otherEnabled) ||
+      left.name.localeCompare(right.name));
+}
+
+export function filterMcpServerEntries(entries, {
+  query = "",
+  filter = "all",
+  grouped = false
+} = {}) {
+  const normalizedQuery = String(query).trim().toLocaleLowerCase();
+  const filtered = (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (filter === "enabled" && !entry.enabled) return false;
+    if (filter === "problems" && entry.ready !== false) return false;
+    if (!normalizedQuery) return true;
+    return [entry.name, entry.category, entry.description]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(normalizedQuery));
+  });
+  if (!grouped) return filtered;
+  return [...filtered].sort((left, right) =>
+    Number(right.enabled) - Number(left.enabled) ||
+    String(left.category || "other").localeCompare(String(right.category || "other")) ||
+    left.name.localeCompare(right.name));
+}
+
+export function skillTargetState(states, target) {
+  const data = states?.[target] && typeof states[target] === "object" ? states[target] : {};
+  return {
+    target,
+    label: targetLabel(target),
+    selection: data.selection_mode === "manual" ? "custom" : data.pack || "none",
+    selectionMode: data.selection_mode || "unknown",
+    basePack: typeof data.base_pack === "string" ? data.base_pack : "",
+    baseSkills: Array.isArray(data.base_skills) ? [...data.base_skills] : [],
+    skills: Array.isArray(data.skills) ? [...data.skills] : [],
+    drift: Array.isArray(data.drift) ? [...data.drift] : [],
+    healthy: data.healthy === true,
+    data
+  };
+}
+
+export function skillEntries(catalogItems, states, target) {
+  const active = new Set(skillTargetState(states, target).skills);
+  const enabledByTarget = Object.fromEntries(SKILL_TARGETS.map((client) => [
+    client,
+    new Set(skillTargetState(states, client).skills)
+  ]));
+  return (Array.isArray(catalogItems) ? catalogItems : [])
+    .filter((item) => item && typeof item.name === "string" && item.name.length > 0)
+    .map((item) => ({
+      name: item.name,
+      description: typeof item.description === "string" ? item.description : "",
+      enabled: active.has(item.name),
+      enabledTargets: SKILL_TARGETS.filter((client) =>
+        client !== target && enabledByTarget[client].has(item.name))
+    }))
+    .sort((left, right) => Number(right.enabled) - Number(left.enabled) ||
+      Number(right.enabledTargets.length > 0) - Number(left.enabledTargets.length > 0) ||
+      left.name.localeCompare(right.name));
+}
+
+export function filterSkillEntries(entries, { query = "", enabledOnly = false } = {}) {
+  const normalizedQuery = String(query).trim().toLocaleLowerCase();
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (enabledOnly && !entry.enabled) return false;
+    if (!normalizedQuery) return true;
+    return [entry.name, entry.description]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(normalizedQuery));
+  });
+}
+
 export function presetEntries(snapshot) {
   return Object.entries(snapshot?.presets || {})
     .sort(([left], [right]) => left.localeCompare(right));
@@ -478,7 +574,9 @@ export function actionForKey(section, input) {
     if (input === "a") return `${section}-apply`;
   }
   if (section === "mcp" && input === "f") return "mcp-repair";
+  if (section === "mcp" && input === " ") return "mcp-toggle";
   if (section === "skills" && input === "f") return "skills-repair";
+  if (section === "skills" && input === " ") return "skills-toggle";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
   if (section === "snippets" && input === "c") return "snippet-copy";
@@ -493,7 +591,12 @@ export function actionForKey(section, input) {
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
     action === "account-use" || action === "account-delete" ||
-    action === "mcp-repair" || action === "skills-repair" ||
+    action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" ||
+    action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" ||
+    action === "mcp-profile-upload" ||
+    action === "skills-repair" || action === "skills-enable" || action === "skills-disable" ||
+    action === "skills-batch" || action === "skills-pack-save" ||
+    action === "skills-pack-update" || action === "skills-pack-upload" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
     action.endsWith("-apply");
 }
@@ -514,8 +617,44 @@ export function actionLabel(action, selection, target) {
   if (action === "mcp-repair") {
     return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }
+  if (action === "mcp-enable") {
+    return `Enable MCP ${selection || "server"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-disable") {
+    return `Disable MCP ${selection || "server"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-batch") {
+    return `Apply staged MCP changes for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-save") {
+    return `Save current MCP selection as ${selection || "a Profile"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-update") {
+    return `Update MCP Profile ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-upload") {
+    return `Back up MCP Store containing ${selection || "the selected Profile"}`;
+  }
   if (action === "skills-repair") {
     return `Repair local Skills pack ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-enable") {
+    return `Enable Skill ${selection || "skill"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-disable") {
+    return `Disable Skill ${selection || "skill"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-batch") {
+    return `Apply staged Skill changes for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-save") {
+    return `Save current Skill selection as ${selection || "a Pack"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-update") {
+    return `Update Skill Pack ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-upload") {
+    return `Back up Skills Store containing ${selection || "the selected Pack"}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;

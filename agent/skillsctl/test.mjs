@@ -8,21 +8,21 @@ import {
   mkdtemp,
   readFile,
   readdir,
-  readlink,
+  realpath,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const directory = dirname(fileURLToPath(import.meta.url));
-const cli = join(directory, "skillsctl");
+const engine = join(directory, "skillsctl.mjs");
 const root = await mkdtemp(join(tmpdir(), "skillsctl-test-"));
 const store = join(root, "store");
 const target = join(root, "codex-skills");
 
 function run(args, extraEnv = {}) {
-  return execFileSync(cli, args, {
+  return execFileSync(process.execPath, [engine, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -47,7 +47,7 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.3.0");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.4.1");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
@@ -59,6 +59,10 @@ const backend = await makeSkill("backend-dev", "Build reliable backend services"
 run(["skill", "add", frontend, "--store", store, "--yes"]);
 run(["skill", "add", backend, "--store", store, "--yes"]);
 assert.match(run(["list", "--store", store]), /frontend-dev\tBuild responsive frontend interfaces across supported agents\./);
+assert.deepEqual(JSON.parse(run(["list", "--store", store, "--json"])), [
+  { name: "backend-dev", description: "Build reliable backend services across supported agents." },
+  { name: "frontend-dev", description: "Build responsive frontend interfaces across supported agents." }
+]);
 
 run(["pack", "add", "frontend", "frontend-dev", "--store", store, "--yes"]);
 run(["pack", "add", "backend", "backend-dev", "--store", store, "--yes"]);
@@ -81,8 +85,8 @@ assert.deepEqual(current.skills, ["frontend-dev"]);
 assert.equal(current.healthy, true);
 assert.equal((await lstat(join(target, "frontend-dev"))).isSymbolicLink(), true);
 assert.equal(
-  resolve(dirname(join(target, "frontend-dev")), await readlink(join(target, "frontend-dev"))),
-  join(store, "skills", "frontend-dev")
+  await realpath(join(target, "frontend-dev")),
+  await realpath(join(store, "skills", "frontend-dev"))
 );
 
 const disablePreview = run([
@@ -114,6 +118,37 @@ assert.equal(codexState.base_pack, "frontend");
 assert.deepEqual(Object.keys(codexState.links), ["frontend-dev"]);
 assert.match(run(["status", "--store", store]), /codex: 1 managed links \(custom based on frontend\)/);
 
+const batchState = JSON.parse(run([
+  "skill", "set", "--target", "codex", "--enable", "backend-dev",
+  "--disable", "frontend-dev", "--store", store, "--yes", "--json"
+]));
+assert.equal(batchState.selection_mode, "manual");
+assert.equal(batchState.base_pack, "frontend");
+assert.deepEqual(batchState.base_skills, ["frontend-dev"]);
+assert.deepEqual(batchState.skills, ["backend-dev"]);
+assert.equal(batchState.healthy, true);
+run(["pack", "save", "daily-test", "--target", "codex", "--store", store, "--yes"]);
+let dailyTest = JSON.parse(await readFile(join(store, "packs", "daily-test.json"), "utf8"));
+assert.deepEqual(dailyTest.extends, ["frontend"]);
+assert.deepEqual(dailyTest.target_overrides.codex.enable, ["backend-dev"]);
+assert.deepEqual(dailyTest.target_overrides.codex.disable, ["frontend-dev"]);
+dailyTest.target_overrides.opencode = { enable: ["frontend-dev"], disable: [] };
+await writeFile(join(store, "packs", "daily-test.json"), `${JSON.stringify(dailyTest, null, 2)}\n`);
+run([
+  "skill", "set", "--target", "codex", "--enable", "frontend-dev",
+  "--disable", "backend-dev", "--store", store, "--yes"
+]);
+run([
+  "pack", "save", "daily-test", "--target", "codex", "--store", store,
+  "--force", "--yes"
+]);
+dailyTest = JSON.parse(await readFile(join(store, "packs", "daily-test.json"), "utf8"));
+assert.deepEqual(dailyTest.target_overrides.opencode, {
+  enable: ["frontend-dev"], disable: []
+});
+assert.deepEqual(dailyTest.target_overrides.codex.enable, ["frontend-dev"]);
+assert.deepEqual(dailyTest.target_overrides.codex.disable, ["backend-dev"]);
+
 run(["apply", "--target", "codex", "--pack", "backend", "--store", store, "--yes"]);
 await assert.rejects(lstat(join(target, "frontend-dev")), { code: "ENOENT" });
 assert.equal((await lstat(join(target, "backend-dev"))).isSymbolicLink(), true);
@@ -126,8 +161,9 @@ const claudeTarget = join(root, "claude-skills");
 await mkdir(claudeTarget, { recursive: true });
 await cp(frontend, join(claudeTarget, "frontend-dev"), { recursive: true });
 const unmanagedDisable = spawnSync(
-  cli,
+  process.execPath,
   [
+    engine,
     "skill", "disable", "frontend-dev", "--target", "claude", "--store", store, "--yes"
   ],
   {
@@ -153,11 +189,8 @@ assert.match(importOutput, /Adopted 1 claude skill\(s\)/);
 assert.match(importOutput, /Preserved original target entries at/);
 assert.equal((await lstat(join(claudeTarget, "frontend-dev"))).isSymbolicLink(), true);
 assert.equal(
-  resolve(
-    dirname(join(claudeTarget, "frontend-dev")),
-    await readlink(join(claudeTarget, "frontend-dev"))
-  ),
-  join(store, "skills", "frontend-dev")
+  await realpath(join(claudeTarget, "frontend-dev")),
+  await realpath(join(store, "skills", "frontend-dev"))
 );
 const claudeState = JSON.parse(await readFile(join(store, "state", "claude.json"), "utf8"));
 assert.equal(claudeState.selection_mode, "pack");
@@ -195,16 +228,21 @@ const snapshot = join(root, "skills.json");
 run(["export", "--store", store, "--output", snapshot]);
 const exported = JSON.parse(await readFile(snapshot, "utf8"));
 assert.equal(exported.kind, "skillsctl-store");
-assert.equal(exported.skills["frontend-dev"].files["scripts/check.sh"].mode, 0o700);
+assert.equal(
+  exported.skills["frontend-dev"].files["scripts/check.sh"].mode,
+  0o700
+);
 
 const restored = join(root, "restored");
 run(["restore-file", "--store", restored, "--input", snapshot, "--yes"]);
-assert.match(run(["status", "--store", restored]), /Skills: 2[\s\S]*Packs:\s+6/);
+assert.match(run(["status", "--store", restored]), /Skills: 2[\s\S]*Packs:\s+7/);
 
 const unsafe = await makeSkill("unsafe-skill", "Contains an accidental secret", {
   ".env": "API_KEY=do-not-copy\n"
 });
-const rejected = spawnSync(cli, ["skill", "add", unsafe, "--store", store, "--yes"], {
+const rejected = spawnSync(process.execPath, [
+  engine, "skill", "add", unsafe, "--store", store, "--yes"
+], {
   encoding: "utf8"
 });
 assert.notEqual(rejected.status, 0);

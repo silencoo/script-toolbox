@@ -35,6 +35,7 @@ CATALOG=""
 STATE_FILE=""
 ALL=0
 DRY_RUN=0
+JSON_OUTPUT=0
 
 if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
   NAME="$1"
@@ -59,6 +60,10 @@ while [ $# -gt 0 ]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --json)
+      JSON_OUTPUT=1
       shift
       ;;
     *)
@@ -237,6 +242,8 @@ requirement_label() {
        "environment " + .name
      elif .type == "any" then
        "one of " + ((.commands // []) + (.envs // []) | join(", "))
+     elif .type == "path" then
+       "path " + ((.paths // []) | join(" or "))
      elif .type == "endpoint" then
        "local endpoint"
      else .type end)
@@ -248,6 +255,7 @@ env_path_is_valid() {
   case "$path_kind" in
     "")        [ -n "$value" ] ;;
     file)      [ -f "$value" ] ;;
+    executable) [ -f "$value" ] && [ -x "$value" ] ;;
     directory) [ -d "$value" ] ;;
     writable-directory) [ -d "$value" ] && [ -w "$value" ] ;;
     *)         return 1 ;;
@@ -255,7 +263,7 @@ env_path_is_valid() {
 }
 
 requirement_satisfied() {
-  local requirement="$1" type command_name env_name env_value path_kind
+  local requirement="$1" type command_name env_name env_value path_kind path_value
   type="$(printf '%s' "$requirement" | jq -r '.type')"
   case "$type" in
     command)
@@ -282,6 +290,19 @@ requirement_satisfied() {
         env_value="$(printenv "$env_name" 2>/dev/null || true)"
         env_path_is_valid "$env_value" "$path_kind" && return 0
       done < <(printf '%s' "$requirement" | jq -r '(.envs // [])[]')
+      return 1
+      ;;
+    path)
+      path_kind="$(printf '%s' "$requirement" | jq -r '.path_kind // empty')"
+      while IFS= read -r path_value; do
+        [ -n "$path_value" ] || continue
+        case "$path_value" in
+          '~/'*) path_value="${HOME}/${path_value#\~/}" ;;
+          /*) ;;
+          *) continue ;;
+        esac
+        env_path_is_valid "$path_value" "$path_kind" && return 0
+      done < <(printf '%s' "$requirement" | jq -r '(.paths // [])[]')
       return 1
       ;;
     endpoint)
@@ -341,6 +362,25 @@ owned_entrypoint() {
     uv)  printf '%s/bin/%s' "$server_dir" "$binary" ;;
     *) return 1 ;;
   esac
+}
+
+# `uv tool install` writes absolute links into UV_TOOL_BIN_DIR. Installs are
+# assembled in a temporary directory and atomically renamed into place, so
+# those links would otherwise keep pointing at the removed staging path.
+# Rebase links that stay inside the staged tool root before the rename.
+relativize_uv_bin_links() {
+  local root="$1" link target relative
+  [ -d "${root}/bin" ] || return 0
+  while IFS= read -r -d '' link; do
+    target="$(readlink "$link")" || continue
+    case "$target" in
+      "${root}"/*)
+        relative="${target#"${root}"/}"
+        rm "$link"
+        ln -s "../${relative}" "$link"
+        ;;
+    esac
+  done < <(find "${root}/bin" -type l -print0)
 }
 
 install_state() {
@@ -523,6 +563,32 @@ doctor_one() {
   return "$failed"
 }
 
+doctor_json_one() {
+  local name="$1" details ready issues
+  if details="$(doctor_one "$name" 2>&1)"; then
+    ready=true
+  else
+    ready=false
+  fi
+  issues="$(printf '%s\n' "$details" | awk '
+    /^  \[(missing|warn)\]/ {
+      sub(/^  \[[^]]+\] /, "")
+      print
+    }
+  ' | jq -Rsc 'split("\n") | map(select(length > 0))')"
+  jq -cn \
+    --arg name "$name" \
+    --argjson ready "$ready" \
+    --argjson issues "$issues" \
+    --arg details "$details" '{
+      name: $name,
+      ready: $ready,
+      issues: $issues,
+      details: $details
+    }'
+  return 0
+}
+
 status_one() {
   local name="$1" host lifecycle installed service enabled
   host="$(host_for "$name")"
@@ -553,8 +619,9 @@ for_each_selected() {
 }
 
 install_one() {
-  local name="$1" host manager package_ref package binary server_dir temp_dir entrypoint
+  local name="$1" host manager package_ref package binary server_dir install_dir entrypoint
   local created_at expected_sha actual_sha with_json requirement
+  local move_into_place=0
   local uv_install_args=()
   host="$(host_for "$name")"
   manager="$(printf '%s' "$host" | jq -r '.install.type // "manual"')"
@@ -641,19 +708,34 @@ install_one() {
   mkdir -p "$SERVERS_ROOT"
   chmod 700 "$SERVERS_ROOT"
   [ ! -L "$SERVERS_ROOT" ] || die "refusing to use symlinked host root $SERVERS_ROOT"
-  temp_dir="$(mktemp -d "${SERVERS_ROOT}/.install-${name}.XXXXXX")"
+  if [ "$manager" = "uv" ]; then
+    # uv-created console scripts embed their environment's absolute Python
+    # path in the shebang. Installing under a staging name and renaming it
+    # therefore leaves every entrypoint broken. Build uv tools at their final
+    # path and remove the directory on failure; the ownership manifest is
+    # still written last, so incomplete installs are never considered owned.
+    install_dir="$server_dir"
+    mkdir "$install_dir"
+  else
+    install_dir="$(mktemp -d "${SERVERS_ROOT}/.install-${name}.XXXXXX")"
+    move_into_place=1
+  fi
   cleanup_temp() {
-    case "$temp_dir" in
-      "${SERVERS_ROOT}"/.install-*) rm -rf "$temp_dir" ;;
-    esac
+    if [ "$move_into_place" -eq 1 ]; then
+      case "$install_dir" in
+        "${SERVERS_ROOT}"/.install-*) rm -rf "$install_dir" ;;
+      esac
+    elif [ "$install_dir" = "$server_dir" ]; then
+      rm -rf "$install_dir"
+    fi
   }
   trap cleanup_temp EXIT HUP INT TERM
 
   case "$manager" in
     npm)
       require_command npm
-      npm install --prefix "$temp_dir" --no-save --no-package-lock -- "$package"
-      entrypoint="${temp_dir}/node_modules/.bin/${binary}"
+      npm install --prefix "$install_dir" --no-save --no-package-lock -- "$package"
+      entrypoint="${install_dir}/node_modules/.bin/${binary}"
       ;;
     uv)
       require_command uv
@@ -661,10 +743,11 @@ install_one() {
         [ -n "$requirement" ] || continue
         uv_install_args+=(--with "$requirement")
       done < <(printf '%s' "$with_json" | jq -r '.[]')
-      UV_TOOL_DIR="${temp_dir}/tools" \
-        UV_TOOL_BIN_DIR="${temp_dir}/bin" \
+      UV_TOOL_DIR="${install_dir}/tools" \
+        UV_TOOL_BIN_DIR="${install_dir}/bin" \
         uv tool install "${uv_install_args[@]}" -- "$package"
-      entrypoint="${temp_dir}/bin/${binary}"
+      relativize_uv_bin_links "$install_dir"
+      entrypoint="${install_dir}/bin/${binary}"
       ;;
   esac
   [ -x "$entrypoint" ] ||
@@ -690,9 +773,11 @@ install_one() {
         with: $with,
         installed_at: $installed_at
       }
-    ' > "${temp_dir}/manifest.json"
-  chmod 600 "${temp_dir}/manifest.json"
-  mv "$temp_dir" "$server_dir"
+    ' > "${install_dir}/manifest.json"
+  chmod 600 "${install_dir}/manifest.json"
+  if [ "$move_into_place" -eq 1 ]; then
+    mv "$install_dir" "$server_dir"
+  fi
   trap - EXIT HUP INT TERM
   log "Installed $name into $server_dir"
 }
@@ -759,7 +844,21 @@ lifecycle_action() {
 
 case "$ACTION" in
   doctor)
-    for_each_selected doctor_one
+    if [ "$JSON_OUTPUT" -eq 1 ]; then
+      if [ "$ALL" -eq 1 ]; then
+        while IFS= read -r name; do
+          [ -n "$name" ] && doctor_json_one "$name"
+        done < <(jq -r '.servers | keys[]' "$CATALOG")
+      else
+        doctor_json_one "$NAME"
+      fi | jq -s --arg platform "$PLATFORM" '{
+        schema: 1,
+        platform: $platform,
+        servers: .
+      }'
+    else
+      for_each_selected doctor_one
+    fi
     ;;
   status)
     printf 'SERVER\tLIFECYCLE\tINSTALL\tSERVICE\tENABLED\n'

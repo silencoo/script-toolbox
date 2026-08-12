@@ -148,12 +148,23 @@ the remote snapshot itself cannot be opened.
 | Key | Action |
 | --- | --- |
 | `[` / `]`, Tab / Shift+Tab, Left / Right | Change top-level section |
-| `t` | Switch Codex/Claude normally; cycle Claude/Codex/OpenCode/Pi in Providers |
+| `t` | Switch Codex/Claude normally; cycle Claude/Codex/OpenCode/Pi in Providers and Skills |
 | `r` | Refresh now |
 | Up / Down | Select the previous / next Profile, Pack, Prompt, Snippet, or Preset inside the section |
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
 | Providers: `i` | Show or hide profiles incompatible with the selected client |
+| MCP: `l` / `w` | Focus target-specific Local server switches / Workspace profiles |
+| MCP: `/` | Search by server name, category, or description; Enter keeps and Esc clears the query |
+| MCP: `e` / `x` / `g` | Toggle enabled-only / readiness-problem filters / category grouping |
+| MCP: Space | Preflight and confirm one target-specific toggle, or stage it while batch mode is active |
+| MCP: `m` / `a` / `c` | Enter batch mode / preflight and atomically apply staged changes / clear staged changes |
+| MCP: `s` / `S` / `u` | Save the exact selection / update only its current-target override / back up the portable encrypted MCP Store containing it |
+| Skills: `l` / `w` | Focus target-specific Local Skill switches / Workspace Packs |
+| Skills: `/` / `e` | Search the canonical Skill catalog / show only enabled Skills |
+| Skills: Space | Confirm one target-specific link toggle, or stage it in batch mode |
+| Skills: `m` / `a` / `c` | Enter batch mode / atomically apply staged links / clear staged changes |
+| Skills: `s` / `S` / `u` | Save the exact selection / update only this client override / back up the portable Skills Store |
 | MCP / Skills: `f` | Confirm repair of the current named local profile or pack when Drift is reported |
 | Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
 | Snippets: `c` | Copy the selected local snippet without rendering it |
@@ -170,7 +181,21 @@ Nerd Font. Green/yellow/red continue to communicate health where used in status
 fields. Target badges are deliberately distinct: Claude Code yellow, Codex
 cyan, OpenCode green, and Pi magenta. Provider availability always has a
 textual `B/L/W/L+W/L≠W` cue in addition to color, and every active section gets
-its own navigation accent instead of a single indistinguishable color.
+its own navigation accent instead of a single indistinguishable color. The MCP
+server list likewise uses `●` active, `○` inactive, and `×` explicit disabled
+override. `✓`, `!`, and `?` report ready, missing requirements, and unchecked
+host state. Active servers are sorted first. Enable operations check platform,
+executables or local services, and required Secret references before the final
+confirmation. Batch changes are rendered by one `mcpctl server set` transaction.
+Target switches preserve unchanged owned entries, render only changed servers,
+and return their final local state in the same process; they do not wait for a
+Workspace round trip. Whole-catalog host readiness is cached for five minutes
+so the 30-second dashboard refresh cannot repeatedly launch every doctor check.
+The Skills section provides the same local/Workspace split for Codex, Claude
+Code, OpenCode, and Pi. Its enabled items sort first, other-client usage remains
+visible, and batch changes use one rollback-protected `skillsctl skill set`
+transaction. Disabling a Skill removes only the selected client's managed link;
+the canonical Store copy and all other clients remain unchanged.
 
 ## Development
 

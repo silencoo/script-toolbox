@@ -47,7 +47,8 @@ For automation, initialize a personal store explicitly:
 ./agent/mcpctl/mcpctl init
 ```
 
-The default location is `~/.config/mcpctl/store`. A different directory,
+The default location is `~/.config/mcpctl/store` on macOS/Linux and
+`%APPDATA%\mcpctl\store` under Windows Git Bash. A different directory,
 including a private Git clone, can be selected explicitly:
 
 ```bash
@@ -400,9 +401,30 @@ mcpctl profile list
 mcpctl profile show frontend
 mcpctl profile show frontend --target codex
 mcpctl server list
+mcpctl server list --target codex --json
+mcpctl server doctor --all --json
+mcpctl server preflight exa --target codex --json
 mcpctl server show brave
 mcpctl current --target claude
 ```
+
+The TUI uses the same explicit commands for safe local management. Multiple
+switches can be committed in one configuration write, and the current exact
+selection can be named without changing other clients:
+
+```bash
+mcpctl server set --target codex --enable exa --disable fetch
+mcpctl profile save daily-search --target codex
+mcpctl apply --target codex --profile daily-search
+```
+
+`server set --json` is the low-latency UI primitive: it updates only changed
+owned entries, preserves unchanged rendered values (including Secret-backed
+fields), writes config and state atomically, and returns the final target state
+without requiring a second `current` process.
+
+`profile save --force` updates only the specified target override of an
+existing Profile; its global rules and other target overrides are preserved.
 
 One-off changes do not modify the saved profile:
 

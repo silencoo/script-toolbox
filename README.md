@@ -24,7 +24,6 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
-| [`userscripts/sehuatang-search-sorter/`](./userscripts/sehuatang-search-sorter/) | Client-side sorting and filtering for Sehuatang search results |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
 | [`agent/`](./agent/) | Provider setup, MCP profiles, portable skill packs, and persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
 | [`workers/toolbox-store/`](./workers/toolbox-store/) | End-to-end encrypted Toolbox Workspace/Web UI for Provider profiles, MCP profiles, skill packs, persistent prompts, snippets, and development presets |

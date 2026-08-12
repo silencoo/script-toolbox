@@ -206,7 +206,8 @@ test("failover CLI previews, validates Provider references, exports, and resolve
     assert.equal(Object.keys(JSON.parse(await readFile(failoverStore, "utf8")).routes).length, 0);
 
     run(FAILOVER_CLIENT, [...createArgs, "--yes", "--json"]);
-    assert.equal((await lstat(failoverStore)).mode & 0o077, 0);
+    if (process.platform === "win32") assert.equal((await lstat(failoverStore)).isFile(), true);
+    else assert.equal((await lstat(failoverStore)).mode & 0o077, 0);
     const resolved = JSON.parse(run(FAILOVER_CLIENT, [
       "resolve", "work-route", "--target", "codex", "--platform", "linux",
       ...common, "--json"

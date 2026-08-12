@@ -39,6 +39,32 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+platform_config_home() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [ -n "${APPDATA:-}" ] && command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$APPDATA"
+      else
+        printf '%s\n' "${APPDATA:-${HOME}/AppData/Roaming}"
+      fi
+      ;;
+    *) printf '%s\n' "${XDG_CONFIG_HOME:-${HOME}/.config}" ;;
+  esac
+}
+
+platform_state_home() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [ -n "${LOCALAPPDATA:-${APPDATA:-}}" ] && command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "${LOCALAPPDATA:-$APPDATA}"
+      else
+        printf '%s\n' "${LOCALAPPDATA:-${APPDATA:-${HOME}/AppData/Local}}"
+      fi
+      ;;
+    *) printf '%s\n' "${XDG_STATE_HOME:-${HOME}/.local/state}" ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 mcpctl — apply task-oriented MCP profiles to coding agents
@@ -66,14 +92,17 @@ Usage:
   mcpctl profile list [--store <directory>]
   mcpctl profile show <name> [--target <target>] [--store <directory>]
   mcpctl profile create <name> [--extends <profile>] [options]
-  mcpctl server list [--store <directory>]
+  mcpctl profile save <name> --target <target> [--force] [options]
+  mcpctl server list [--target <target>] [--json] [--store <directory>]
   mcpctl server show <name> [--target <target>] [--store <directory>]
-  mcpctl server doctor [<name>|--all] [--store <directory>]
+  mcpctl server doctor [<name>|--all] [--json] [--store <directory>]
+  mcpctl server preflight <name> --target <target> [--json] [options]
   mcpctl server install <name> [--dry-run] [--store <directory>]
   mcpctl server uninstall <name> [--dry-run] [--store <directory>]
   mcpctl server status [<name>|--all] [--store <directory>]
   mcpctl server start|stop|restart <name> [--store <directory>]
   mcpctl server enable|disable <name> --target <target> [options]
+  mcpctl server set --target <target> [--enable <name>] [--disable <name>]
   mcpctl secrets status [options]
   mcpctl secrets edit [options]
 
@@ -591,8 +620,8 @@ run_interactive() {
   done
 
   require_jq
-  default_config_home="${XDG_CONFIG_HOME:-${HOME}/.config}"
-  default_state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
+  default_config_home="$(platform_config_home)"
+  default_state_home="$(platform_state_home)"
   preferences_file="${MCPCTL_PREFERENCES:-${default_config_home}/mcpctl/preferences.json}"
   load_preferences "$preferences_file"
   store_dir="${store_arg:-${MCPCTL_STORE:-${PREFERENCE_STORE:-${default_config_home}/mcpctl/store}}}"
@@ -1037,6 +1066,13 @@ if [ $# -gt 0 ]; then
           ENTITY_NAME="$1"
           shift
           ;;
+        save)
+          COMMAND="profile-save"
+          shift
+          [ $# -gt 0 ] || die "profile save requires a profile name"
+          ENTITY_NAME="$1"
+          shift
+          ;;
         *) die "unknown profile command '${1:-}'" ;;
       esac
       ;;
@@ -1061,6 +1097,17 @@ if [ $# -gt 0 ]; then
             ENTITY_NAME="$1"
             shift
           fi
+          ;;
+        preflight)
+          COMMAND="server-preflight"
+          shift
+          [ $# -gt 0 ] || die "server preflight requires a server name"
+          ENTITY_NAME="$1"
+          shift
+          ;;
+        set)
+          COMMAND="server-set"
+          shift
           ;;
         install|uninstall|start|stop|restart|enable|disable)
           COMMAND="server-${1}"
@@ -1247,7 +1294,7 @@ while [ $# -gt 0 ]; do
     --dry-run)
       case "$COMMAND" in
         import) IMPORT_WRITE=0 ;;
-        server-install|server-uninstall|server-enable|server-disable)
+        server-install|server-uninstall|server-enable|server-disable|server-set)
           DRY_RUN=1
           ;;
         *) COMMAND="plan" ;;
@@ -1270,8 +1317,8 @@ done
 
 require_jq
 
-DEFAULT_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
-DEFAULT_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+DEFAULT_CONFIG_HOME="$(platform_config_home)"
+DEFAULT_STATE_HOME="$(platform_state_home)"
 PREFERENCES_FILE="${MCPCTL_PREFERENCES:-${DEFAULT_CONFIG_HOME}/mcpctl/preferences.json}"
 load_preferences "$PREFERENCES_FILE"
 STORE_DIR="${STORE_ARG:-${MCPCTL_STORE:-${PREFERENCE_STORE:-${DEFAULT_CONFIG_HOME}/mcpctl/store}}}"
@@ -1436,6 +1483,7 @@ case "$COMMAND" in
     host_args+=(--catalog "$CATALOG_FILE" --state "$STATE_FILE")
     [ "$ALL_SERVERS" -eq 0 ] || host_args+=(--all)
     [ "$DRY_RUN" -eq 0 ] || host_args+=(--dry-run)
+    [ "$JSON_OUTPUT" -eq 0 ] || host_args+=(--json)
     exec bash "$HOST_MANAGER" "${host_args[@]}"
     ;;
 esac
@@ -2256,8 +2304,40 @@ if [ "$COMMAND" = "profile-show" ]; then
 fi
 
 if [ "$COMMAND" = "server-list" ]; then
-  jq -r '.servers | to_entries[] | "\(.key)\t\(.value.description // "")"' \
-    "$CATALOG_FILE"
+  if [ -n "$TARGET" ]; then
+    TARGET="$(canonical_target "$TARGET")"
+  fi
+  server_list_json="$(jq -c --arg target "$TARGET" '
+    [
+      .servers
+      | to_entries[]
+      | . as $entry
+      | ($entry.value * (
+          if $target == "" then {}
+          else (($entry.value.target_overrides // {})[$target] // {})
+          end
+        )) as $definition
+      | select(
+          $target == ""
+          or ((($definition.supported_targets // []) | length) == 0)
+          or (($definition.supported_targets // []) | index($target)) != null
+        )
+      | {
+          name: $entry.key,
+          category: ($definition.category // ""),
+          description: ($definition.description // ""),
+          setup: ($definition.setup // ""),
+          variant_group: ($definition.variant_group // ""),
+          supported_targets: ($definition.supported_targets // [])
+        }
+    ]
+    | sort_by(.name)
+  ' "$CATALOG_FILE")"
+  if [ "$JSON_OUTPUT" -eq 1 ]; then
+    printf '%s\n' "$server_list_json" | jq .
+  else
+    printf '%s\n' "$server_list_json" | jq -r '.[] | "\(.name)\t\(.description)"'
+  fi
   exit 0
 fi
 
@@ -2339,6 +2419,8 @@ strip_selected_codex_blocks() {
 
 CURRENT=()
 CURRENT_SUPPRESSED=()
+PATCH_REMOVE=()
+PATCH_RENDER=()
 
 load_current_servers() {
   local status server marker_check
@@ -2416,6 +2498,50 @@ load_current_servers() {
       | .key
     ' "$CONFIG_FILE")
   fi
+}
+
+server_selection_state() {
+  local server="$1"
+  if array_has "$server" ${ENABLED[@]+"${ENABLED[@]}"}; then
+    printf 'enabled\n'
+  elif array_has "$server" ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; then
+    printf 'suppressed\n'
+  else
+    printf 'absent\n'
+  fi
+}
+
+current_server_selection_state() {
+  local server="$1"
+  if array_has "$server" ${CURRENT[@]+"${CURRENT[@]}"}; then
+    printf 'enabled\n'
+  elif array_has "$server" ${CURRENT_SUPPRESSED[@]+"${CURRENT_SUPPRESSED[@]}"}; then
+    printf 'suppressed\n'
+  else
+    printf 'absent\n'
+  fi
+}
+
+prepare_server_patch() {
+  local server current_state desired_state
+  local seen=" "
+  PATCH_REMOVE=()
+  PATCH_RENDER=()
+  for server in \
+    ${CURRENT[@]+"${CURRENT[@]}"} \
+    ${CURRENT_SUPPRESSED[@]+"${CURRENT_SUPPRESSED[@]}"} \
+    ${ENABLED[@]+"${ENABLED[@]}"} \
+    ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
+    case "$seen" in *" $server "*) continue ;; esac
+    seen="${seen}${server} "
+    current_state="$(current_server_selection_state "$server")"
+    desired_state="$(server_selection_state "$server")"
+    [ "$current_state" = "$desired_state" ] && continue
+    [ "$current_state" = "absent" ] || PATCH_REMOVE+=("$server")
+    if [ "$desired_state" != "absent" ]; then
+      PATCH_RENDER+=("$server")
+    fi
+  done
 }
 
 CONFLICTS=()
@@ -2920,6 +3046,46 @@ build_desired_json() {
   done
 }
 
+build_patch_json() {
+  local desired="$1" server entry next
+  printf '{}\n' > "$desired"
+  for server in ${PATCH_RENDER[@]+"${PATCH_RENDER[@]}"}; do
+    make_temp
+    entry="$TEMP_RESULT"
+    make_json_entry "$server" "$entry"
+    make_temp
+    next="$TEMP_RESULT"
+    jq --arg server "$server" --slurpfile entry "$entry" \
+      '. + {($server): $entry[0]}' "$desired" > "$next"
+    mv "$next" "$desired"
+  done
+}
+
+if [ "$COMMAND" = "server-preflight" ]; then
+  validate_id "server name" "$ENTITY_NAME"
+  definition="$(resolved_effective_server "$ENTITY_NAME" 2>/dev/null)" ||
+    die "unknown server '$ENTITY_NAME'"
+  validate_effective_server "$ENTITY_NAME" "$definition"
+  make_temp
+  preflight_entry="$TEMP_RESULT"
+  # Exercise the exact target renderer and Secret resolution path without
+  # printing or installing the generated entry. The mode-0600 temporary file
+  # is removed by the normal mcpctl cleanup trap.
+  make_json_entry "$ENTITY_NAME" "$preflight_entry"
+  if [ "$JSON_OUTPUT" -eq 1 ]; then
+    jq -n --arg name "$ENTITY_NAME" --arg target "$TARGET" '{
+      schema: 1,
+      name: $name,
+      target: $target,
+      ready: true,
+      configuration: "renderable"
+    }'
+  else
+    ok "server '$ENTITY_NAME' is renderable for $TARGET; required Secret references are available"
+  fi
+  exit 0
+fi
+
 write_toml_map_table() {
   local server="$1" table="$2" map_file="$3" output="$4"
   local encoded_key encoded_value key value
@@ -2969,10 +3135,64 @@ write_codex_common_options() {
       >> "$output"
 }
 
-build_codex_block() {
-  local output="$1" server definition transport url command args value
-  local disabled_entry
+append_codex_server() {
+  local server="$1" disabled_entry="$2" output="$3"
+  local definition transport url command args value
   local resolved_command resolved_environment resolved_headers
+  definition="$(resolved_effective_server "$server")"
+  transport="$(printf '%s' "$definition" | jq -r '.transport')"
+  printf '\n[mcp_servers.%s]\n' "$server" >> "$output"
+  if [ "$transport" = "stdio" ]; then
+    make_temp
+    resolved_command="$TEMP_RESULT"
+    build_resolved_command "$server" "$definition" "$resolved_command"
+    command="$(jq -r '.[0]' "$resolved_command")"
+    args="$(jq -c '.[1:]' "$resolved_command")"
+    printf 'command = %s\n' "$(toml_quote "$command")" >> "$output"
+    printf 'args = %s\n' "$args" >> "$output"
+    value="$(printf '%s' "$definition" | jq -r '.cwd // empty')"
+    [ -z "$value" ] ||
+      printf 'cwd = %s\n' "$(toml_quote "$value")" >> "$output"
+    if [ "$(printf '%s' "$definition" | jq -r '(.env_vars // []) | length')" \
+      -gt 0 ]; then
+      value="$(printf '%s' "$definition" | jq -r '
+        (.env_vars // [])
+        | map(
+            if type == "string" then
+              @json
+            else
+              "{ name = " + (.name | @json)
+              + ", source = " + ((.source // "local") | @json) + " }"
+            end
+          )
+        | "[" + join(", ") + "]"
+      ')"
+      printf 'env_vars = %s\n' "$value" >> "$output"
+    fi
+    [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
+    write_codex_common_options "$definition" "$output"
+    make_temp
+    resolved_environment="$TEMP_RESULT"
+    build_resolved_map \
+      "$server" "$definition" "environment" "$resolved_environment"
+    write_toml_map_table \
+      "$server" "env" "$resolved_environment" "$output"
+    return 0
+  fi
+
+  url="$(printf '%s' "$definition" | jq -r '.url')"
+  printf 'url = %s\n' "$(toml_quote "$url")" >> "$output"
+  [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
+  write_codex_common_options "$definition" "$output"
+  make_temp
+  resolved_headers="$TEMP_RESULT"
+  build_resolved_headers "$server" "$definition" "$resolved_headers"
+  write_toml_map_table \
+    "$server" "http_headers" "$resolved_headers" "$output"
+}
+
+build_codex_block() {
+  local output="$1" server disabled_entry
   : > "$output"
   if [ ${#ENABLED[@]} -eq 0 ] && [ ${#SUPPRESSED[@]} -eq 0 ]; then
     return 0
@@ -2984,62 +3204,25 @@ build_codex_block() {
     ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
     disabled_entry=0
     array_has "$server" ${SUPPRESSED[@]+"${SUPPRESSED[@]}"} && disabled_entry=1
-    definition="$(resolved_effective_server "$server")"
-    transport="$(printf '%s' "$definition" | jq -r '.transport')"
-    printf '\n[mcp_servers.%s]\n' "$server" >> "$output"
-    if [ "$transport" = "stdio" ]; then
-      make_temp
-      resolved_command="$TEMP_RESULT"
-      build_resolved_command "$server" "$definition" "$resolved_command"
-      command="$(jq -r '.[0]' "$resolved_command")"
-      args="$(jq -c '.[1:]' "$resolved_command")"
-      printf 'command = %s\n' "$(toml_quote "$command")" >> "$output"
-      printf 'args = %s\n' "$args" >> "$output"
-      value="$(printf '%s' "$definition" | jq -r '.cwd // empty')"
-      [ -z "$value" ] ||
-        printf 'cwd = %s\n' "$(toml_quote "$value")" >> "$output"
-      if [ "$(printf '%s' "$definition" | jq -r '(.env_vars // []) | length')" \
-        -gt 0 ]; then
-        value="$(printf '%s' "$definition" | jq -r '
-          (.env_vars // [])
-          | map(
-              if type == "string" then
-                @json
-              else
-                "{ name = " + (.name | @json)
-                + ", source = " + ((.source // "local") | @json) + " }"
-              end
-            )
-          | "[" + join(", ") + "]"
-        ')"
-        printf 'env_vars = %s\n' "$value" >> "$output"
-      fi
-      [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
-      write_codex_common_options "$definition" "$output"
-      make_temp
-      resolved_environment="$TEMP_RESULT"
-      build_resolved_map \
-        "$server" "$definition" "environment" "$resolved_environment"
-      write_toml_map_table \
-        "$server" "env" "$resolved_environment" "$output"
-      continue
-    fi
-
-    url="$(printf '%s' "$definition" | jq -r '.url')"
-    printf 'url = %s\n' "$(toml_quote "$url")" >> "$output"
-    [ "$disabled_entry" -eq 0 ] || printf 'enabled = false\n' >> "$output"
-    write_codex_common_options "$definition" "$output"
-    make_temp
-    resolved_headers="$TEMP_RESULT"
-    build_resolved_headers "$server" "$definition" "$resolved_headers"
-    write_toml_map_table \
-      "$server" "http_headers" "$resolved_headers" "$output"
+    append_codex_server "$server" "$disabled_entry" "$output"
   done
   printf '%s\n' "$CODEX_END" >> "$output"
 }
 
 STATE_SELECTION_MODE="profile"
 STATE_BASE_PROFILE=""
+STATE_BASE_SERVERS_JSON='[]'
+
+profile_servers_json() {
+  local profile="$1"
+  (
+    PROFILE="$profile"
+    CLI_ENABLE=()
+    CLI_DISABLE=()
+    resolve_profile
+    json_array_from_values ${ENABLED[@]+"${ENABLED[@]}"}
+  )
+}
 
 validate_state_file() {
   [ ! -L "$STATE_FILE" ] || die "refusing to replace symlink $STATE_FILE"
@@ -3076,6 +3259,7 @@ update_state() {
      --arg config "$CONFIG_FILE" \
      --arg selection_mode "$STATE_SELECTION_MODE" \
      --arg base_profile "$STATE_BASE_PROFILE" \
+     --argjson base_servers "$STATE_BASE_SERVERS_JSON" \
      --argjson servers "$server_json" '
     .schema = 1
     | .targets = (.targets // {})
@@ -3087,7 +3271,8 @@ update_state() {
       + if $selection_mode == "manual" then
           {
             selection_mode: "manual",
-            base_profile: $base_profile
+            base_profile: $base_profile,
+            base_servers: $base_servers
           }
         else
           {}
@@ -3095,6 +3280,37 @@ update_state() {
   ' "$input" > "$output"
   chmod 600 "$output"
   mv "$output" "$STATE_FILE"
+}
+
+emit_updated_selection_json() {
+  local servers_json suppressed_json base_profile_json
+  servers_json="$(json_array_from_values ${ENABLED[@]+"${ENABLED[@]}"})"
+  suppressed_json="$(json_array_from_values ${SUPPRESSED[@]+"${SUPPRESSED[@]}"})"
+  if [ -n "$STATE_BASE_PROFILE" ]; then
+    base_profile_json="$(printf '%s' "$STATE_BASE_PROFILE" | jq -R '.')"
+  else
+    base_profile_json='null'
+  fi
+  jq -n --arg target "$TARGET" \
+    --arg config "$CONFIG_FILE" \
+    --argjson base_profile "$base_profile_json" \
+    --argjson base_servers "$STATE_BASE_SERVERS_JSON" \
+    --argjson servers "$servers_json" \
+    --argjson suppressed "$suppressed_json" '{
+      schema: 1,
+      target: $target,
+      config: $config,
+      selection_mode: "manual",
+      profile: "custom",
+      base_profile: $base_profile,
+      base_servers: $base_servers,
+      servers: $servers,
+      expected_servers: $servers,
+      suppressed_servers: $suppressed,
+      expected_suppressed_servers: $suppressed,
+      drift: false,
+      healthy: true
+    }'
 }
 
 apply_json_target() {
@@ -3147,6 +3363,66 @@ apply_json_target() {
   mv "$output" "$CONFIG_FILE"
 }
 
+apply_json_target_patch() {
+  local input desired removals output config_dir force_json root_key
+  config_dir="$(dirname "$CONFIG_FILE")"
+  mkdir -p "$config_dir"
+  [ ! -L "$CONFIG_FILE" ] || die "refusing to replace symlink $CONFIG_FILE"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    input="$CONFIG_FILE"
+    jq -e 'type == "object"' "$input" >/dev/null 2>&1 ||
+      die "$CONFIG_FILE is not a valid JSON object; it was left unchanged"
+  else
+    make_temp
+    input="$TEMP_RESULT"
+    printf '{}\n' > "$input"
+  fi
+
+  make_temp
+  desired="$TEMP_RESULT"
+  build_patch_json "$desired"
+  removals="$(json_array_from_values ${PATCH_REMOVE[@]+"${PATCH_REMOVE[@]}"})"
+  make_temp_near "$CONFIG_FILE"
+  output="$TEMP_RESULT"
+  force_json="$FORCE"
+
+  if [ "$TARGET" = "claude" ]; then
+    root_key="mcpServers"
+  else
+    root_key="mcp"
+  fi
+
+  jq --arg root "$root_key" \
+     --arg manager "$MANAGED_BY" \
+     --argjson force "$force_json" \
+     --argjson removals "$removals" \
+     --slurpfile desired "$desired" '
+    .[$root] = (.[$root] // {})
+    | reduce $removals[] as $key (.;
+        if ((.[$root][$key] | type) == "object"
+            and (.[$root][$key]._managed_by // "") == $manager)
+        then del(.[$root][$key]) else . end
+      )
+    | reduce ($desired[0] | keys[]) as $key (.;
+        if $force == 1 then del(.[$root][$key]) else . end
+      )
+    | .[$root] += $desired[0]
+    | if (.[$root] | length) == 0 then del(.[$root]) else . end
+  ' "$input" > "$output"
+  chmod 600 "$output"
+  mv "$output" "$CONFIG_FILE"
+}
+
+extract_owned_codex_body() {
+  local input="$1" output="$2"
+  awk -v begin="$CODEX_BEGIN" -v end="$CODEX_END" '
+    $0 == begin { in_owned = 1; next }
+    $0 == end && in_owned { in_owned = 0; next }
+    in_owned { print }
+  ' "$input" > "$output"
+}
+
 apply_codex_target() {
   local input stripped selected stripped_forced block output config_dir
   config_dir="$(dirname "$CONFIG_FILE")"
@@ -3188,11 +3464,164 @@ apply_codex_target() {
   mv "$output" "$CONFIG_FILE"
 }
 
+apply_codex_target_patch() {
+  local input stripped selected stripped_forced body retained block output
+  local config_dir server disabled_entry
+  config_dir="$(dirname "$CONFIG_FILE")"
+  mkdir -p "$config_dir"
+  [ ! -L "$CONFIG_FILE" ] || die "refusing to replace symlink $CONFIG_FILE"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    input="$CONFIG_FILE"
+  else
+    make_temp
+    input="$TEMP_RESULT"
+    printf '# Codex configuration created by mcpctl.\n' > "$input"
+  fi
+
+  make_temp
+  stripped="$TEMP_RESULT"
+  strip_owned_codex_block "$input" "$stripped" ||
+    die "$CONFIG_FILE has an unclosed $CODEX_BEGIN block"
+
+  if [ "$FORCE" -eq 1 ] && [ ${#CONFLICTS[@]} -gt 0 ]; then
+    selected="${CONFLICTS[*]}"
+    make_temp
+    stripped_forced="$TEMP_RESULT"
+    strip_selected_codex_blocks "$stripped" "$stripped_forced" "$selected"
+    stripped="$stripped_forced"
+  fi
+
+  make_temp
+  body="$TEMP_RESULT"
+  extract_owned_codex_body "$input" "$body"
+  make_temp
+  retained="$TEMP_RESULT"
+  if [ ${#PATCH_REMOVE[@]} -gt 0 ]; then
+    selected="${PATCH_REMOVE[*]}"
+    strip_selected_codex_blocks "$body" "$retained" "$selected"
+  else
+    cat "$body" > "$retained"
+  fi
+
+  make_temp
+  block="$TEMP_RESULT"
+  : > "$block"
+  if [ ${#ENABLED[@]} -gt 0 ] || [ ${#SUPPRESSED[@]} -gt 0 ]; then
+    printf '\n%s\n' "$CODEX_BEGIN" >> "$block"
+    cat "$retained" >> "$block"
+    for server in ${PATCH_RENDER[@]+"${PATCH_RENDER[@]}"}; do
+      disabled_entry=0
+      array_has "$server" ${SUPPRESSED[@]+"${SUPPRESSED[@]}"} && disabled_entry=1
+      append_codex_server "$server" "$disabled_entry" "$block"
+    done
+    printf '%s\n' "$CODEX_END" >> "$block"
+  fi
+
+  make_temp_near "$CONFIG_FILE"
+  output="$TEMP_RESULT"
+  {
+    cat "$stripped"
+    cat "$block"
+  } > "$output"
+  chmod 600 "$output"
+  mv "$output" "$CONFIG_FILE"
+}
+
+if [ "$COMMAND" = "profile-save" ]; then
+  validate_id "profile name" "$ENTITY_NAME"
+  load_current_servers
+  path="$(profile_path "$ENTITY_NAME")"
+  if { [ -e "$path" ] || [ -L "$path" ]; } && [ "$FORCE" -ne 1 ]; then
+    die "profile '$ENTITY_NAME' already exists at $path; use --force only to update this target override"
+  fi
+
+  current_json="$(json_array_from_values ${CURRENT[@]+"${CURRENT[@]}"})"
+  compatible_json="$({
+    while IFS= read -r server; do
+      [ -n "$server" ] || continue
+      definition="$(resolved_effective_server "$server")"
+      if printf '%s' "$definition" | jq -e --arg target "$TARGET" '
+        ((.supported_targets // []) | length) == 0
+        or ((.supported_targets // []) | index($target)) != null
+      ' >/dev/null; then
+        printf '%s\n' "$server"
+      fi
+    done < <(jq -r '.servers | keys[]' "$CATALOG_FILE")
+  } | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
+  disabled_json="$(jq -cn \
+    --argjson compatible "$compatible_json" \
+    --argjson current "$current_json" \
+    '$compatible - $current')"
+
+  make_temp_near "$path"
+  output="$TEMP_RESULT"
+  if [ -f "$path" ]; then
+    validate_profile_file "$ENTITY_NAME" "$path"
+    jq \
+      --arg target "$TARGET" \
+      --argjson enabled "$current_json" \
+      --argjson disabled "$disabled_json" '
+        .target_overrides = (.target_overrides // {})
+        | .target_overrides[$target] = {
+            enable: $enabled,
+            disable: $disabled
+          }
+      ' "$path" > "$output"
+  else
+    parent_profile=""
+    if [ -f "$STATE_FILE" ]; then
+      parent_profile="$(jq -r --arg target "$TARGET" '
+        .targets[$target] as $state
+        | if $state == null then ""
+          elif ($state.base_profile // "") != "" then $state.base_profile
+          elif ($state.profile // "") != "custom" then ($state.profile // "")
+          else ""
+          end
+      ' "$STATE_FILE" 2>/dev/null || true)"
+    fi
+    [ -n "$parent_profile" ] || parent_profile="base"
+    validate_id "profile name" "$parent_profile"
+    [ -f "$(profile_path "$parent_profile")" ] ||
+      die "cannot save '$ENTITY_NAME': base profile '$parent_profile' is unavailable"
+    jq -n \
+      --arg name "$ENTITY_NAME" \
+      --arg description "Saved from the current $TARGET MCP selection" \
+      --arg parent "$parent_profile" \
+      --arg target "$TARGET" \
+      --argjson enabled "$current_json" \
+      --argjson disabled "$disabled_json" '{
+        schema: 1,
+        name: $name,
+        description: $description,
+        extends: [$parent],
+        enable: [],
+        disable: [],
+        target_overrides: {
+          ($target): {
+            enable: $enabled,
+            disable: $disabled
+          }
+        }
+      }' > "$output"
+  fi
+  validate_profile_file "$ENTITY_NAME" "$output"
+  chmod 600 "$output"
+  mv "$output" "$path"
+  ok "saved current $TARGET MCP selection as profile '$ENTITY_NAME'"
+  exit 0
+fi
+
 if [ "$COMMAND" = "server-enable" ] ||
-   [ "$COMMAND" = "server-disable" ]; then
-  validate_id "server name" "$ENTITY_NAME"
-  resolved_effective_server "$ENTITY_NAME" >/dev/null 2>&1 ||
-    die "unknown server '$ENTITY_NAME'"
+   [ "$COMMAND" = "server-disable" ] ||
+   [ "$COMMAND" = "server-set" ]; then
+  if [ "$COMMAND" != "server-set" ]; then
+    validate_id "server name" "$ENTITY_NAME"
+    resolved_effective_server "$ENTITY_NAME" >/dev/null 2>&1 ||
+      die "unknown server '$ENTITY_NAME'"
+  elif [ ${#CLI_ENABLE[@]} -eq 0 ] && [ ${#CLI_DISABLE[@]} -eq 0 ]; then
+    die "server set requires at least one --enable or --disable"
+  fi
   load_current_servers
 
   if [ "$COMMAND" = "server-enable" ] &&
@@ -3206,12 +3635,21 @@ if [ "$COMMAND" = "server-enable" ] ||
     exit 0
   fi
 
-  ENABLED=(${CURRENT[@]+"${CURRENT[@]}"})
   if [ "$COMMAND" = "server-enable" ]; then
-    selected_group="$(effective_server "$ENTITY_NAME" |
+    CLI_ENABLE+=("$ENTITY_NAME")
+  elif [ "$COMMAND" = "server-disable" ]; then
+    CLI_DISABLE+=("$ENTITY_NAME")
+  fi
+
+  ENABLED=(${CURRENT[@]+"${CURRENT[@]}"})
+  for selected_server in ${CLI_ENABLE[@]+"${CLI_ENABLE[@]}"}; do
+    validate_id "server name" "$selected_server"
+    resolved_effective_server "$selected_server" >/dev/null 2>&1 ||
+      die "unknown server '$selected_server'"
+    selected_group="$(effective_server "$selected_server" |
       jq -r '.variant_group // empty')"
     if [ -n "$selected_group" ]; then
-      for server in ${CURRENT[@]+"${CURRENT[@]}"}; do
+      for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
         current_group="$(effective_server "$server" 2>/dev/null |
           jq -r '.variant_group // empty' 2>/dev/null || true)"
         if [ "$current_group" = "$selected_group" ]; then
@@ -3219,14 +3657,20 @@ if [ "$COMMAND" = "server-enable" ] ||
         fi
       done
     fi
-    enable_server "$ENTITY_NAME"
-  else
-    disable_server "$ENTITY_NAME"
-  fi
+    enable_server "$selected_server"
+  done
+  for selected_server in ${CLI_DISABLE[@]+"${CLI_DISABLE[@]}"}; do
+    validate_id "server name" "$selected_server"
+    resolved_effective_server "$selected_server" >/dev/null 2>&1 ||
+      die "unknown server '$selected_server'"
+    disable_server "$selected_server"
+  done
 
   resolve_suppressed_servers
+  prepare_server_patch
 
   STATE_BASE_PROFILE=""
+  STATE_BASE_SERVERS_JSON='[]'
   if [ -f "$STATE_FILE" ]; then
     STATE_BASE_PROFILE="$(jq -r --arg target "$TARGET" '
       .targets[$target] as $state
@@ -3236,18 +3680,39 @@ if [ "$COMMAND" = "server-enable" ] ||
         else ""
         end
     ' "$STATE_FILE" 2>/dev/null || true)"
+    previous_selection_mode="$(jq -r --arg target "$TARGET" \
+      '.targets[$target].selection_mode // "profile"' "$STATE_FILE" 2>/dev/null || true)"
+    if [ "$previous_selection_mode" = "manual" ] &&
+       jq -e --arg target "$TARGET" \
+         '.targets[$target].base_servers | type == "array"' \
+         "$STATE_FILE" >/dev/null 2>&1; then
+      STATE_BASE_SERVERS_JSON="$(jq -c --arg target "$TARGET" \
+        '.targets[$target].base_servers' "$STATE_FILE")"
+    elif [ "$previous_selection_mode" != "manual" ]; then
+      STATE_BASE_SERVERS_JSON="$(jq -c --arg target "$TARGET" \
+        '.targets[$target].servers // []' "$STATE_FILE" 2>/dev/null || printf '[]')"
+    elif [ -n "$STATE_BASE_PROFILE" ] &&
+         [ -f "$(profile_path "$STATE_BASE_PROFILE")" ]; then
+      STATE_BASE_SERVERS_JSON="$(profile_servers_json "$STATE_BASE_PROFILE")"
+    fi
   fi
   PROFILE="custom"
   STATE_SELECTION_MODE="manual"
 
-  for server in ${ENABLED[@]+"${ENABLED[@]}"}; do
+  validation_servers=(${ENABLED[@]+"${ENABLED[@]}"})
+  if [ "$JSON_OUTPUT" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    validation_servers=(${PATCH_RENDER[@]+"${PATCH_RENDER[@]}"})
+  fi
+  for server in ${validation_servers[@]+"${validation_servers[@]}"}; do
     definition="$(resolved_effective_server "$server" 2>/dev/null)" ||
       die "currently managed server '$server' is no longer in the catalog; apply a profile before editing the selection"
     validate_effective_server "$server" "$definition"
   done
   validate_enabled_variant_groups
   detect_conflicts
-  print_plan
+  if [ "$JSON_OUTPUT" -eq 0 ]; then
+    print_plan
+  fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
@@ -3257,14 +3722,20 @@ if [ "$COMMAND" = "server-enable" ] ||
   fi
   validate_state_file
   if [ "$TARGET" = "codex" ]; then
-    apply_codex_target
+    apply_codex_target_patch
   else
-    apply_json_target
+    apply_json_target_patch
   fi
   update_state
-  action_word="enabled"
-  [ "$COMMAND" = "server-enable" ] || action_word="disabled"
-  ok "${action_word} server '$ENTITY_NAME' for $TARGET"
+  if [ "$JSON_OUTPUT" -eq 1 ]; then
+    emit_updated_selection_json
+  elif [ "$COMMAND" = "server-set" ]; then
+    ok "applied MCP server selection changes for $TARGET"
+  else
+    action_word="enabled"
+    [ "$COMMAND" = "server-enable" ] || action_word="disabled"
+    ok "${action_word} server '$ENTITY_NAME' for $TARGET"
+  fi
   exit 0
 fi
 
@@ -3285,7 +3756,23 @@ if [ "$COMMAND" = "current" ]; then
          "$STATE_FILE" >/dev/null 2>&1; then
       current_selection_mode="$(jq -r --arg target "$TARGET" \
         '.targets[$target].selection_mode // "profile"' "$STATE_FILE")"
+      base_servers_json='[]'
       if [ "$current_selection_mode" = "manual" ]; then
+        base_profile="$(jq -r --arg target "$TARGET" \
+          '.targets[$target].base_profile // empty' "$STATE_FILE")"
+        if jq -e --arg target "$TARGET" \
+          '.targets[$target].base_servers | type == "array"' \
+          "$STATE_FILE" >/dev/null 2>&1; then
+          base_servers_json="$(jq -c --arg target "$TARGET" \
+            '.targets[$target].base_servers' "$STATE_FILE")"
+        elif [ -n "$base_profile" ] && [ -f "$(profile_path "$base_profile")" ]; then
+          PROFILE="$base_profile"
+          resolve_profile
+          base_servers_json="$(
+            for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '%s\n' "$server"; done |
+              jq -Rsc 'split("\n") | map(select(length > 0))'
+          )"
+        fi
         expected_servers_json="$(jq -c --arg target "$TARGET" \
           '.targets[$target].servers // []' "$STATE_FILE")"
         ENABLED=()
@@ -3302,6 +3789,7 @@ if [ "$COMMAND" = "current" ]; then
           for server in ${ENABLED[@]+"${ENABLED[@]}"}; do printf '%s\n' "$server"; done |
             jq -Rsc 'split("\n") | map(select(length > 0))'
         )"
+        base_servers_json="$expected_servers_json"
       fi
       expected_suppressed_json="$(
         for server in ${SUPPRESSED[@]+"${SUPPRESSED[@]}"}; do
@@ -3311,6 +3799,7 @@ if [ "$COMMAND" = "current" ]; then
       jq --arg target "$TARGET" \
          --arg config "$CONFIG_FILE" \
          --argjson servers "$current_servers_json" \
+         --argjson base_servers "$base_servers_json" \
          --argjson expected "$expected_servers_json" \
          --argjson suppressed "$current_suppressed_json" \
          --argjson expected_suppressed "$expected_suppressed_json" '
@@ -3322,6 +3811,7 @@ if [ "$COMMAND" = "current" ]; then
             selection_mode: ($state.selection_mode // "profile"),
             profile: ($state.profile // null),
             base_profile: ($state.base_profile // null),
+            base_servers: $base_servers,
             servers: $servers,
             expected_servers: $expected,
             suppressed_servers: $suppressed,

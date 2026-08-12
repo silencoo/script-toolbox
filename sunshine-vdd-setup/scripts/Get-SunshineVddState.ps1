@@ -64,6 +64,11 @@ function Get-VddXmlSummary {
         GlobalRefreshRates = $rates
         Resolutions        = $resolutions
         HardwareCursor     = if ($null -ne $xml.vdd_settings.options.HardwareCursor) { [string]$xml.vdd_settings.options.HardwareCursor } else { $null }
+        SDR10bit           = if ($null -ne $xml.vdd_settings.options.SDR10bit) { [string]$xml.vdd_settings.options.SDR10bit } else { $null }
+        HDRPlus            = if ($null -ne $xml.vdd_settings.options.HDRPlus) { [string]$xml.vdd_settings.options.HDRPlus } else { $null }
+        CustomEdid         = if ($null -ne $xml.vdd_settings.options.CustomEdid) { [string]$xml.vdd_settings.options.CustomEdid } else { $null }
+        PreventSpoof       = if ($null -ne $xml.vdd_settings.options.PreventSpoof) { [string]$xml.vdd_settings.options.PreventSpoof } else { $null }
+        EdidCeaOverride    = if ($null -ne $xml.vdd_settings.options.EdidCeaOverride) { [string]$xml.vdd_settings.options.EdidCeaOverride } else { $null }
         Logging            = if ($null -ne $xml.vdd_settings.options.logging) { [string]$xml.vdd_settings.options.logging } else { $null }
         DebugLogging       = if ($null -ne $xml.vdd_settings.options.debuglogging) { [string]$xml.vdd_settings.options.debuglogging } else { $null }
     }
@@ -92,18 +97,26 @@ function Invoke-CapturedCommand {
     }
 }
 
-function Get-LatestSunshineDisplayInventory {
+function Read-SharedTextFile {
     param([Parameter(Mandatory)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     try {
         $reader = [IO.StreamReader]::new($stream)
-        try { $lines = @($reader.ReadToEnd() -split '\r?\n') } finally { $reader.Dispose() }
+        try { $reader.ReadToEnd() } finally { $reader.Dispose() }
     }
     finally {
         $stream.Dispose()
     }
+}
+
+function Get-LatestSunshineDisplayInventory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $content = Read-SharedTextFile -Path $Path
+    if ($null -eq $content) { return $null }
+    $lines = @($content -split '\r?\n')
     $start = -1
     for ($index = $lines.Length - 1; $index -ge 0; $index--) {
         if ($lines[$index] -match 'Currently available display devices:') {
@@ -131,8 +144,138 @@ function Get-LatestSunshineDisplayInventory {
     try { $builder.ToString() | ConvertFrom-Json -ErrorAction Stop } catch { $null }
 }
 
+function Get-SunshineStreamingState {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [object[]]$Processes = @()
+    )
+
+    if ($Processes.Count -eq 0) {
+        return [pscustomobject][ordered]@{
+            Status                 = 'Inactive'
+            EstimatedActiveClients = 0
+            Detection              = 'SunshineProcessNotRunning'
+            LogPath                = $Path
+            LastRelevantEvents     = @()
+        }
+    }
+
+    $content = Read-SharedTextFile -Path $Path
+    if ($null -eq $content) {
+        return [pscustomobject][ordered]@{
+            Status                 = 'Unknown'
+            EstimatedActiveClients = $null
+            Detection              = 'SunshineLogUnavailable'
+            LogPath                = $Path
+            LastRelevantEvents     = @()
+        }
+    }
+
+    $lines = @($content -split '\r?\n')
+    $startupIndex = -1
+    for ($index = $lines.Count - 1; $index -ge 0; $index--) {
+        if ($lines[$index] -match '(?i)Sunshine version:') {
+            $startupIndex = $index
+            break
+        }
+    }
+    if ($startupIndex -lt 0) {
+        return [pscustomobject][ordered]@{
+            Status                 = 'Unknown'
+            EstimatedActiveClients = $null
+            Detection              = 'CurrentSunshineLogEpochNotFound'
+            LogPath                = $Path
+            LastRelevantEvents     = @($lines | Where-Object { $_ -match '(?i)CLIENT (CONNECTED|DISCONNECTED)|New streaming session started' } | Select-Object -Last 8)
+        }
+    }
+
+    $events = @($lines[$startupIndex..($lines.Count - 1)] | Where-Object {
+        $_ -match '(?i)CLIENT (CONNECTED|DISCONNECTED)|New streaming session started'
+    })
+    $activeClients = 0
+    $lastConnectIndex = -1
+    $lastDisconnectIndex = -1
+    $lastStartIndex = -1
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        $event = $events[$index]
+        if ($event -match '(?i)CLIENT CONNECTED') {
+            $activeClients++
+            $lastConnectIndex = $index
+        }
+        elseif ($event -match '(?i)CLIENT DISCONNECTED') {
+            if ($activeClients -gt 0) { $activeClients-- }
+            $lastDisconnectIndex = $index
+        }
+        elseif ($event -match '(?i)New streaming session started') {
+            $lastStartIndex = $index
+        }
+    }
+
+    $status = if ($activeClients -gt 0) {
+        'Active'
+    }
+    elseif ($lastStartIndex -gt $lastDisconnectIndex -and $lastStartIndex -gt $lastConnectIndex) {
+        # A session can change display configuration before CLIENT CONNECTED appears.
+        'Unknown'
+    }
+    else {
+        'Inactive'
+    }
+    [pscustomobject][ordered]@{
+        Status                 = $status
+        EstimatedActiveClients = $activeClients
+        Detection              = 'CurrentSunshineLogEpoch'
+        LogPath                = $Path
+        LastRelevantEvents     = @($events | Select-Object -Last 8)
+    }
+}
+
+function Get-PnpDisplayDeviceInventory {
+    try {
+        $devices = @(Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPClass = 'Display'" -ErrorAction Stop)
+        foreach ($device in $devices) {
+            $identityText = '{0} {1} {2} {3}' -f $device.PNPDeviceID, $device.Name, $device.Manufacturer, $device.Service
+            [pscustomobject][ordered]@{
+                InstanceId             = [string]$device.PNPDeviceID
+                Name                   = [string]$device.Name
+                Manufacturer           = [string]$device.Manufacturer
+                Service                = [string]$device.Service
+                Status                 = [string]$device.Status
+                ConfigManagerErrorCode = [int]$device.ConfigManagerErrorCode
+                IsMttVdd               = $identityText -match '(?i)MTTVDD|MikeTheTech|Virtual Display Driver|IddSampleDriver Device HDR'
+                IsOtherVirtual         = ($identityText -match '(?i)virtual|indirect|idd|parsec|spacedesk|meta|rustdesk') -and ($identityText -notmatch '(?i)MTTVDD|MikeTheTech|Virtual Display Driver|IddSampleDriver Device HDR')
+            }
+        }
+    }
+    catch {
+        [pscustomobject][ordered]@{
+            InstanceId             = $null
+            Name                   = $null
+            Manufacturer           = $null
+            Service                = $null
+            Status                 = 'InventoryFailed'
+            ConfigManagerErrorCode = $null
+            IsMttVdd               = $false
+            IsOtherVirtual         = $false
+            Error                  = $_.Exception.Message
+        }
+    }
+}
+
 $resolvedSunshineConfig = Find-SunshineConfig -RequestedPath $SunshineConfigPath
-$sunshineLogPath = Join-Path (Split-Path -Parent $resolvedSunshineConfig) 'sunshine.log'
+$sunshineConfigExists = Test-Path -LiteralPath $resolvedSunshineConfig
+$sunshineConfig = if ($sunshineConfigExists) { ConvertFrom-SunshineConfig -Path $resolvedSunshineConfig } else { $null }
+$configuredLogPath = if ($sunshineConfig -and $sunshineConfig.PSObject.Properties.Name -contains 'log_path') {
+    [Environment]::ExpandEnvironmentVariables([string]$sunshineConfig.log_path)
+}
+else { $null }
+$sunshineLogPath = if ($configuredLogPath) {
+    if ([IO.Path]::IsPathRooted($configuredLogPath)) { $configuredLogPath }
+    else { Join-Path (Split-Path -Parent $resolvedSunshineConfig) $configuredLogPath }
+}
+else {
+    Join-Path (Split-Path -Parent $resolvedSunshineConfig) 'sunshine.log'
+}
 $sunshineExeCandidates = @(
     (Join-Path $SunshineRoot 'sunshine.exe'),
     (Join-Path $SunshineRoot 'tools\sunshine.exe')
@@ -154,7 +297,9 @@ if (-not $service) {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$sunshineProcesses = @(Get-Process -Name 'sunshine' -ErrorAction SilentlyContinue | Select-Object Id, ProcessName)
 $pnp = Invoke-CapturedCommand -FilePath 'pnputil.exe' -ArgumentList @('/enum-devices', '/class', 'Display', '/drivers')
+$pnpStructured = @(Get-PnpDisplayDeviceInventory)
 $dxgi = if ($dxgiExe) {
     Invoke-CapturedCommand -FilePath $dxgiExe
 }
@@ -177,18 +322,21 @@ $state = [pscustomobject][ordered]@{
         Executable    = $sunshineExe
         Version       = if ($sunshineExe) { (Get-Item -LiteralPath $sunshineExe).VersionInfo.FileVersion } else { $null }
         ConfigPath    = $resolvedSunshineConfig
-        ConfigExists  = Test-Path -LiteralPath $resolvedSunshineConfig
-        Config        = if (Test-Path -LiteralPath $resolvedSunshineConfig) { ConvertFrom-SunshineConfig -Path $resolvedSunshineConfig } else { $null }
+        ConfigExists  = $sunshineConfigExists
+        Config        = $sunshineConfig
         LogPath       = $sunshineLogPath
         DisplayInventoryFromLog = @(Get-LatestSunshineDisplayInventory -Path $sunshineLogPath)
+        Streaming     = Get-SunshineStreamingState -Path $sunshineLogPath -Processes $sunshineProcesses
         ServiceName   = if ($service) { $service.Name } else { $null }
         ServiceStatus = if ($service) { [string]$service.Status } else { 'NotFound' }
-        Processes     = @(Get-Process -Name 'sunshine' -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime)
+        Processes     = $sunshineProcesses
         DxgiInfo      = $dxgi
     }
     Vdd = Get-VddXmlSummary -Path $VddConfigPath
     Displays = @(Get-VddDisplayInventory)
     PnpDisplayDevices = $pnp
+    PnpDisplayDevicesStructured = $pnpStructured
+    MttVddPnpDevices = @($pnpStructured | Where-Object IsMttVdd)
 }
 
 if ($AsObject) {

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { bashScriptCommand } from "../platform-command.mjs";
 
 import {
   backupStore,
@@ -40,11 +41,18 @@ const CREATE_TOKEN = "remote-test-create-token".padEnd(48, "C");
 
 async function run(command, arguments_, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, arguments_, {
+    const invocation = command === MCPCTL
+      ? bashScriptCommand(command, arguments_)
+      : { executable: command, args: arguments_ };
+    const requestedHome = options.env?.HOME;
+    const child = spawn(invocation.executable, invocation.args, {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        ...options.env
+        ...options.env,
+        ...(process.platform === "win32" && requestedHome
+          ? { HOME: requestedHome.replaceAll("\\", "/"), USERPROFILE: requestedHome }
+          : {})
       },
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
@@ -338,19 +346,28 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
     );
     assert.equal(localCiphertext.includes("remote-test-brave-secret"), false);
     assert.equal(localCiphertext.includes("remote-test-exa-secret"), false);
-    assert.equal((await stat(restoredConfig)).mode & 0o777, 0o600);
-    assert.equal(
-      (await stat(join(restoredStore, "secrets.remote.enc"))).mode & 0o777,
-      0o600
-    );
+    if (process.platform === "win32") {
+      assert.equal((await stat(restoredConfig)).isFile(), true);
+      assert.equal((await stat(join(restoredStore, "secrets.remote.enc"))).isFile(), true);
+    } else {
+      assert.equal((await stat(restoredConfig)).mode & 0o777, 0o600);
+      assert.equal(
+        (await stat(join(restoredStore, "secrets.remote.enc"))).mode & 0o777,
+        0o600
+      );
+    }
     assert.deepEqual(
       await readFile(join(restoredStore, "artifacts", artifactName)),
       artifactBytes
     );
-    assert.equal(
-      (await stat(join(restoredStore, "artifacts", artifactName))).mode & 0o777,
-      0o600
-    );
+    if (process.platform === "win32") {
+      assert.equal((await stat(join(restoredStore, "artifacts", artifactName))).isFile(), true);
+    } else {
+      assert.equal(
+        (await stat(join(restoredStore, "artifacts", artifactName))).mode & 0o777,
+        0o600
+      );
+    }
 
     const restoredConfiguration = JSON.parse(
       await readFile(restoredConfig, "utf8")

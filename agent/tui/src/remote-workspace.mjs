@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { platformConfigHome, platformDataHome } from "../../platform-paths.mjs";
 import {
   MCP_REMOTE_PROTOCOL,
   PROMPT_REMOTE_PROTOCOL,
@@ -118,7 +119,7 @@ export class RemoteWorkspaceError extends Error {
 }
 
 function defaultConfigPath() {
-  const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const configHome = platformConfigHome();
   return resolve(process.env.AGENTCTL_WORKSPACE_CONFIG ||
     join(configHome, "agentctl", "workspace-remote.json"));
 }
@@ -127,12 +128,9 @@ function defaultRuntimeRoot() {
   if (process.env.AGENTCTL_WORKSPACE_RUNTIME) {
     return resolve(process.env.AGENTCTL_WORKSPACE_RUNTIME);
   }
-  if (process.platform === "win32") {
-    return resolve(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-      "script-toolbox", "workspaces");
-  }
-  return resolve(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "agentctl", "workspaces");
+  return process.platform === "win32"
+    ? resolve(platformDataHome(), "script-toolbox", "workspaces")
+    : resolve(platformDataHome(), "agentctl", "workspaces");
 }
 
 function assertObject(value, label) {

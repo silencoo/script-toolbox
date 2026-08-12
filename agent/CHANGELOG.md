@@ -1,5 +1,38 @@
 # Changelog — agent/
 
+## 2026-08-12 — incremental MCP target switches
+
+- Expanded the platform contract beyond macOS. Linux CI is now named
+  explicitly and continues to run the complete agent suite. Windows CI now
+  exercises the portable Node backends, real Skills junction transactions,
+  Provider/Preset flows, TUI launch, and a Git Bash MCP apply using isolated
+  paths containing spaces and non-ASCII characters.
+- Added shared Windows-safe Bash-controller invocation and platform config,
+  state, and data path resolution. The TUI, Provider backend, and Preset
+  orchestrator now route Bash scripts through Git for Windows/MSYS2 Bash;
+  portable catalogs use roaming AppData and device state uses local AppData.
+  Bumped `agentctl` to 0.16.9 and `skillsctl` to 0.4.1.
+
+- Made TUI MCP enable/disable and staged batch writes incremental. `mcpctl
+  server set --json` now preserves unchanged owned entries, renders only
+  changed servers, and returns the final target state in the same process.
+  This avoids resolving unrelated Secret-backed MCPs and removes the TUI's
+  second `mcpctl current` subprocess.
+- Cached whole-catalog MCP host readiness for five minutes so the 30-second
+  local dashboard refresh does not repeatedly launch every doctor check.
+  Added explicit in-progress copy and regression coverage for direct JSON
+  state return, readiness caching, Codex suppression, and unchanged Secret
+  preservation.
+- Added four-client local Skill management to the TUI. Skills now have
+  Local/Workspace panes, search, enabled-only filtering, active-first sorting,
+  per-client usage badges, direct toggles, staged batch writes, Pack
+  save/update, encrypted Store backup, and target cycling across Codex, Claude
+  Code, OpenCode, and Pi.
+- Added rollback-protected `skillsctl skill set`, machine-readable final state,
+  safe JSON catalog metadata, and `skillsctl pack save`. Updating a saved Pack
+  replaces only the selected target override and preserves every other client.
+  Bumped `skillsctl` to 0.4.0 and `agentctl` to 0.16.8.
+
 ## 2026-08-11 — native compaction capabilities
 
 - Added the same local-only drift repair flow to Skills. In the Skills section,

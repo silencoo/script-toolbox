@@ -11,13 +11,15 @@
 | Client-requested resolution | `dd_resolution_option = auto` |
 | Fixed display refresh | `dd_refresh_rate_option = manual` and `dd_manual_refresh_rate = RATE` |
 | Client-requested refresh | `dd_refresh_rate_option = auto` |
+| Follow the client's HDR request | `dd_hdr_option = auto` |
+| Leave the Windows HDR state unmanaged | `dd_hdr_option = disabled` |
 | Restore idle topology | `dd_config_revert_on_disconnect = enabled` |
 
 Use `disabled` for a display-device option only when the user explicitly wants Sunshine not to manage that part.
 
 ## Stable and dynamic identifiers
 
-- MTT PnP instance IDs such as `ROOT\DISPLAY\0001` can change after reinstalling the driver.
+- MTT PnP instance IDs are discovered live and commonly look like `ROOT\MTTVDD\0000`; some releases/Windows enumerations may expose `ROOT\DISPLAY\0001`. They can change after reinstalling the driver.
 - GDI display names such as `\\.\DISPLAY19` can change after reloads and topology changes.
 - Sunshine's Windows `output_name` should use the stable device GUID reported by the installed Sunshine display inventory, for example `{...}`.
 - Re-inventory all identifiers after installing or reloading VDD. Never copy identifiers from a README or another host.
@@ -52,6 +54,19 @@ The example values are illustrative only. Generate the XML from the approved pla
 - Preserve unrelated XML options unless the plan changes them.
 - Keep normal and debug logging disabled after troubleshooting to prevent oversized logs.
 
+VDD color/EDID options are separate from Sunshine's HDR request handling:
+
+- `SDR10bit` and `HDRPlus` must not both be enabled.
+- `CustomEdid=true` requires `user_edid.bin` beside `vdd_settings.xml`.
+- `PreventSpoof` and `EdidCeaOverride` require custom EDID to be enabled.
+- Preserve these values unless the approved plan explicitly changes them. Do not enable Sunshine's HDR toggle delay unless a targeted HDR-color test requires the workaround.
+
+## Encoder adapter versus VDD GPU
+
+- Sunshine `adapter_name` chooses a capture/encoding adapter. Omit it to keep Sunshine's automatic selection unless live testing proves pinning is necessary.
+- VDD `<gpu><friendlyname>` chooses the render GPU used by the virtual display driver.
+- Treat these as independent choices on hybrid systems. `dxgi-info.exe` output is useful inventory, not proof of physical wiring.
+
 ## Sunshine input
 
 - `mouse = enabled` permits Moonlight mouse input.
@@ -63,9 +78,9 @@ The example values are illustrative only. Generate the XML from the approved pla
 Persisting a physical-only idle topology must:
 
 1. Run with no active Moonlight session.
-2. Confirm the chosen physical target is currently attached and primary, or explicitly activate it first.
-3. Save the pre-change topology.
-4. Keep only the approved physical display path(s) active using `SetDisplayConfig`.
+2. Confirm every chosen physical target is currently attached and that the selected set includes the current primary display.
+3. Save the pre-change native CCD paths and modes in an integrity-checked snapshot.
+4. Keep only the approved physical display path(s) active using virtual-mode-aware `SetDisplayConfig` calls when supported.
 5. Save the result to the Windows display database.
 6. Leave MTT VDD installed and started but detached from the desktop.
 
@@ -79,4 +94,4 @@ Create timestamped backups beside the original files or in an approved recovery 
 - `vdd_settings.xml.bak-<purpose>-<timestamp>`
 - `display-topology-before-<purpose>-<timestamp>.json`
 
-Report every path in the handoff.
+The topology JSON must contain serialized native paths and modes, not only a friendly inventory. Preview `Restore-DisplayTopology.ps1` before applying it; the restore script also snapshots the current state. Report every path in the handoff.

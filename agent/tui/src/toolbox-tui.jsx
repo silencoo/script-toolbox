@@ -5,6 +5,7 @@ import { createController } from "./controller.mjs";
 import {
   SECTIONS,
   PROVIDER_TARGETS,
+  SKILL_TARGETS,
   TARGETS,
   actionForKey,
   actionLabel,
@@ -14,7 +15,10 @@ import {
   componentSummary,
   componentTargetState,
   cycleTarget,
+  filterMcpServerEntries,
+  filterSkillEntries,
   mcpTargetComparison,
+  mcpServerEntries,
   moveSection,
   normalizeSection,
   otherTarget,
@@ -25,6 +29,8 @@ import {
   sectionDelta,
   selectionDelta,
   selectionWindow,
+  skillEntries,
+  skillTargetState,
   snippetEntries,
   targetLabel,
   targetReport,
@@ -74,7 +80,7 @@ Usage:
 Keys:
   [ / ] / Tab / Shift+Tab / Left / Right
                                     Switch section
-  t                                 Switch target (four clients in Providers)
+  t                                 Switch target (four clients in Providers / Skills)
   r                                 Refresh live status
   Up / Down                         Select previous / next list item
   p / a                             Plan / apply selected configuration
@@ -83,7 +89,8 @@ Keys:
   Agents: c / p / Enter unified Providers · x uninstall owned config
   Accounts: a/Enter switch · x delete saved account
   Providers: p plan · a apply · u upload · d download/merge · i incompatible
-  MCP: f                            Repair current local profile drift
+  MCP: l/w panes · / search · e/x filters · m batch · Space toggle
+  Skills: l/w panes · / search · e enabled · m batch · Space toggle
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -192,11 +199,14 @@ function SummaryRow({ name, summary }) {
 
 function TargetStatusRow({ state, selected }) {
   const count = state.items.length;
+  const selection = state.selection === "custom" && state.baseSelection
+    ? `custom · base ${state.baseSelection}`
+    : state.selection;
   return (
     <Box gap={1}>
       <TargetBadge target={state.target} selected={selected} />
       <Badge kind={state.summary.kind}>{state.summary.label.padEnd(11)}</Badge>
-      <Text color="white" bold>{state.selection}</Text>
+      <Text color="white" bold>{selection}</Text>
       <Text color="gray">· {count} {count === 1 ? "server" : "servers"}</Text>
     </Box>
   );
@@ -649,15 +659,150 @@ function CloudCatalog({ catalog, selected, target, component }) {
   );
 }
 
-function McpView({ snapshot, target, catalog, selected }) {
+function LocalMcpCatalog({
+  target,
+  catalog,
+  entries,
+  selectedName,
+  staged,
+  batchMode,
+  query,
+  filter,
+  grouped,
+  searching
+}) {
+  if (catalog.loading && catalog.items.length === 0) {
+    return <Text color="gray">Loading the local MCP catalog…</Text>;
+  }
+  if (catalog.error && catalog.items.length === 0) return <ErrorText value={catalog.error} />;
+  if (entries.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text color="gray">No local MCP servers match the current search or filter.</Text>
+        <Text color="gray">Press Esc while searching, or toggle e/x to return to all servers.</Text>
+      </Box>
+    );
+  }
+  const selectedIndex = Math.max(0, entries.findIndex((entry) => entry.name === selectedName));
+  const item = entries[selectedIndex];
+  const visible = selectionWindow(entries, selectedIndex, 9);
+  const activeCount = catalog.activeCount || 0;
+  const other = otherTarget(target);
+  const stagedMap = staged instanceof Map ? staged : new Map();
+  const selectedDesired = stagedMap.has(item.name) ? stagedMap.get(item.name) : item.enabled;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box gap={1} flexWrap="wrap">
+        <Text color={searching ? "black" : "cyan"} backgroundColor={searching ? "cyan" : undefined} bold>
+          {` / ${query || (searching ? "type to search" : "search")} `}
+        </Text>
+        <Text color={filter === "enabled" ? "black" : "green"} backgroundColor={filter === "enabled" ? "green" : undefined} bold>
+          {" e ENABLED "}
+        </Text>
+        <Text color={filter === "problems" ? "black" : "red"} backgroundColor={filter === "problems" ? "red" : undefined} bold>
+          {" x PROBLEMS "}
+        </Text>
+        <Text color={grouped ? "black" : "yellow"} backgroundColor={grouped ? "yellow" : undefined} bold>
+          {" g GROUP "}
+        </Text>
+        <Text color={batchMode ? "black" : "magenta"} backgroundColor={batchMode ? "magenta" : undefined} bold>
+          {` m BATCH${stagedMap.size > 0 ? ` ${stagedMap.size}` : ""} `}
+        </Text>
+      </Box>
+      <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 94 ? "column" : "row"}>
+        <Box borderStyle="single" borderColor="cyan" paddingX={1} flexDirection="column" minWidth={34}>
+          <Text color="gray">
+            Local servers {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} · {activeCount} active
+          </Text>
+          {visible.items.map(({ item: entry, index }) => {
+            const stagedDesired = stagedMap.get(entry.name);
+            const marker = stagedMap.has(entry.name)
+              ? stagedDesired ? "+" : "−"
+              : entry.suppressed ? "×" : entry.enabled ? "●" : "○";
+            const markerColor = stagedMap.has(entry.name)
+              ? stagedDesired ? "green" : "red"
+              : entry.suppressed ? "red" : entry.enabled ? "green" : "gray";
+            const readiness = entry.ready === false ? "!" : entry.ready === true ? "✓" : "?";
+            return (
+              <Box key={entry.name} gap={1}>
+                <Text color={index === selectedIndex ? "white" : "gray"} bold={index === selectedIndex}>
+                  {index === selectedIndex ? "›" : " "}
+                </Text>
+                <Text color={markerColor} bold>{marker}</Text>
+                <Text color={index === selectedIndex ? "cyan" : "white"} bold={index === selectedIndex}>
+                  {entry.name}
+                </Text>
+                <Text color={entry.ready === false ? "red" : entry.ready === true ? "green" : "gray"}>{readiness}</Text>
+                {entry.otherEnabled && !entry.enabled && <Text color={COLORS[other]}>[{targetLabel(other)}]</Text>}
+              </Box>
+            );
+          })}
+        </Box>
+        <Box borderStyle="single" borderColor={item.enabled ? "green" : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
+          <Text color="gray">Selected local server</Text>
+          <Text bold color="cyan">{item.name}</Text>
+          <Row
+            label={targetLabel(target)}
+            value={stagedMap.has(item.name)
+              ? `${selectedDesired ? "enable" : "disable"} staged`
+              : item.suppressed ? "disabled override" : item.enabled ? "enabled" : "disabled"}
+            kind={stagedMap.has(item.name) ? "selected" : item.enabled ? "good" : item.suppressed ? "bad" : "muted"}
+          />
+          <Row
+            label={targetLabel(other)}
+            value={item.otherEnabled ? "enabled" : "disabled"}
+            kind={item.otherEnabled ? other : "muted"}
+          />
+          {item.category && <Row label="Category" value={item.category} />}
+          {item.variantGroup && <Row label="Alternative group" value={item.variantGroup} kind="warn" />}
+          <Row
+            label="Readiness"
+            value={item.ready === false ? "requirements missing" : item.ready === true ? "host ready" : "not checked"}
+            kind={item.ready === false ? "bad" : item.ready === true ? "good" : "muted"}
+          />
+          {item.issues.slice(0, 3).map((issue, index) => (
+            <Row key={`${item.name}-issue-${index}`} label={index === 0 ? "Issue" : ""} value={issue} kind="bad" />
+          ))}
+          {item.description && <Row label="About" value={item.description} />}
+          {item.setup && <Row label="Setup" value={item.setup} kind="muted" />}
+        </Box>
+      </Box>
+      <ErrorText value={catalog.error} />
+      <Text color="gray">
+        ↑/↓ · <Text color="magenta" bold>Space</Text> {batchMode ? "stage" : selectedDesired ? "disable" : "enable"} · {batchMode ? <><Text bold>a</Text> apply · <Text bold>c</Text> clear · </> : null}<Text bold>s/S/u</Text> save/update/backup · ● active · ○ inactive · × override · ! setup
+      </Text>
+    </Box>
+  );
+}
+
+function McpView({
+  snapshot,
+  target,
+  catalog,
+  selected,
+  localCatalog,
+  localEntries,
+  selectedServerName,
+  focus,
+  staged,
+  batchMode,
+  query,
+  filter,
+  grouped,
+  searching
+}) {
   const comparison = mcpTargetComparison(snapshot);
   const active = comparison.targets[target];
   const repairable = active?.drift?.length > 0 &&
     active?.data?.selection_mode !== "manual" &&
     active?.selection && active.selection !== "none";
+  const baseServers = new Set(Array.isArray(active?.data?.base_servers) ? active.data.base_servers : []);
+  const currentServers = new Set(active?.items || []);
+  const customAdded = [...currentServers].filter((name) => !baseServers.has(name));
+  const customDisabled = [...baseServers].filter((name) => !currentServers.has(name));
   return (
     <Box flexDirection="column">
-      <Text color="gray">Local assignments by client; the highlighted client receives Workspace actions.</Text>
+      <Text color="gray">The highlighted client receives target-specific local and Workspace actions.</Text>
       {TARGETS.map((entry) => (
         <TargetStatusRow
           key={entry}
@@ -665,27 +810,22 @@ function McpView({ snapshot, target, catalog, selected }) {
           selected={entry === target}
         />
       ))}
-      <Box flexDirection="column" marginTop={1}>
-        <ItemGroup label="Shared" items={comparison.shared} />
-        <ItemGroup label="Codex only" items={comparison.only.codex} kind="codex" />
-        <ItemGroup label="Claude only" items={comparison.only.claude} kind="claude" />
-        {TARGETS.map((entry) => comparison.targets[entry].suppressed.length > 0 && (
-          <ItemGroup
-            key={`${entry}-disabled`}
-            label={`${targetLabel(entry)} disabled`}
-            items={comparison.targets[entry].suppressed}
-            kind="warn"
-          />
-        ))}
-        {TARGETS.map((entry) => comparison.targets[entry].drift.length > 0 && (
-          <ItemGroup
-            key={`${entry}-drift`}
-            label={`${targetLabel(entry)} drift`}
-            items={comparison.targets[entry].drift}
-            kind="bad"
-          />
-        ))}
+      <Box gap={1} marginTop={1}>
+        <Text color={focus === "local" ? "black" : "cyan"} backgroundColor={focus === "local" ? "cyan" : undefined} bold>
+          {" l LOCAL SWITCHES "}
+        </Text>
+        <Text color={focus === "workspace" ? "black" : "blue"} backgroundColor={focus === "workspace" ? "blue" : undefined} bold>
+          {" w WORKSPACE PROFILES "}
+        </Text>
+        <Text color="gray">{comparison.shared.length} shared · {comparison.only.codex.length} Codex only · {comparison.only.claude.length} Claude only</Text>
       </Box>
+      {active?.data?.selection_mode === "manual" && (
+        <Box flexDirection="column">
+          <ItemGroup label="Custom added" items={customAdded} kind="good" />
+          <ItemGroup label="Custom disabled" items={customDisabled} kind="bad" />
+          <Text color="gray"><Text bold>s</Text> save new · <Text bold>S</Text> update base for this target · <Text bold>u</Text> encrypted Store backup after saving</Text>
+        </Box>
+      )}
       {TARGETS.map((entry) => (
         <ErrorText
           key={`${entry}-error`}
@@ -702,9 +842,205 @@ function McpView({ snapshot, target, catalog, selected }) {
       {active?.drift?.length > 0 && !repairable && (
         <Text color="yellow">Current MCP selection uses manual state; apply a named profile before automatic repair.</Text>
       )}
-      {snapshot.workspace
-        ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="mcp" />
-        : <WorkspaceCatalogFallback snapshot={snapshot} />}
+      {focus === "local"
+        ? <LocalMcpCatalog
+            target={target}
+            catalog={localCatalog}
+            entries={localEntries}
+            selectedName={selectedServerName}
+            staged={staged}
+            batchMode={batchMode}
+            query={query}
+            filter={filter}
+            grouped={grouped}
+            searching={searching}
+          />
+        : snapshot.workspace
+          ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="mcp" />
+          : <WorkspaceCatalogFallback snapshot={snapshot} />}
+    </Box>
+  );
+}
+
+function LocalSkillsCatalog({
+  target,
+  dashboard,
+  entries,
+  selectedName,
+  staged,
+  batchMode,
+  query,
+  enabledOnly,
+  searching
+}) {
+  if (dashboard.loading && dashboard.catalog.length === 0) {
+    return <Text color="gray">Loading the local Skills catalog…</Text>;
+  }
+  if (dashboard.error && dashboard.catalog.length === 0) return <ErrorText value={dashboard.error} />;
+  if (entries.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text color="gray">No local Skills match the current search or filter.</Text>
+        <Text color="gray">Press Esc while searching, or toggle e to return to all Skills.</Text>
+      </Box>
+    );
+  }
+  const selectedIndex = Math.max(0, entries.findIndex((entry) => entry.name === selectedName));
+  const item = entries[selectedIndex];
+  const visible = selectionWindow(entries, selectedIndex, 9);
+  const stagedMap = staged instanceof Map ? staged : new Map();
+  const selectedDesired = stagedMap.has(item.name) ? stagedMap.get(item.name) : item.enabled;
+  const activeCount = skillTargetState(dashboard.states, target).skills.length;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box gap={1} flexWrap="wrap">
+        <Text color={searching ? "black" : "green"} backgroundColor={searching ? "green" : undefined} bold>
+          {` / ${query || (searching ? "type to search" : "search")} `}
+        </Text>
+        <Text color={enabledOnly ? "black" : "green"} backgroundColor={enabledOnly ? "green" : undefined} bold>
+          {" e ENABLED "}
+        </Text>
+        <Text color={batchMode ? "black" : "magenta"} backgroundColor={batchMode ? "magenta" : undefined} bold>
+          {` m BATCH${stagedMap.size > 0 ? ` ${stagedMap.size}` : ""} `}
+        </Text>
+      </Box>
+      <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 94 ? "column" : "row"}>
+        <Box borderStyle="single" borderColor="green" paddingX={1} flexDirection="column" minWidth={36}>
+          <Text color="gray">
+            Local Skills {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} · {activeCount} active
+          </Text>
+          {visible.items.map(({ item: entry, index }) => {
+            const stagedDesired = stagedMap.get(entry.name);
+            const marker = stagedMap.has(entry.name)
+              ? stagedDesired ? "+" : "−"
+              : entry.enabled ? "●" : "○";
+            const markerColor = stagedMap.has(entry.name)
+              ? stagedDesired ? "green" : "red"
+              : entry.enabled ? "green" : "gray";
+            return (
+              <Box key={entry.name} gap={1}>
+                <Text color={index === selectedIndex ? "white" : "gray"} bold={index === selectedIndex}>
+                  {index === selectedIndex ? "›" : " "}
+                </Text>
+                <Text color={markerColor} bold>{marker}</Text>
+                <Text color={index === selectedIndex ? "green" : "white"} bold={index === selectedIndex}>
+                  {entry.name}
+                </Text>
+                {!entry.enabled && entry.enabledTargets.slice(0, 2).map((client) => (
+                  <Text key={`${entry.name}-${client}`} color={COLORS[client]}>[{targetLabel(client)}]</Text>
+                ))}
+              </Box>
+            );
+          })}
+        </Box>
+        <Box borderStyle="single" borderColor={item.enabled ? "green" : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
+          <Text color="gray">Selected canonical Skill</Text>
+          <Text bold color="green">{item.name}</Text>
+          <Row
+            label={targetLabel(target)}
+            value={stagedMap.has(item.name)
+              ? `${selectedDesired ? "enable" : "disable"} staged`
+              : item.enabled ? "enabled" : "disabled"}
+            kind={stagedMap.has(item.name) ? "selected" : item.enabled ? "good" : "muted"}
+          />
+          <Row
+            label="Other clients"
+            value={item.enabledTargets.length > 0
+              ? item.enabledTargets.map(targetLabel).join(", ")
+              : "disabled everywhere else"}
+            kind={item.enabledTargets.length > 0 ? "accent" : "muted"}
+          />
+          {item.description && <Row label="About" value={item.description} />}
+          <Row label="Canonical copy" value="kept in Skills Store" kind="good" />
+        </Box>
+      </Box>
+      <ErrorText value={dashboard.error} />
+      <Text color="gray">
+        ↑/↓ · <Text color="magenta" bold>Space</Text> {batchMode ? "stage" : selectedDesired ? "disable" : "enable"} · {batchMode ? <><Text bold>a</Text> apply · <Text bold>c</Text> clear · </> : null}<Text bold>s/S/u</Text> save/update/backup · ● active · ○ inactive
+      </Text>
+    </Box>
+  );
+}
+
+function SkillsView({
+  snapshot,
+  target,
+  catalog,
+  selected,
+  dashboard,
+  localEntries,
+  selectedSkillName,
+  focus,
+  staged,
+  batchMode,
+  query,
+  enabledOnly,
+  searching
+}) {
+  const active = skillTargetState(dashboard.states, target);
+  const baseSkills = new Set(active.baseSkills);
+  const currentSkills = new Set(active.skills);
+  const customAdded = [...currentSkills].filter((name) => !baseSkills.has(name));
+  const customDisabled = [...baseSkills].filter((name) => !currentSkills.has(name));
+  const repairable = active.drift.length > 0 && active.selectionMode !== "manual" &&
+    active.selection !== "none";
+  return (
+    <Box flexDirection="column">
+      <Text color="gray">Each client receives its own local Skill links; the canonical Store remains shared.</Text>
+      <Box gap={1} flexWrap="wrap">
+        {SKILL_TARGETS.map((client) => {
+          const state = skillTargetState(dashboard.states, client);
+          return (
+            <Box key={client} gap={1}>
+              <TargetBadge target={client} selected={client === target} />
+              <Text color={state.healthy ? "green" : state.data.target ? "red" : "gray"}>
+                {state.selection} · {state.skills.length}
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
+      <Box gap={1} marginTop={1}>
+        <Text color={focus === "local" ? "black" : "green"} backgroundColor={focus === "local" ? "green" : undefined} bold>
+          {" l LOCAL SWITCHES "}
+        </Text>
+        <Text color={focus === "workspace" ? "black" : "blue"} backgroundColor={focus === "workspace" ? "blue" : undefined} bold>
+          {" w WORKSPACE PACKS "}
+        </Text>
+      </Box>
+      {active.selectionMode === "manual" && (
+        <Box flexDirection="column">
+          <ItemGroup label="Custom added" items={customAdded} kind="good" />
+          <ItemGroup label="Custom disabled" items={customDisabled} kind="bad" />
+          <Text color="gray"><Text bold>s</Text> save new · <Text bold>S</Text> update base for this target · <Text bold>u</Text> encrypted Store backup after saving</Text>
+        </Box>
+      )}
+      {Object.entries(dashboard.errors || {}).map(([client, error]) => (
+        <ErrorText key={`${client}-skills-error`} value={`${targetLabel(client)}: ${error}`} />
+      ))}
+      {repairable && (
+        <Text color="yellow">
+          <Text bold>f</Text> repair current local pack {active.selection} for {targetLabel(target)} · restores managed links only
+        </Text>
+      )}
+      {active.drift.length > 0 && !repairable && (
+        <Text color="yellow">Current Skills selection uses manual state; save it as a Pack before automatic repair.</Text>
+      )}
+      {focus === "local"
+        ? <LocalSkillsCatalog
+            target={target}
+            dashboard={dashboard}
+            entries={localEntries}
+            selectedName={selectedSkillName}
+            staged={staged}
+            batchMode={batchMode}
+            query={query}
+            enabledOnly={enabledOnly}
+            searching={searching}
+          />
+        : snapshot.workspace
+          ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="skills" />
+          : <WorkspaceCatalogFallback snapshot={snapshot} />}
     </Box>
   );
 }
@@ -956,14 +1292,18 @@ function Help() {
   return (
     <Panel title="Keyboard help">
       <Text>[ / ] or Tab / Shift+Tab / Left / Right  switch section</Text>
-      <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers) · r refresh · q quit</Text>
+      <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) · r refresh · q quit</Text>
       <Text>Up / Down  select previous / next item inside the current section</Text>
       <Text>
         Agents: <Text color="cyan" bold>c/p/Enter</Text> open unified Providers · <Text color="red" bold>x</Text> uninstall
       </Text>
       <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
       <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
-      <Text>MCP / Skills / Prompts: p inspect plan · a apply selected</Text>
+      <Text>MCP: l local · w Workspace · / search · e enabled · x problems · g group</Text>
+      <Text>MCP: Space toggle · m batch · a apply staged · c clear · s save · S update · u backup</Text>
+      <Text>Skills: l local · w Workspace · / search · e enabled · Space toggle · m batch</Text>
+      <Text>Skills: a apply staged · c clear · s save · S update · u backup</Text>
+      <Text>MCP / Skills / Prompts: p inspect plan · a apply selected Workspace item</Text>
       <Text>MCP / Skills: f repair the current named local selection when Drift is reported</Text>
       <Text>Prompts: v view active local · V view selected Workspace · ↑/↓ scroll preview</Text>
       <Text>Snippets: ↑/↓ select · c copy local · p inspect cloud pull · a pull</Text>
@@ -978,12 +1318,36 @@ function App({ initialSection, controller, onLaunch }) {
   const [section, setSection] = useState(initialSection);
   const [target, setTarget] = useState("codex");
   const [providerTarget, setProviderTarget] = useState("codex");
+  const [skillsTarget, setSkillsTarget] = useState("codex");
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(0);
   const [componentSelected, setComponentSelected] = useState({ accounts: 0, providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [mcpFocus, setMcpFocus] = useState("local");
+  const [selectedMcpServerName, setSelectedMcpServerName] = useState("");
+  const [mcpQuery, setMcpQuery] = useState("");
+  const [mcpSearching, setMcpSearching] = useState(false);
+  const [mcpFilter, setMcpFilter] = useState("all");
+  const [mcpGrouped, setMcpGrouped] = useState(false);
+  const [mcpBatchMode, setMcpBatchMode] = useState(false);
+  const [mcpStaged, setMcpStaged] = useState(new Map());
+  const [mcpProfilePrompt, setMcpProfilePrompt] = useState(null);
+  const [localMcpCatalog, setLocalMcpCatalog] = useState({
+    items: [], target: "codex", loading: false, error: "", key: ""
+  });
+  const [skillsFocus, setSkillsFocus] = useState("local");
+  const [selectedSkillName, setSelectedSkillName] = useState("");
+  const [skillsQuery, setSkillsQuery] = useState("");
+  const [skillsSearching, setSkillsSearching] = useState(false);
+  const [skillsEnabledOnly, setSkillsEnabledOnly] = useState(false);
+  const [skillsBatchMode, setSkillsBatchMode] = useState(false);
+  const [skillsStaged, setSkillsStaged] = useState(new Map());
+  const [skillsPackPrompt, setSkillsPackPrompt] = useState(null);
+  const [localSkillsDashboard, setLocalSkillsDashboard] = useState({
+    catalog: [], states: {}, errors: {}, loading: false, error: "", key: ""
+  });
   const [catalogs, setCatalogs] = useState({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
@@ -1062,7 +1426,20 @@ function App({ initialSection, controller, onLaunch }) {
     setPromptPreviewOffset(0);
   }, [section, target]);
 
+  useEffect(() => {
+    setMcpStaged(new Map());
+    setMcpBatchMode(false);
+    setMcpProfilePrompt(null);
+  }, [target]);
+
+  useEffect(() => {
+    setSkillsStaged(new Map());
+    setSkillsBatchMode(false);
+    setSkillsPackPrompt(null);
+  }, [skillsTarget]);
+
   const workspaceStoreId = snapshot?.workspace?.store_id || "";
+  const catalogTarget = section === "skills" ? skillsTarget : target;
   const catalogStore = section === "snippets" ? "prompts" : section;
   const workspaceCatalogVersion = ["mcp", "skills", "prompts", "snippets"].includes(section)
     ? snapshot?.workspace?.stores?.[catalogStore]?.latest?.version || snapshot?.workspace?.latest?.version || "empty"
@@ -1070,13 +1447,13 @@ function App({ initialSection, controller, onLaunch }) {
 
   useEffect(() => {
     if (!["mcp", "skills", "prompts", "snippets"].includes(section) || !workspaceStoreId) return;
-    const key = `${workspaceStoreId}:${workspaceCatalogVersion}:${target}`;
+    const key = `${workspaceStoreId}:${workspaceCatalogVersion}:${catalogTarget}`;
     let cancelled = false;
     setCatalogs((value) => ({
       ...value,
       [section]: { ...value[section], loading: true, error: "", key }
     }));
-    void controller.remoteCatalog(section, target).then((result) => {
+    void controller.remoteCatalog(section, catalogTarget).then((result) => {
       if (cancelled) return;
       setCatalogs((value) => ({
         ...value,
@@ -1088,7 +1465,7 @@ function App({ initialSection, controller, onLaunch }) {
       }));
     });
     return () => { cancelled = true; };
-  }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
+  }, [catalogTarget, controller, section, workspaceCatalogVersion, workspaceStoreId]);
 
   useEffect(() => {
     if (section !== "providers" || !snapshot) return;
@@ -1164,6 +1541,53 @@ function App({ initialSection, controller, onLaunch }) {
     return () => { cancelled = true; };
   }, [controller, providerTarget, section, snapshot, workspaceStoreId]);
 
+  useEffect(() => {
+    if (section !== "mcp" || !snapshot || typeof controller.localMcpServers !== "function") return;
+    const key = `${target}:${snapshot.updatedAt || "local"}`;
+    let cancelled = false;
+    setLocalMcpCatalog((value) => ({
+      items: value.target === target ? value.items : [],
+      target,
+      loading: true,
+      error: "",
+      key
+    }));
+    void controller.localMcpServers(target).then((items) => {
+      if (cancelled) return;
+      setLocalMcpCatalog({ items, target, loading: false, error: "", key });
+    }).catch((error) => {
+      if (cancelled) return;
+      setLocalMcpCatalog((value) => ({
+        ...value,
+        target,
+        loading: false,
+        error: String(error?.message || error),
+        key
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [controller, section, snapshot?.updatedAt, target]);
+
+  useEffect(() => {
+    if (section !== "skills" || !snapshot || typeof controller.localSkillsDashboard !== "function") return;
+    const key = `${snapshot.updatedAt || "local"}`;
+    let cancelled = false;
+    setLocalSkillsDashboard((value) => ({ ...value, loading: true, error: "", key }));
+    void controller.localSkillsDashboard().then((dashboard) => {
+      if (cancelled) return;
+      setLocalSkillsDashboard({ ...dashboard, loading: false, error: "", key });
+    }).catch((error) => {
+      if (cancelled) return;
+      setLocalSkillsDashboard((value) => ({
+        ...value,
+        loading: false,
+        error: String(error?.message || error),
+        key
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [controller, section, snapshot?.updatedAt]);
+
   const selectedPreset = useMemo(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents)
     ? snapshot.agents[selectedAgent]?.client || ""
@@ -1197,15 +1621,204 @@ function App({ initialSection, controller, onLaunch }) {
   const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local
     ? selectedSnippet.name
     : "";
+  const allLocalMcpEntries = useMemo(
+    () => mcpServerEntries(localMcpCatalog.items, snapshot, target),
+    [localMcpCatalog.items, snapshot, target]
+  );
+  const localMcpEntries = useMemo(
+    () => filterMcpServerEntries(allLocalMcpEntries, {
+      query: mcpQuery,
+      filter: mcpFilter,
+      grouped: mcpGrouped
+    }),
+    [allLocalMcpEntries, mcpFilter, mcpGrouped, mcpQuery]
+  );
+  const selectedMcpServerIndex = Math.max(
+    0,
+    localMcpEntries.findIndex((entry) => entry.name === selectedMcpServerName)
+  );
+  const selectedMcpServer = localMcpEntries[selectedMcpServerIndex] || null;
+  useEffect(() => {
+    if (localMcpEntries.length === 0) {
+      if (selectedMcpServerName) setSelectedMcpServerName("");
+      return;
+    }
+    if (!localMcpEntries.some((entry) => entry.name === selectedMcpServerName)) {
+      setSelectedMcpServerName(localMcpEntries[0].name);
+    }
+  }, [localMcpEntries, selectedMcpServerName]);
+  const allLocalSkillEntries = useMemo(
+    () => skillEntries(localSkillsDashboard.catalog, localSkillsDashboard.states, skillsTarget),
+    [localSkillsDashboard.catalog, localSkillsDashboard.states, skillsTarget]
+  );
+  const localSkillEntries = useMemo(
+    () => filterSkillEntries(allLocalSkillEntries, {
+      query: skillsQuery,
+      enabledOnly: skillsEnabledOnly
+    }),
+    [allLocalSkillEntries, skillsEnabledOnly, skillsQuery]
+  );
+  const selectedSkillIndex = Math.max(
+    0,
+    localSkillEntries.findIndex((entry) => entry.name === selectedSkillName)
+  );
+  const selectedSkill = localSkillEntries[selectedSkillIndex] || null;
+  useEffect(() => {
+    if (localSkillEntries.length === 0) {
+      if (selectedSkillName) setSelectedSkillName("");
+      return;
+    }
+    if (!localSkillEntries.some((entry) => entry.name === selectedSkillName)) {
+      setSelectedSkillName(localSkillEntries[0].name);
+    }
+  }, [localSkillEntries, selectedSkillName]);
   const selectedMcpState = componentTargetState(snapshot, "mcp", target);
   const selectedMcpProfile = selectedMcpState.data?.selection_mode === "manual"
     ? ""
     : selectedMcpState.selection === "none" ? "" : selectedMcpState.selection;
-  const selectedSkillsState = componentTargetState(snapshot, "skills", target);
-  const selectedSkillsPack = selectedSkillsState.data?.selection_mode === "manual"
+  const selectedSkillsState = skillTargetState(localSkillsDashboard.states, skillsTarget);
+  const selectedSkillsPack = selectedSkillsState.selectionMode === "manual"
     ? ""
     : selectedSkillsState.selection === "none" ? "" : selectedSkillsState.selection;
   const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
+
+  const patchLocalMcpState = useCallback((state) => {
+    if (!state?.target) return;
+    setSnapshot((current) => {
+      if (!current?.doctor?.targets) return current;
+      return {
+        ...current,
+        doctor: {
+          ...current.doctor,
+          targets: current.doctor.targets.map((report) => report.target === state.target
+            ? {
+                ...report,
+                mcp: {
+                  ...(report.mcp || {}),
+                  ok: true,
+                  code: 0,
+                  error: "",
+                  summary: "",
+                  data: state
+                }
+              }
+            : report)
+        }
+      };
+    });
+  }, []);
+
+  const patchLocalSkillsState = useCallback((state) => {
+    if (!state?.target) return;
+    setLocalSkillsDashboard((current) => ({
+      ...current,
+      states: { ...current.states, [state.target]: state },
+      errors: { ...current.errors, [state.target]: "" }
+    }));
+    setSnapshot((current) => {
+      if (!current?.doctor?.targets) return current;
+      return {
+        ...current,
+        doctor: {
+          ...current.doctor,
+          targets: current.doctor.targets.map((report) => report.target === state.target
+            ? {
+                ...report,
+                skills: {
+                  ...(report.skills || {}),
+                  ok: true,
+                  code: 0,
+                  error: "",
+                  summary: "",
+                  data: state
+                }
+              }
+            : report)
+        }
+      };
+    });
+  }, []);
+
+  const stageMcpToggle = useCallback((entry) => {
+    if (!entry) return;
+    setMcpStaged((current) => {
+      const next = new Map(current);
+      const effective = next.has(entry.name) ? next.get(entry.name) : entry.enabled;
+      const desired = !effective;
+      if (desired === entry.enabled) next.delete(entry.name);
+      else next.set(entry.name, desired);
+      if (desired && entry.variantGroup) {
+        for (const candidate of allLocalMcpEntries) {
+          if (candidate.name === entry.name || candidate.variantGroup !== entry.variantGroup) continue;
+          const candidateEffective = next.has(candidate.name)
+            ? next.get(candidate.name)
+            : candidate.enabled;
+          if (candidateEffective) {
+            if (candidate.enabled) next.set(candidate.name, false);
+            else next.delete(candidate.name);
+          }
+        }
+      }
+      return next;
+    });
+  }, [allLocalMcpEntries]);
+
+  const stageSkillToggle = useCallback((entry) => {
+    if (!entry) return;
+    setSkillsStaged((current) => {
+      const next = new Map(current);
+      const effective = next.has(entry.name) ? next.get(entry.name) : entry.enabled;
+      const desired = !effective;
+      if (desired === entry.enabled) next.delete(entry.name);
+      else next.set(entry.name, desired);
+      return next;
+    });
+  }, []);
+
+  const prepareMcpConfirmation = useCallback(async (action, changes, selection = "") => {
+    const enabling = changes.filter((change) => change.enabled).filter((change) => {
+      const current = allLocalMcpEntries.find((entry) => entry.name === change.name);
+      return !current?.enabled;
+    });
+    setBusy(true);
+    setLastDetail("");
+    setMessage(enabling.length > 0
+      ? `Checking ${enabling.length} MCP server requirement(s)…`
+      : "Preparing target-specific MCP change…");
+    try {
+      const results = await Promise.all(enabling.map((change) =>
+        controller.localMcpPreflight(change.name, target)
+      ));
+      const failed = results.filter((result) => !result.ready);
+      const detail = failed.length > 0
+        ? [
+            `Preflight warning: ${failed.length} server(s) have unmet requirements.`,
+            ...failed.flatMap((result) => [
+              `${result.server}:`,
+              ...result.issues.map((issue) => `  ${issue}`)
+            ])
+          ].join("\n")
+        : enabling.length > 0
+          ? `Preflight passed for ${enabling.map((entry) => entry.name).join(", ")}.`
+          : "No enable preflight is needed for disable-only changes.";
+      const labelSelection = selection || (changes.length === 1 ? changes[0].name : "");
+      setConfirm({
+        action,
+        changes,
+        selection: labelSelection,
+        detail,
+        warning: failed.length > 0,
+        label: actionLabel(action, labelSelection, target)
+      });
+      setMessage(failed.length > 0
+        ? "Preflight found missing requirements; review the warning before confirming."
+        : "MCP preflight complete.");
+    } catch (error) {
+      setMessage(`MCP preflight failed: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [allLocalMcpEntries, controller, target]);
 
   const openPromptPreview = useCallback(async (source) => {
     const local = promptTargetState(snapshot, target);
@@ -1233,7 +1846,7 @@ function App({ initialSection, controller, onLaunch }) {
     }
   }, [controller, selectedRemote, snapshot, target]);
 
-  const executeAction = useCallback(async (action) => {
+  const executeAction = useCallback(async (action, payload = {}) => {
     setConfirm(null);
     if (action === "agent-provider") {
       setProviderTarget(selectedAgentId);
@@ -1245,17 +1858,36 @@ function App({ initialSection, controller, onLaunch }) {
     setBusy(true);
     const providerAction = action.startsWith("provider-");
     const accountAction = action.startsWith("account-");
+    const localMcpAction = [
+      "mcp-enable", "mcp-disable", "mcp-batch", "mcp-profile-save", "mcp-profile-update",
+      "mcp-profile-upload"
+    ].includes(action);
+    const localSkillsAction = [
+      "skills-enable", "skills-disable", "skills-batch", "skills-pack-save",
+      "skills-pack-update", "skills-pack-upload"
+    ].includes(action);
     const localRepairAction = action === "mcp-repair" || action === "skills-repair";
     const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
-    const actionTarget = providerAction ? providerTarget : target;
+    const actionTarget = providerAction
+      ? providerTarget
+      : action.startsWith("skills-") ? skillsTarget : target;
     const selection = action.startsWith("agent-")
       ? selectedAgentId
       : accountAction ? selectedAccountName
       : providerAction ? selectedProviderName
+      : localMcpAction ? payload.selection || selectedMcpServer?.name || ""
+      : localSkillsAction ? payload.selection || selectedSkill?.name || ""
       : localRepairAction ? localRepairSelection
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
-    setMessage(`${actionLabel(action, selection, actionTarget)}…`);
+    const runningLabel = actionLabel(action, selection, actionTarget);
+    setMessage(action === "mcp-disable"
+      ? `${runningLabel} · removing only the changed target entry…`
+      : action === "mcp-enable" || action === "mcp-batch"
+        ? `${runningLabel} · updating changed target entries atomically…`
+        : action === "skills-disable" || action === "skills-enable" || action === "skills-batch"
+          ? `${runningLabel} · updating managed links atomically…`
+        : `${runningLabel}…`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
@@ -1265,34 +1897,172 @@ function App({ initialSection, controller, onLaunch }) {
           ? selectedAccountName
           : providerAction
           ? selectedProviderName
+          : localMcpAction
+          ? payload.selection || selectedMcpServer?.name || ""
+          : localSkillsAction
+          ? payload.selection || selectedSkill?.name || ""
           : localRepairAction
           ? localRepairSelection
           : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction
           ? selectedProviderSource
           : snapshot?.presetSource || "local",
-        target: actionTarget
+        target: actionTarget,
+        changes: payload.changes || [],
+        replace: action === "mcp-profile-update"
       });
       setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
-      await refresh(true);
+      if (localMcpAction) {
+        if (result.data?.state) patchLocalMcpState(result.data.state);
+        if (result.ok && action === "mcp-batch") {
+          setMcpStaged(new Map());
+          setMcpBatchMode(false);
+        }
+      } else if (localSkillsAction) {
+        if (result.data?.state) patchLocalSkillsState(result.data.state);
+        if (result.ok && action === "skills-batch") {
+          setSkillsStaged(new Map());
+          setSkillsBatchMode(false);
+        }
+      } else {
+        await refresh(true);
+      }
     } catch (error) {
       setMessage(`Failed: ${error.message}`);
     } finally {
       setBusy(false);
     }
-  }, [controller, providerTarget, refresh, selectedAccountName, selectedAgentId, selectedLocalSnippet,
-    selectedMcpProfile, selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
-    selectedSkillsPack,
+  }, [controller, patchLocalMcpState, patchLocalSkillsState, providerTarget, refresh, selectedAccountName, selectedAgentId, selectedLocalSnippet,
+    selectedMcpProfile, selectedMcpServer, selectedPreset, selectedProviderName, selectedProviderSource, selectedRemote,
+    selectedSkill, selectedSkillsPack, skillsTarget,
     snapshot?.presetSource, target]);
 
   useInput((input, key) => {
     if (busy) return;
     if (confirm) {
-      if (input === "y" || input === "Y") void executeAction(confirm.action);
+      if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
       else if (input === "n" || input === "N" || key.escape) {
         setMessage("Cancelled; no changes were made.");
         setConfirm(null);
+      }
+      return;
+    }
+    if (mcpProfilePrompt) {
+      if (key.escape) {
+        setMcpProfilePrompt(null);
+        setMessage("MCP Profile save cancelled.");
+        return;
+      }
+      if (key.return) {
+        const name = mcpProfilePrompt.value.trim();
+        if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+          setMcpProfilePrompt((value) => ({
+            ...value,
+            error: "Use only letters, numbers, dot, underscore, and hyphen."
+          }));
+          return;
+        }
+        const action = mcpProfilePrompt.mode === "update"
+          ? "mcp-profile-update"
+          : "mcp-profile-save";
+        setMcpProfilePrompt(null);
+        setConfirm({
+          action,
+          selection: name,
+          label: actionLabel(action, name, target),
+          detail: action === "mcp-profile-update"
+            ? "Only this target override is replaced; other target overrides remain intact."
+            : "The current target selection is saved and then reapplied as a named Profile."
+        });
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setMcpProfilePrompt((value) => ({ ...value, value: value.value.slice(0, -1), error: "" }));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && /^[A-Za-z0-9._-]+$/.test(input)) {
+        setMcpProfilePrompt((value) => ({ ...value, value: `${value.value}${input}`, error: "" }));
+      }
+      return;
+    }
+    if (skillsPackPrompt) {
+      if (key.escape) {
+        setSkillsPackPrompt(null);
+        setMessage("Skill Pack save cancelled.");
+        return;
+      }
+      if (key.return) {
+        const name = skillsPackPrompt.value.trim();
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+          setSkillsPackPrompt((value) => ({
+            ...value,
+            error: "Use lowercase letters, numbers, and single hyphens."
+          }));
+          return;
+        }
+        const action = skillsPackPrompt.mode === "update"
+          ? "skills-pack-update"
+          : "skills-pack-save";
+        setSkillsPackPrompt(null);
+        setConfirm({
+          action,
+          selection: name,
+          label: actionLabel(action, name, skillsTarget),
+          detail: action === "skills-pack-update"
+            ? "Only this target override is replaced; other target overrides remain intact."
+            : "The current target selection is saved and then reapplied as a named Pack."
+        });
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSkillsPackPrompt((value) => ({ ...value, value: value.value.slice(0, -1), error: "" }));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && /^[a-z0-9-]+$/.test(input)) {
+        setSkillsPackPrompt((value) => ({ ...value, value: `${value.value}${input}`.slice(0, 64), error: "" }));
+      }
+      return;
+    }
+    if (mcpSearching) {
+      if (key.escape) {
+        setMcpSearching(false);
+        setMcpQuery("");
+        setMessage("MCP search cleared.");
+        return;
+      }
+      if (key.return) {
+        setMcpSearching(false);
+        setMessage(mcpQuery ? `MCP search kept: ${mcpQuery}` : "MCP search closed.");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setMcpQuery((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !/[\u0000-\u001f\u007f]/.test(input)) {
+        setMcpQuery((value) => `${value}${input}`.slice(0, 80));
+      }
+      return;
+    }
+    if (skillsSearching) {
+      if (key.escape) {
+        setSkillsSearching(false);
+        setSkillsQuery("");
+        setMessage("Skills search cleared.");
+        return;
+      }
+      if (key.return) {
+        setSkillsSearching(false);
+        setMessage(skillsQuery ? `Skills search kept: ${skillsQuery}` : "Skills search closed.");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSkillsQuery((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !/[\u0000-\u001f\u007f]/.test(input)) {
+        setSkillsQuery((value) => `${value}${input}`.slice(0, 80));
       }
       return;
     }
@@ -1326,12 +2096,172 @@ function App({ initialSection, controller, onLaunch }) {
     }
     if (input === "?") return setShowHelp((value) => !value);
     if (showHelp && key.escape) return setShowHelp(false);
+    if (section === "mcp" && (input === "l" || input === "w")) {
+      const nextFocus = input === "l" ? "local" : "workspace";
+      setMcpFocus(nextFocus);
+      setMessage(nextFocus === "local"
+        ? "Local MCP switches focused; Space changes only the highlighted target."
+        : "Workspace MCP profiles focused; p inspects and a applies the selected profile.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "/") {
+      setMcpSearching(true);
+      setMessage("Type to filter MCP servers; Enter keeps the query and Esc clears it.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && (input === "e" || input === "x")) {
+      const requested = input === "e" ? "enabled" : "problems";
+      setMcpFilter((value) => value === requested ? "all" : requested);
+      setMessage(requested === "enabled"
+        ? "Enabled-only MCP filter toggled."
+        : "MCP readiness-problem filter toggled.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "g") {
+      setMcpGrouped((value) => !value);
+      setMessage(mcpGrouped ? "MCP category grouping disabled." : "MCP category grouping enabled.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "m") {
+      setMcpBatchMode((value) => !value);
+      setMessage(mcpBatchMode
+        ? `Batch mode closed${mcpStaged.size > 0 ? "; staged changes remain available" : ""}.`
+        : "Batch mode enabled; Space stages changes and a applies them once.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "c" && mcpBatchMode) {
+      setMcpStaged(new Map());
+      setMessage("Staged MCP changes cleared.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && (input === "s" || input === "S")) {
+      if (mcpStaged.size > 0) {
+        setMessage("Apply or clear staged MCP changes before saving a Profile.");
+        return;
+      }
+      const updateName = selectedMcpState.baseSelection ||
+        (selectedMcpState.selection !== "custom" && selectedMcpState.selection !== "none"
+          ? selectedMcpState.selection
+          : "");
+      if (input === "S" && !updateName) {
+        setMessage("No named base MCP Profile is available to update.");
+        return;
+      }
+      setMcpProfilePrompt({
+        mode: input === "S" ? "update" : "save",
+        value: input === "S" ? updateName : "",
+        error: ""
+      });
+      setMessage(input === "S"
+        ? "Edit or confirm the Profile name to update for this target."
+        : "Enter a new MCP Profile name.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "u") {
+      if (mcpStaged.size > 0) {
+        setMessage("Apply or clear staged MCP changes before backing up the MCP Store.");
+        return;
+      }
+      if (!selectedMcpProfile) {
+        setMessage("Save the current custom MCP selection as a named Profile before backing it up.");
+        return;
+      }
+      if (!workspaceConfigured(snapshot)) {
+        setMessage("Connect or restore the encrypted Workspace before backing up the MCP Store.");
+        return;
+      }
+      setConfirm({
+        action: "mcp-profile-upload",
+        selection: selectedMcpProfile,
+        label: actionLabel("mcp-profile-upload", selectedMcpProfile, target),
+        detail: "MCP Profiles depend on catalog definitions, artifacts, and Secret ciphertext, so the encrypted MCP Store is backed up as one portable unit."
+      });
+      return;
+    }
+    if (section === "skills" && (input === "l" || input === "w")) {
+      const nextFocus = input === "l" ? "local" : "workspace";
+      setSkillsFocus(nextFocus);
+      setMessage(nextFocus === "local"
+        ? "Local Skill switches focused; Space changes only the highlighted client."
+        : "Workspace Skill Packs focused; p inspects and a applies the selected Pack.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "/") {
+      setSkillsSearching(true);
+      setMessage("Type to filter Skills; Enter keeps the query and Esc clears it.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "e") {
+      setSkillsEnabledOnly((value) => !value);
+      setMessage("Enabled-only Skills filter toggled.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "m") {
+      setSkillsBatchMode((value) => !value);
+      setMessage(skillsBatchMode
+        ? `Skills batch mode closed${skillsStaged.size > 0 ? "; staged changes remain available" : ""}.`
+        : "Skills batch mode enabled; Space stages changes and a applies them once.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "c" && skillsBatchMode) {
+      setSkillsStaged(new Map());
+      setMessage("Staged Skill changes cleared.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && (input === "s" || input === "S")) {
+      if (skillsStaged.size > 0) {
+        setMessage("Apply or clear staged Skill changes before saving a Pack.");
+        return;
+      }
+      const updateName = selectedSkillsState.basePack ||
+        (selectedSkillsState.selection !== "custom" && selectedSkillsState.selection !== "none"
+          ? selectedSkillsState.selection
+          : "");
+      if (input === "S" && !updateName) {
+        setMessage("No named base Skill Pack is available to update.");
+        return;
+      }
+      setSkillsPackPrompt({
+        mode: input === "S" ? "update" : "save",
+        value: input === "S" ? updateName : "",
+        error: ""
+      });
+      setMessage(input === "S"
+        ? "Edit or confirm the Skill Pack name to update for this client."
+        : "Enter a new lowercase Skill Pack name.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "u") {
+      if (skillsStaged.size > 0) {
+        setMessage("Apply or clear staged Skill changes before backing up the Skills Store.");
+        return;
+      }
+      if (!selectedSkillsPack) {
+        setMessage("Save the current custom Skill selection as a named Pack before backing it up.");
+        return;
+      }
+      if (!workspaceConfigured(snapshot)) {
+        setMessage("Connect or restore the encrypted Workspace before backing up the Skills Store.");
+        return;
+      }
+      setConfirm({
+        action: "skills-pack-upload",
+        selection: selectedSkillsPack,
+        label: actionLabel("skills-pack-upload", selectedSkillsPack, skillsTarget),
+        detail: "The Skills Store backup includes Pack definitions and canonical Skill files for portable restore."
+      });
+      return;
+    }
     if (input === "t") {
       if (section === "providers") {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
         return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS));
       }
       if (section === "accounts") return;
+      if (section === "skills") {
+        setComponentSelected((value) => ({ ...value, skills: 0 }));
+        return setSkillsTarget((value) => cycleTarget(value, 1, SKILL_TARGETS));
+      }
       return setTarget((value) => otherTarget(value));
     }
     if (section === "providers" && (input === "i" || input === "I")) {
@@ -1364,15 +2294,107 @@ function App({ initialSection, controller, onLaunch }) {
         providers: clampSelection(value.providers + delta, mergedProviders.length)
       }));
     }
-    if (["mcp", "skills", "prompts", "snippets"].includes(section) && delta !== 0) {
+    if (section === "mcp" && delta !== 0) {
+      if (mcpFocus === "local") {
+        if (localMcpEntries.length === 0) return;
+        const index = clampSelection(selectedMcpServerIndex + delta, localMcpEntries.length);
+        setSelectedMcpServerName(localMcpEntries[index].name);
+        return;
+      }
+      return setComponentSelected((value) => ({
+        ...value,
+        mcp: clampSelection(value.mcp + delta, catalogs.mcp.items.length)
+      }));
+    }
+    if (section === "skills" && delta !== 0) {
+      if (skillsFocus === "local") {
+        if (localSkillEntries.length === 0) return;
+        const index = clampSelection(selectedSkillIndex + delta, localSkillEntries.length);
+        setSelectedSkillName(localSkillEntries[index].name);
+        return;
+      }
+      return setComponentSelected((value) => ({
+        ...value,
+        skills: clampSelection(value.skills + delta, catalogs.skills.items.length)
+      }));
+    }
+    if (["prompts", "snippets"].includes(section) && delta !== 0) {
       const length = section === "snippets" ? mergedSnippets.length : catalogs[section].items.length;
       return setComponentSelected((value) => ({
         ...value,
         [section]: clampSelection(value[section] + delta, length)
       }));
     }
-    const action = actionForKey(section, key.return ? "\r" : input);
+    let action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action === "mcp-toggle") {
+      if (mcpFocus !== "local") {
+        setMessage("Press l to focus local MCP switches before toggling a server.");
+        return;
+      }
+      if (!selectedMcpServer) {
+        setMessage("No local MCP server is selected.");
+        return;
+      }
+      if (mcpBatchMode) {
+        stageMcpToggle(selectedMcpServer);
+        setMessage(`${selectedMcpServer.name} toggle staged; press a to apply all staged changes.`);
+        return;
+      }
+      action = selectedMcpServer.enabled ? "mcp-disable" : "mcp-enable";
+      const changes = [{ name: selectedMcpServer.name, enabled: action === "mcp-enable" }];
+      if (action === "mcp-enable") {
+        void prepareMcpConfirmation(action, changes, selectedMcpServer.name);
+        return;
+      }
+    }
+    if (action === "mcp-apply" && mcpFocus === "local" && mcpBatchMode) {
+      const changes = [...mcpStaged.entries()].map(([name, enabled]) => ({ name, enabled }));
+      if (changes.length === 0) {
+        setMessage("No MCP changes are staged; use Space to mark servers first.");
+        return;
+      }
+      void prepareMcpConfirmation("mcp-batch", changes);
+      return;
+    }
+    if ((action === "mcp-plan" || action === "mcp-apply") && mcpFocus !== "workspace") {
+      setMessage("Press w to focus Workspace MCP profiles before planning or applying one.");
+      return;
+    }
+    if (action === "skills-toggle") {
+      if (skillsFocus !== "local") {
+        setMessage("Press l to focus local Skill switches before toggling a Skill.");
+        return;
+      }
+      if (!selectedSkill) {
+        setMessage("No local Skill is selected.");
+        return;
+      }
+      if (skillsBatchMode) {
+        stageSkillToggle(selectedSkill);
+        setMessage(`${selectedSkill.name} toggle staged; press a to apply all staged changes.`);
+        return;
+      }
+      action = selectedSkill.enabled ? "skills-disable" : "skills-enable";
+    }
+    if (action === "skills-apply" && skillsFocus === "local" && skillsBatchMode) {
+      const changes = [...skillsStaged.entries()].map(([name, enabled]) => ({ name, enabled }));
+      if (changes.length === 0) {
+        setMessage("No Skill changes are staged; use Space to mark Skills first.");
+        return;
+      }
+      setConfirm({
+        action: "skills-batch",
+        changes,
+        label: actionLabel("skills-batch", "", skillsTarget),
+        detail: `${changes.length} managed Skill link change(s) will be applied in one target transaction.`
+      });
+      return;
+    }
+    if ((action === "skills-plan" || action === "skills-apply") && skillsFocus !== "workspace") {
+      setMessage("Press w to focus Workspace Skill Packs before planning or applying one.");
+      return;
+    }
     if (action === "prompt-view-local" || action === "prompt-view-cloud") {
       return void openPromptPreview(action.endsWith("cloud") ? "cloud" : "local");
     }
@@ -1416,7 +2438,7 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     if (action === "skills-repair" && selectedSkillsState.drift.length === 0) {
-      setMessage(`${targetLabel(target)} Skills configuration is already healthy.`);
+      setMessage(`${targetLabel(skillsTarget)} Skills configuration is already healthy.`);
       return;
     }
     if (action === "skills-repair" && !selectedSkillsPack) {
@@ -1438,18 +2460,26 @@ function App({ initialSection, controller, onLaunch }) {
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
       const accountAction = action.startsWith("account-");
+      const localMcpAction = action === "mcp-enable" || action === "mcp-disable";
+      const localSkillsAction = action === "skills-enable" || action === "skills-disable";
       const localRepairAction = action === "mcp-repair" || action === "skills-repair";
       const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
       const selection = action.startsWith("agent-")
         ? selectedAgentId
         : accountAction ? selectedAccountName
         : providerAction ? selectedProviderName
+        : localMcpAction ? selectedMcpServer?.name || ""
+        : localSkillsAction ? selectedSkill?.name || ""
         : localRepairAction ? localRepairSelection
         : action === "snippet-copy" ? selectedLocalSnippet
           : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
-        label: actionLabel(action, selection, providerAction ? providerTarget : target)
+        label: actionLabel(
+          action,
+          selection,
+          providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target
+        )
       });
     } else {
       void executeAction(action);
@@ -1470,8 +2500,44 @@ function App({ initialSection, controller, onLaunch }) {
         showIncompatible={showIncompatibleProviders}
       />
     );
-    if (section === "mcp") content = <McpView snapshot={snapshot} target={target} catalog={catalogs.mcp} selected={componentSelected.mcp} />;
-    if (section === "skills") content = <ComponentView snapshot={snapshot} target={target} component="skills" catalog={catalogs.skills} selected={componentSelected.skills} />;
+    if (section === "mcp") content = (
+      <McpView
+        snapshot={snapshot}
+        target={target}
+        catalog={catalogs.mcp}
+        selected={componentSelected.mcp}
+        localCatalog={{
+          ...localMcpCatalog,
+          activeCount: allLocalMcpEntries.filter((entry) => entry.enabled).length
+        }}
+        localEntries={localMcpEntries}
+        selectedServerName={selectedMcpServer?.name || selectedMcpServerName}
+        focus={mcpFocus}
+        staged={mcpStaged}
+        batchMode={mcpBatchMode}
+        query={mcpQuery}
+        filter={mcpFilter}
+        grouped={mcpGrouped}
+        searching={mcpSearching}
+      />
+    );
+    if (section === "skills") content = (
+      <SkillsView
+        snapshot={snapshot}
+        target={skillsTarget}
+        catalog={catalogs.skills}
+        selected={componentSelected.skills}
+        dashboard={localSkillsDashboard}
+        localEntries={localSkillEntries}
+        selectedSkillName={selectedSkill?.name || selectedSkillName}
+        focus={skillsFocus}
+        staged={skillsStaged}
+        batchMode={skillsBatchMode}
+        query={skillsQuery}
+        enabledOnly={skillsEnabledOnly}
+        searching={skillsSearching}
+      />
+    );
     if (section === "prompts") content = promptPreview
       ? <PromptPreview preview={promptPreview} offset={promptPreviewOffset} pageSize={promptPreviewPageSize} />
       : <PromptView snapshot={snapshot} target={target} catalog={catalogs.prompts} selected={componentSelected.prompts} />;
@@ -1481,15 +2547,18 @@ function App({ initialSection, controller, onLaunch }) {
   }
 
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
-  const activeTarget = section === "providers" ? providerTarget : section === "accounts" ? "codex" : target;
+  const activeTarget = section === "providers"
+    ? providerTarget
+    : section === "skills" ? skillsTarget : section === "accounts" ? "codex" : target;
   const panelTitle = promptPreview
     ? `Prompts · ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview`
     : ["mcp", "prompts"].includes(section)
     ? `${sectionLabel} · Claude Code vs Codex`
     : section === "providers" ? `Providers · ${targetLabel(providerTarget)}`
+    : section === "skills" ? `Skills · ${targetLabel(skillsTarget)}`
     : section === "accounts" ? "Accounts · Codex official Identity"
     : section === "snippets" ? "Snippets · Shared library"
-      : ["overview", "skills", "prompts", "presets"].includes(section)
+      : ["overview", "prompts", "presets"].includes(section)
       ? `${sectionLabel} · ${targetLabel(target)}`
       : sectionLabel;
 
@@ -1526,8 +2595,31 @@ function App({ initialSection, controller, onLaunch }) {
           ))}
         </Box>
       )}
-      {confirm ? (
-        <Box marginTop={1}><Text color="yellow" bold>{confirm.label}? [y/N]</Text></Box>
+      {mcpProfilePrompt ? (
+        <Box borderStyle="single" borderColor="magenta" paddingX={1} flexDirection="column" marginTop={1}>
+          <Text color="magenta" bold>
+            {mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"}
+          </Text>
+          <Text>Name: <Text color="white" bold>{mcpProfilePrompt.value}</Text><Text inverse> </Text></Text>
+          {mcpProfilePrompt.error && <Text color="red">{mcpProfilePrompt.error}</Text>}
+          <Text color="gray">Enter confirm · Esc cancel · allowed: letters, numbers, . _ -</Text>
+        </Box>
+      ) : skillsPackPrompt ? (
+        <Box borderStyle="single" borderColor="green" paddingX={1} flexDirection="column" marginTop={1}>
+          <Text color="green" bold>
+            {skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"}
+          </Text>
+          <Text>Name: <Text color="white" bold>{skillsPackPrompt.value}</Text><Text inverse> </Text></Text>
+          {skillsPackPrompt.error && <Text color="red">{skillsPackPrompt.error}</Text>}
+          <Text color="gray">Enter confirm · Esc cancel · lowercase letters, numbers, single hyphens</Text>
+        </Box>
+      ) : confirm ? (
+        <Box marginTop={1} flexDirection="column">
+          {confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => (
+            <Text key={`${index}-${line}`} color={confirm.warning ? "red" : "gray"}>{line}</Text>
+          ))}
+          <Text color="yellow" bold>{confirm.label}? [y/N]</Text>
+        </Box>
       ) : (
         <Box marginTop={1} justifyContent="space-between">
           <Text color={message.startsWith("Failed") ? "red" : "gray"} wrap="truncate-end">{loading || busy ? "◌ " : ""}{message}</Text>

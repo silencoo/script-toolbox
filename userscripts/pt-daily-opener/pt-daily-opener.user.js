@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PT站点定时批量打开（防拦截 + 跨标签页互斥：监听器版）
 // @namespace    http://tampermonkey.net/
-// @version      1.10
+// @version      1.11
 // @description  每日显示“打开PT站点”按钮；定时仅自动打开一次（全浏览器互斥）；使用 GM_openInTab 规避拦截并后台开标签。
 // @author       ChatGPT
 // @match        *://*/*
@@ -304,8 +304,15 @@
   /* ------------- 常量与工具 ------------- */
   const INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const LOCK_KEY = 'pt_open_trigger_date';     // “今日是否已触发”的全局键（只存日期，如 2025-09-25）
-  const OPENED_FLAG = `pt_open_done_${INSTANCE_ID}`; // 本实例兜底标志（防二次打开）
   const OPENED_DATE_KEY = 'pt_open_last_date';       // 跨标签页记录“今日是否已真正执行打开”
+  // GM 存储没有原子的 compare-and-set。所有页面到点后会同时争抢 LOCK_KEY，
+  // 因此必须等待写入稳定，再由最终仍持有锁的实例执行打开。
+  const LOCK_SETTLE_MS = 1500;
+  const LOCK_LEASE_MS = 10000;
+  const LOCK_RETRY_JITTER_MS = 500;
+  let lockSettlementTimerId = null;
+  let lockSettlementClaimKey = '';
+  let lockRetryTimerId = null;
   const BARK_ENDPOINT_STORAGE_KEY = 'pt_bark_endpoint';
   const STORED_BARK_ENDPOINT = (GM_getValue(BARK_ENDPOINT_STORAGE_KEY, '') || '').trim();
   const DEFAULT_BARK_ENDPOINT = ''; // 如需默认 Bark 地址，可填入类似 https://api.day.app/XXXXXXXX
@@ -427,6 +434,88 @@
     } catch (_) {
       return '';
     }
+  }
+
+  function lockClaimKey(state) {
+    if (!state) return '';
+    return `${state.date}|${state.owner}|${state.ts}`;
+  }
+
+  function isSameLockClaim(left, right) {
+    return !!left && !!right
+      && left.date === right.date
+      && left.owner === right.owner
+      && left.ts === right.ts;
+  }
+
+  function wasOpenedOn(date) {
+    return GM_getValue(OPENED_DATE_KEY, '') === date
+      || GM_getValue(AUTO_LAST_TRIGGER_DATE_KEY, '') === date;
+  }
+
+  function isFreshLock(state, now = Date.now()) {
+    if (!state || !state.owner || !state.ts) return false;
+    return now - state.ts < LOCK_LEASE_MS;
+  }
+
+  function clearLockSettlementTimer() {
+    if (lockSettlementTimerId) {
+      clearTimeout(lockSettlementTimerId);
+      lockSettlementTimerId = null;
+    }
+    lockSettlementClaimKey = '';
+  }
+
+  function clearLockRetryTimer() {
+    if (lockRetryTimerId) {
+      clearTimeout(lockRetryTimerId);
+      lockRetryTimerId = null;
+    }
+  }
+
+  function finalizeLockClaim(claim) {
+    clearLockSettlementTimer();
+    if (!claim || claim.date !== ymd()) return;
+
+    if (wasOpenedOn(claim.date)) {
+      return;
+    }
+
+    // 等待期结束后必须再次读取共享锁。只有最终写入且一直未被覆盖的实例
+    // 才能继续；被其它标签页覆盖过的候选者全部退出。
+    const storedState = parseLockState(GM_getValue(LOCK_KEY, ''));
+    if (!isSameLockClaim(storedState, claim) || storedState.owner !== INSTANCE_ID) return;
+
+    // 在打开第一个标签页之前写入完成标志，避免新页面启动后再次参与当天任务。
+    GM_setValue(OPENED_DATE_KEY, claim.date);
+    GM_setValue(AUTO_LAST_TRIGGER_DATE_KEY, claim.date);
+    clearLockRetryTimer();
+    notifyScheduleTriggered(claim.date);
+    openSites(AUTO_OPEN_CONFIRM, { batchSource: 'auto' });
+  }
+
+  function scheduleLockSettlement(claim) {
+    if (!claim || claim.owner !== INSTANCE_ID || claim.date !== ymd()) return;
+    const claimKey = lockClaimKey(claim);
+    if (lockSettlementTimerId && lockSettlementClaimKey === claimKey) return;
+    clearLockSettlementTimer();
+    lockSettlementClaimKey = claimKey;
+    // 从当前页面实际观察/写入该候选值后开始等待，不能只依据候选时间戳；
+    // 否则一个被浏览器暂停过的旧候选值可能在恢复后跳过稳定期。
+    lockSettlementTimerId = setTimeout(() => finalizeLockClaim(claim), LOCK_SETTLE_MS);
+  }
+
+  function scheduleLockRetry(state) {
+    if (!state || state.date !== ymd() || wasOpenedOn(state.date)) return;
+    clearLockRetryTimer();
+    const targetMoment = parseYmdDate(state.date);
+    if (!targetMoment) return;
+    const leaseRemainingMs = Math.max(0, state.ts + LOCK_LEASE_MS - Date.now());
+    const jitterMs = Math.floor(Math.random() * LOCK_RETRY_JITTER_MS);
+    lockRetryTimerId = setTimeout(() => {
+      lockRetryTimerId = null;
+      attemptAutoOpen(targetMoment);
+    }, leaseRemainingMs + jitterMs + 50);
   }
 
   // 在后台打开站点（使用 GM_openInTab 规避拦截）
@@ -819,10 +908,10 @@
     }
   }
 
-  /* ---------------- 关键互斥逻辑（监听器法） ----------------
-   * 到点时只写入一次锁值：{ date, owner, ts }。
-   * 只有最终持有锁（owner 匹配当前实例）的页面负责执行 openSites，
-   * 其它页面只记录状态，不会重复打开。
+  /* ---------------- 关键互斥逻辑（租约 + 稳定期） ----------------
+   * GM_setValue 不提供原子锁。到点时多个页面可能同时写入候选值，
+   * 所以候选者必须等待 LOCK_SETTLE_MS，再次确认自己仍是最终持有者。
+   * 如果持有者在执行前关闭，其他页面会在租约过期后重新竞选。
   */
 
   // 注册跨页面变更监听
@@ -831,8 +920,12 @@
     const nextState = parseLockState(newVal);
     if (!nextState || nextState.date !== today) return;
 
-    if (GM_getValue(OPENED_DATE_KEY, '') === today) {
-      GM_setValue(OPENED_FLAG, true);
+    if (wasOpenedOn(today)) {
+      clearLockSettlementTimer();
+      clearLockRetryTimer();
+      if (GM_getValue(OPENED_DATE_KEY, '') !== today) {
+        GM_setValue(OPENED_DATE_KEY, today);
+      }
       if (GM_getValue(AUTO_LAST_TRIGGER_DATE_KEY, '') !== today) {
         GM_setValue(AUTO_LAST_TRIGGER_DATE_KEY, today);
       }
@@ -841,15 +934,12 @@
 
     const storedState = parseLockState(GM_getValue(LOCK_KEY, ''));
     if (!storedState || storedState.date !== today) return;
-    if (storedState.owner !== INSTANCE_ID) return;
-    if (GM_getValue(OPENED_FLAG, false)) return;
-
-    GM_setValue(OPENED_DATE_KEY, today);
-    GM_setValue(AUTO_LAST_TRIGGER_DATE_KEY, today);
-    notifyScheduleTriggered(today);
-    const opened = openSites(AUTO_OPEN_CONFIRM, { batchSource: 'auto' });
-    if (opened) {
-      GM_setValue(OPENED_FLAG, true); // 本实例兜底
+    if (storedState.owner === INSTANCE_ID) {
+      clearLockRetryTimer();
+      scheduleLockSettlement(storedState);
+    } else {
+      clearLockSettlementTimer();
+      scheduleLockRetry(storedState);
     }
   });
 
@@ -898,18 +988,27 @@
 
     if (!shouldTrigger) return;
     const triggerDateStr = ymd(targetMoment);
+    if (wasOpenedOn(triggerDateStr)) return;
+
     const existingLock = parseLockState(GM_getValue(LOCK_KEY, ''));
     if (existingLock && existingLock.date === triggerDateStr) {
-      const openedDate = GM_getValue(OPENED_DATE_KEY, '');
-      const lastAutoDate = GM_getValue(AUTO_LAST_TRIGGER_DATE_KEY, '');
-      if (openedDate === triggerDateStr || lastAutoDate === triggerDateStr) {
+      if (existingLock.owner === INSTANCE_ID) {
+        scheduleLockSettlement(existingLock);
         return;
       }
+      if (isFreshLock(existingLock)) {
+        scheduleLockRetry(existingLock);
+        return;
+      }
+      // 持有者可能已经关闭；仅在租约过期且仍未打开时重新竞选。
     }
+
     const lockState = buildLockState(triggerDateStr);
     const serialized = serializeLockState(lockState);
     if (!serialized) return;
     GM_setValue(LOCK_KEY, serialized);
+    // 不依赖变更监听是否会回调写入方；当前实例也显式进入稳定期。
+    scheduleLockSettlement(lockState);
   }
 
   function tryImmediateAutoOpen() {

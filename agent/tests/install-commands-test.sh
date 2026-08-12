@@ -45,6 +45,10 @@ for name in agentctl mcpctl promptctl skillsctl; do
   esac
 done
 [ -f "$RUNTIME/.script-toolbox-agent-runtime" ] || fail "runtime marker is missing"
+[ -f "$RUNTIME/platform-command.mjs" ] ||
+  fail "standalone runtime omitted the cross-platform command launcher"
+[ -f "$RUNTIME/platform-paths.mjs" ] ||
+  fail "standalone runtime omitted the cross-platform path resolver"
 [ "$(mode_of "$PREFIX/.script-toolbox-agent-commands")" = "600" ] ||
   fail "command manifest is not mode 600"
 [ "$(mode_of "$RUNTIME/.script-toolbox-agent-runtime")" = "600" ] ||
@@ -52,7 +56,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.16.7" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.16.9" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROVIDER_TARGETS,
+  SKILL_TARGETS,
   accountEntries,
   actionForKey,
   actionNeedsConfirmation,
@@ -9,6 +10,9 @@ import {
   componentSummary,
   componentTargetState,
   cycleTarget,
+  filterMcpServerEntries,
+  filterSkillEntries,
+  mcpServerEntries,
   mcpTargetComparison,
   moveSection,
   normalizeSection,
@@ -19,6 +23,8 @@ import {
   sectionDelta,
   selectionDelta,
   selectionWindow,
+  skillEntries,
+  skillTargetState,
   snippetEntries,
   targetLabel,
   workspaceConfigured,
@@ -141,6 +147,77 @@ test("MCP comparison makes shared and per-client assignments explicit", () => {
   assert.deepEqual(comparison.only.claude, ["claude-only"]);
   assert.deepEqual(comparison.targets.codex.suppressed, ["computer-use"]);
   assert.equal(componentTargetState(snapshot, "mcp", "claude").selection, "work");
+
+  const servers = mcpServerEntries([
+    { name: "inactive", category: "other" },
+    { name: "claude-only", category: "local" },
+    { name: "shared", category: "search" },
+    { name: "computer-use", category: "browser" }
+  ], snapshot, "codex");
+  assert.deepEqual(servers.map(({ name }) => name), [
+    "shared", "claude-only", "computer-use", "inactive"
+  ]);
+  assert.equal(servers[0].enabled, true);
+  assert.equal(servers[1].otherEnabled, true);
+  assert.equal(servers[2].suppressed, true);
+
+  const searchable = servers.map((entry) => ({
+    ...entry,
+    ready: entry.name === "computer-use" ? false : true
+  }));
+  assert.deepEqual(
+    filterMcpServerEntries(searchable, { query: "browser" })
+      .map(({ name }) => name),
+    ["computer-use"]
+  );
+  assert.deepEqual(
+    filterMcpServerEntries(searchable, { filter: "enabled" })
+      .map(({ name }) => name),
+    ["shared"]
+  );
+  assert.deepEqual(
+    filterMcpServerEntries(searchable, { filter: "problems" })
+      .map(({ name }) => name),
+    ["computer-use"]
+  );
+});
+
+test("Skill entries expose four-client local state and keep enabled items first", () => {
+  const states = {
+    codex: {
+      target: "codex",
+      selection_mode: "manual",
+      base_pack: "base",
+      base_skills: ["shared"],
+      skills: ["codex-only", "shared"],
+      drift: [],
+      healthy: true
+    },
+    claude: { target: "claude", selection_mode: "pack", pack: "base", skills: ["shared"], healthy: true },
+    opencode: { target: "opencode", selection_mode: "pack", pack: "base", skills: ["other"], healthy: true },
+    pi: { target: "pi", selection_mode: "pack", pack: "off", skills: [], healthy: true }
+  };
+  assert.deepEqual(SKILL_TARGETS, ["codex", "claude", "opencode", "pi"]);
+  assert.equal(skillTargetState(states, "codex").selection, "custom");
+  const entries = skillEntries([
+    { name: "other", description: "Other client Skill" },
+    { name: "inactive", description: "Inactive Skill" },
+    { name: "shared", description: "Shared Skill" },
+    { name: "codex-only", description: "Codex Skill" }
+  ], states, "codex");
+  assert.deepEqual(entries.map(({ name }) => name), [
+    "shared", "codex-only", "other", "inactive"
+  ]);
+  assert.deepEqual(entries.find(({ name }) => name === "shared").enabledTargets, ["claude"]);
+  assert.deepEqual(entries.find(({ name }) => name === "other").enabledTargets, ["opencode"]);
+  assert.deepEqual(
+    filterSkillEntries(entries, { query: "other" }).map(({ name }) => name),
+    ["other"]
+  );
+  assert.deepEqual(
+    filterSkillEntries(entries, { enabledOnly: true }).map(({ name }) => name),
+    ["shared", "codex-only"]
+  );
 });
 
 test("catalog windows keep the selected item visible without rendering the full store", () => {
@@ -386,8 +463,10 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("presets", "P"), null);
   assert.equal(actionForKey("mcp", "p"), "mcp-plan");
   assert.equal(actionForKey("mcp", "f"), "mcp-repair");
+  assert.equal(actionForKey("mcp", " "), "mcp-toggle");
   assert.equal(actionForKey("skills", "a"), "skills-apply");
   assert.equal(actionForKey("skills", "f"), "skills-repair");
+  assert.equal(actionForKey("skills", " "), "skills-toggle");
   assert.equal(actionForKey("prompts", "v"), "prompt-view-local");
   assert.equal(actionForKey("prompts", "V"), "prompt-view-cloud");
   assert.equal(actionForKey("snippets", "p"), "snippets-plan");
@@ -417,7 +496,15 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("provider-apply"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-pull"), true);
+  assert.equal(actionNeedsConfirmation("skills-disable"), true);
+  assert.equal(actionNeedsConfirmation("skills-batch"), true);
   assert.equal(actionNeedsConfirmation("mcp-repair"), true);
+  assert.equal(actionNeedsConfirmation("mcp-enable"), true);
+  assert.equal(actionNeedsConfirmation("mcp-disable"), true);
+  assert.equal(actionNeedsConfirmation("mcp-batch"), true);
+  assert.equal(actionNeedsConfirmation("mcp-profile-save"), true);
+  assert.equal(actionNeedsConfirmation("mcp-profile-update"), true);
+  assert.equal(actionNeedsConfirmation("mcp-profile-upload"), true);
   assert.equal(actionNeedsConfirmation("skills-repair"), true);
 });
 

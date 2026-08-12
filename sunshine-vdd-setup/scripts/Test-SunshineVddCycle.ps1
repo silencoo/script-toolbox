@@ -1,15 +1,34 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\\\\\.\\DISPLAY\d+$')]
-    [string]$ExpectedPhysicalDisplay,
+    [string[]]$ExpectedIdlePhysicalDisplays,
 
-    [Parameter(Mandatory)]
+    [ValidateRange(0, 16)]
+    [int]$ExpectedIdlePhysicalCount = 1,
+
+    [ValidateRange(0, 16)]
+    [int]$ExpectedIdleMttVddCount = 0,
+
+    [ValidateRange(0, 16)]
+    [int]$ExpectedIdleOtherVirtualCount = 0,
+
+    [string[]]$ExpectedStreamPhysicalDisplays,
+
+    [ValidateRange(0, 16)]
+    [int]$ExpectedStreamPhysicalCount = 0,
+
+    [ValidateRange(0, 16)]
+    [int]$ExpectedStreamMttVddCount = 1,
+
+    [ValidateRange(0, 16)]
+    [int]$ExpectedStreamOtherVirtualCount = 0,
+
     [ValidatePattern('^\d{3,5}x\d{3,5}$')]
     [string]$ExpectedVirtualResolution,
 
-    [Nullable[int]]$ExpectedVirtualRefreshRate,
+    [Nullable[double]]$ExpectedVirtualRefreshRate,
 
-    [bool]$RequireVirtualOnly = $true,
+    [ValidateRange(0, 5)]
+    [double]$RefreshRateTolerance = 0.6,
 
     [ValidateRange(10, 1800)]
     [int]$ConnectTimeoutSeconds = 180,
@@ -31,33 +50,70 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module -Force (Join-Path $PSScriptRoot 'DisplayTopology.psm1')
 
+foreach ($name in @($ExpectedIdlePhysicalDisplays) + @($ExpectedStreamPhysicalDisplays)) {
+    if ($name -notmatch '^\\\\\.\\DISPLAY\d+$') {
+        throw "Invalid expected physical display name '$name'. Re-inventory and use a current GDI name such as \\\\.\\DISPLAY3."
+    }
+}
+if (-not $IdleOnly -and $ExpectedStreamMttVddCount -gt 0 -and -not $ExpectedVirtualResolution) {
+    throw 'ExpectedVirtualResolution is required when one or more streaming MTT VDD displays are expected.'
+}
+
 function Get-CycleSnapshot {
     $displays = @(Get-VddDisplayInventory)
     [pscustomobject][ordered]@{
-        CapturedAt = (Get-Date).ToString('o')
-        Displays   = $displays
-        Attached   = @($displays | Where-Object Attached)
-        MttVdd     = @($displays | Where-Object { $_.Attached -and $_.IsMttVdd })
-        Physical   = @($displays | Where-Object { $_.Attached -and -not $_.IsMttVdd -and -not $_.IsOtherVirtual })
+        CapturedAt   = (Get-Date).ToString('o')
+        Displays     = $displays
+        Attached     = @($displays | Where-Object Attached)
+        MttVdd       = @($displays | Where-Object { $_.Attached -and $_.IsMttVdd })
+        OtherVirtual = @($displays | Where-Object { $_.Attached -and $_.IsOtherVirtual })
+        Physical     = @($displays | Where-Object { $_.Attached -and -not $_.IsMttVdd -and -not $_.IsOtherVirtual })
     }
+}
+
+function Test-ExpectedNames {
+    param(
+        [object[]]$ActualDisplays,
+        [string[]]$ExpectedNames,
+        [int]$ExpectedCount
+    )
+
+    if ($ExpectedNames) {
+        $uniqueExpected = @($ExpectedNames | Sort-Object -Unique)
+        if ($uniqueExpected.Count -ne $ExpectedNames.Count) { return $false }
+        if ($ActualDisplays.Count -ne $uniqueExpected.Count) { return $false }
+        $actualNames = @($ActualDisplays.DeviceName)
+        return @($uniqueExpected | Where-Object { $actualNames -inotcontains $_ }).Count -eq 0
+    }
+    $ActualDisplays.Count -eq $ExpectedCount
 }
 
 function Test-IdleState {
     param($Snapshot)
-    if ($Snapshot.MttVdd.Count -ne 0) { return $false }
-    if ($Snapshot.Physical.Count -ne 1) { return $false }
-    if ($Snapshot.Attached.Count -ne 1) { return $false }
-    if ($ExpectedPhysicalDisplay -and $Snapshot.Physical[0].DeviceName -ine $ExpectedPhysicalDisplay) { return $false }
-    $true
+
+    if (-not (Test-ExpectedNames -ActualDisplays $Snapshot.Physical -ExpectedNames $ExpectedIdlePhysicalDisplays -ExpectedCount $ExpectedIdlePhysicalCount)) { return $false }
+    if ($Snapshot.MttVdd.Count -ne $ExpectedIdleMttVddCount) { return $false }
+    if ($Snapshot.OtherVirtual.Count -ne $ExpectedIdleOtherVirtualCount) { return $false }
+    $expectedAttached = $(if ($ExpectedIdlePhysicalDisplays) { $ExpectedIdlePhysicalDisplays.Count } else { $ExpectedIdlePhysicalCount }) + $ExpectedIdleMttVddCount + $ExpectedIdleOtherVirtualCount
+    $Snapshot.Attached.Count -eq $expectedAttached
 }
 
 function Test-StreamState {
     param($Snapshot)
-    if ($Snapshot.MttVdd.Count -ne 1) { return $false }
-    if ($RequireVirtualOnly -and $Snapshot.Attached.Count -ne 1) { return $false }
-    $expectedParts = $ExpectedVirtualResolution -split 'x'
-    if ($Snapshot.MttVdd[0].Width -ne [int]$expectedParts[0] -or $Snapshot.MttVdd[0].Height -ne [int]$expectedParts[1]) { return $false }
-    if ($null -ne $ExpectedVirtualRefreshRate -and $Snapshot.MttVdd[0].RefreshRate -ne $ExpectedVirtualRefreshRate) { return $false }
+
+    if (-not (Test-ExpectedNames -ActualDisplays $Snapshot.Physical -ExpectedNames $ExpectedStreamPhysicalDisplays -ExpectedCount $ExpectedStreamPhysicalCount)) { return $false }
+    if ($Snapshot.MttVdd.Count -ne $ExpectedStreamMttVddCount) { return $false }
+    if ($Snapshot.OtherVirtual.Count -ne $ExpectedStreamOtherVirtualCount) { return $false }
+    $expectedAttached = $(if ($ExpectedStreamPhysicalDisplays) { $ExpectedStreamPhysicalDisplays.Count } else { $ExpectedStreamPhysicalCount }) + $ExpectedStreamMttVddCount + $ExpectedStreamOtherVirtualCount
+    if ($Snapshot.Attached.Count -ne $expectedAttached) { return $false }
+
+    if ($ExpectedStreamMttVddCount -gt 0) {
+        $expectedParts = $ExpectedVirtualResolution -split 'x'
+        foreach ($vdd in $Snapshot.MttVdd) {
+            if ($vdd.Width -ne [int]$expectedParts[0] -or $vdd.Height -ne [int]$expectedParts[1]) { return $false }
+            if ($null -ne $ExpectedVirtualRefreshRate -and [Math]::Abs([double]$vdd.RefreshRate - [double]$ExpectedVirtualRefreshRate) -gt $RefreshRateTolerance) { return $false }
+        }
+    }
     $true
 }
 
@@ -68,12 +124,13 @@ function Wait-ForState {
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $snapshot = Get-CycleSnapshot
     do {
-        $snapshot = Get-CycleSnapshot
         if (& $Predicate $snapshot) {
             return [pscustomobject]@{ Passed = $true; Snapshot = $snapshot }
         }
         Start-Sleep -Seconds $PollIntervalSeconds
+        $snapshot = Get-CycleSnapshot
     } while ((Get-Date) -lt $deadline)
     [pscustomobject]@{ Passed = $false; Snapshot = $snapshot }
 }
@@ -81,7 +138,7 @@ function Wait-ForState {
 $errors = [Collections.Generic.List[string]]::new()
 $idleBefore = Get-CycleSnapshot
 if (-not (Test-IdleState $idleBefore)) {
-    $errors.Add('Initial state is not one physical display with MTT VDD detached.')
+    $errors.Add('Initial attached display set does not match the expected idle topology.')
 }
 
 if ($IdleOnly) {
@@ -102,7 +159,7 @@ if (-not $StartImmediately) {
 $streamPredicate = { param($snapshot) Test-StreamState $snapshot }
 $stream = Wait-ForState -Predicate $streamPredicate -TimeoutSeconds $ConnectTimeoutSeconds
 if (-not $stream.Passed) {
-    $errors.Add("The expected VDD stream state did not appear within $ConnectTimeoutSeconds seconds.")
+    $errors.Add("The expected streaming topology and VDD mode did not appear within $ConnectTimeoutSeconds seconds.")
 }
 
 $idleAfter = $null
@@ -113,7 +170,7 @@ if ($stream.Passed) {
     $idlePredicate = { param($snapshot) Test-IdleState $snapshot }
     $idleAfter = Wait-ForState -Predicate $idlePredicate -TimeoutSeconds $DisconnectTimeoutSeconds
     if (-not $idleAfter.Passed) {
-        $errors.Add("The physical-only idle state did not return within $DisconnectTimeoutSeconds seconds.")
+        $errors.Add("The expected idle topology did not return within $DisconnectTimeoutSeconds seconds.")
     }
 }
 

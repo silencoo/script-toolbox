@@ -17,12 +17,19 @@ exporting a conversation's full-size images, and safely managing conversations.
   disabling every image button
 - Recognizes current tiered `gg-*-dl` and `rd-*` original-image routes and
   refuses to silently substitute a smaller preview when original lookup fails
-- Exports all generated images currently loaded in a conversation as separate
-  downloads, fetching and saving only one image at a time
+- Remembers generated images as they appear while a conversation is scrolled,
+  even after Gemini removes their virtualized DOM elements
+- Shows the ordered export manifest and flags images that are missing
+  original-size metadata before downloading
+- Exports captured images as separate downloads, fetching and saving only one
+  image at a time with stable response-, attachment-, and asset-based filenames
+- Retries only transient image failures up to three times, keeps a persistent
+  result summary, and lets you retry only eligible failures
 - Provides one persistent, independently controlled watermark-removal switch
   for both single-image and bulk downloads
 - Uses web2gem-plus's bottom-right crop strategy and its vendored GargantuaX
-  adaptive watermark core, including newer 36/48/96-pixel variants
+  adaptive watermark core, including newer 36/48/96-pixel variants, while
+  releasing image and canvas memory after every file
 - Filters conversations by title, ID, or age
 - Selects all conversations matching the current filters
 - Protects the current and pinned conversations by default
@@ -72,14 +79,15 @@ deleted before cancellation cannot be restored.
 - Turn on **Remove image watermark** in **Gemini Toolkit** when single-image and
   bulk downloads should be processed. It is off by default and persists until
   changed.
-- Open **Toolkit** and select **Export full-size images**, review the
-  detected image count and watermark setting, then select **Download images**.
-  Each image is fetched and downloaded separately before the next one starts;
-  allow multiple downloads if the browser prompts you.
+- Open **Toolkit** and select **Export full-size images**, review the ordered
+  file list, readiness status, and watermark setting, then select
+  **Download images**. Each image is fetched and downloaded separately before
+  the next one starts; allow multiple downloads if the browser prompts you.
 
-The exporter sees generated images whose full-size buttons are present in the
-loaded conversation DOM. If Gemini virtualizes an unusually long conversation,
-scroll through it once before opening the export confirmation.
+The exporter remembers generated images seen since the userscript loaded the
+current conversation. For an unusually long virtualized conversation, scroll
+through it from top to bottom once before opening the export confirmation;
+images remain in the manifest even after Gemini unloads their message elements.
 
 ## Privacy and compatibility
 

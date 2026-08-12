@@ -56,6 +56,8 @@ the saved pack:
 skillsctl skill disable frontend-dev --target codex
 skillsctl skill disable frontend-dev --target codex --yes
 skillsctl skill enable frontend-dev --target codex --yes
+skillsctl skill set --target codex \
+  --enable backend-dev --disable frontend-dev --yes --json
 ```
 
 This records a target-local custom selection based on the last applied pack.
@@ -64,11 +66,30 @@ managed target link. Applying a named pack later replaces the custom selection.
 `current` reports the named or custom selection, exact managed Skill names,
 and link drift in a stable human or JSON form for orchestration.
 
+`skill set` commits every repeated `--enable` / `--disable` flag through one
+target plan, rolls completed link operations back if publication fails, and
+with `--json` returns the final state without a second `current` process.
+Disable wins when the same Skill appears in both lists.
+
+Turn an exact custom selection into a reusable target-specific Pack without
+changing other clients:
+
+```bash
+skillsctl pack save daily-web --target codex --yes
+skillsctl pack save daily-web --target codex --force --yes
+```
+
+The first command creates a Pack based on the current named Pack; `--force`
+updates only the selected target override and preserves global rules plus every
+other target override.
+
 ## Store and targets
 
-The default canonical store is `~/.config/skillsctl/store`. `skillsctl`
-creates only links it owns and records them under `store/state`; it refuses to
-replace unowned target entries.
+The default canonical store is `~/.config/skillsctl/store` on macOS/Linux and
+`%APPDATA%\skillsctl\store` on Windows. `skillsctl` creates only links it owns
+and records them under `store/state`; it refuses to replace unowned target
+entries. Windows target links use directory junctions so they do not require a
+Unix symlink implementation.
 
 | Target | Default skill directory |
 | --- | --- |

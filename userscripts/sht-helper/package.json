@@ -1,0 +1,14 @@
+{
+  "name": "sht-helper-userscript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:check": "node scripts/build.mjs --check",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run build:check && node --check sht-helper.user.js && npm test"
+  },
+  "devDependencies": {
+    "linkedom": "0.18.12"
+  }
+}

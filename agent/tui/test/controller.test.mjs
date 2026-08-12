@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   createController,
+  normalizeMcpServerCatalog,
+  normalizeSkillsCatalog,
   normalizeSnippetMetadata,
   parseJsonOutput,
   readPromptPreviewFile,
@@ -39,6 +41,316 @@ test("Snippet controller metadata drops content before entering the TUI snapshot
     state: "regular"
   }]);
   assert.equal(JSON.stringify(metadata).includes("do-not-render"), false);
+});
+
+test("MCP controller catalog keeps display metadata only and rejects unsafe names", () => {
+  const catalog = normalizeMcpServerCatalog([{
+    name: "exa",
+    category: "search",
+    description: "Search MCP",
+    setup: "Set the referenced Secret before enabling.",
+    variant_group: "search",
+    command: ["never-render"],
+    headers: { Authorization: "never-render" }
+  }, {
+    name: "../unsafe",
+    description: "drop"
+  }]);
+  assert.deepEqual(catalog, [{
+    name: "exa",
+    category: "search",
+    description: "Search MCP",
+    setup: "Set the referenced Secret before enabling.",
+    variant_group: "search",
+    checked: false,
+    ready: null,
+    issues: [],
+    check_details: ""
+  }]);
+  assert.equal(JSON.stringify(catalog).includes("never-render"), false);
+});
+
+test("Skills controller catalog keeps display metadata only and rejects unsafe names", () => {
+  assert.deepEqual(normalizeSkillsCatalog([{
+    name: "frontend-dev",
+    description: "Frontend development",
+    files: ["never-render"]
+  }, {
+    name: "../unsafe",
+    description: "drop"
+  }]), [{ name: "frontend-dev", description: "Frontend development" }]);
+});
+
+test("local MCP catalog and target switch actions stay behind mcpctl", async () => {
+  const calls = [];
+  const runner = async (executable, args) => {
+    calls.push({ executable, args });
+    if (args.join(" ") === "server list --target codex --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify([{
+          name: "exa",
+          category: "search",
+          description: "Search MCP",
+          command: ["must-not-reach-the-tui"]
+        }]),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") === "server doctor --all --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          schema: 1,
+          platform: "darwin",
+          servers: [{ name: "exa", ready: true, issues: [], details: "exa\n  [ok] platform darwin" }]
+        }),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") === "current --target codex --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({ target: "codex", profile: "custom", servers: [] }),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") === "server set --target codex --disable exa --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({ target: "codex", profile: "custom", servers: [] }),
+        stderr: ""
+      };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  assert.deepEqual(await controller.localMcpServers("codex"), [{
+    name: "exa",
+    category: "search",
+    description: "Search MCP",
+    setup: "",
+    variant_group: "",
+    checked: true,
+    ready: true,
+    issues: [],
+    check_details: "exa\n  [ok] platform darwin"
+  }]);
+  await controller.localMcpServers("codex");
+  assert.equal(
+    calls.filter(({ args }) => args.join(" ") === "server doctor --all --json").length,
+    1
+  );
+  const disabled = await controller.action("mcp-disable", {
+    selection: "exa",
+    target: "codex"
+  });
+  assert.equal(disabled.ok, true);
+  assert.match(disabled.detail, /target-specific override/);
+  assert.deepEqual(calls.at(-1).args, ["server", "set", "--target", "codex", "--disable", "exa", "--json"]);
+  await assert.rejects(() => controller.localMcpServers("pi"), /unsupported MCP target/);
+  await assert.rejects(
+    () => controller.action("mcp-enable", { selection: "../unsafe", target: "codex" }),
+    /valid MCP server/
+  );
+});
+
+test("MCP preflight, atomic batch, and named Profile save use targeted commands", async () => {
+  const calls = [];
+  const runner = async (executable, args) => {
+    calls.push({ executable, args });
+    const command = args.join(" ");
+    if (command === "server doctor exa --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          schema: 1,
+          servers: [{ name: "exa", ready: true, issues: [], details: "ready" }]
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "server preflight exa --target codex --json") {
+      return { code: 0, stdout: '{"ready":true}', stderr: "" };
+    }
+    if (command === "current --target codex --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "profile",
+          profile: "daily",
+          servers: ["exa"]
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "server set --target codex --enable exa --disable fetch --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "manual",
+          profile: "custom",
+          servers: ["exa"]
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 0, stdout: "ok\n", stderr: "" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  const preflight = await controller.localMcpPreflight("exa", "codex");
+  assert.equal(preflight.ready, true);
+  assert.match(preflight.detail, /passed platform/);
+
+  const batch = await controller.action("mcp-batch", {
+    target: "codex",
+    changes: [{ name: "exa", enabled: true }, { name: "fetch", enabled: false }]
+  });
+  assert.equal(batch.ok, true);
+  assert.deepEqual(calls.at(-1).args, [
+    "server", "set", "--target", "codex", "--enable", "exa", "--disable", "fetch", "--json"
+  ]);
+  assert.equal(batch.data.state.profile, "custom");
+
+  const saved = await controller.action("mcp-profile-save", {
+    selection: "daily",
+    target: "codex"
+  });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(calls.slice(-3).map(({ args }) => args), [
+    ["profile", "save", "daily", "--target", "codex"],
+    ["apply", "--target", "codex", "--profile", "daily"],
+    ["current", "--target", "codex", "--json"]
+  ]);
+  const backedUp = await controller.action("mcp-profile-upload", {
+    selection: "daily",
+    target: "codex"
+  });
+  assert.equal(backedUp.ok, true);
+  assert.deepEqual(calls.at(-1).args, ["backup"]);
+  assert.match(backedUp.detail, /No Secret value was printed/);
+});
+
+test("Skills dashboard and local switches use atomic target-scoped skillsctl commands", async () => {
+  const calls = [];
+  const runner = async (executable, args) => {
+    calls.push({ executable, args });
+    const command = args.join(" ");
+    if (command === "list --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify([{
+          name: "frontend-dev",
+          description: "Frontend development",
+          files: ["must-not-reach-tui"]
+        }]),
+        stderr: ""
+      };
+    }
+    if (command.startsWith("current --target ")) {
+      const target = args[2];
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target,
+          selection_mode: "pack",
+          pack: "base",
+          base_skills: [],
+          skills: target === "codex" ? ["frontend-dev"] : [],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "skill set --target codex --disable frontend-dev --yes --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "manual",
+          base_pack: "base",
+          base_skills: [],
+          skills: [],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "skill set --target codex --enable frontend-dev --disable backend-dev --yes --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "manual",
+          base_pack: "base",
+          base_skills: [],
+          skills: ["frontend-dev"],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 0, stdout: "ok\n", stderr: "" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  const dashboard = await controller.localSkillsDashboard();
+  assert.deepEqual(dashboard.catalog, [{
+    name: "frontend-dev",
+    description: "Frontend development"
+  }]);
+  assert.deepEqual(dashboard.states.codex.skills, ["frontend-dev"]);
+
+  const disabled = await controller.action("skills-disable", {
+    selection: "frontend-dev",
+    target: "codex"
+  });
+  assert.equal(disabled.ok, true);
+  assert.deepEqual(calls.at(-1).args, [
+    "skill", "set", "--target", "codex", "--disable", "frontend-dev", "--yes", "--json"
+  ]);
+
+  const batch = await controller.action("skills-batch", {
+    target: "codex",
+    changes: [
+      { name: "frontend-dev", enabled: true },
+      { name: "backend-dev", enabled: false }
+    ]
+  });
+  assert.equal(batch.ok, true);
+  assert.deepEqual(calls.at(-1).args, [
+    "skill", "set", "--target", "codex", "--enable", "frontend-dev",
+    "--disable", "backend-dev", "--yes", "--json"
+  ]);
+
+  const saved = await controller.action("skills-pack-save", {
+    selection: "daily-pack",
+    target: "codex"
+  });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(calls.slice(-3).map(({ args }) => args), [
+    ["pack", "save", "daily-pack", "--target", "codex", "--yes"],
+    ["apply", "--target", "codex", "--pack", "daily-pack", "--yes"],
+    ["current", "--target", "codex", "--json"]
+  ]);
+  const updated = await controller.action("skills-pack-update", {
+    selection: "daily-pack",
+    target: "codex"
+  });
+  assert.equal(updated.ok, true);
+  assert.deepEqual(calls.at(-3).args, [
+    "pack", "save", "daily-pack", "--target", "codex", "--yes", "--force"
+  ]);
+  const backedUp = await controller.action("skills-pack-upload", {
+    selection: "daily-pack",
+    target: "codex"
+  });
+  assert.equal(backedUp.ok, true);
+  assert.deepEqual(calls.at(-1).args, ["backup"]);
 });
 
 test("Prompt content is loaded only through an explicit local or Workspace preview", async () => {

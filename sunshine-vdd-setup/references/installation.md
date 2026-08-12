@@ -31,3 +31,5 @@ Do not remove unrelated virtual display products as part of routine installation
 4. Reload only the newly discovered MTT VDD instance when necessary.
 5. Derive Sunshine's stable output GUID from its new display inventory or log. Never assume the pre-install GUID survived.
 6. Continue with Sunshine configuration, the physical-only idle baseline, and the full connect/disconnect test.
+
+Do not assume the MTT device instance is `ROOT\DISPLAY\...`; current installations commonly report `ROOT\MTTVDD\0000`. Always use the exact positively identified `MttVddPnpDevices[].InstanceId`. Keep the restorable pre-install topology snapshot and the config backup until the closed-loop test passes.

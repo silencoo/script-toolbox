@@ -169,6 +169,29 @@ test("import normalizes user tool launchers and records executable requirements"
   assert.match(imported.warnings.join("\n"), /normalized local executable/);
 });
 
+test("Codex import makes the ChatGPT Computer Use client portable", () => {
+  const imported = parseCodexList([{
+    name: "computer-use",
+    enabled: true,
+    transport: {
+      type: "stdio",
+      command: "./Codex Computer Use.app/Contents/SharedSupport/" +
+        "SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+      args: ["mcp"],
+      cwd: "."
+    }
+  }]);
+  const definition = imported.servers[0].definition;
+  assert.deepEqual(definition.command, [
+    "@mcpctl/adapters/mcp-computer-use"
+  ]);
+  assert.equal(definition.cwd, undefined);
+  assert.deepEqual(definition.host.platforms, ["darwin"]);
+  assert.equal(definition.host.requirements[0].type, "path");
+  assert.equal(definition.host.requirements[0].path_kind, "executable");
+  assert.match(imported.warnings.join("\n"), /portable macOS adapter/);
+});
+
 test("import refuses URL credentials and extracts credential command arguments", () => {
   assert.throws(
     () => parseClaudeConfig({
@@ -326,9 +349,15 @@ test("apply writes only redacted catalog data and an encrypted Secret cache", as
     assert.equal(applied.stderr.includes(firstToken), false);
     const catalogText = await readFile(join(store, "catalog.json"), "utf8");
     assert.equal(catalogText.includes(firstToken), false);
-    assert.equal((await stat(join(store, "catalog.json"))).mode & 0o777, 0o600);
-    assert.equal((await stat(profile)).mode & 0o777, 0o600);
-    assert.equal((await stat(encryptedSecrets)).mode & 0o777, 0o600);
+    if (process.platform === "win32") {
+      assert.equal((await stat(join(store, "catalog.json"))).isFile(), true);
+      assert.equal((await stat(profile)).isFile(), true);
+      assert.equal((await stat(encryptedSecrets)).isFile(), true);
+    } else {
+      assert.equal((await stat(join(store, "catalog.json"))).mode & 0o777, 0o600);
+      assert.equal((await stat(profile)).mode & 0o777, 0o600);
+      assert.equal((await stat(encryptedSecrets)).mode & 0o777, 0o600);
+    }
 
     const importedProfile = JSON.parse(await readFile(profile, "utf8"));
     assert.deepEqual(importedProfile.target_overrides.claude.enable, ["private"]);

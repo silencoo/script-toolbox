@@ -2,7 +2,6 @@
 param(
     [string]$ConfigPath = "$env:ProgramFiles\Sunshine\config\sunshine.conf",
 
-    [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string]$AdapterName,
 
@@ -24,6 +23,15 @@ param(
     [Nullable[double]]$ManualRefreshRate,
 
     [bool]$RevertOnDisconnect = $true,
+
+    [ValidateSet('preserve', 'disabled', 'auto')]
+    [string]$HdrMode = 'preserve',
+
+    [ValidateRange(0, 3000)]
+    [Nullable[int]]$HdrToggleDelay,
+
+    [ValidateRange(0, 60000)]
+    [Nullable[int]]$RevertDelay,
 
     [ValidateSet('enabled', 'disabled')]
     [string]$Mouse = 'enabled',
@@ -58,17 +66,19 @@ $rateText = if ($null -ne $ManualRefreshRate) {
 }
 else { $null }
 
-$desired = [ordered]@{
-    adapter_name                   = $AdapterName
-    output_name                    = $OutputName
-    dd_configuration_option        = $Topology
-    dd_resolution_option           = $ResolutionMode
-    dd_refresh_rate_option         = $RefreshRateMode
-    dd_config_revert_on_disconnect = if ($RevertOnDisconnect) { 'enabled' } else { 'disabled' }
-    mouse                          = $Mouse
-}
+$desired = [ordered]@{}
+if ($AdapterName) { $desired.adapter_name = $AdapterName }
+$desired.output_name = $OutputName
+$desired.dd_configuration_option = $Topology
+$desired.dd_resolution_option = $ResolutionMode
+$desired.dd_refresh_rate_option = $RefreshRateMode
+$desired.dd_config_revert_on_disconnect = if ($RevertOnDisconnect) { 'enabled' } else { 'disabled' }
+$desired.mouse = $Mouse
 if ($ResolutionMode -eq 'manual') { $desired.dd_manual_resolution = $ManualResolution }
 if ($RefreshRateMode -eq 'manual') { $desired.dd_manual_refresh_rate = $rateText }
+if ($HdrMode -ne 'preserve') { $desired.dd_hdr_option = $HdrMode }
+if ($null -ne $HdrToggleDelay) { $desired.dd_wa_hdr_toggle_delay = [string]$HdrToggleDelay }
+if ($null -ne $RevertDelay) { $desired.dd_config_revert_delay = [string]$RevertDelay }
 if ($NativePenTouch -ne 'preserve') { $desired.native_pen_touch = $NativePenTouch }
 $removeKeys = @()
 if ($ResolutionMode -ne 'manual') { $removeKeys += 'dd_manual_resolution' }

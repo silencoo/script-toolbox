@@ -16,6 +16,8 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { bashScriptCommand } from "../platform-command.mjs";
+import { platformConfigHome, platformStateHome } from "../platform-paths.mjs";
 import {
   CURRENT_PROVIDER_SCHEMA,
   PROVIDER_AUTH_MODES,
@@ -160,16 +162,8 @@ export function providerDefaults({
   environment = process.env,
   home = homedir()
 } = {}) {
-  let configHome;
-  if (platform === "win32") {
-    configHome = environment.APPDATA || join(home, "AppData", "Roaming");
-  } else {
-    configHome = environment.XDG_CONFIG_HOME || join(home, ".config");
-  }
-  const stateHome = platform === "win32"
-    ? (environment.LOCALAPPDATA || environment.APPDATA ||
-      join(home, "AppData", "Local"))
-    : (environment.XDG_STATE_HOME || join(home, ".local", "state"));
+  const configHome = platformConfigHome({ platform, environment, home });
+  const stateHome = platformStateHome({ platform, environment, home });
   const root = join(configHome, "agentctl");
   return {
     storePath: environment.AGENTCTL_PROVIDER_STORE || join(root, "providers.json"),
@@ -1239,7 +1233,8 @@ async function applyApplication(name, options, prepared = {}) {
         force: options.force,
         forceContext: options.contextForce ?? options.force
       });
-      const result = spawnSync(plan.backend, args, {
+      const command = bashScriptCommand(plan.backend, args);
+      const result = spawnSync(command.executable, command.args, {
         encoding: "utf8",
         env: {
           ...process.env,

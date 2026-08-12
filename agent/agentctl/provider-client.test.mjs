@@ -31,9 +31,17 @@ import { providerDefaults } from "./provider-client.mjs";
 const CLIENT = join(dirname(fileURLToPath(import.meta.url)), "provider-client.mjs");
 
 function run(args, expectedStatus = 0, environment = {}) {
+  const requestedHome = environment.HOME;
   const result = spawnSync(process.execPath, [CLIENT, ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1", ...environment }
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      ...environment,
+      ...(process.platform === "win32" && requestedHome
+        ? { HOME: requestedHome.replaceAll("\\", "/"), USERPROFILE: requestedHome }
+        : {})
+    }
   });
   assert.equal(
     result.status,
@@ -326,8 +334,13 @@ test("provider CLI previews mutations, stores Secrets separately, and exports no
     const exportText = await readFile(exported, "utf8");
     assert.equal(exportText.includes("TOP-SECRET-VALUE"), false);
     assert.equal(exportText.includes("gateway_key"), true);
-    assert.equal((await lstat(p.secrets)).mode & 0o077, 0);
-    assert.equal((await lstat(exported)).mode & 0o077, 0);
+    if (process.platform === "win32") {
+      assert.equal((await lstat(p.secrets)).isFile(), true);
+      assert.equal((await lstat(exported)).isFile(), true);
+    } else {
+      assert.equal((await lstat(p.secrets)).mode & 0o077, 0);
+      assert.equal((await lstat(exported)).mode & 0o077, 0);
+    }
 
     const status = JSON.parse(run(["status", ...common(root), "--json"]).stdout);
     assert.equal(status.profile_count, 1);
@@ -645,7 +658,11 @@ test("CCS migration imports third-party Providers and Secrets while skipping off
     assert.equal(secrets.secrets.deepseek_api_key.value, "CCS-DEEPSEEK-SECRET");
     assert.equal(Object.values(secrets.secrets).some((entry) =>
       entry.value === "OFFICIAL-MUST-NOT-MIGRATE"), false);
-    assert.equal((await lstat(paths(root).secrets)).mode & 0o077, 0);
+    if (process.platform === "win32") {
+      assert.equal((await lstat(paths(root).secrets)).isFile(), true);
+    } else {
+      assert.equal((await lstat(paths(root).secrets)).mode & 0o077, 0);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

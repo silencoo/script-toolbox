@@ -1,50 +1,481 @@
 // ==UserScript==
 // @name         SHT Helper - 附件、链接与搜索增强
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      2.9.1
-// @description  为色花堂提供附件文本预览、ZIP/RAR 解压、ED2K/磁力链接聚合、图片控制、离线下载与搜索结果排序。
+// @version      3.2.0
+// @description  为色花堂提供附件文本预览、ZIP/RAR 解压、ED2K/磁力链接聚合、图片控制、离线下载与搜索结果排序、高亮和过滤。
 // @author       silencoo
 // @license      MIT
 // @homepageURL  https://github.com/silencoo/script-toolbox/tree/main/userscripts/sht-helper
 // @supportURL   https://github.com/silencoo/script-toolbox/issues
 // @downloadURL  https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/sht-helper/sht-helper.user.js
 // @updateURL    https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/sht-helper/sht-helper.user.js
-// @match        https://*/forum.php?mod=viewthread*
-// @match        http://*/forum.php?mod=viewthread*
-// @match        https://*/forum.php?mod=redirect&goto=findpost*
-// @match        http://*/forum.php?mod=redirect&goto=findpost*
-// @match        https://*/forum.php?mod=forumdisplay*
-// @match        http://*/forum.php?mod=forumdisplay*
-// @match        https://*/forum.php
-// @match        http://*/forum.php
-// @match        https://sehuatang.org/
-// @match        http://sehuatang.org/
-// @match        https://sehuatang.org/search.php?mod=forum*
-// @match        http://sehuatang.org/search.php?mod=forum*
+// @match        *://sehuatang.org/*
+// @match        *://*.sehuatang.org/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setClipboard
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_addStyle
-// @connect      *
+// @connect      self
+// @connect      cdn.jsdelivr.net
+// @connect      raw.githubusercontent.com
+// @connect      115.com
+// @connect      my.115.com
+// @connect      webapi.115.com
+// @connect      www.123pan.com
 // @run-at       document-idle
-// @require      https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.53/dist/zip.min.js
-// @require      https://cdn.jsdelivr.net/npm/jschardet@3.0.0/dist/jschardet.min.js
 // ==/UserScript==
 
-
+// Generated from src/ by scripts/build.mjs. Edit source modules, not the bundled file.
 (function () {
     'use strict';
+
+    const SCRIPT_VERSION = '3.2.0';
+
+    /*********************** 请求、完整性、通知与诊断 ***********************/
+    const REQUEST_DEFAULT_TIMEOUT = 30_000;
+    const DIAGNOSTIC_LIMIT = 250;
+    const diagnosticEvents = [];
+
+    class ShtRequestError extends Error {
+        constructor(message, { kind = 'network', status = 0, url = '', cause = null } = {}) {
+            super(message);
+            this.name = 'ShtRequestError';
+            this.kind = kind;
+            this.status = status;
+            this.url = url;
+            this.cause = cause;
+        }
+    }
+
+    function sanitizedRequestTarget(url) {
+        try {
+            const parsed = new URL(url, location.href);
+            return `${parsed.origin}${parsed.pathname}`;
+        } catch {
+            return '(invalid-url)';
+        }
+    }
+
+    function redactDiagnosticValue(value, depth = 0) {
+        if (depth > 3) return '[truncated]';
+        if (typeof value === 'string') {
+            return value
+                .replace(/(authorization)\s*[:=]\s*(?:Bearer\s+)?[^;\s,]+/gi, '$1=[REDACTED]')
+                .replace(/(cookie|token|loginuuid|usersessionid|seid|cid|uid)\s*[:=]\s*[^;\s,]+/gi, '$1=[REDACTED]')
+                .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+                .replace(/magnet:\?[^\s]+/gi, 'magnet:[REDACTED]')
+                .slice(0, 500);
+        }
+        if (Array.isArray(value)) return value.slice(0, 20).map(item => redactDiagnosticValue(item, depth + 1));
+        if (value && typeof value === 'object') {
+            const out = {};
+            Object.entries(value).slice(0, 40).forEach(([key, item]) => {
+                out[key] = /cookie|token|authorization|loginuuid|useragent/i.test(key)
+                    ? '[REDACTED]'
+                    : redactDiagnosticValue(item, depth + 1);
+            });
+            return out;
+        }
+        return value;
+    }
+
+    function diagnosticLog(level, scope, message, details = null) {
+        let debugEnabled = false;
+        try { debugEnabled = Boolean(CFG?.debugMode); } catch { }
+        const entry = {
+            time: new Date().toISOString(),
+            level,
+            scope,
+            message: redactDiagnosticValue(String(message || '')),
+            details: details == null ? null : redactDiagnosticValue(details)
+        };
+        if (level !== 'debug' || debugEnabled) {
+            diagnosticEvents.push(entry);
+            if (diagnosticEvents.length > DIAGNOSTIC_LIMIT) diagnosticEvents.shift();
+        }
+        if (debugEnabled) {
+            const method = level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'debug';
+            console[method](`[SHT:${scope}] ${entry.message}`, entry.details || '');
+        }
+        return entry;
+    }
+
+    const waitWithSignal = (ms, signal) => new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('请求已取消', 'AbortError'));
+            return;
+        }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new DOMException('请求已取消', 'AbortError'));
+        }, { once: true });
+    });
+
+    function runGmRequest(options) {
+        const {
+            method = 'GET', url, headers = {}, data, responseType = 'text',
+            timeout = REQUEST_DEFAULT_TIMEOUT, signal, onProgress
+        } = options;
+        return new Promise((resolve, reject) => {
+            if (signal?.aborted) {
+                reject(new DOMException('请求已取消', 'AbortError'));
+                return;
+            }
+            let settled = false;
+            const finish = callback => value => {
+                if (settled) return;
+                settled = true;
+                signal?.removeEventListener('abort', abortRequest);
+                callback(value);
+            };
+            const request = GM_xmlhttpRequest({
+                method,
+                url,
+                headers,
+                data,
+                responseType,
+                timeout,
+                anonymous: false,
+                onprogress: event => {
+                    if (typeof onProgress === 'function') {
+                        onProgress({ loaded: event.loaded || 0, total: event.lengthComputable ? event.total : 0 });
+                    }
+                },
+                onload: finish(response => {
+                    if (response.status >= 200 && response.status < 300) {
+                        resolve(response);
+                    } else {
+                        reject(new ShtRequestError(`HTTP ${response.status}`, {
+                            kind: 'http', status: response.status, url
+                        }));
+                    }
+                }),
+                onerror: finish(error => reject(new ShtRequestError('网络请求失败', {
+                    kind: 'network', url, cause: error
+                }))),
+                ontimeout: finish(() => reject(new ShtRequestError('请求超时', {
+                    kind: 'timeout', url
+                }))),
+                onabort: finish(() => reject(new DOMException('请求已取消', 'AbortError')))
+            });
+            function abortRequest() {
+                try { request?.abort?.(); } catch { }
+                finish(reject)(new DOMException('请求已取消', 'AbortError'));
+            }
+            signal?.addEventListener('abort', abortRequest, { once: true });
+        });
+    }
+
+    async function shtRequest(options) {
+        const method = (options.method || 'GET').toUpperCase();
+        const retries = Math.max(0, Number(options.retries ?? (method === 'GET' ? 1 : 0)) || 0);
+        const target = sanitizedRequestTarget(options.url);
+        let attempt = 0;
+        while (true) {
+            try {
+                diagnosticLog('debug', options.scope || 'request', `${method} ${target}`, { attempt: attempt + 1 });
+                const response = await runGmRequest({ ...options, method });
+                diagnosticLog('debug', options.scope || 'request', `${method} 请求成功`, {
+                    target, status: response.status, attempt: attempt + 1
+                });
+                return response;
+            } catch (error) {
+                const retryable = error?.name !== 'AbortError' && (
+                    error?.kind === 'network' || error?.kind === 'timeout' ||
+                    [408, 429, 500, 502, 503, 504].includes(error?.status)
+                );
+                diagnosticLog(retryable ? 'warning' : 'error', options.scope || 'request', `${method} 请求失败`, {
+                    target, kind: error?.kind || error?.name, status: error?.status || 0, attempt: attempt + 1
+                });
+                if (!retryable || attempt >= retries) throw error;
+                attempt += 1;
+                await waitWithSignal((options.retryDelayMs || 500) * (2 ** (attempt - 1)), options.signal);
+            }
+        }
+    }
+
+    async function responseJson(response, label = '响应') {
+        if (response.response && typeof response.response === 'object') return response.response;
+        const text = response.responseText || response.response || '';
+        try {
+            return JSON.parse(text);
+        } catch (error) {
+            throw new ShtRequestError(`${label}不是有效 JSON`, { kind: 'parse', status: response.status, cause: error });
+        }
+    }
+
+    async function sha256Hex(value) {
+        const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value);
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function assertSha256(value, expected, label) {
+        const actual = await sha256Hex(value);
+        if (actual !== expected) {
+            diagnosticLog('error', 'integrity', `${label} 完整性校验失败`, { expected, actual });
+            throw new Error(`${label} 完整性校验失败，已拒绝执行`);
+        }
+        diagnosticLog('debug', 'integrity', `${label} 完整性校验通过`, { sha256: actual });
+    }
+
+    const OPTIONAL_LIBRARIES = Object.freeze({
+        zip: {
+            url: 'https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/sht-helper/vendor/zip-2.7.53.min.js',
+            sha256: 'c239c5a4914692dc41bb58027395c99ce7f1b93ab97059dc4035822303ea45d3',
+            globalName: 'zip'
+        },
+        jschardet: {
+            url: 'https://cdn.jsdelivr.net/npm/jschardet@3.0.0/dist/jschardet.min.js',
+            sha256: 'be115e6d895d30f6d96f3644a4880a7a656b60239ef20391a2dd6f3dd9608664',
+            globalName: 'jschardet'
+        }
+    });
+    const optionalLibraryPromises = new Map();
+
+    function loadOptionalLibrary(name, { signal } = {}) {
+        const spec = OPTIONAL_LIBRARIES[name];
+        if (!spec) return Promise.reject(new Error(`未知的可选依赖: ${name}`));
+        if (globalThis[spec.globalName]) return Promise.resolve(globalThis[spec.globalName]);
+        if (optionalLibraryPromises.has(name)) return optionalLibraryPromises.get(name);
+
+        const promise = (async () => {
+            const response = await shtRequest({
+                method: 'GET', url: spec.url, responseType: 'text', timeout: 30_000,
+                signal, retries: 1, scope: `dependency:${name}`
+            });
+            const source = response.responseText || response.response || '';
+            await assertSha256(source, spec.sha256, name);
+            // 固定版本且通过 SHA-256 校验的资源，仅在用户触发对应功能时执行。
+            Function(`${source}\n//# sourceURL=${spec.url}`)();
+            const loaded = globalThis[spec.globalName];
+            if (!loaded) throw new Error(`${spec.globalName} 未注册`);
+            return loaded;
+        })().catch(error => {
+            optionalLibraryPromises.delete(name);
+            throw error;
+        });
+
+        optionalLibraryPromises.set(name, promise);
+        return promise;
+    }
+
+    function ensureToastRegion() {
+        let region = document.querySelector('#sht-toast-region');
+        if (region) return region;
+        region = document.createElement('div');
+        region.id = 'sht-toast-region';
+        region.setAttribute('aria-live', 'polite');
+        region.style.cssText = 'position:fixed;right:16px;top:16px;z-index:2147483647;display:grid;gap:8px;width:min(380px,calc(100vw - 32px));pointer-events:none;';
+        document.body.appendChild(region);
+        return region;
+    }
+
+    function showToast(message, type = 'info', duration = 3000) {
+        if (!document.body) return null;
+        const colors = {
+            info: ['#e8f4fd', '#0b5f91'], success: ['#eaf7ed', '#1e6b34'],
+            warning: ['#fff6dd', '#7a5600'], error: ['#fdecec', '#9b1c1c']
+        };
+        const [background, color] = colors[type] || colors.info;
+        const toast = document.createElement('div');
+        toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+        toast.style.cssText = `pointer-events:auto;padding:10px 12px;border:1px solid ${color}33;border-radius:7px;background:${background};color:${color};box-shadow:0 4px 18px rgba(0,0,0,.18);font-size:13px;line-height:1.45;white-space:pre-wrap;`;
+        toast.textContent = String(message);
+        ensureToastRegion().appendChild(toast);
+        const close = () => toast.remove();
+        toast.addEventListener('click', close);
+        if (duration > 0) setTimeout(close, duration);
+        return { element: toast, close };
+    }
+
+    function showActionDialog({ title = '请确认', message = '', confirmText = '确定', cancelText = '取消', danger = false, input = null } = {}) {
+        return new Promise(resolve => {
+            const previouslyFocused = document.activeElement;
+            const backdrop = document.createElement('div');
+            backdrop.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.5);display:grid;place-items:center;padding:16px;';
+            const dialog = document.createElement('div');
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.style.cssText = 'width:min(520px,100%);max-height:80vh;overflow:auto;background:#fff;border-radius:9px;padding:18px;box-shadow:0 12px 36px rgba(0,0,0,.3);color:#222;';
+            const heading = document.createElement('h3');
+            heading.id = `sht-action-title-${Date.now()}`;
+            heading.textContent = title;
+            heading.style.cssText = 'margin:0 0 10px;font-size:17px;';
+            const body = document.createElement('div');
+            body.textContent = message;
+            body.style.cssText = 'white-space:pre-wrap;font-size:13px;line-height:1.55;';
+            let field = null;
+            if (input) {
+                field = input.multiline ? document.createElement('textarea') : document.createElement('input');
+                if (!input.multiline) field.type = input.type || 'text';
+                field.value = input.value || '';
+                field.placeholder = input.placeholder || '';
+                field.style.cssText = 'width:100%;box-sizing:border-box;margin-top:12px;padding:8px;border:1px solid #bbb;border-radius:5px;';
+            }
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px;';
+            const cancel = document.createElement('button');
+            cancel.type = 'button'; cancel.textContent = cancelText;
+            const confirmButton = document.createElement('button');
+            confirmButton.type = 'button'; confirmButton.textContent = confirmText;
+            confirmButton.style.cssText = `padding:6px 14px;border:0;border-radius:5px;background:${danger ? '#c62828' : '#0677b8'};color:white;cursor:pointer;`;
+            cancel.style.cssText = 'padding:6px 14px;border:1px solid #bbb;border-radius:5px;background:#fff;cursor:pointer;';
+            dialog.setAttribute('aria-labelledby', heading.id);
+            const finish = value => {
+                backdrop.remove();
+                if (previouslyFocused?.isConnected) previouslyFocused.focus?.();
+                resolve(value);
+            };
+            cancel.addEventListener('click', () => finish(input ? null : false));
+            confirmButton.addEventListener('click', () => finish(input ? field.value : true));
+            backdrop.addEventListener('click', event => { if (event.target === backdrop) finish(input ? null : false); });
+            backdrop.addEventListener('keydown', event => {
+                if (event.key === 'Escape') finish(input ? null : false);
+                if (event.key === 'Enter' && !input?.multiline) finish(input ? field.value : true);
+                if (event.key === 'Tab') {
+                    const focusable = [field, cancel, confirmButton].filter(Boolean);
+                    const current = focusable.indexOf(document.activeElement);
+                    const next = event.shiftKey
+                        ? (current <= 0 ? focusable.length - 1 : current - 1)
+                        : (current >= focusable.length - 1 ? 0 : current + 1);
+                    event.preventDefault();
+                    focusable[next].focus();
+                }
+            });
+            actions.append(cancel, confirmButton);
+            dialog.append(heading, body);
+            if (field) dialog.append(field);
+            dialog.append(actions);
+            backdrop.append(dialog);
+            document.body.append(backdrop);
+            (field || confirmButton).focus();
+        });
+    }
+
+    const confirmAction = (message, options = {}) => showActionDialog({ ...options, message });
+    const promptText = (message, options = {}) => showActionDialog({ ...options, message, input: {
+        value: options.value || '', placeholder: options.placeholder || '', multiline: Boolean(options.multiline)
+    } });
+
+    function describeRequestError(error) {
+        if (error?.name === 'AbortError') return '操作已取消';
+        if (error?.kind === 'timeout') return '请求超时，请稍后重试';
+        if (error?.kind === 'network') return '网络连接失败';
+        if (error?.kind === 'parse') return '服务返回了无法识别的数据';
+        if (error?.status === 401 || error?.status === 403) return '登录已失效或权限不足';
+        if (error?.status === 404) return '请求的资源不存在';
+        if (error?.status === 429) return '请求过于频繁，请稍后重试';
+        if (error?.status >= 500) return '服务暂时不可用';
+        return error?.message || '未知错误';
+    }
+
+    function exportDiagnosticReport() {
+        const report = {
+            format: 'sht-helper-diagnostics',
+            version: SCRIPT_VERSION,
+            exportedAt: new Date().toISOString(),
+            page: {
+                origin: location.origin,
+                pathname: location.pathname,
+                type: typeof isThreadPage !== 'undefined' && isThreadPage ? 'thread'
+                    : typeof isSearchPage !== 'undefined' && isSearchPage ? 'search'
+                        : typeof isForumListPage !== 'undefined' && isForumListPage ? 'forum-list' : 'other'
+            },
+            capabilities: {
+                zipLoaded: Boolean(globalThis.zip),
+                charsetLoaded: Boolean(globalThis.jschardet),
+                rarWorkerReady: Boolean(gWorker),
+                pan115Enabled: Boolean(CFG.pan115Enabled),
+                pan123Enabled: Boolean(CFG.pan123Enabled)
+            },
+            events: diagnosticEvents.map(event => redactDiagnosticValue(event))
+        };
+        const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `sht-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        showToast('已导出脱敏诊断报告', 'success');
+    }
+
+    class ShtTaskQueue {
+        constructor(getConcurrency) {
+            this.getConcurrency = getConcurrency;
+            this.pending = [];
+            this.active = new Map();
+            this.listeners = new Set();
+            this.sequence = 0;
+        }
+        add(run, { label = '任务', retries = 0, signal = null } = {}) {
+            const id = ++this.sequence;
+            return new Promise((resolve, reject) => {
+                this.pending.push({ id, run, label, retries, signal, resolve, reject });
+                this.emit();
+                this.drain();
+            });
+        }
+        cancelPending(reason = '队列已取消') {
+            const pending = this.pending.splice(0);
+            pending.forEach(task => task.reject(new DOMException(reason, 'AbortError')));
+            this.emit();
+        }
+        subscribe(listener) {
+            this.listeners.add(listener);
+            listener(this.snapshot());
+            return () => this.listeners.delete(listener);
+        }
+        snapshot() {
+            return {
+                active: Array.from(this.active.values(), task => ({ id: task.id, label: task.label })),
+                pending: this.pending.map(task => ({ id: task.id, label: task.label }))
+            };
+        }
+        emit() { this.listeners.forEach(listener => listener(this.snapshot())); }
+        async execute(task) {
+            let attempt = 0;
+            while (true) {
+                if (task.signal?.aborted) throw new DOMException('任务已取消', 'AbortError');
+                try { return await task.run({ signal: task.signal, attempt }); }
+                catch (error) {
+                    if (error?.name === 'AbortError' || attempt >= task.retries) throw error;
+                    attempt += 1;
+                    await waitWithSignal(500 * (2 ** (attempt - 1)), task.signal);
+                }
+            }
+        }
+        drain() {
+            const concurrency = Math.max(1, Number(this.getConcurrency()) || 1);
+            while (this.active.size < concurrency && this.pending.length) {
+                const task = this.pending.shift();
+                this.active.set(task.id, task);
+                this.emit();
+                this.execute(task).then(task.resolve, task.reject).finally(() => {
+                    this.active.delete(task.id);
+                    this.emit();
+                    this.drain();
+                });
+            }
+        }
+    }
+
+    const cloudTaskQueue = new ShtTaskQueue(() => CFG.cloudTaskConcurrency);
 
     // RAR 解压功能 - 使用 Web Worker 实现
     let gWorker = null;
     let gWorkerReady = null;
 
     const LIB_SOURCES = [{
-        name: 'github raw gh-pages',
-        js: 'https://raw.githubusercontent.com/wcchoi/libunrar-js/refs/heads/gh-pages/libunrar.js',
-        mem: 'https://raw.githubusercontent.com/wcchoi/libunrar-js/refs/heads/gh-pages/libunrar.js.mem',
+        name: 'silencoo/libunrar-js@b49a41a',
+        js: 'https://raw.githubusercontent.com/silencoo/libunrar-js/b49a41a6855374c0119283a2120d2a88a0d3811e/libunrar.js',
+        jsSha256: 'fd17b6d83dcf5fbe2d43dc3ebf05e44760d7228d8ea74113bf6bbedc0f997bea',
+        mem: 'https://raw.githubusercontent.com/silencoo/libunrar-js/b49a41a6855374c0119283a2120d2a88a0d3811e/libunrar.js.mem',
+        memSha256: '5c1cf97aebdc1413d64cc852b8e7ac6d415c0a312b06d21c2484ad80d4d00299',
     }];
 
     // 工具函数
@@ -165,30 +596,24 @@
     }
 
     // 网络请求函数
-    function fetchBinary(url, timeout = 30_000) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                url, method: 'GET', responseType: 'arraybuffer', timeout,
-                headers: { 'Accept': '*/*', 'Referer': location.href },
-                onload: res => (res.status >= 200 && res.status < 300) ? resolve(res.response)
-                    : reject(new Error(`HTTP ${res.status}`)),
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('超时')),
-            });
+    async function fetchBinary(url, timeout = 30_000, options = {}) {
+        const response = await shtRequest({
+            url, method: 'GET', responseType: 'arraybuffer', timeout,
+            headers: { 'Accept': '*/*', 'Referer': location.href },
+            signal: options.signal, onProgress: options.onProgress,
+            retries: 1, scope: options.scope || 'binary-download'
         });
+        return response.response;
     }
 
-    function fetchText(url, timeout = 20_000) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                url, method: 'GET', responseType: 'text', timeout,
-                headers: { 'Accept': 'text/plain,*/*;q=0.8', 'Referer': location.href },
-                onload: res => (res.status >= 200 && res.status < 300) ? resolve(res.responseText)
-                    : reject(new Error(`HTTP ${res.status}`)),
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('超时')),
-            });
+    async function fetchText(url, timeout = 20_000, options = {}) {
+        const response = await shtRequest({
+            url, method: 'GET', responseType: 'text', timeout,
+            headers: { 'Accept': 'text/plain,*/*;q=0.8', 'Referer': location.href },
+            signal: options.signal, onProgress: options.onProgress,
+            retries: 1, scope: options.scope || 'text-download'
         });
+        return response.responseText || response.response || '';
     }
 
     // libunrar 加载
@@ -196,10 +621,18 @@
         if (gWorker && gWorkerReady) return gWorkerReady;
 
         // 拉 gh-pages 的 js / mem
-        const JS_URL = LIB_SOURCES[0].js;
-        const MEM_URL = LIB_SOURCES[0].mem;
+        const source = LIB_SOURCES[0];
+        const JS_URL = source.js;
+        const MEM_URL = source.mem;
 
-        const [jsCode, memBuf] = await Promise.all([fetchText(JS_URL), fetchBinary(MEM_URL)]);
+        const [jsCode, memBuf] = await Promise.all([
+            fetchText(JS_URL, 30_000, { scope: 'dependency:rar-js' }),
+            fetchBinary(MEM_URL, 30_000, { scope: 'dependency:rar-mem' })
+        ]);
+        await Promise.all([
+            assertSha256(jsCode, source.jsSha256, 'libunrar.js'),
+            assertSha256(memBuf, source.memSha256, 'libunrar.js.mem')
+        ]);
 
         // 用 blob: 提供 .mem
         const memBlob = new Blob([new Uint8Array(memBuf)], { type: 'application/octet-stream' });
@@ -514,13 +947,18 @@
     };
 
     /*********************** 配置 ***********************/
+    const CONFIG_SCHEMA_VERSION = 3;
+    const volatileCredentialVault = {};
     const DEFAULT_CONFIG = {
+        schemaVersion: CONFIG_SCHEMA_VERSION,
         maxAutoBytes: 2 * 1024 * 1024,
         autoHoistToTop: true,
         textExts: ['txt', 'nfo', 'log', 'json', 'ini', 'md', 'csv'],
         maxEntryBytes: 3 * 1024 * 1024,
         passwordCandidates: ['', 'www.98T.la', '98T.la', '98t', 'sehuatang', 'sht', 'sht123', '123456', 'www.sehuatang.org'],
         wrapAtTop: true,
+        toolbarCompactMode: false,
+        toolbarGroupState: { quick: true, attachments: false, cloud: false, more: false },
 
         blockImages: true,
         imageAllowDomains: [],
@@ -613,6 +1051,11 @@
         pan123CurrentThreadFolder: '', // 当前帖子的文件夹ID
         pan123ThreadFolders: {}, // 帖子URL到文件夹ID的映射
 
+        // 任务、凭据和诊断
+        cloudTaskConcurrency: 2,
+        credentialsSessionOnly: false,
+        debugMode: false,
+
         // ED2K文件名处理配置
         ed2kFileNameReplaceEnabled: false,
         ed2kFileNameReplaceRules: [
@@ -622,35 +1065,76 @@
             { pattern: '\\[视频分享\\]', replacement: '' }
         ]
     };
+    const MAIN_CONFIG_KEY = 'sht_cfg_v2';
+    const SEARCH_CONFIG_KEY = 'sht_sorter_config';
+    const CONFIG_EXPORT_VERSION = SCRIPT_VERSION;
+    const SENSITIVE_CONFIG_KEYS = Object.freeze([
+        'pan115Cookie',
+        'pan115UserAgent',
+        'pan123Token',
+        'pan123LoginUuid',
+        'pan123Cookie'
+    ]);
     let CFG = loadConfig();
 
-    function saveConfig() {
-        // console.log('保存配置:', CFG);
-        const configString = JSON.stringify(CFG);
-        // console.log('配置字符串:', configString);
-        GM_setValue('sht_cfg_v2', configString);
-        // console.log('配置已保存到存储');
+    function readSessionCredentials() {
+        return { ...volatileCredentialVault };
+    }
 
-        // 验证保存是否成功
-        const savedConfig = GM_getValue('sht_cfg_v2');
-        // console.log('验证保存的配置:', savedConfig);
+    function migrateConfig(input) {
+        const migrated = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : {};
+        const fromVersion = Number(migrated.schemaVersion || 1);
+        if (fromVersion < 2 && migrated.toolbarCollapsed != null) {
+            migrated.toolbarCompactMode = Boolean(migrated.toolbarCollapsed);
+            delete migrated.toolbarCollapsed;
+        }
+        if (fromVersion < 3) {
+            if (migrated.toolbarGroupState) {
+                migrated.toolbarGroupState = { ...DEFAULT_CONFIG.toolbarGroupState, ...migrated.toolbarGroupState };
+            }
+            if (migrated.cloudTaskConcurrency != null) {
+                migrated.cloudTaskConcurrency = Math.max(1, Math.min(4, Number(migrated.cloudTaskConcurrency) || 2));
+            }
+        }
+        migrated.schemaVersion = CONFIG_SCHEMA_VERSION;
+        return migrated;
+    }
+
+    function saveConfig() {
+        const storedConfig = cloneJson(CFG);
+        storedConfig.schemaVersion = CONFIG_SCHEMA_VERSION;
+        if (storedConfig.credentialsSessionOnly) {
+            SENSITIVE_CONFIG_KEYS.forEach(key => {
+                volatileCredentialVault[key] = storedConfig[key] || '';
+                storedConfig[key] = '';
+            });
+        } else {
+            SENSITIVE_CONFIG_KEYS.forEach(key => delete volatileCredentialVault[key]);
+        }
+        const configString = JSON.stringify(storedConfig);
+        GM_setValue(MAIN_CONFIG_KEY, configString);
+        diagnosticLog('debug', 'config', '配置已保存', {
+            schemaVersion: CONFIG_SCHEMA_VERSION,
+            credentialsSessionOnly: storedConfig.credentialsSessionOnly
+        });
     }
     function loadConfig() {
         try {
-            const raw = GM_getValue('sht_cfg_v2');
+            const raw = GM_getValue(MAIN_CONFIG_KEY);
             if (raw) {
-                const parsed = JSON.parse(raw);
-                // console.log('加载的配置:', parsed);
-                // 确保新添加的配置项存在
-                const config = { ...DEFAULT_CONFIG, ...parsed };
-                // console.log('合并后的配置:', config);
+                const parsed = migrateConfig(JSON.parse(raw));
+                const config = {
+                    ...DEFAULT_CONFIG,
+                    ...parsed,
+                    toolbarGroupState: { ...DEFAULT_CONFIG.toolbarGroupState, ...(parsed.toolbarGroupState || {}) }
+                };
+                if (config.credentialsSessionOnly) Object.assign(config, readSessionCredentials());
                 return config;
             }
         } catch (e) {
-            // console.log('加载配置失败:', e);
+            diagnosticLog('warning', 'config', '配置加载失败，已回退默认值', { message: e?.message });
         }
-        // console.log('使用默认配置');
-        return { ...DEFAULT_CONFIG };
+        return cloneJson(DEFAULT_CONFIG);
     }
 
     /*********************** 图标与控件 ***********************/
@@ -1251,69 +1735,124 @@
         return createModal('提示', message, 'info');
     }
 
-    // 导出配置
-    function exportConfig() {
+    function cloneJson(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function readSearchConfig() {
         try {
-            // 创建配置对象，排除历史记录等大数据
-            const configToExport = {
-                version: '2.7.3',
-                exportTime: new Date().toISOString(),
-                config: {
-                    // 基础设置
-                    passwordCandidates: CFG.passwordCandidates,
-                    maxAutoBytes: CFG.maxAutoBytes,
-                    maxEntryBytes: CFG.maxEntryBytes,
-                    wrapAtTop: CFG.wrapAtTop,
-                    blockImages: CFG.blockImages,
+            const raw = GM_getValue(SEARCH_CONFIG_KEY);
+            if (!raw) return null;
+            return typeof raw === 'string' ? JSON.parse(raw) : cloneJson(raw);
+        } catch (error) {
+            console.warn('[SHT] 搜索配置读取失败:', error);
+            return null;
+        }
+    }
 
-                    // 显示设置
-                    showMetaInfo: CFG.showMetaInfo,
-                    hideAuthorColumn: CFG.hideAuthorColumn,
-                    hideStickyThreads: CFG.hideStickyThreads,
+    function createConfigExport(includeSensitive = false) {
+        const mainConfig = cloneJson(CFG);
+        // 历史记录有单独导出入口，避免配置文件无限膨胀。
+        delete mainConfig.historyItems;
+        if (!includeSensitive) {
+            SENSITIVE_CONFIG_KEYS.forEach(key => delete mainConfig[key]);
+        }
 
-                    // 收集设置
-                    autoCollectED2K: CFG.autoCollectED2K,
-                    autoCollectMagnet: CFG.autoCollectMagnet,
-                    ed2kFileNameReplaceEnabled: CFG.ed2kFileNameReplaceEnabled,
-                    ed2kFileNameReplaceRules: CFG.ed2kFileNameReplaceRules,
-                    enableHistory: CFG.enableHistory,
-                    maxHistoryItems: CFG.maxHistoryItems,
+        return {
+            format: 'sht-helper-config',
+            version: CONFIG_EXPORT_VERSION,
+            exportTime: new Date().toISOString(),
+            includesSensitiveCredentials: includeSensitive,
+            config: mainConfig,
+            searchConfig: readSearchConfig()
+        };
+    }
 
-                    // 115设置
-                    pan115Enabled: CFG.pan115Enabled,
-                    pan115Cookie: CFG.pan115Cookie,
-                    pan115UserAgent: CFG.pan115UserAgent,
-                    pan115UploadDir: CFG.pan115UploadDir,
-                    pan115FolderNames: CFG.pan115FolderNames,
-                    pan115CurrentThreadFolder: CFG.pan115CurrentThreadFolder,
-                    pan115ThreadFolders: CFG.pan115ThreadFolders,
+    function sanitizeImportedObject(input, defaults, label) {
+        if (!input || typeof input !== 'object' || Array.isArray(input)) {
+            throw new Error(`${label}不是有效对象`);
+        }
 
-                    // 123Pan设置
-                    pan123Enabled: CFG.pan123Enabled,
-                    pan123Token: CFG.pan123Token,
-                    pan123LoginUuid: CFG.pan123LoginUuid,
-                    pan123Cookie: CFG.pan123Cookie,
-                    pan123UploadDir: CFG.pan123UploadDir,
-                    pan123MinSize: CFG.pan123MinSize,
-                    pan123MaxSize: CFG.pan123MaxSize,
-                    pan123IncludeExt: CFG.pan123IncludeExt,
-                    pan123ExcludeExt: CFG.pan123ExcludeExt,
-                    pan123VideoMinSize: CFG.pan123VideoMinSize,
-                    pan123PickLargest: CFG.pan123PickLargest,
-                    pan123InstantOfflineAction: CFG.pan123InstantOfflineAction,
-                    pan123InstantOfflineCheckDelay: CFG.pan123InstantOfflineCheckDelay,
-                    pan123BatchSendInterval: CFG.pan123BatchSendInterval,
-                    pan123CurrentThreadFolder: CFG.pan123CurrentThreadFolder,
-                    pan123ThreadFolders: CFG.pan123ThreadFolders,
+        const output = {};
+        for (const [key, defaultValue] of Object.entries(defaults)) {
+            if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+            const value = input[key];
+            if (Array.isArray(defaultValue)) {
+                if (!Array.isArray(value)) throw new Error(`${label}.${key} 类型无效`);
+                output[key] = cloneJson(value.slice(0, 5000));
+            } else if (defaultValue && typeof defaultValue === 'object') {
+                if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label}.${key} 类型无效`);
+                output[key] = cloneJson(value);
+            } else if (typeof defaultValue === 'number') {
+                if (!Number.isFinite(value)) throw new Error(`${label}.${key} 必须是有限数字`);
+                output[key] = value;
+            } else if (typeof value === typeof defaultValue) {
+                output[key] = value;
+            } else {
+                throw new Error(`${label}.${key} 类型无效`);
+            }
+        }
+        return output;
+    }
 
-                    // 高级设置
-                    hidePagination: CFG.hidePagination,
-                    enableKeywordFilter: CFG.enableKeywordFilter,
-                    keywordFilters: CFG.keywordFilters,
-                    enabledModules: CFG.enabledModules
-                }
-            };
+    function sanitizeImportedSearchConfig(input) {
+        if (input == null) return null;
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('searchConfig 不是有效对象');
+        const defaults = {
+            sortBy: null,
+            sortDir: 'desc',
+            secondarySort: null,
+            secondaryDir: 'desc',
+            onlyQuota: false,
+            filterQiuPian: false,
+            highlightEnabled: false,
+            highlightThreshold: 'auto',
+            lastUsed: 0
+        };
+        const sortKeys = [null, 'quota', 'fileSize', 'replies', 'views', 'postDate'];
+        const sanitized = { ...defaults };
+        if (!sortKeys.includes(input.sortBy ?? null) || !sortKeys.includes(input.secondarySort ?? null)) {
+            throw new Error('searchConfig 排序字段无效');
+        }
+        if (input.sortDir != null && !['asc', 'desc'].includes(input.sortDir)) throw new Error('searchConfig.sortDir 无效');
+        if (input.secondaryDir != null && !['asc', 'desc'].includes(input.secondaryDir)) throw new Error('searchConfig.secondaryDir 无效');
+        if (input.highlightThreshold != null && !['auto', 'low', 'medium', 'high'].includes(input.highlightThreshold)) {
+            throw new Error('searchConfig.highlightThreshold 无效');
+        }
+        sanitized.sortBy = input.sortBy ?? null;
+        sanitized.secondarySort = input.secondarySort ?? null;
+        if (input.sortDir != null) sanitized.sortDir = input.sortDir;
+        if (input.secondaryDir != null) sanitized.secondaryDir = input.secondaryDir;
+        if (input.highlightThreshold != null) sanitized.highlightThreshold = input.highlightThreshold;
+        ['onlyQuota', 'filterQiuPian', 'highlightEnabled'].forEach(key => {
+            if (input[key] != null) {
+                if (typeof input[key] !== 'boolean') throw new Error(`searchConfig.${key} 类型无效`);
+                sanitized[key] = input[key];
+            }
+        });
+        if (input.lastUsed != null) {
+            if (!Number.isFinite(input.lastUsed)) throw new Error('searchConfig.lastUsed 必须是有限数字');
+            sanitized.lastUsed = input.lastUsed;
+        }
+        return sanitized;
+    }
 
+    function buildConfigDiffPreview(mainConfig, searchConfig) {
+        const changed = [];
+        Object.entries(mainConfig).forEach(([key, value]) => {
+            if (JSON.stringify(CFG[key]) === JSON.stringify(value)) return;
+            changed.push(SENSITIVE_CONFIG_KEYS.includes(key) ? `${key}: [敏感值已隐藏]` : `${key}: 将更新`);
+        });
+        if (searchConfig) changed.push('searchConfig: 将更新搜索排序、筛选和高亮设置');
+        const visible = changed.slice(0, 30);
+        if (changed.length > visible.length) visible.push(`……另有 ${changed.length - visible.length} 项`);
+        return visible.length ? visible.join('\n') : '没有检测到配置差异。';
+    }
+
+    // 导出配置；敏感凭据默认不包含。
+    function exportConfig(includeSensitive = false) {
+        try {
+            const configToExport = createConfigExport(includeSensitive);
             const blob = new Blob([JSON.stringify(configToExport, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1322,7 +1861,7 @@
             a.click();
             URL.revokeObjectURL(url);
 
-            showSuccessModal('配置导出成功！\n\n文件已保存到下载文件夹。');
+            showSuccessModal(`配置导出成功！\n\n${includeSensitive ? '已包含网盘凭据，请妥善保管。' : '未包含网盘 Cookie、Token 等敏感凭据。'}`);
         } catch (error) {
             console.error('导出配置失败:', error);
             showErrorModal('导出配置失败: ' + error.message);
@@ -1348,86 +1887,40 @@
                 console.log('用户取消了文件选择');
                 return;
             }
+            if (file.size > 2 * 1024 * 1024) {
+                showErrorModal('配置文件过大，最大支持 2 MB。历史记录请使用独立导入/导出功能。');
+                return;
+            }
 
             const reader = new FileReader();
-            reader.onload = (e) => {
+            reader.onload = async (e) => {
                 try {
                     const importedData = JSON.parse(e.target.result);
 
-                    // 验证配置格式
-                    if (!importedData.config || !importedData.version) {
+                    // 兼容旧版导出，但只接受白名单字段和匹配的基础类型。
+                    if (!importedData || !importedData.config || !importedData.version) {
                         throw new Error('无效的配置文件格式');
                     }
 
-                    // 确认导入
-                    const confirmMessage = `确定要导入配置吗？\n\n版本: ${importedData.version}\n导出时间: ${importedData.exportTime}\n\n这将覆盖当前的所有设置！`;
-                    if (!confirm(confirmMessage)) return;
+                    const mainConfig = migrateConfig(sanitizeImportedObject(importedData.config, DEFAULT_CONFIG, 'config'));
+                    const searchConfig = sanitizeImportedSearchConfig(importedData.searchConfig);
+                    const importsCredentials = SENSITIVE_CONFIG_KEYS.some(key =>
+                        Object.prototype.hasOwnProperty.call(mainConfig, key) && Boolean(mainConfig[key])
+                    );
 
-                    // 导入配置
-                    const config = importedData.config;
+                    const confirmMessage = `版本: ${importedData.version}\n导出时间: ${importedData.exportTime || '未知'}\n敏感凭据: ${importsCredentials ? '包含' : '不包含（保留本机现有凭据）'}\n\n变更预览：\n${buildConfigDiffPreview(mainConfig, searchConfig)}\n\n只会覆盖文件中包含的有效设置。`;
+                    if (!await confirmAction(confirmMessage, { title: '导入配置预览', confirmText: '确认导入' })) return;
 
-                    // 基础设置
-                    if (config.passwordCandidates) CFG.passwordCandidates = config.passwordCandidates;
-                    if (config.maxAutoBytes !== undefined) CFG.maxAutoBytes = config.maxAutoBytes;
-                    if (config.maxEntryBytes !== undefined) CFG.maxEntryBytes = config.maxEntryBytes;
-                    if (config.wrapAtTop !== undefined) CFG.wrapAtTop = config.wrapAtTop;
-                    if (config.blockImages !== undefined) CFG.blockImages = config.blockImages;
-
-                    // 显示设置
-                    if (config.showMetaInfo !== undefined) CFG.showMetaInfo = config.showMetaInfo;
-                    if (config.hideAuthorColumn !== undefined) CFG.hideAuthorColumn = config.hideAuthorColumn;
-                    if (config.hideStickyThreads !== undefined) CFG.hideStickyThreads = config.hideStickyThreads;
-
-                    // 收集设置
-                    if (config.autoCollectED2K !== undefined) CFG.autoCollectED2K = config.autoCollectED2K;
-                    if (config.autoCollectMagnet !== undefined) CFG.autoCollectMagnet = config.autoCollectMagnet;
-                    if (config.ed2kFileNameReplaceEnabled !== undefined) CFG.ed2kFileNameReplaceEnabled = config.ed2kFileNameReplaceEnabled;
-                    if (config.ed2kFileNameReplaceRules) CFG.ed2kFileNameReplaceRules = config.ed2kFileNameReplaceRules;
-                    if (config.enableHistory !== undefined) CFG.enableHistory = config.enableHistory;
-                    if (config.maxHistoryItems !== undefined) CFG.maxHistoryItems = config.maxHistoryItems;
-
-                    // 115设置
-                    if (config.pan115Enabled !== undefined) CFG.pan115Enabled = config.pan115Enabled;
-                    if (config.pan115Cookie) CFG.pan115Cookie = config.pan115Cookie;
-                    if (config.pan115UserAgent) CFG.pan115UserAgent = config.pan115UserAgent;
-                    if (config.pan115UploadDir) CFG.pan115UploadDir = config.pan115UploadDir;
-                    if (config.pan115FolderNames) CFG.pan115FolderNames = config.pan115FolderNames;
-                    if (config.pan115CurrentThreadFolder) CFG.pan115CurrentThreadFolder = config.pan115CurrentThreadFolder;
-                    if (config.pan115ThreadFolders) CFG.pan115ThreadFolders = config.pan115ThreadFolders;
-
-                    // 123Pan设置
-                    if (config.pan123Enabled !== undefined) CFG.pan123Enabled = config.pan123Enabled;
-                    if (config.pan123Token) CFG.pan123Token = config.pan123Token;
-                    if (config.pan123LoginUuid) CFG.pan123LoginUuid = config.pan123LoginUuid;
-                    if (config.pan123Cookie) CFG.pan123Cookie = config.pan123Cookie;
-                    if (config.pan123UploadDir) CFG.pan123UploadDir = config.pan123UploadDir;
-                    if (config.pan123MinSize) CFG.pan123MinSize = config.pan123MinSize;
-                    if (config.pan123MaxSize) CFG.pan123MaxSize = config.pan123MaxSize;
-                    if (config.pan123IncludeExt) CFG.pan123IncludeExt = config.pan123IncludeExt;
-                    if (config.pan123ExcludeExt) CFG.pan123ExcludeExt = config.pan123ExcludeExt;
-                    if (config.pan123VideoMinSize) CFG.pan123VideoMinSize = config.pan123VideoMinSize;
-                    if (config.pan123PickLargest !== undefined) CFG.pan123PickLargest = config.pan123PickLargest;
-                    if (config.pan123InstantOfflineAction) CFG.pan123InstantOfflineAction = config.pan123InstantOfflineAction;
-                    if (config.pan123InstantOfflineCheckDelay !== undefined) CFG.pan123InstantOfflineCheckDelay = config.pan123InstantOfflineCheckDelay;
-                    if (config.pan123BatchSendInterval !== undefined) CFG.pan123BatchSendInterval = config.pan123BatchSendInterval;
-                    if (config.pan123CurrentThreadFolder) CFG.pan123CurrentThreadFolder = config.pan123CurrentThreadFolder;
-                    if (config.pan123ThreadFolders) CFG.pan123ThreadFolders = config.pan123ThreadFolders;
-
-                    // 高级设置
-                    if (config.hidePagination !== undefined) CFG.hidePagination = config.hidePagination;
-                    if (config.enableKeywordFilter !== undefined) CFG.enableKeywordFilter = config.enableKeywordFilter;
-                    if (config.keywordFilters) CFG.keywordFilters = config.keywordFilters;
-                    if (config.enabledModules) CFG.enabledModules = config.enabledModules;
-
-                    // 保存配置
+                    Object.assign(CFG, mainConfig);
                     saveConfig();
+                    if (searchConfig) GM_setValue(SEARCH_CONFIG_KEY, JSON.stringify(searchConfig));
 
-                    showSuccessModal('配置导入成功！\n\n页面将自动刷新以应用新设置。');
-
-                    // 延迟刷新页面
-                    setTimeout(() => {
-                        location.reload();
-                    }, 2000);
+                    if (CFG.credentialsSessionOnly) {
+                        showSuccessModal('配置导入成功！\n\n临时凭据已在当前页面内存中生效，刷新或离开页面即清除。');
+                    } else {
+                        showSuccessModal('配置导入成功！\n\n页面将自动刷新以应用新设置。未包含的敏感凭据已保留。');
+                        setTimeout(() => location.reload(), 2000);
+                    }
 
                 } catch (error) {
                     console.error('导入配置失败:', error);
@@ -1451,17 +1944,19 @@
     }
 
     // 重置配置
-    function resetConfig() {
-        if (!confirm('确定要重置所有配置到默认值吗？\n\n这将清除所有自定义设置，包括历史记录！')) {
-            return;
-        }
+    async function resetConfig() {
+        if (!await confirmAction('这将清除所有自定义设置，包括历史记录和会话凭据。', {
+            title: '重置全部配置', confirmText: '确认重置', danger: true
+        })) return;
 
         try {
             // 重置为默认配置
-            Object.assign(CFG, DEFAULT_CONFIG);
+            Object.keys(CFG).forEach(key => delete CFG[key]);
+            Object.assign(CFG, cloneJson(DEFAULT_CONFIG));
 
             // 清空历史记录
             CFG.historyItems = [];
+            SENSITIVE_CONFIG_KEYS.forEach(key => delete volatileCredentialVault[key]);
 
             // 保存配置
             saveConfig();
@@ -1532,9 +2027,66 @@
         }
     }
 
-    /*********************** 顶部聚合区 ***********************/
-    const isThreadPage = location.href.includes('mod=viewthread');
-    const agg = ensureAggregator();
+    /*********************** 网盘提供方适配层 ***********************/
+    const CLOUD_PROVIDERS = Object.freeze({
+        pan115: {
+            id: 'pan115',
+            label: '115',
+            isEnabled: () => Boolean(CFG.pan115Enabled),
+            isConfigured: () => Boolean(CFG.pan115Cookie?.trim()),
+            testConnection: credentials => testPan115Connection(credentials),
+            submitBatch: (items, options = {}) => pan115AddTasks(items, { signal: options.signal })
+        },
+        pan123: {
+            id: 'pan123',
+            label: '123Pan',
+            isEnabled: () => Boolean(CFG.pan123Enabled),
+            isConfigured: () => Boolean(CFG.pan123Token && CFG.pan123LoginUuid && CFG.pan123Cookie),
+            testConnection: credentials => testPan123Connection(credentials),
+            submitOne: (item, options = {}) => processSingleMagnetOffline(item, item, { signal: options.signal })
+        }
+    });
+
+    function getCloudProvider(id) {
+        const provider = CLOUD_PROVIDERS[id];
+        if (!provider) throw new Error(`未知网盘提供方: ${id}`);
+        return provider;
+    }
+
+    async function testCloudProviderConnection(id, credentials) {
+        const provider = getCloudProvider(id);
+        diagnosticLog('debug', 'cloud-provider', `开始测试 ${provider.label} 连接`);
+        const result = await provider.testConnection(credentials);
+        diagnosticLog('debug', 'cloud-provider', `${provider.label} 连接测试成功`);
+        return result;
+    }
+
+    function queueCloudProviderTask(id, run, options = {}) {
+        const provider = getCloudProvider(id);
+        return cloudTaskQueue.add(run, {
+            label: options.label || `${provider.label} 任务`,
+            retries: options.retries ?? 1,
+            signal: options.signal || null
+        });
+    }
+
+    /*********************** 页面类型与顶部聚合区 ***********************/
+    function classifyPage(href) {
+        const url = new URL(href);
+        const mod = url.searchParams.get('mod');
+        const isForumScript = /\/forum\.php$/i.test(url.pathname);
+        return {
+            isSearchPage: /\/search\.php$/i.test(url.pathname) && mod === 'forum',
+            isThreadPage: isForumScript && mod === 'viewthread',
+            isForumListPage: isForumScript && mod === 'forumdisplay',
+            isForumHomePage: (isForumScript && !mod) ||
+                (url.pathname === '/' && /(^|\.)sehuatang\.org$/i.test(url.hostname))
+        };
+    }
+    const { isSearchPage, isThreadPage, isForumListPage, isForumHomePage } = classifyPage(location.href);
+
+    // 帖子专用工具只能在帖子详情页创建，避免首页、版块页和跳转页出现空工具栏。
+    const agg = isThreadPage ? ensureAggregator() : null;
     function ensureAggregator() {
         const c = document.createElement('div');
         c.id = 'sht-aggregator';
@@ -1543,6 +2095,7 @@
         const h = document.createElement('strong'); h.textContent = '附件文本汇总 / 实用工具'; h.style.fontSize = '16px';
         const btn = (label, icon, fn, type = 'default') => {
             const b = document.createElement('button');
+            b.type = 'button';
             setIconLabel(b, icon, label);
 
             // 根据按钮类型设置不同的样式
@@ -1619,8 +2172,16 @@
         const btnAuthorOnly = btn('只看楼主', 'user', () => toggleAuthorOnly(), 'default');
         const btnHistory = btn('历史', 'history', () => openHistory(), 'default');
         const btnExport = btn('导出', 'upload', () => exportAll(), 'default');
-        const btnCreateFolder123 = btn('123 新建', 'folder', () => showCreateFolderDialog(), 'success');
-        btnCreateFolder123.id = 'sht-create-folder-btn';
+        const btnCompact = btn(CFG.toolbarCompactMode ? '展开工具' : '极简模式', 'eye', () => {
+            CFG.toolbarCompactMode = !CFG.toolbarCompactMode;
+            saveConfig();
+            applyCompactMode();
+        }, 'default');
+        let btnCreateFolder123 = null;
+        if (CFG.pan123Enabled) {
+            btnCreateFolder123 = btn('123 新建', 'folder', () => showCreateFolderDialog(), 'success');
+            btnCreateFolder123.id = 'sht-create-folder-btn';
+        }
         let btnCreateFolder115 = null;
         let btn115OneClick = null;
         if (CFG.pan115Enabled) {
@@ -1633,16 +2194,17 @@
         const originalFavBtn = document.querySelector('#k_favorite') || document.querySelector('a[href*="favorite"]') || document.querySelector('a[onclick*="favorite"]');
         const originalRateBtn = document.querySelector('#ak_rate') || document.querySelector('a[href*="rate"]') || document.querySelector('a[onclick*="rate"]');
 
+        let favClone = null;
         if (originalFavBtn) {
             // 克隆按钮以避免移动原按钮
-            const favClone = originalFavBtn.cloneNode(true);
+            favClone = originalFavBtn.cloneNode(true);
             favClone.style.cssText = 'padding:2px 8px;cursor:pointer;text-decoration:none;display:inline-block;margin:0 4px;';
-            title.appendChild(favClone);
         }
 
+        let rateClone = null;
         if (originalRateBtn) {
             // 克隆按钮以避免移动原按钮
-            const rateClone = originalRateBtn.cloneNode(true);
+            rateClone = originalRateBtn.cloneNode(true);
             rateClone.style.cssText = 'padding:2px 8px;cursor:pointer;text-decoration:none;display:inline-block;margin:0 4px;';
 
             // 如果启用一键评分，替换点击事件
@@ -1653,20 +2215,69 @@
                     quickRate(originalRateBtn);
                 };
             }
-
-            title.appendChild(rateClone);
         }
 
-        const tip = document.createElement('span'); tip.style.cssText = 'font-size:12px;opacity:.7'; tip.textContent = '（聚合文本/ED2K/磁力；支持 123Pan / 115 离线；图片屏蔽可切换）';
-        const headerButtons = [h, btnCopyAll, btnWrap, btnSearch, btnConf, btnImgToggle, btnED2K, btnMagnet, btnAuthorOnly, btnHistory, btnExport, btnCreateFolder123];
-        if (btnCreateFolder115) headerButtons.push(btnCreateFolder115);
-        if (btn115OneClick) headerButtons.push(btn115OneClick);
-        headerButtons.push(tip);
-        title.append(...headerButtons);
+        const toolbarGroups = {};
+        const createToolbarGroup = (key, label, controls, defaultOpen = false) => {
+            const details = document.createElement('details');
+            details.open = CFG.toolbarGroupState?.[key] ?? defaultOpen;
+            details.style.cssText = 'display:inline-block;border:1px solid #ddd;border-radius:5px;background:#fff;padding:2px 5px;';
+            const summary = document.createElement('summary');
+            summary.style.cssText = 'cursor:pointer;font-size:12px;font-weight:600;user-select:none;';
+            const labelNode = document.createElement('span');
+            labelNode.textContent = label;
+            const badge = document.createElement('span');
+            badge.style.cssText = 'display:none;margin-left:4px;padding:0 5px;border-radius:999px;background:#e6f2fa;color:#075f8f;font-size:11px;';
+            summary.append(labelNode, badge);
+            const body = document.createElement('span');
+            body.style.cssText = 'display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;margin-left:5px;';
+            body.append(...controls.filter(Boolean));
+            details.addEventListener('toggle', () => {
+                CFG.toolbarGroupState = { ...(CFG.toolbarGroupState || {}), [key]: details.open };
+                saveConfig();
+            });
+            details.append(summary, body);
+            toolbarGroups[key] = { details, badge };
+            return details;
+        };
+
+        const tip = document.createElement('span');
+        tip.className = 'sht-toolbar-tip';
+        tip.style.cssText = 'font-size:12px;opacity:.7;flex-basis:100%';
+        tip.textContent = '（附件依赖按需加载；网盘按钮仅在启用后显示）';
+        const quickGroup = createToolbarGroup('quick', '常用', [btnCopyAll, btnWrap, btnSearch, btnConf, btnCompact], true);
+        const attachmentGroup = createToolbarGroup('attachments', '附件与链接', [btnImgToggle, btnED2K, btnMagnet]);
+        const cloudControls = [btnCreateFolder123, btnCreateFolder115, btn115OneClick].filter(Boolean);
+        const moreGroup = createToolbarGroup('more', '更多', [btnAuthorOnly, btnHistory, btnExport, favClone, rateClone]);
+        title.append(h, quickGroup, attachmentGroup);
+        const cloudGroup = cloudControls.length ? createToolbarGroup('cloud', '网盘', cloudControls) : null;
+        if (cloudGroup) title.append(cloudGroup);
+        title.append(moreGroup, tip);
         const list = document.createElement('div'); list.id = 'sht-agg-list'; list.style.cssText = 'margin-top:8px;display:grid;gap:8px';
         const ed2kBox = document.createElement('div'); ed2kBox.id = 'sht-agg-ed2k'; ed2kBox.style.marginTop = '8px';
         const magnetBox = document.createElement('div'); magnetBox.id = 'sht-agg-magnet'; magnetBox.style.marginTop = '8px';
         c.append(title, list, ed2kBox, magnetBox);
+
+        function applyCompactMode() {
+            [attachmentGroup, cloudGroup, moreGroup].filter(Boolean).forEach(group => {
+                group.style.display = CFG.toolbarCompactMode ? 'none' : 'inline-block';
+            });
+            setIconLabel(btnCompact, 'eye', CFG.toolbarCompactMode ? '展开工具' : '极简模式');
+        }
+
+        function updateToolbarCounts({ attachments, ed2k, magnets } = {}) {
+            const setBadge = (key, value) => {
+                const badge = toolbarGroups[key]?.badge;
+                if (!badge || value == null) return;
+                badge.textContent = String(value);
+                badge.style.display = value > 0 ? 'inline-block' : 'none';
+            };
+            setBadge('attachments', (attachments ?? list.querySelectorAll('.sht-agg-item').length) + (ed2k ?? Number(ed2kBox.querySelector('textarea')?.dataset.count || 0)) + (magnets ?? Number(magnetBox.querySelector('textarea')?.dataset.count || 0)));
+            setBadge('cloud', cloudTaskQueue.snapshot().active.length + cloudTaskQueue.snapshot().pending.length);
+        }
+        applyCompactMode();
+        const unsubscribeTaskQueue = cloudTaskQueue.subscribe(() => updateToolbarCounts({}));
+        window.addEventListener('pagehide', unsubscribeTaskQueue, { once: true });
 
         // 检查当前帖子对应的文件夹
         checkCurrentThreadFolder();
@@ -1675,7 +2286,7 @@
         }
 
         // 初始化创建文件夹按钮显示
-        updateCreateFolderButton();
+        if (CFG.pan123Enabled) updateCreateFolderButton();
         if (CFG.pan115Enabled) {
             updateCreateFolderButton115();
             refreshPan115FolderInfo();
@@ -1688,10 +2299,11 @@
             const chunks = [...list.querySelectorAll('.sht-agg-item textarea')].map(t => `【${t.dataset.title || '附件'}】\n${t.value}`);
             const edTa = ed2kBox.querySelector('textarea'); if (edTa && edTa.value.trim()) chunks.unshift(`【ED2K(${edTa.dataset.count || 0})】\n${edTa.value}`);
             const mgTa = magnetBox.querySelector('textarea'); if (mgTa && mgTa.value.trim()) chunks.unshift(`【磁力(${mgTa.dataset.count || 0})】\n${mgTa.value}`);
-            GM_setClipboard(chunks.join('\n\n' + '-'.repeat(40) + '\n\n')); alert('已复制全部（含ED2K/磁力）。');
+            GM_setClipboard(chunks.join('\n\n' + '-'.repeat(40) + '\n\n'));
+            showToast('已复制全部文本（含 ED2K/磁力）', 'success');
         }
-        function filterPrompt() {
-            const keyword = prompt('输入关键词进行过滤（留空恢复）：', '');
+        async function filterPrompt() {
+            const keyword = await promptText('留空即可恢复显示全部附件。', { title: '过滤聚合内容', placeholder: '输入关键词' });
             if (keyword === null) return;
             const items = list.querySelectorAll('.sht-agg-item');
             const normalizedKeyword = keyword.trim().toLowerCase();
@@ -1700,7 +2312,7 @@
                 item.style.display = !normalizedKeyword || text.includes(normalizedKeyword) ? '' : 'none';
             });
         }
-        c.updateWrapMode = updateWrapMode; c.list = list; c.ed2kBox = ed2kBox; c.magnetBox = magnetBox;
+        c.updateWrapMode = updateWrapMode; c.updateToolbarCounts = updateToolbarCounts; c.list = list; c.ed2kBox = ed2kBox; c.magnetBox = magnetBox;
         c.addItem = (title, text) => {
             // 检查是否为种子文件
             const isTorrentFile = /\.torrent$/i.test(title) || text.includes('forum.php?mod=attachment') && text.includes('.torrent');
@@ -1726,28 +2338,7 @@
 
                 bDownload.addEventListener('click', () => { window.open(text, '_blank'); });
                 b123Pan.addEventListener('click', async () => {
-                    if (!CFG.pan123Enabled) {
-                        showWarningModal('请先在设置中启用 123Pan 功能并配置认证信息');
-                        return;
-                    }
-
-                    b123Pan.textContent = '发送中...';
-                    b123Pan.disabled = true;
-
-                    try {
-                        // 使用GM_xmlhttpRequest下载torrent文件（绕过CORS）
-                        const torrentBlob = await downloadFileWithGM(text);
-                        const filename = title.replace(/\.torrent$/i, '');
-
-                        // 处理torrent文件离线下载
-                        await processTorrentOffline(torrentBlob, filename);
-                    } catch (error) {
-                        console.error('发送到123Pan失败:', error);
-                        showErrorModal(`发送失败: ${error.message}`);
-                    } finally {
-                        b123Pan.textContent = '发送到123Pan';
-                        b123Pan.disabled = false;
-                    }
+                    await sendTorrentAttachmentToPan123(b123Pan, text, title.replace(/\.torrent$/i, ''));
                 });
 
                 actions.append(bDownload, b123Pan);
@@ -1763,7 +2354,7 @@
                 actions.append(bCopy, bCol); head.append(name, actions); body.append(ta); card.append(head, body);
             }
 
-            list.append(card); c.updateWrapMode(); queueED2KScan(true); queueMagnetScan(true); return card;
+            list.append(card); c.updateWrapMode(); c.updateToolbarCounts({}); queueED2KScan(true); queueMagnetScan(true); return card;
         };
 
         // 只看楼主功能 - 使用论坛自带的只看该作者功能
@@ -1886,7 +2477,7 @@
         function toggleAuthorOnly() {
             const authorId = getThreadAuthorId();
             if (!authorId) {
-                alert('无法识别楼主，请稍后再试');
+                showToast('无法识别楼主，请稍后再试', 'warning');
                 return;
             }
 
@@ -1917,7 +2508,7 @@
         }
 
         function updateTipText(text) {
-            const tip = document.querySelector('#sht-aggregator span:last-child');
+            const tip = document.querySelector('#sht-aggregator .sht-toolbar-tip');
             if (tip) {
                 tip.textContent = text;
             }
@@ -1999,8 +2590,8 @@
                 clearAllBtn.style.transform = 'translateY(0)';
                 clearAllBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
             });
-            clearAllBtn.onclick = () => {
-                if (confirm('确定要清空所有历史记录吗？')) {
+            clearAllBtn.onclick = async () => {
+                if (await confirmAction('清空后无法恢复。', { title: '清空全部历史记录', confirmText: '确认清空', danger: true })) {
                     CFG.historyItems = [];
                     saveConfig();
                     dialog.remove();
@@ -2248,7 +2839,7 @@
             a.click();
 
             URL.revokeObjectURL(url);
-            alert('导出完成！');
+            showToast('帖子数据导出完成', 'success');
         }
 
         // 导出历史记录
@@ -2262,7 +2853,7 @@
             a.click();
 
             URL.revokeObjectURL(url);
-            alert('历史记录导出完成！');
+            showToast('历史记录导出完成', 'success');
         }
 
 
@@ -2948,6 +3539,17 @@
         const configButtonsGroup = document.createElement('div');
         configButtonsGroup.style.cssText = 'margin: 8px 0; display: flex; gap: 10px; flex-wrap: wrap;';
 
+        const sensitiveExportLabel = document.createElement('label');
+        sensitiveExportLabel.style.cssText = 'display:flex;align-items:flex-start;gap:8px;margin:8px 0;padding:8px;border:1px solid #f0c36d;border-radius:4px;background:#fff8e5;font-size:12px;';
+        const sensitiveExportCheckbox = document.createElement('input');
+        sensitiveExportCheckbox.type = 'checkbox';
+        sensitiveExportCheckbox.checked = false;
+        sensitiveExportCheckbox.setAttribute('aria-describedby', 'sht-sensitive-export-help');
+        const sensitiveExportText = document.createElement('span');
+        sensitiveExportText.id = 'sht-sensitive-export-help';
+        sensitiveExportText.textContent = '在导出文件中包含 115/123Pan Cookie、Token 和 User-Agent（默认关闭；文件包含账号凭据，请仅保存在可信设备）。';
+        sensitiveExportLabel.append(sensitiveExportCheckbox, sensitiveExportText);
+
         const exportConfigBtn = document.createElement('button');
         setIconLabel(exportConfigBtn, 'upload', '导出配置');
         exportConfigBtn.style.cssText = `
@@ -2978,7 +3580,7 @@
         exportConfigBtn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            exportConfig();
+            exportConfig(sensitiveExportCheckbox.checked);
         });
 
         const importConfigBtn = document.createElement('button');
@@ -3050,10 +3652,41 @@
         configButtonsGroup.appendChild(exportConfigBtn);
         configButtonsGroup.appendChild(importConfigBtn);
         configButtonsGroup.appendChild(resetConfigBtn);
+        configGroup.appendChild(sensitiveExportLabel);
         configGroup.appendChild(configButtonsGroup);
+
+        const runtimeGroup = createSettingGroup('运行与诊断', '工具栏显示、任务并发、会话凭据与脱敏诊断报告');
+        const makeRuntimeToggle = (labelText, checked) => {
+            const label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px;';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox'; checkbox.checked = checked;
+            label.append(checkbox, document.createTextNode(labelText));
+            runtimeGroup.appendChild(label);
+            return checkbox;
+        };
+        const compactModeCheckbox = makeRuntimeToggle('启用帖子工具栏极简模式', CFG.toolbarCompactMode);
+        const sessionCredentialsCheckbox = makeRuntimeToggle('网盘凭据仅保留在当前页面内存中（刷新或离开即清除）', CFG.credentialsSessionOnly);
+        const debugModeCheckbox = makeRuntimeToggle('启用调试诊断日志（日志会自动脱敏）', CFG.debugMode);
+        const concurrencyRow = document.createElement('label');
+        concurrencyRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px;';
+        concurrencyRow.append(document.createTextNode('网盘任务并发数：'));
+        const cloudConcurrencyInput = document.createElement('input');
+        cloudConcurrencyInput.type = 'number'; cloudConcurrencyInput.min = '1'; cloudConcurrencyInput.max = '4';
+        cloudConcurrencyInput.value = String(CFG.cloudTaskConcurrency || 2);
+        cloudConcurrencyInput.style.width = '64px';
+        concurrencyRow.append(cloudConcurrencyInput);
+        runtimeGroup.appendChild(concurrencyRow);
+        const diagnosticExportButton = document.createElement('button');
+        diagnosticExportButton.type = 'button';
+        setIconLabel(diagnosticExportButton, 'download', '导出脱敏诊断报告');
+        diagnosticExportButton.style.cssText = 'padding:7px 12px;border:1px solid #777;border-radius:4px;background:#fff;cursor:pointer;margin-top:6px;';
+        diagnosticExportButton.addEventListener('click', exportDiagnosticReport);
+        runtimeGroup.appendChild(diagnosticExportButton);
 
         // 将 filterGroup 和 configGroup 添加到高级设置标签页
         advancedForm.appendChild(filterGroup);
+        advancedForm.appendChild(runtimeGroup);
         advancedForm.appendChild(configGroup);
         advancedTab.appendChild(advancedForm);
 
@@ -3085,6 +3718,7 @@
         pan115CookieInput.placeholder = 'USERSESSIONID=...; UID=...; CID=...; SEID=...';
         pan115CookieInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;';
         pan115CookieGroup.appendChild(pan115CookieInput);
+        attachSensitiveFieldControls(pan115CookieGroup, pan115CookieInput);
         pan115Group.appendChild(pan115CookieGroup);
 
         const pan115UserAgentGroup = createSettingGroup('User-Agent (可选)', '默认使用当前浏览器 UA，如需仿真 115 浏览器可在此自定义。');
@@ -3095,6 +3729,28 @@
         pan115UserAgentInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;';
         pan115UserAgentGroup.appendChild(pan115UserAgentInput);
         pan115Group.appendChild(pan115UserAgentGroup);
+
+        const pan115CredentialActions = document.createElement('div');
+        pan115CredentialActions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 10px;';
+        const pan115TestButton = document.createElement('button');
+        pan115TestButton.type = 'button'; pan115TestButton.textContent = '测试 115 连接';
+        const pan115ClearButton = document.createElement('button');
+        pan115ClearButton.type = 'button'; pan115ClearButton.textContent = '清除 115 凭据';
+        [pan115TestButton, pan115ClearButton].forEach(button => { button.style.cssText = 'padding:6px 10px;border:1px solid #999;border-radius:4px;background:#fff;cursor:pointer;'; });
+        pan115TestButton.addEventListener('click', async () => {
+            pan115TestButton.disabled = true; pan115TestButton.textContent = '测试中…';
+            try {
+                const result = await testCloudProviderConnection('pan115', { cookie: pan115CookieInput.value, userAgent: pan115UserAgentInput.value });
+                showToast(`115 连接成功（UID: ${result.uid}）`, 'success');
+            } catch (error) { showToast(`115 连接失败：${describeRequestError(error)}`, 'error', 5000); }
+            finally { pan115TestButton.disabled = false; pan115TestButton.textContent = '测试 115 连接'; }
+        });
+        pan115ClearButton.addEventListener('click', () => {
+            pan115CookieInput.value = ''; pan115UserAgentInput.value = '';
+            showToast('115 凭据输入框已清空，保存设置后生效', 'info');
+        });
+        pan115CredentialActions.append(pan115TestButton, pan115ClearButton);
+        pan115Group.appendChild(pan115CredentialActions);
 
         const pan115UploadDirGroup = createSettingGroup('保存目录 ID (可选)', '填写 115 网盘目标目录 ID (wp_path_id)。留空则使用默认离线目录。');
         const pan115UploadDirInput = document.createElement('input');
@@ -3175,6 +3831,7 @@
         pan123TokenInput.placeholder = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
         pan123TokenInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;';
         pan123TokenGroup.appendChild(pan123TokenInput);
+        attachSensitiveFieldControls(pan123TokenGroup, pan123TokenInput);
         pan123Group.appendChild(pan123TokenGroup);
 
         // Login UUID 配置
@@ -3185,6 +3842,7 @@
         pan123LoginUuidInput.placeholder = '7ab2526ea059412c87f7ff866ff5c2ac...';
         pan123LoginUuidInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;';
         pan123LoginUuidGroup.appendChild(pan123LoginUuidInput);
+        attachSensitiveFieldControls(pan123LoginUuidGroup, pan123LoginUuidInput);
         pan123Group.appendChild(pan123LoginUuidGroup);
 
         // Cookie 配置
@@ -3195,7 +3853,32 @@
         pan123CookieInput.placeholder = 'cna=xxx; HMACCOUNT=xxx; ...';
         pan123CookieInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;';
         pan123CookieGroup.appendChild(pan123CookieInput);
+        attachSensitiveFieldControls(pan123CookieGroup, pan123CookieInput);
         pan123Group.appendChild(pan123CookieGroup);
+
+        const pan123CredentialActions = document.createElement('div');
+        pan123CredentialActions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 10px;';
+        const pan123TestButton = document.createElement('button');
+        pan123TestButton.type = 'button'; pan123TestButton.textContent = '测试 123Pan 连接';
+        const pan123ClearButton = document.createElement('button');
+        pan123ClearButton.type = 'button'; pan123ClearButton.textContent = '清除 123Pan 凭据';
+        [pan123TestButton, pan123ClearButton].forEach(button => { button.style.cssText = 'padding:6px 10px;border:1px solid #999;border-radius:4px;background:#fff;cursor:pointer;'; });
+        pan123TestButton.addEventListener('click', async () => {
+            pan123TestButton.disabled = true; pan123TestButton.textContent = '测试中…';
+            try {
+                await testCloudProviderConnection('pan123', {
+                    token: pan123TokenInput.value, loginUuid: pan123LoginUuidInput.value, cookie: pan123CookieInput.value
+                });
+                showToast('123Pan 连接成功', 'success');
+            } catch (error) { showToast(`123Pan 连接失败：${describeRequestError(error)}`, 'error', 5000); }
+            finally { pan123TestButton.disabled = false; pan123TestButton.textContent = '测试 123Pan 连接'; }
+        });
+        pan123ClearButton.addEventListener('click', () => {
+            pan123TokenInput.value = ''; pan123LoginUuidInput.value = ''; pan123CookieInput.value = '';
+            showToast('123Pan 凭据输入框已清空，保存设置后生效', 'info');
+        });
+        pan123CredentialActions.append(pan123TestButton, pan123ClearButton);
+        pan123Group.appendChild(pan123CredentialActions);
 
         // 上传目录配置
         const pan123UploadDirGroup = createSettingGroup('上传目录 ID', '123Pan 上传目录 ID (可选)');
@@ -3502,6 +4185,11 @@
             CFG.defaultRateScore = parseInt(rateScoreInput.value) || 2;
             CFG.defaultRateReason = reasonInput.value.trim() || '很给力!';
 
+            CFG.toolbarCompactMode = compactModeCheckbox.checked;
+            CFG.credentialsSessionOnly = sessionCredentialsCheckbox.checked;
+            CFG.debugMode = debugModeCheckbox.checked;
+            CFG.cloudTaskConcurrency = Math.max(1, Math.min(4, parseInt(cloudConcurrencyInput.value, 10) || 2));
+
             // 115 离线设置
             CFG.pan115Enabled = pan115EnabledCheckbox.checked;
             CFG.pan115Cookie = pan115CookieInput.value.trim();
@@ -3539,12 +4227,12 @@
                 applyModuleFilter();
             }
 
-            alert('设置已保存！页面将自动刷新以应用新设置。');
-
-            // 延迟刷新页面，让用户看到提示
-            setTimeout(() => {
-                location.reload();
-            }, 1000);
+            if (CFG.credentialsSessionOnly) {
+                showToast('设置已保存；临时凭据已在当前页面生效，刷新或离开页面即清除', 'success', 5000);
+            } else {
+                showToast('设置已保存，页面将刷新以应用新设置', 'success');
+                setTimeout(() => location.reload(), 1000);
+            }
         };
 
         buttonGroup.appendChild(cancelBtn);
@@ -3588,10 +4276,76 @@
         return group;
     }
 
+    function attachSensitiveFieldControls(group, field) {
+        let revealed = false;
+        const applyMask = () => {
+            if (field.tagName === 'INPUT') field.type = revealed ? 'text' : 'password';
+            else field.style.webkitTextSecurity = revealed ? 'none' : 'disc';
+        };
+        applyMask();
+        field.autocomplete = 'off';
+        field.spellcheck = false;
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;margin-top:6px;';
+        const reveal = document.createElement('button');
+        reveal.type = 'button'; reveal.textContent = '显示';
+        const clear = document.createElement('button');
+        clear.type = 'button'; clear.textContent = '清空';
+        [reveal, clear].forEach(button => { button.style.cssText = 'padding:3px 8px;border:1px solid #aaa;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;'; });
+        reveal.addEventListener('click', () => {
+            revealed = !revealed;
+            applyMask();
+            reveal.textContent = revealed ? '隐藏' : '显示';
+        });
+        clear.addEventListener('click', () => { field.value = ''; });
+        actions.append(reveal, clear);
+        group.appendChild(actions);
+    }
+
     /*********************** 附件预览（同前） ***********************/
     const SELECTOR_ATTACH_ANCHOR = 'a[href*="forum.php?mod=attachment"][href*="aid="]';
-    function enhanceAll() { document.querySelectorAll(SELECTOR_ATTACH_ANCHOR).forEach(a => { if (!a.dataset._shtEnhanced) { a.dataset._shtEnhanced = '1'; const name = (a.textContent || '').trim(); const span = a.closest('span[id^="attach_"]'); const sizeBytes = parseSizeBytesFromSpan(span); buildInlineUI(a, name, sizeBytes); } }); }
-    function enhanceInNode(node) { node.querySelectorAll?.(SELECTOR_ATTACH_ANCHOR).forEach(a => { if (!a.dataset._shtEnhanced) { a.dataset._shtEnhanced = '1'; const name = (a.textContent || '').trim(); const span = a.closest('span[id^="attach_"]'); const sizeBytes = parseSizeBytesFromSpan(span); buildInlineUI(a, name, sizeBytes); } }); }
+    function queryWithin(root, selector) {
+        const found = [];
+        if (root instanceof Element && root.matches(selector)) found.push(root);
+        root.querySelectorAll?.(selector).forEach(node => found.push(node));
+        return found;
+    }
+
+    function enhanceAttachmentAnchor(anchor) {
+        if (anchor.dataset._shtEnhanced) return;
+        anchor.dataset._shtEnhanced = '1';
+        const name = (anchor.textContent || '').trim();
+        const span = anchor.closest('span[id^="attach_"]');
+        buildInlineUI(anchor, name, parseSizeBytesFromSpan(span));
+    }
+
+    function scanThreadContent(roots, { forceImages = false, forceLinks = false } = {}) {
+        if (!isThreadPage) return;
+        const imageCandidates = new Set();
+        let contentMayContainLinks = forceLinks;
+
+        markDownloadLinkScopes(roots);
+
+        roots.forEach(root => {
+            if (!(root instanceof Element) && root !== document) return;
+            if (root instanceof Element && root.closest('[class^="sht-"], [id^="sht-"]')) return;
+
+            queryWithin(root, SELECTOR_ATTACH_ANCHOR).forEach(enhanceAttachmentAnchor);
+            queryWithin(root, '[id^="postmessage_"] img').forEach(img => imageCandidates.add(img));
+            if (root === document ||
+                (root instanceof Element && (root.matches('[id^="postmessage_"]') || root.closest('[id^="postmessage_"]') || root.querySelector?.('[id^="postmessage_"]')))) {
+                contentMayContainLinks = true;
+            }
+        });
+
+        if (CFG.blockImages && imageCandidates.size) {
+            applyImageBlocking(true, { forceRebuild: forceImages, candidates: imageCandidates });
+        }
+        if (contentMayContainLinks) {
+            queueED2KScan(forceLinks);
+            queueMagnetScan(forceLinks);
+        }
+    }
 
     function buildInlineUI(a, filename, bytes) {
         const wrap = document.createElement('div'); wrap.className = 'sht-inline'; wrap.style.cssText = 'margin:6px 0 12px 0';
@@ -3615,25 +4369,8 @@
             });
 
             const btn123Pan = mkBtn('发送到123Pan', async () => {
-                if (!CFG.pan123Enabled) {
-                    showWarningModal('请先在设置中启用 123Pan 功能并配置认证信息');
-                    return;
-                }
-
-                btn123Pan.textContent = '发送中...';
-                btn123Pan.disabled = true;
-
-                try {
-                    const torrentBlob = await downloadFileWithGM(a.href);
-                    const title = (resolvedName || rawName || '').replace(/\.torrent$/i, '') || effectiveName;
-                    await processTorrentOffline(torrentBlob, title);
-                } catch (error) {
-                    console.error('发送到123Pan失败:', error);
-                    showErrorModal(`发送失败: ${error.message}`);
-                } finally {
-                    btn123Pan.textContent = '发送到123Pan';
-                    btn123Pan.disabled = false;
-                }
+                const title = (resolvedName || rawName || '').replace(/\.torrent$/i, '') || effectiveName;
+                await sendTorrentAttachmentToPan123(btn123Pan, a.href, title);
             });
 
             bar.append(btnDownload, btn123Pan, info);
@@ -3655,32 +4392,75 @@
             return;
         }
 
-        const btnFetch = mkBtn('加载预览', () => fetchAndShow()); const btnCopy = mkBtn('复制', () => copyCurrent()); btnCopy.disabled = true;
+        let activeController = null;
+        const btnFetch = mkBtn('加载预览', () => {
+            if (activeController) activeController.abort();
+            else fetchAndShow({ enhancedDecoding: true });
+        }); const btnCopy = mkBtn('复制', () => copyCurrent()); btnCopy.disabled = true;
         const btnHoist = mkBtn('上顶聚合', () => { if (ta.value) agg?.addItem(effectiveName, ta.value); }); const btnPw = mkBtn('设密码', () => openSettings());
         const ta = document.createElement('textarea'); ta.placeholder = '（附件内容将显示在这里）'; ta.rows = 8; ta.style.cssText = 'width:min(900px,100%);max-width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:6px;box-sizing:border-box;border-radius:6px;border:1px solid #ddd'; ta.readOnly = true;
         bar.append(btnFetch, btnCopy, btnHoist, btnPw, info); wrap.append(bar, ta); a.parentElement.insertAdjacentElement('afterend', wrap);
-        if (!isTorrentFile && !isImageFile && (!bytes || bytes <= CFG.maxAutoBytes)) fetchAndShow();
+        // 仅自动预览小型纯文本；压缩包必须由用户点击，避免页面加载时下载解压依赖。
+        if (isTextLike(effectiveName) && (!bytes || bytes <= CFG.maxAutoBytes)) fetchAndShow({ enhancedDecoding: false });
 
-        function setLoading(loading, text = '加载中…') { btnFetch.disabled = loading; btnFetch.textContent = loading ? text : '重新加载'; }
+        function setLoading(loading, text = '加载中…') {
+            btnFetch.disabled = false;
+            btnFetch.textContent = loading ? `${text}（点击取消）` : '重新加载';
+        }
         function copyCurrent() { GM_setClipboard(ta.value || ''); btnCopy.textContent = '已复制'; setTimeout(() => btnCopy.textContent = '复制', 1200); }
-        async function fetchAndShow() {
+        async function fetchAndShow({ enhancedDecoding = true } = {}) {
+            if (activeController) return;
+            const controller = new AbortController();
+            activeController = controller;
             try {
                 setLoading(true); ta.value = ''; btnCopy.disabled = true;
-                const url = absoluteUrl(a.href); const buf = await httpGetArrayBuffer(url);
+                if (enhancedDecoding) {
+                    setLoading(true, '加载编码组件…');
+                    await loadOptionalLibrary('jschardet', { signal: controller.signal });
+                }
+                if (isZip(effectiveName)) {
+                    setLoading(true, '加载 ZIP 组件…');
+                    await loadOptionalLibrary('zip', { signal: controller.signal });
+                }
+                const url = absoluteUrl(a.href);
+                setLoading(true, '下载附件…');
+                const buf = await httpGetArrayBuffer(url, {
+                    signal: controller.signal,
+                    onProgress: ({ loaded, total }) => {
+                        const progress = total > 0 ? ` ${Math.round((loaded / total) * 100)}%` : ` ${formatBytes(loaded)}`;
+                        setLoading(true, `下载附件${progress}`);
+                    }
+                });
                 const bin = new Uint8Array(buf);
                 if (isImageBuffer(bin)) {
                     ta.value = '（图片文件，跳过预览）';
                     return;
                 }
                 if (isTextLike(effectiveName)) { const text = decodeBest(buf, effectiveName); showText(text, '(文本)'); }
-                else if (isZip(effectiveName)) { const out = await tryExtractZipTexts(buf, CFG.passwordCandidates, CFG.maxEntryBytes); showArchiveTexts(out); }
-                else if (isRar(effectiveName)) { const out = await tryExtractRarTexts(buf, CFG.passwordCandidates, CFG.maxEntryBytes); showArchiveTexts(out); }
+                else if (isZip(effectiveName)) {
+                    setLoading(true, '正在解压 ZIP…');
+                    const out = await tryExtractZipTexts(buf, CFG.passwordCandidates, CFG.maxEntryBytes);
+                    showArchiveTexts(out);
+                }
+                else if (isRar(effectiveName)) {
+                    setLoading(true, '正在解压 RAR…');
+                    const out = await tryExtractRarTexts(buf, CFG.passwordCandidates, CFG.maxEntryBytes);
+                    showArchiveTexts(out);
+                }
                 else {
                     const text = decodeBest(buf, effectiveName);
                     if (text && /[\u0009\u000A\u000D\u0020-\u007E\u00A0-\uFFFF]/.test(text.slice(0, 200))) showText(text, '(猜测文本)');
                     else ta.value = '（不支持的附件类型，或内容非文本）';
                 }
-            } catch { ta.value = '（加载失败，可能需要登录或无权限）'; } finally { setLoading(false); }
+            } catch (error) {
+                ta.value = `（${describeRequestError(error)}）`;
+                diagnosticLog(error?.name === 'AbortError' ? 'debug' : 'warning', 'attachment', '附件预览未完成', {
+                    filename: effectiveName, reason: describeRequestError(error)
+                });
+            } finally {
+                if (activeController === controller) activeController = null;
+                setLoading(false);
+            }
         }
         function showText(text, note = '') {
             // 确保文本正确显示，处理可能的编码问题
@@ -3842,11 +4622,15 @@
         if (!imgs.length) return;
         imgs.forEach(img => pendingImgs.add(img));
         if (pendingTimer) return;
-        pendingTimer = setTimeout(() => {
-            const batch = Array.from(pendingImgs); pendingImgs.clear(); pendingTimer = null;
+        const drainPendingImages = () => {
+            pendingTimer = null;
             const limit = CFG.imageProcessBatch * 4;
-            batch.slice(0, limit).forEach(observeImg);
-        }, CFG.mutationDebounceMs);
+            const batch = Array.from(pendingImgs).slice(0, limit);
+            batch.forEach(img => pendingImgs.delete(img));
+            batch.forEach(observeImg);
+            if (pendingImgs.size) pendingTimer = setTimeout(drainPendingImages, 0);
+        };
+        pendingTimer = setTimeout(drainPendingImages, CFG.mutationDebounceMs);
     }
 
     /*********************** ED2K & 磁力 聚合 ***********************/
@@ -3880,7 +4664,28 @@
         return out;
     }
 
-    let ed2kTimer = null, magnetTimer = null;
+    let linkScanTimer = null;
+    const pendingLinkScan = { ed2k: false, magnet: false, forceEd2k: false, forceMagnet: false };
+    let linkScopeCache = new WeakMap();
+    let dirtyLinkScopes = new WeakSet();
+
+    function postScopesWithin(root) {
+        const scopes = new Set();
+        if (root === document) {
+            document.querySelectorAll('[id^="postmessage_"]').forEach(scope => scopes.add(scope));
+            return scopes;
+        }
+        if (!(root instanceof Element)) return scopes;
+        const closest = root.closest('[id^="postmessage_"]');
+        if (closest) scopes.add(closest);
+        if (root.matches('[id^="postmessage_"]')) scopes.add(root);
+        root.querySelectorAll?.('[id^="postmessage_"]').forEach(scope => scopes.add(scope));
+        return scopes;
+    }
+
+    function markDownloadLinkScopes(roots) {
+        roots.forEach(root => postScopesWithin(root).forEach(scope => dirtyLinkScopes.add(scope)));
+    }
 
     function collectLinksFromNode(node) {
         const ed2k = [], magnets = [];
@@ -3897,36 +4702,40 @@
             if (txt.includes('ed2k://')) extractED2K(txt).forEach(u => ed2k.push(u));
             if (txt.includes('magnet:?')) extractMagnet(txt).forEach(u => magnets.push(u));
         }
-        return { ed2k, magnets };
+        node.querySelectorAll('a[href*="forum.php?mod=attachment"][href*=".torrent"]').forEach(link => {
+            if ((link.textContent || '').trim()) magnets.push(link.href);
+        });
+        return { ed2k: Array.from(new Set(ed2k)), magnets: Array.from(new Set(magnets)) };
     }
 
-    function collectAllED2K() {
-        const scopes = [...document.querySelectorAll('[id^="postmessage_"]')]; const set = new Set();
-        scopes.forEach(sc => collectLinksFromNode(sc).ed2k.forEach(u => set.add(u)));
-        document.querySelectorAll('.sht-agg-item textarea').forEach(ta => {
-            extractED2K(ta.value).forEach(u => set.add(u));
-        });
-        return Array.from(set);
-    }
-    function collectAllMagnets() {
-        const scopes = [...document.querySelectorAll('[id^="postmessage_"]')]; const set = new Set();
-        scopes.forEach(sc => collectLinksFromNode(sc).magnets.forEach(u => set.add(u)));
-
-        document.querySelectorAll('.sht-agg-item textarea').forEach(ta => {
-            extractMagnet(ta.value).forEach(u => set.add(u));
-        });
-
-        // 添加种子文件到磁力链接区域
-        const torrentLinks = Array.from(document.querySelectorAll('a[href*="forum.php?mod=attachment"][href*=".torrent"]'));
-        torrentLinks.forEach(link => {
-            const filename = (link.textContent || '').trim();
-            if (filename) {
-                set.add(link.href);
+    function collectAllDownloadLinks() {
+        const ed2kSet = new Set();
+        const magnetSet = new Set();
+        const scopes = [...document.querySelectorAll('[id^="postmessage_"]')];
+        scopes.forEach(scope => {
+            let links = linkScopeCache.get(scope);
+            if (!links || dirtyLinkScopes.has(scope)) {
+                links = collectLinksFromNode(scope);
+                linkScopeCache.set(scope, links);
+                dirtyLinkScopes.delete(scope);
+                diagnosticLog('debug', 'link-index', '已更新楼层链接索引', {
+                    scope: scope.id || '(anonymous)', ed2k: links.ed2k.length, magnets: links.magnets.length
+                });
             }
+            links.ed2k.forEach(url => ed2kSet.add(url));
+            links.magnets.forEach(url => magnetSet.add(url));
         });
 
-        return Array.from(set);
+        document.querySelectorAll('.sht-agg-item textarea').forEach(ta => {
+            extractED2K(ta.value).forEach(url => ed2kSet.add(url));
+            extractMagnet(ta.value).forEach(url => magnetSet.add(url));
+        });
+
+        return { ed2k: Array.from(ed2kSet), magnets: Array.from(magnetSet) };
     }
+
+    const collectAllED2K = () => collectAllDownloadLinks().ed2k;
+    const collectAllMagnets = () => collectAllDownloadLinks().magnets;
 
     function formatPan115ResultItems(details, originalUrls) {
         const out = [];
@@ -4010,7 +4819,10 @@
                 btn115.textContent = '115 离线发送中...';
 
                 try {
-                    const summary = await pan115AddTasks(targetUrls);
+                    const summary = await queueCloudProviderTask('pan115',
+                        ({ signal }) => pan115AddTasks(targetUrls, { signal }),
+                        { label: `115 批量任务（${targetUrls.length}）`, retries: 0 }
+                    );
                     const { successCount, failCount, details } = summary;
                     const total = summary.total || targetUrls.length;
                     const modalResults = formatPan115ResultItems(details, targetUrls);
@@ -4110,43 +4922,63 @@
         }
 
         act.append(b); head.append(title, act); card.append(head, body); container.append(card); agg?.updateWrapMode();
+        agg?.updateToolbarCounts?.({
+            ed2k: titleText === 'ED2K 链接' ? links.length : undefined,
+            magnets: titleText === '磁力链接' ? links.length : undefined
+        });
     }
 
     function queueED2KScan(force = false) {
         if (!agg) return;
         if (!CFG.autoCollectED2K && !force) return;
-        if (ed2kTimer) clearTimeout(ed2kTimer);
-        ed2kTimer = setTimeout(() => { renderBox(agg.ed2kBox, 'ED2K 链接', collectAllED2K()); }, CFG.ed2kDebounceMs);
+        pendingLinkScan.ed2k = true;
+        pendingLinkScan.forceEd2k ||= force;
+        scheduleCombinedLinkScan();
     }
     function queueMagnetScan(force = false) {
         if (!agg) return;
         if (!CFG.autoCollectMagnet && !force) return;
-        if (magnetTimer) clearTimeout(magnetTimer);
-        magnetTimer = setTimeout(() => { renderBox(agg.magnetBox, '磁力链接', collectAllMagnets()); }, CFG.magnetDebounceMs);
+        pendingLinkScan.magnet = true;
+        pendingLinkScan.forceMagnet ||= force;
+        scheduleCombinedLinkScan();
+    }
+    function scheduleCombinedLinkScan() {
+        if (linkScanTimer) clearTimeout(linkScanTimer);
+        const delay = Math.min(CFG.ed2kDebounceMs, CFG.magnetDebounceMs);
+        linkScanTimer = setTimeout(() => {
+            linkScanTimer = null;
+            const requested = { ...pendingLinkScan };
+            pendingLinkScan.ed2k = false;
+            pendingLinkScan.magnet = false;
+            pendingLinkScan.forceEd2k = false;
+            pendingLinkScan.forceMagnet = false;
+            const links = collectAllDownloadLinks();
+            if (requested.ed2k && (CFG.autoCollectED2K || requested.forceEd2k)) {
+                renderBox(agg.ed2kBox, 'ED2K 链接', links.ed2k);
+            }
+            if (requested.magnet && (CFG.autoCollectMagnet || requested.forceMagnet)) {
+                renderBox(agg.magnetBox, '磁力链接', links.magnets);
+            }
+        }, delay);
     }
 
     /*********************** 网络与解压（同前） ***********************/
-    function httpGetArrayBuffer(url) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url,
-                responseType: 'arraybuffer',
-                timeout: 30000,
-                anonymous: false,
-                headers: {
-                    'Referer': location.href,
-                    'Accept': 'text/plain, text/html, application/octet-stream, */*',
-                    'Accept-Charset': 'utf-8, gbk, gb2312, shift_jis, euc-jp, big5, iso-8859-1',
-                    'Accept-Encoding': 'identity'
-                },
-                onload: res => resolve(res.response),
-                ontimeout: () => reject(new Error('timeout')),
-                onerror: () => reject(new Error('error'))
-            });
+    async function httpGetArrayBuffer(url, options = {}) {
+        const response = await shtRequest({
+            method: 'GET', url, responseType: 'arraybuffer', timeout: 30_000,
+            signal: options.signal, onProgress: options.onProgress, retries: 1,
+            scope: 'attachment',
+            headers: {
+                'Referer': location.href,
+                'Accept': 'text/plain, text/html, application/octet-stream, */*',
+                'Accept-Charset': 'utf-8, gbk, gb2312, shift_jis, euc-jp, big5, iso-8859-1',
+                'Accept-Encoding': 'identity'
+            }
         });
+        return response.response;
     }
     async function tryExtractZipTexts(buf, pwds, maxEntryBytes) {
+        await loadOptionalLibrary('zip');
         const blob = new Blob([buf]); const results = []; const tries = ['', ...pwds.filter(p => p && p.trim() !== '')];
         for (const pwd of tries) {
             try {
@@ -4347,7 +5179,7 @@
             await submitRating(tid, pid);
         } catch (error) {
             console.error('评分过程中出错:', error);
-            alert('评分过程中出错: ' + error.message);
+            showToast('评分过程中出错: ' + describeRequestError(error), 'error', 5000);
         }
     }
 
@@ -4362,11 +5194,9 @@
 
             if (!formhash) {
                 console.log('无法获取formhash');
-                alert('无法获取安全令牌，请刷新页面后重试');
+                showToast('无法获取安全令牌，请刷新页面后重试', 'warning', 5000);
                 return;
             }
-
-            console.log('formhash:', formhash);
 
             // 构建评分请求数据 - 根据实际 curl 请求格式
             const rateData = new URLSearchParams();
@@ -4378,16 +5208,18 @@
             rateData.append('score8', CFG.defaultRateScore.toString());
             rateData.append('reason', CFG.defaultRateReason); // 添加评分理由
 
-            console.log('评分请求数据:', rateData.toString());
-
-            // 发送评分请求
-            const response = await fetch('https://sehuatang.org/forum.php?mod=misc&action=rate&ratesubmit=yes&infloat=yes&inajax=1', {
+            // 始终向当前论坛来源发送评分，兼容官方子域名与同源镜像。
+            const rateEndpoint = new URL('/forum.php?mod=misc&action=rate&ratesubmit=yes&infloat=yes&inajax=1', location.origin);
+            const response = await shtRequest({
                 method: 'POST',
+                url: rateEndpoint.toString(),
+                responseType: 'text',
+                timeout: 20_000,
+                retries: 0,
+                scope: 'rating',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Origin': 'https://sehuatang.org',
-                    'Referer': location.href,
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                     'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6',
                     'Cache-Control': 'max-age=0',
@@ -4397,14 +5229,13 @@
                     'Sec-Fetch-User': '?1',
                     'Upgrade-Insecure-Requests': '1'
                 },
-                credentials: 'include', // 包含 cookies
-                body: rateData.toString()
+                data: rateData.toString()
             });
 
             console.log('评分响应状态:', response.status);
 
-            if (response.ok) {
-                const result = await response.text();
+            if (response.status >= 200 && response.status < 300) {
+                const result = response.responseText || response.response || '';
                 console.log('评分响应内容:', result);
 
                 // 检查是否包含成功标识
@@ -4432,17 +5263,18 @@
                         rateClone.onclick = null; // 禁用再次点击
                     }
                     console.log(`评分成功: ${CFG.defaultRateScore}分 - ${successMessage}`);
+                    showToast(successMessage, 'success');
                 } else {
                     console.log('评分失败:', result);
-                    alert('评分失败，请检查网络连接或权限');
+                    showToast('评分失败，请检查登录状态或权限', 'error', 5000);
                 }
             } else {
                 console.log('评分请求失败:', response.status);
-                alert('评分请求失败，状态码: ' + response.status);
+                showToast('评分请求失败，状态码: ' + response.status, 'error', 5000);
             }
         } catch (error) {
             console.error('评分过程中出错:', error);
-            alert('评分过程中出错: ' + error.message);
+            showToast('评分过程中出错: ' + describeRequestError(error), 'error', 5000);
         }
     }
 
@@ -4875,12 +5707,6 @@
 
     /*********************** 启动与监听 ***********************/
 
-    // 检查是否在帖子列表页面
-    const isForumListPage = location.href.includes('mod=forumdisplay');
-    const isForumHomePage = (location.href.includes('forum.php') && !location.href.includes('mod=')) ||
-        location.href === 'https://sehuatang.org/' ||
-        location.href === 'http://sehuatang.org/';
-
     // 确保配置加载完成后再执行功能
     // console.log('当前配置:', CFG);
 
@@ -4895,10 +5721,8 @@
         // 在论坛首页应用论坛模块屏蔽
         applyModuleFilter();
     } else if (isThreadPage) {
-        // 在帖子页面运行原有功能
-        enhanceAll();
-        if (CFG.blockImages) applyImageBlocking(true, { forceRebuild: true });
-        queueED2KScan(true); queueMagnetScan(true);
+        // 附件、图片和下载链接在同一次初始扫描中收集。
+        scanThreadContent([document], { forceImages: CFG.blockImages, forceLinks: true });
 
         // 处理帖子详情标题
         enhanceThreadTitle();
@@ -5008,34 +5832,15 @@
 
                     // 添加点击事件
                     clickableTitle.addEventListener('click', () => {
-                        navigator.clipboard.writeText(title).then(() => {
-                            // 临时改变样式表示复制成功
-                            const originalColor = clickableTitle.style.color;
-                            clickableTitle.style.color = '#28a745';
-                            clickableTitle.textContent = '已复制!';
-                            setTimeout(() => {
-                                clickableTitle.style.color = originalColor;
-                                clickableTitle.textContent = title;
-                            }, 1000);
-                        }).catch(err => {
-                            console.error('复制失败:', err);
-                            // 降级方案：使用旧方法
-                            const textArea = document.createElement('textarea');
-                            textArea.value = title;
-                            document.body.appendChild(textArea);
-                            textArea.select();
-                            document.execCommand('copy');
-                            document.body.removeChild(textArea);
-
-                            // 显示复制成功提示
-                            const originalColor = clickableTitle.style.color;
-                            clickableTitle.style.color = '#28a745';
-                            clickableTitle.textContent = '已复制!';
-                            setTimeout(() => {
-                                clickableTitle.style.color = originalColor;
-                                clickableTitle.textContent = title;
-                            }, 1000);
-                        });
+                        GM_setClipboard(title);
+                        const originalColor = clickableTitle.style.color;
+                        clickableTitle.style.color = '#28a745';
+                        clickableTitle.textContent = '已复制!';
+                        showToast('标题已复制', 'success');
+                        setTimeout(() => {
+                            clickableTitle.style.color = originalColor;
+                            clickableTitle.textContent = title;
+                        }, 1000);
                     });
 
                     // 替换原元素内容
@@ -5068,31 +5873,30 @@
         }
     }
 
-    const mo = new MutationObserver(muts => {
-        const newImgCandidates = new Set();
-        let needCollect = false;
-
-        for (const m of muts) {
-            if (m.type !== 'childList') continue;
-            m.addedNodes.forEach(node => {
-                if (!(node instanceof Element)) return;
-                if (node.classList && Array.from(node.classList).some(c => c.startsWith('sht-'))) return;
-
-                enhanceInNode(node);
-
-                if (node.matches?.('[id^="postmessage_"] img')) newImgCandidates.add(node);
-                node.querySelectorAll?.('[id^="postmessage_"] img')?.forEach(img => newImgCandidates.add(img));
-
-                if (!needCollect && (node.id?.startsWith?.('postmessage_') || node.closest?.('[id^="postmessage_"]'))) {
-                    needCollect = true;
-                }
-            });
-        }
-
-        if (newImgCandidates.size && CFG.blockImages) applyImageBlocking(true, { candidates: newImgCandidates });
-        if (needCollect) { queueED2KScan(false); queueMagnetScan(false); }
-    });
-    mo.observe(document.body, { childList: true, subtree: true });
+    // 仅帖子详情页需要观察异步插入的楼层内容；其他页面完全不创建 Observer。
+    let threadContentObserver = null;
+    if (isThreadPage) {
+        threadContentObserver = new MutationObserver(mutations => {
+            const addedRoots = new Set();
+            for (const mutation of mutations) {
+                if (mutation.type !== 'childList') continue;
+                let hasRelevantAddition = false;
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.TEXT_NODE && node.nodeValue?.trim()) {
+                        hasRelevantAddition = true;
+                        return;
+                    }
+                    if (!(node instanceof Element)) return;
+                    if (node.matches('[class^="sht-"], [id^="sht-"]') || node.closest('[class^="sht-"], [id^="sht-"]')) return;
+                    hasRelevantAddition = true;
+                    addedRoots.add(node);
+                });
+                if (hasRelevantAddition && mutation.target instanceof Element) addedRoots.add(mutation.target);
+            }
+            if (addedRoots.size) scanThreadContent(Array.from(addedRoots));
+        });
+        threadContentObserver.observe(document.body, { childList: true, subtree: true });
+    }
 
     // ========== 115 离线下载功能 ==========
     const PAN115_REQUEST_TIMEOUT = 20000;
@@ -5123,45 +5927,33 @@
         return { ...base, ...extra };
     }
 
-    function pan115Request({ method = 'GET', url, data, headers = {}, responseType = 'json' }) {
+    async function pan115Request({ method = 'GET', url, data, headers = {}, responseType = 'json', signal = null, retries = 0 }) {
         ensurePan115Config();
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method,
-                url,
-                data,
-                headers: makePan115Headers(headers),
-                responseType,
-                timeout: PAN115_REQUEST_TIMEOUT,
-                onload: (res) => {
-                    if (res.status >= 200 && res.status < 300) {
-                        let body = res.response;
-                        if (!body && res.responseText) {
-                            if (responseType === 'json') {
-                                try {
-                                    body = JSON.parse(res.responseText);
-                                } catch (e) {
-                                    reject(new Error('115 响应解析失败'));
-                                    return;
-                                }
-                            } else {
-                                body = res.responseText;
-                            }
-                        }
-                        resolve(body);
-                    } else {
-                        reject(new Error(`115 请求失败: HTTP ${res.status}`));
-                    }
-                },
-                onerror: (error) => {
-                    reject(new Error(error?.message || '115 请求网络错误'));
-                },
-                ontimeout: () => reject(new Error('115 请求超时'))
-            });
+        const response = await shtRequest({
+            method, url, data, headers: makePan115Headers(headers), responseType,
+            timeout: PAN115_REQUEST_TIMEOUT, signal, retries, scope: 'pan115'
         });
+        return responseType === 'json' ? responseJson(response, '115 响应') : (response.response ?? response.responseText);
     }
 
-    async function pan115FetchUid() {
+    async function testPan115Connection({ cookie, userAgent }) {
+        if (!cookie?.trim()) throw new Error('请先填写 115 Cookie');
+        const response = await shtRequest({
+            method: 'GET', url: 'https://my.115.com/?ct=ajax&ac=get_user_aq', responseType: 'json',
+            timeout: PAN115_REQUEST_TIMEOUT, retries: 0, scope: 'pan115-test',
+            headers: {
+                ...makePan115Headers(),
+                'Cookie': cookie.trim(),
+                'User-Agent': userAgent?.trim() || navigator.userAgent
+            }
+        });
+        const result = await responseJson(response, '115 测试响应');
+        const uid = result?.data?.uid || result?.uid;
+        if (!uid) throw new Error(result?.error_msg || '未获取到 UID，Cookie 可能已失效');
+        return { uid };
+    }
+
+    async function pan115FetchUid(signal = null) {
         ensurePan115Config();
         const now = Date.now();
         if (pan115UidCache.value && now - pan115UidCache.ts < 10 * 60 * 1000) {
@@ -5170,7 +5962,7 @@
         const result = await pan115Request({
             method: 'GET',
             url: 'https://my.115.com/?ct=ajax&ac=get_user_aq',
-            responseType: 'json'
+            responseType: 'json', signal
         });
         const uid = result?.data?.uid || result?.uid;
         if (!uid) {
@@ -5180,11 +5972,12 @@
         return uid;
     }
 
-    async function pan115FetchSignTime() {
+    async function pan115FetchSignTime(signal = null) {
         const result = await pan115Request({
             method: 'GET',
             url: 'https://115.com/?ct=offline&ac=space',
             responseType: 'json',
+            signal,
             headers: { 'Accept-Encoding': 'text/html' }
         });
         if (!result) {
@@ -5206,8 +5999,8 @@
             throw new Error('没有可发送的链接');
         }
 
-        const uid = await pan115FetchUid();
-        let signTime = await pan115FetchSignTime();
+        const uid = await pan115FetchUid(options.signal);
+        let signTime = await pan115FetchSignTime(options.signal);
 
         const targetDir = (CFG.pan115CurrentThreadFolder && String(CFG.pan115CurrentThreadFolder).trim())
             || (CFG.pan115UploadDir && String(CFG.pan115UploadDir).trim())
@@ -5222,7 +6015,7 @@
                 console.warn('[115 离线] 目录已失效:', targetDir);
                 clearPan115FolderReference(targetDir);
                 showWarningModal('115 离线目录不存在或已删除，已清除缓存，请重新创建或选择新目录。');
-                return pan115AddTasks(urls, { __fallbackUsed: true });
+                return pan115AddTasks(urls, { __fallbackUsed: true, signal: options.signal });
             }
         }
 
@@ -5249,7 +6042,7 @@
                 url: 'https://115.com/web/lixian/?ct=lixian&ac=add_task_urls',
                 data: batchParams.toString(),
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                responseType: 'json'
+                responseType: 'json', signal: options.signal
             });
 
             const respList = response?.result || [];
@@ -5361,7 +6154,10 @@
                 button.textContent = '115 离线发送中...';
             }
 
-            const summary = await pan115AddTasks(allLinks);
+            const summary = await queueCloudProviderTask('pan115',
+                ({ signal }) => pan115AddTasks(allLinks, { signal }),
+                { label: `115 批量任务（${allLinks.length}）`, retries: 0 }
+            );
             const { successCount, failCount, details } = summary;
             const total = summary.total || allLinks.length;
             const modalResults = formatPan115ResultItems(details, allLinks);
@@ -5393,8 +6189,11 @@
     // ========== 123Pan 离线下载功能 ==========
 
     // 123Pan API 基础函数
-    function makePan123Session() {
-        if (!CFG.pan123Token || !CFG.pan123LoginUuid || !CFG.pan123Cookie) {
+    function makePan123Session(overrides = {}) {
+        const token = overrides.token ?? CFG.pan123Token;
+        const loginUuid = overrides.loginUuid ?? CFG.pan123LoginUuid;
+        const cookie = overrides.cookie ?? CFG.pan123Cookie;
+        if (!token || !loginUuid || !cookie) {
             throw new Error('123Pan 认证信息不完整，请检查配置');
         }
 
@@ -5402,13 +6201,13 @@
             headers: {
                 'Accept': 'application/json, text/plain, */*',
                 'App-Version': '3',
-                'Authorization': CFG.pan123Token,
+                'Authorization': token,
                 'Origin': 'https://www.123pan.com',
                 'Referer': 'https://www.123pan.com/',
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari',
                 'platform': 'web',
-                'LoginUuid': CFG.pan123LoginUuid,
-                'Cookie': CFG.pan123Cookie
+                'LoginUuid': loginUuid,
+                'Cookie': cookie
             }
         };
     }
@@ -5418,121 +6217,101 @@
         return `${Math.floor(Math.random() * 10000000000)}=${Math.floor(Math.random() * 10000000000)}-${Math.floor(Math.random() * 1000000)}-${Math.floor(Math.random() * 10000000000)}`;
     }
 
-    // 使用GM_xmlhttpRequest下载文件（绕过CORS）
-    function downloadFileWithGM(url) {
-        return new Promise((resolve, reject) => {
-            // 获取当前页面的Cookie
-            const cookies = document.cookie;
+    async function pan123RequestJson({ method = 'GET', url, body, headers = {}, sessionOverrides = {}, signal = null, retries = 0 }) {
+        const session = makePan123Session(sessionOverrides);
+        const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+        const response = await shtRequest({
+            method, url, signal, retries, timeout: 30_000, responseType: 'json', scope: 'pan123',
+            headers: {
+                ...session.headers,
+                ...(body != null && !isFormData ? { 'Content-Type': 'application/json;charset=UTF-8' } : {}),
+                ...headers
+            },
+            data: body == null || isFormData ? body : JSON.stringify(body)
+        });
+        return responseJson(response, '123Pan 响应');
+    }
 
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                responseType: 'arraybuffer',
-                headers: {
-                    'Cookie': cookies,
-                    'User-Agent': navigator.userAgent,
-                    'Referer': window.location.href
-                },
-                onload: function (response) {
-                    if (response.status >= 200 && response.status < 300) {
-                        const arrayBuffer = response.response;
-                        const blob = new Blob([arrayBuffer]);
-                        resolve(blob);
-                    } else {
-                        reject(new Error(`下载失败: HTTP ${response.status}`));
-                    }
-                },
-                onerror: function (error) {
-                    reject(new Error(`下载失败: ${error.message || '网络错误'}`));
-                },
-                ontimeout: function () {
-                    reject(new Error('下载超时'));
+    async function testPan123Connection({ token, loginUuid, cookie }) {
+        const url = `https://www.123pan.com/b/api/offline_download/task/list?${generateRandomQuery()}`;
+        const result = await pan123RequestJson({
+            method: 'POST', url, sessionOverrides: { token, loginUuid, cookie },
+            body: { current_page: 1, page_size: 1, status_arr: [0, 1, 3, 4] }
+        });
+        if (result?.code !== 0) throw new Error(result?.message || '123Pan 凭据验证失败');
+        return result;
+    }
+
+    // 使用GM_xmlhttpRequest下载文件（绕过CORS）
+    async function downloadFileWithGM(url, options = {}) {
+        const response = await shtRequest({
+            method: 'GET', url, responseType: 'arraybuffer', timeout: 30_000,
+            signal: options.signal, onProgress: options.onProgress, retries: 1, scope: 'torrent-download',
+            headers: {
+                'Cookie': document.cookie,
+                'User-Agent': navigator.userAgent,
+                'Referer': window.location.href
+            }
+        });
+        return new Blob([response.response]);
+    }
+
+    const torrentSendControllers = new WeakMap();
+    async function sendTorrentAttachmentToPan123(button, url, title) {
+        const running = torrentSendControllers.get(button);
+        if (running) {
+            running.abort();
+            return;
+        }
+        if (!CFG.pan123Enabled || !CFG.pan123Token || !CFG.pan123LoginUuid || !CFG.pan123Cookie) {
+            showToast('请先在设置中启用 123Pan 并配置认证信息', 'warning');
+            return;
+        }
+        const controller = new AbortController();
+        torrentSendControllers.set(button, controller);
+        try {
+            button.textContent = '准备中…（点击取消）';
+            const torrentBlob = await downloadFileWithGM(url, {
+                signal: controller.signal,
+                onProgress: ({ loaded, total }) => {
+                    const value = total ? `${Math.round((loaded / total) * 100)}%` : formatBytes(loaded);
+                    button.textContent = `下载 ${value}（点击取消）`;
                 }
             });
-        });
+            button.textContent = '提交中…（点击取消）';
+            await processTorrentOffline(torrentBlob, title, { signal: controller.signal });
+            showToast('种子任务已发送到 123Pan', 'success');
+        } catch (error) {
+            showToast(describeRequestError(error), error?.name === 'AbortError' ? 'info' : 'error', 5000);
+        } finally {
+            torrentSendControllers.delete(button);
+            button.textContent = '发送到123Pan';
+        }
     }
 
     // 上传 torrent 文件到 123Pan
-    async function apiUploadTorrent(torrentBlob, filename) {
-        const session = makePan123Session();
+    async function apiUploadTorrent(torrentBlob, filename, options = {}) {
         const url = `https://www.123pan.com/b/api/offline_download/upload/seed?${generateRandomQuery()}`;
 
         const formData = new FormData();
         formData.append('upload-torrent', torrentBlob, filename);
-
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: session.headers,
-                body: formData
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('上传 torrent 失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: formData, signal: options.signal });
     }
 
     // 解析资源（通过infohash）
-    async function apiResolve(infohash) {
-        const session = makePan123Session();
+    async function apiResolve(infohash, options = {}) {
         const url = `https://www.123pan.com/b/api/v2/offline_download/task/resolve?${generateRandomQuery()}`;
-
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ info_hash: infohash.toLowerCase() })
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('解析资源失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: { info_hash: infohash.toLowerCase() }, signal: options.signal });
     }
 
     // 解析磁力链接
-    async function apiResolveMagnet(magnetUrl) {
-        const session = makePan123Session();
+    async function apiResolveMagnet(magnetUrl, options = {}) {
         const url = `https://www.123pan.com/b/api/v2/offline_download/task/resolve?${generateRandomQuery()}`;
-
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ urls: magnetUrl })
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('解析磁力链接失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: { urls: magnetUrl }, signal: options.signal });
     }
 
     // 提交离线任务
-    async function apiSubmit(resourceId, fileIds) {
-        const session = makePan123Session();
+    async function apiSubmit(resourceId, fileIds, options = {}) {
         const url = `https://www.123pan.com/b/api/v2/offline_download/task/submit?${generateRandomQuery()}`;
 
         const payload = {
@@ -5548,30 +6327,11 @@
             payload.upload_dir = parseInt(uploadDir);
         }
 
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('提交离线任务失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: payload, signal: options.signal });
     }
 
     // 获取离线任务列表
-    async function apiGetOfflineTasks() {
-        const session = makePan123Session();
+    async function apiGetOfflineTasks(options = {}) {
         const url = `https://www.123pan.com/b/api/offline_download/task/list?${generateRandomQuery()}`;
 
         const data = {
@@ -5580,30 +6340,11 @@
             status_arr: [0, 1, 3, 4] // 0: pending, 1: downloading, 3: completed, 4: failed
         };
 
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json;charset=UTF-8'
-                },
-                body: JSON.stringify(data)
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('获取离线任务列表失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: data, signal: options.signal });
     }
 
     // 取消离线任务
-    async function apiCancelOfflineTask(taskId) {
-        const session = makePan123Session();
+    async function apiCancelOfflineTask(taskId, options = {}) {
         const url = `https://www.123pan.com/b/api/offline_download/task/abort?${generateRandomQuery()}`;
 
         const data = {
@@ -5612,30 +6353,11 @@
             task_ids: [parseInt(taskId)]
         };
 
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json;charset=UTF-8'
-                },
-                body: JSON.stringify(data)
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('取消离线任务失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: data, signal: options.signal });
     }
 
     // 创建文件夹
     async function apiCreateFolder(folderName, parentFileId = 0) {
-        const session = makePan123Session();
         const url = `https://www.123pan.com/b/api/file/upload_request?${generateRandomQuery()}`;
 
         const data = {
@@ -5652,43 +6374,15 @@
             RequestSource: null
         };
 
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    ...session.headers,
-                    'Content-Type': 'application/json;charset=UTF-8'
-                },
-                body: JSON.stringify(data)
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('创建文件夹失败:', error);
-            throw error;
-        }
+        return pan123RequestJson({ method: 'POST', url, body: data });
     }
 
     // 获取文件夹信息（通过文件ID）
     async function apiGetFileInfo(fileId) {
-        const session = makePan123Session();
         const url = `https://www.123pan.com/b/api/file/info?${generateRandomQuery()}&fileId=${fileId}`;
 
         try {
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: session.headers
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const result = await response.json();
+            const result = await pan123RequestJson({ method: 'GET', url, retries: 1 });
 
             if (result.code === 0 && result.data) {
                 return result.data;
@@ -6369,9 +7063,9 @@
     }
 
     // 检查任务是否在离线列表中
-    async function checkTaskInOfflineList(resourceName) {
+    async function checkTaskInOfflineList(resourceName, options = {}) {
         try {
-            const offlineData = await apiGetOfflineTasks();
+            const offlineData = await apiGetOfflineTasks(options);
             if (offlineData.code !== 0) {
                 console.warn('获取离线任务列表失败:', offlineData.message);
                 return null;
@@ -6402,6 +7096,7 @@
             console.log(`任务不在离线列表中: ${resourceName}`);
             return null;
         } catch (error) {
+            if (error?.name === 'AbortError') throw error;
             console.error('检查任务状态失败:', error);
             return null;
         }
@@ -6944,105 +7639,70 @@
     }
 
     // 批量处理磁力链接离线下载
+    let nextPan123TaskStartAt = 0;
+    async function waitForPan123TaskSlot(intervalMs, signal) {
+        const now = Date.now();
+        const scheduledAt = Math.max(now, nextPan123TaskStartAt);
+        nextPan123TaskStartAt = scheduledAt + Math.max(0, intervalMs);
+        if (scheduledAt > now) await waitWithSignal(scheduledAt - now, signal);
+    }
+
     async function processBatchMagnetOffline(magnetUrls) {
         if (!CFG.pan123Enabled) {
             showWarningModal('请先在设置中启用 123Pan 功能并配置认证信息');
             return;
         }
 
-        const results = [];
+        const results = new Array(magnetUrls.length);
         let successCount = 0;
         let failCount = 0;
-        let cancelled = false;
-
-        console.log(`开始批量处理 ${magnetUrls.length} 个磁力链接`);
+        let completedCount = 0;
         const totalTasks = magnetUrls.length;
         const intervalMs = CFG.pan123BatchSendInterval || 2000;
-
-        // 创建进度显示
         const progressModal = createBatchProgressModal(totalTasks);
-
-        // 设置取消处理
+        const controller = new AbortController();
         progressModal.setCancelHandler(() => {
-            cancelled = true;
-            progressModal.close();
-            showInfoModal('批量发送已取消');
+            controller.abort();
+            showToast('正在取消未开始及进行中的 123Pan 任务', 'warning');
         });
 
         try {
-            for (let i = 0; i < magnetUrls.length; i++) {
-                // 检查是否已取消
-                if (cancelled) {
-                    console.log('批量发送已取消');
-                    break;
-                }
-
-                const magnetUrl = magnetUrls[i];
-                const title = magnetUrl;
-
-                console.log(`处理第 ${i + 1}/${totalTasks} 个: ${title}`);
-
-                try {
-                    // 先解析磁力链接获取任务名称
-                    const resolveResult = await apiResolveMagnet(magnetUrl);
-                    if (resolveResult.code !== 0) {
-                        throw new Error(`解析磁力链接失败: ${resolveResult.message}`);
-                    }
-
-                    const resourceList = resolveResult.data?.list || [];
-                    if (resourceList.length === 0) {
-                        throw new Error('没有找到可用的资源');
-                    }
-
-                    const realTitle = resourceList[0].name || magnetUrl;
-
-                    // 更新进度显示为真实任务名称
-                    progressModal.updateProgress(i + 1, successCount, failCount, `正在处理: ${realTitle}`);
-
-                    // 继续处理离线下载
-                    const result = await processSingleMagnetOffline(magnetUrl, magnetUrl);
-
-                    // 最终更新进度显示
-                    progressModal.updateProgress(i + 1, successCount, failCount, `处理完成: ${realTitle}`);
-
-                    results.push({
-                        title: realTitle,
-                        success: true,
-                        result: result
-                    });
-                    successCount++;
-                    console.log(`第 ${i + 1} 个处理成功: ${realTitle}`);
-                } catch (error) {
-                    console.error(`第 ${i + 1} 个处理失败: ${magnetUrl}`, error);
-                    results.push({
-                        title: magnetUrl,
-                        success: false,
-                        error: error.message
-                    });
-                    failCount++;
-                }
-
-                // 添加间隔，避免API请求过于频繁
-                if (i < magnetUrls.length - 1 && !cancelled) {
-                    const remainingTasks = totalTasks - i - 1;
-                    const estimatedTime = Math.ceil((remainingTasks * intervalMs) / 1000);
-                    progressModal.updateProgress(i + 1, successCount, failCount, `等待 ${intervalMs}ms 后处理下一个... (剩余 ${remainingTasks} 个任务，预计还需 ${estimatedTime} 秒)`);
-                    console.log(`等待 ${intervalMs}ms 后处理下一个... (剩余 ${remainingTasks} 个任务，预计还需 ${estimatedTime} 秒)`);
-                    await new Promise(resolve => setTimeout(resolve, intervalMs));
-                }
-            }
+            const tasks = magnetUrls.map((magnetUrl, index) => queueCloudProviderTask('pan123', async ({ signal }) => {
+                await waitForPan123TaskSlot(intervalMs, signal);
+                progressModal.updateProgress(completedCount, successCount, failCount, `正在处理第 ${index + 1} 个任务`);
+                return processSingleMagnetOffline(magnetUrl, magnetUrl, { signal });
+            }, {
+                label: `123Pan ${index + 1}/${totalTasks}`,
+                retries: 0,
+                signal: controller.signal
+            }).then(result => {
+                successCount += 1;
+                completedCount += 1;
+                results[index] = { title: result.taskName || magnetUrl, success: true, result };
+                progressModal.updateProgress(completedCount, successCount, failCount, `已完成: ${result.taskName || `任务 ${index + 1}`}`);
+            }).catch(error => {
+                completedCount += 1;
+                failCount += 1;
+                results[index] = {
+                    title: magnetUrl,
+                    success: false,
+                    cancelled: error?.name === 'AbortError',
+                    error: describeRequestError(error)
+                };
+                progressModal.updateProgress(completedCount, successCount, failCount, error?.name === 'AbortError' ? '任务已取消' : `任务失败: ${describeRequestError(error)}`);
+            }));
+            await Promise.all(tasks);
         } finally {
-            // 关闭进度显示
             progressModal.close();
         }
 
-        // 显示批量处理结果（使用可滚动的文本块）
-        showBatchResultModal(results, successCount, failCount, totalTasks);
-        return results;
+        const completedResults = results.filter(Boolean);
+        showBatchResultModal(completedResults, successCount, failCount, totalTasks);
+        return completedResults;
     }
 
     // 处理单个磁力链接离线下载（不显示Modal）
-    async function processSingleMagnetOffline(magnetUrl, title) {
+    async function processSingleMagnetOffline(magnetUrl, title, options = {}) {
         if (!CFG.pan123Enabled) {
             throw new Error('123Pan 功能未启用');
         }
@@ -7052,7 +7712,7 @@
 
             // 1. 通过磁力链接解析任务
             console.log('解析磁力链接...');
-            const resolveResult = await apiResolveMagnet(magnetUrl);
+            const resolveResult = await apiResolveMagnet(magnetUrl, options);
             console.log('解析结果:', resolveResult);
 
             if (resolveResult.code !== 0) {
@@ -7080,7 +7740,7 @@
 
             // 3. 提交离线任务
             console.log('提交离线任务...');
-            const submitResult = await apiSubmit(resourceId, selectedFileIds);
+            const submitResult = await apiSubmit(resourceId, selectedFileIds, options);
             if (submitResult.code !== 0 || submitResult.message !== 'ok') {
                 throw new Error(`提交失败: ${submitResult.message}`);
             }
@@ -7089,10 +7749,10 @@
 
             // 4. 等待并检查秒离线状态
             console.log('等待秒离线检查...');
-            await new Promise(resolve => setTimeout(resolve, CFG.pan123InstantOfflineCheckDelay));
+            await waitWithSignal(CFG.pan123InstantOfflineCheckDelay, options.signal);
 
             const taskName = item.name;
-            const offlineTask = await checkTaskInOfflineList(taskName);
+            const offlineTask = await checkTaskInOfflineList(taskName, options);
             const isInstantOffline = !offlineTask;
             let actionTaken = '';
 
@@ -7102,7 +7762,7 @@
                 // 根据配置处理秒离线失败
                 if (CFG.pan123InstantOfflineAction === 'auto_cancel') {
                     console.log('自动取消任务:', taskName);
-                    await apiCancelOfflineTask(offlineTask.task_id);
+                    await apiCancelOfflineTask(offlineTask.task_id, options);
                     actionTaken = '已自动取消任务';
                 } else if (CFG.pan123InstantOfflineAction === 'ask_user') {
                     // 批量模式下跳过用户询问，直接保留任务
@@ -7132,7 +7792,7 @@
     // 处理磁力链接离线下载（保持原有接口，用于单个发送）
     async function processMagnetOffline(magnetUrl, title) {
         if (!CFG.pan123Enabled) {
-            alert('请先在设置中启用 123Pan 功能并配置认证信息');
+            showToast('请先在设置中启用 123Pan 功能并配置认证信息', 'warning');
             return;
         }
 
@@ -7234,38 +7894,16 @@
         btn123Pan.style.cssText = 'padding:2px 8px;cursor:pointer;background:#007cba;color:white;border:none;border-radius:3px';
 
         btn123Pan.addEventListener('click', async () => {
-            if (!CFG.pan123Token || !CFG.pan123LoginUuid || !CFG.pan123Cookie) {
-                alert('请先在设置中配置 123Pan 认证信息');
-                return;
-            }
-
-            btn123Pan.textContent = '发送中...';
-            btn123Pan.disabled = true;
-
-            try {
-                // 使用GM_xmlhttpRequest下载torrent文件（绕过CORS）
-                const torrentBlob = await downloadFileWithGM(torrentUrl);
-                const title = filename.replace(/\.torrent$/i, '');
-
-                // 处理torrent文件离线下载
-                await processTorrentOffline(torrentBlob, title);
-                alert('发送到123Pan成功！');
-            } catch (error) {
-                console.error('发送到123Pan失败:', error);
-                alert(`发送失败: ${error.message}`);
-            } finally {
-                btn123Pan.textContent = '发送到123Pan';
-                btn123Pan.disabled = false;
-            }
+            await sendTorrentAttachmentToPan123(btn123Pan, torrentUrl, filename.replace(/\.torrent$/i, ''));
         });
 
         bar.appendChild(btn123Pan);
     }
 
     // 处理torrent文件离线下载
-    async function processTorrentOffline(torrentBlob, title) {
+    async function processTorrentOffline(torrentBlob, title, options = {}) {
         if (!CFG.pan123Enabled) {
-            alert('请先在设置中启用 123Pan 功能并配置认证信息');
+            showToast('请先在设置中启用 123Pan 功能并配置认证信息', 'warning');
             return;
         }
 
@@ -7274,7 +7912,7 @@
 
             // 1. 上传 torrent 到 123Pan
             console.log('上传 torrent 文件...');
-            const uploadResult = await apiUploadTorrent(torrentBlob, `${title}.torrent`);
+            const uploadResult = await apiUploadTorrent(torrentBlob, `${title}.torrent`, options);
             console.log('上传结果:', uploadResult);
 
             if (uploadResult.code !== 0) {
@@ -7286,7 +7924,7 @@
 
             // 2. 解析文件列表
             console.log('解析文件列表...');
-            const resolveResult = await apiResolve(infohash);
+            const resolveResult = await apiResolve(infohash, options);
             console.log('解析结果:', resolveResult);
 
             if (resolveResult.code !== 0) {
@@ -7313,7 +7951,7 @@
 
             // 4. 提交离线任务
             console.log('提交离线任务...');
-            const submitResult = await apiSubmit(resourceId, selectedFileIds);
+            const submitResult = await apiSubmit(resourceId, selectedFileIds, options);
             console.log('提交结果:', submitResult);
 
             if (submitResult.code !== 0) {
@@ -7419,7 +8057,7 @@
             sendBtn.style.cssText = 'padding: 4px 8px; background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer; margin-left: 8px;';
             sendBtn.addEventListener('click', async () => {
                 if (!CFG.pan123Token || !CFG.pan123LoginUuid || !CFG.pan123Cookie) {
-                    alert('请先在设置中配置 123Pan 认证信息');
+                    showToast('请先在设置中配置 123Pan 认证信息', 'warning');
                     return;
                 }
 
@@ -7546,6 +8184,7 @@
 
         // 去顶部按钮
         const topBtn = document.createElement('button');
+        topBtn.type = 'button';
         topBtn.title = '去顶部';
         topBtn.setAttribute('aria-label', '去顶部');
         setIconLabel(topBtn, 'arrowUp', '', 20);
@@ -7568,6 +8207,7 @@
 
         // 去底部按钮
         const bottomBtn = document.createElement('button');
+        bottomBtn.type = 'button';
         bottomBtn.title = '去底部';
         bottomBtn.setAttribute('aria-label', '去底部');
         setIconLabel(bottomBtn, 'arrowDown', '', 20);
@@ -7608,17 +8248,19 @@
         document.body.appendChild(container);
     }
 
-    // 页面加载完成后创建浮动按钮
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createFloatingScrollButtons);
-    } else {
-        createFloatingScrollButtons();
+    // 滚动按钮只在内容较长的帖子、版块列表和搜索结果页显示，首页保持简洁。
+    if (isThreadPage || isForumListPage || isSearchPage) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', createFloatingScrollButtons, { once: true });
+        } else {
+            createFloatingScrollButtons();
+        }
     }
 
     // ===== 搜索增强功能模块 =====
     function initSearchEnhancement() {
         // 检查是否在搜索页面
-        if (!location.href.includes('search.php?mod=forum')) {
+        if (!isSearchPage) {
             return;
         }
 
@@ -7639,13 +8281,18 @@
     .sht-config-status{font-size:10px;color:#666;margin-top:6px;padding:3px;background:#f8f9fa;border-radius:3px;text-align:center}
     .sht-section-title{margin:6px 0 4px;font-size:11px;font-weight:bold;color:#333;text-align:center;background:#f0f0f0;padding:2px 4px;border-radius:3px}
     .sht-scroll-container{max-height:60vh;overflow-y:auto;overflow-x:hidden}
+    .sht-select-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 4px;padding:4px 6px;color:#555;font-size:12px}
+    .sht-select-row select{min-width:88px;padding:3px 4px;border:1px solid #ccc;border-radius:4px;background:#fff;color:#333;font:inherit}
+    .sht-select-row select:focus-visible{outline:2px solid #005fcc;outline-offset:2px}
+    @media (max-width:600px){#sht-sorter-panel{top:12px;right:12px;width:min(200px,calc(100vw - 48px));max-height:calc(100vh - 48px)}#sht-sorter-opener{top:12px;right:12px}}
   `);
 
         const toHalf = s => (s || '').replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFF10 + 0x30));
         const numNorm = s => toHalf(s).replace(/,/g, '');
 
         // 配置管理
-        const CONFIG_KEY = 'sht_sorter_config';
+        const CONFIG_KEY = SEARCH_CONFIG_KEY;
+        const CONFIG_MIGRATION_KEY = 'sht_sorter_config_v3_migrated';
         const defaultConfig = {
             sortBy: null,
             sortDir: 'desc',
@@ -7653,16 +8300,75 @@
             secondaryDir: 'desc',
             onlyQuota: false,
             filterQiuPian: false,
-            lastUsed: Date.now()
+            highlightEnabled: false,
+            highlightThreshold: 'auto',
+            lastUsed: 0
         };
+
+        const createDefaultConfig = () => ({ ...defaultConfig });
+
+        function parseStoredConfig(raw) {
+            if (!raw) return null;
+            if (typeof raw === 'object') return raw;
+            if (typeof raw !== 'string') return null;
+            return JSON.parse(raw);
+        }
+
+        function migrateLegacyConfig(config, hasSavedConfig) {
+            if (GM_getValue(CONFIG_MIGRATION_KEY, false)) return config;
+
+            try {
+                const legacy = parseStoredConfig(localStorage.getItem(CONFIG_KEY));
+                if (legacy) {
+                    if (!hasSavedConfig) {
+                        if (legacy.autoSizeQuotaSort) {
+                            if (legacy.sizeQuotaSortType === 'both') {
+                                config.sortBy = 'fileSize';
+                                config.sortDir = 'desc';
+                                config.secondarySort = 'quota';
+                                config.secondaryDir = 'desc';
+                            } else {
+                                config.sortBy = legacy.sizeQuotaSortType === 'size' ? 'fileSize' : 'quota';
+                                config.sortDir = 'desc';
+                            }
+                        } else if (legacy.autoSort) {
+                            config.sortBy = ['replies', 'views', 'postDate'].includes(legacy.autoSortType)
+                                ? legacy.autoSortType
+                                : 'replies';
+                            config.sortDir = legacy.autoSortOrder === 'asc' ? 'asc' : 'desc';
+                        }
+                        config.filterQiuPian = Boolean(legacy.filterQiuPian);
+                    }
+
+                    config.highlightEnabled = Boolean(legacy.autoHighlight);
+                    if (['auto', 'high', 'medium', 'low'].includes(legacy.highlightThreshold)) {
+                        config.highlightThreshold = legacy.highlightThreshold;
+                    }
+                    console.info('[SHT] 已迁移独立搜索排序脚本的配置。');
+                }
+            } catch (e) {
+                console.warn('[SHT] 旧搜索配置迁移失败，将继续使用当前配置:', e);
+            } finally {
+                GM_setValue(CONFIG_MIGRATION_KEY, true);
+            }
+
+            return config;
+        }
 
         function loadConfig() {
             try {
                 const saved = GM_getValue(CONFIG_KEY);
-                return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
+                const parsedConfig = parseStoredConfig(saved);
+                const config = { ...createDefaultConfig(), ...(parsedConfig || {}) };
+                const beforeMigration = JSON.stringify(config);
+                const migrated = migrateLegacyConfig(config, Boolean(parsedConfig));
+                if (!parsedConfig || JSON.stringify(migrated) !== beforeMigration) {
+                    saveConfig(migrated);
+                }
+                return migrated;
             } catch (e) {
                 console.warn('[SHT] 配置加载失败，使用默认配置:', e);
-                return defaultConfig;
+                return migrateLegacyConfig(createDefaultConfig(), false);
             }
         }
 
@@ -7680,10 +8386,10 @@
             try {
                 GM_deleteValue(CONFIG_KEY);
                 console.info('[SHT] 配置已重置');
-                return defaultConfig;
+                return createDefaultConfig();
             } catch (e) {
                 console.warn('[SHT] 配置重置失败:', e);
-                return defaultConfig;
+                return createDefaultConfig();
             }
         }
 
@@ -7757,8 +8463,8 @@
                 const quota = parseQuota(titleText); // 列表的"配额"基本都在标题
                 const postDate = dateSpan ? new Date((dateSpan.innerText || '').replace(/-/g, '/')).getTime() : 0;
 
-                // 标题后插配额徽标
-                if (aEl && !aEl.parentElement.querySelector('.sht-qbadge')) {
+                // 标题后插配额徽标；没有配额时不显示无意义的“配额:0”
+                if (quota > 0 && aEl && !aEl.parentElement.querySelector('.sht-qbadge')) {
                     const tag = document.createElement('span');
                     tag.className = 'sht-qbadge';
                     tag.textContent = `配额:${quota}`;
@@ -7796,11 +8502,26 @@
         <div class="sht-section-title">过滤器</div>
         <button type="button" class="sht-button" data-action="only-quota">只显示含配额</button>
         <button type="button" class="sht-button" data-action="filter-qp">过滤求片区</button>
+
+        <div class="sht-section-title">热门标记</div>
+        <button type="button" class="sht-button" data-action="toggle-highlight" aria-pressed="false">高亮热门帖子</button>
+        <label class="sht-select-row" for="sht-highlight-threshold">
+          <span>高亮门槛</span>
+          <select id="sht-highlight-threshold">
+            <option value="auto">自动</option>
+            <option value="high">高</option>
+            <option value="medium">中</option>
+            <option value="low">低</option>
+          </select>
+        </label>
+
         <button type="button" class="sht-button" data-action="restore">恢复默认</button>
         <button type="button" class="sht-button" data-action="reset-config" style="background:#dc3545;color:#fff;border-color:#dc3545;font-size:11px;">重置配置</button>
       </div>
-      <div class="sht-config-status" id="sht-config-status">配置已记忆</div>
+      <div class="sht-config-status" id="sht-config-status" role="status" aria-live="polite">配置已记忆</div>
             `;
+            panel.setAttribute('role', 'region');
+            panel.setAttribute('aria-label', '搜索结果排序工具');
             document.body.appendChild(panel);
             const closePanelButton = panel.querySelector('#sht-sorter-close-btn');
             setIconLabel(closePanelButton, 'close', '', 18);
@@ -7820,6 +8541,48 @@
                 button.setAttribute('aria-label', `${button.dataset.label}，${direction === 'desc' ? '降序' : '升序'}`);
             };
 
+            const highlightThresholdNames = {
+                auto: '自动',
+                high: '高',
+                medium: '中',
+                low: '低'
+            };
+
+            function updateHighlights() {
+                parsed.forEach(t => t.element.classList.remove('sht-hot-thread'));
+                if (!config.highlightEnabled || !parsed.length) return;
+
+                const avgReplies = parsed.reduce((sum, t) => sum + t.replies, 0) / parsed.length;
+                const avgViews = parsed.reduce((sum, t) => sum + t.views, 0) / parsed.length;
+                let thresholdReplies;
+                let thresholdViews;
+
+                switch (config.highlightThreshold) {
+                    case 'high':
+                        thresholdReplies = Math.max(50, avgReplies * 3);
+                        thresholdViews = Math.max(2000, avgViews * 2.5);
+                        break;
+                    case 'medium':
+                        thresholdReplies = Math.max(20, avgReplies * 2);
+                        thresholdViews = Math.max(1000, avgViews * 2);
+                        break;
+                    case 'low':
+                        thresholdReplies = Math.max(5, avgReplies * 1.5);
+                        thresholdViews = Math.max(200, avgViews * 1.5);
+                        break;
+                    default:
+                        thresholdReplies = Math.max(10, avgReplies * 2);
+                        thresholdViews = Math.max(500, avgViews * 1.5);
+                        break;
+                }
+
+                parsed.forEach(t => {
+                    if (t.replies > thresholdReplies || t.views > thresholdViews) {
+                        t.element.classList.add('sht-hot-thread');
+                    }
+                });
+            }
+
             // 更新按钮状态
             function updateButtonStates() {
                 // 更新主要排序按钮状态
@@ -7827,6 +8590,7 @@
                     const sortKey = btn.dataset.sort;
                     const isActive = config.sortBy === sortKey;
                     btn.classList.toggle('active', isActive);
+                    btn.setAttribute('aria-pressed', String(isActive));
                     updateSortButton(btn, isActive ? config.sortDir : 'desc');
                 });
 
@@ -7835,12 +8599,32 @@
                     const sortKey = btn.dataset.secondarySort;
                     const isActive = config.secondarySort === sortKey;
                     btn.classList.toggle('active', isActive);
+                    btn.setAttribute('aria-pressed', String(isActive));
                     updateSortButton(btn, isActive ? config.secondaryDir : 'desc');
                 });
 
                 // 更新过滤器按钮状态
-                panel.querySelector('[data-action="only-quota"]').classList.toggle('filtered', config.onlyQuota);
-                panel.querySelector('[data-action="filter-qp"]').classList.toggle('filtered', config.filterQiuPian);
+                const onlyQuotaButton = panel.querySelector('[data-action="only-quota"]');
+                onlyQuotaButton.classList.toggle('filtered', config.onlyQuota);
+                onlyQuotaButton.setAttribute('aria-pressed', String(config.onlyQuota));
+                setIconLabel(onlyQuotaButton, 'filter', '只显示含配额');
+
+                const filterQiuPianButton = panel.querySelector('[data-action="filter-qp"]');
+                filterQiuPianButton.classList.toggle('filtered', config.filterQiuPian);
+                filterQiuPianButton.setAttribute('aria-pressed', String(config.filterQiuPian));
+                setIconLabel(filterQiuPianButton, 'filter', '过滤求片区');
+
+                const highlightButton = panel.querySelector('[data-action="toggle-highlight"]');
+                highlightButton.classList.toggle('filtered', config.highlightEnabled);
+                highlightButton.setAttribute('aria-pressed', String(config.highlightEnabled));
+                setIconLabel(highlightButton, 'eye', '高亮热门帖子');
+
+                const thresholdSelect = panel.querySelector('#sht-highlight-threshold');
+                thresholdSelect.value = config.highlightThreshold;
+
+                setIconLabel(panel.querySelector('[data-action="clear-secondary"]'), 'close', '清除次要');
+                setIconLabel(panel.querySelector('[data-action="restore"]'), 'refresh', '恢复默认');
+                setIconLabel(panel.querySelector('[data-action="reset-config"]'), 'trash', '重置搜索配置');
 
                 // 更新状态显示
                 const statusEl = panel.querySelector('#sht-config-status');
@@ -7853,6 +8637,7 @@
                 }
                 if (config.onlyQuota) statusText.push('仅配额');
                 if (config.filterQiuPian) statusText.push('过滤求片');
+                if (config.highlightEnabled) statusText.push(`热门高亮(${highlightThresholdNames[config.highlightThreshold] || '自动'})`);
                 statusEl.textContent = statusText.length ? statusText.join(', ') : '默认配置';
             }
 
@@ -7902,13 +8687,14 @@
                     }
                 });
 
+                updateHighlights();
                 updateButtonStates();
             }
 
             // 初始化时应用配置
             applyConfig();
 
-            panel.addEventListener('click', (e) => {
+            panel.addEventListener('click', async (e) => {
                 if (!(e.target instanceof Element)) return;
                 const btn = e.target.closest('button');
                 if (!(btn instanceof HTMLButtonElement) || !panel.contains(btn)) return;
@@ -7959,12 +8745,12 @@
                     config.secondaryDir = 'desc';
                     config.onlyQuota = false;
                     config.filterQiuPian = false;
+                    config.highlightEnabled = false;
+                    config.highlightThreshold = 'auto';
                     saveConfig(config);
 
                     originalOrder.forEach(el => list.appendChild(el));
-                    parsed.forEach(t => { t.element.style.display = ''; t.element.classList.remove('sht-hot-thread'); });
-
-                    updateButtonStates();
+                    applyConfig();
                 } else if (action === 'clear-secondary') {
                     config.secondarySort = null;
                     config.secondaryDir = 'desc';
@@ -7974,9 +8760,11 @@
                     if (config.sortBy) {
                         multiSort(parsed);
                         reorder(parsed);
+                    } else {
+                        originalOrder.forEach(el => list.appendChild(el));
                     }
 
-                    updateButtonStates();
+                    applyConfig();
                 } else if (action === 'only-quota') {
                     config.onlyQuota = !config.onlyQuota;
                     saveConfig(config);
@@ -7985,15 +8773,28 @@
                     config.filterQiuPian = !config.filterQiuPian;
                     saveConfig(config);
                     applyConfig();
+                } else if (action === 'toggle-highlight') {
+                    config.highlightEnabled = !config.highlightEnabled;
+                    saveConfig(config);
+                    applyConfig();
                 } else if (action === 'reset-config') {
-                    if (confirm('确定要重置所有配置吗？这将清除所有保存的设置。')) {
+                    if (await confirmAction('这将清除排序、过滤和高亮设置。', {
+                        title: '重置搜索配置', confirmText: '确认重置', danger: true
+                    })) {
                         config = resetConfig();
                         // 重新应用默认状态
                         originalOrder.forEach(el => list.appendChild(el));
-                        parsed.forEach(t => { t.element.style.display = ''; t.element.classList.remove('sht-hot-thread'); });
-                        updateButtonStates();
+                        applyConfig();
                     }
                 }
+            });
+
+            panel.querySelector('#sht-highlight-threshold').addEventListener('change', e => {
+                const nextThreshold = e.target.value;
+                if (!['auto', 'high', 'medium', 'low'].includes(nextThreshold)) return;
+                config.highlightThreshold = nextThreshold;
+                saveConfig(config);
+                applyConfig();
             });
 
             closePanelButton.addEventListener('click', () => {

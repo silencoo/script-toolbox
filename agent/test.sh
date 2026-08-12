@@ -718,6 +718,15 @@ else
   fail=1
 fi
 
+if node --test \
+  "$SCRIPT_DIR/platform-command.test.mjs" \
+  "$SCRIPT_DIR/platform-paths.test.mjs"; then
+  :
+else
+  echo "FAIL: cross-platform Bash controller launcher tests" >&2
+  fail=1
+fi
+
 if node "$SCRIPT_DIR/remote-store.test.mjs"; then
   :
 else

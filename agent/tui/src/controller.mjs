@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bashScriptCommand } from "../../platform-command.mjs";
 import { createRemoteWorkspace } from "./remote-workspace.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,7 @@ export const defaultAgentRoot = resolve(
 const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const WORKSPACE_RETRY_DELAY_MS = 250;
+const MCP_READINESS_CACHE_MS = 5 * 60 * 1000;
 const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
 const MCP_CLIENTS = new Set(["claude", "codex", "opencode"]);
 const PROMPT_CLIENTS = new Set(["claude", "codex"]);
@@ -53,6 +55,51 @@ export function normalizeSnippetMetadata(value) {
     path: typeof entry.path === "string" ? entry.path : "",
     state: typeof entry.state === "string" ? entry.state : ""
   }));
+}
+
+export function normalizeMcpServerCatalog(value, doctorReport = null) {
+  if (!Array.isArray(value)) return [];
+  const checks = new Map(
+    Array.isArray(doctorReport?.servers)
+      ? doctorReport.servers
+          .filter((entry) => entry && typeof entry.name === "string")
+          .map((entry) => [entry.name, entry])
+      : []
+  );
+  const text = (entry, field, limit) => typeof entry[field] === "string"
+    ? sanitizeOutput(entry[field]).slice(0, limit)
+    : "";
+  return value
+    .filter((entry) => entry && typeof entry.name === "string" && /^[A-Za-z0-9._-]+$/.test(entry.name))
+    .map((entry) => {
+      const check = checks.get(entry.name);
+      return {
+        name: entry.name,
+        category: text(entry, "category", 80),
+        description: text(entry, "description", 500),
+        setup: text(entry, "setup", 1000),
+        variant_group: text(entry, "variant_group", 128),
+        checked: Boolean(check),
+        ready: check ? check.ready === true : null,
+        issues: Array.isArray(check?.issues)
+          ? check.issues.map((issue) => sanitizeOutput(issue).slice(0, 240)).filter(Boolean).slice(0, 8)
+          : [],
+        check_details: text(check || {}, "details", 1600)
+      };
+    });
+}
+
+export function normalizeSkillsCatalog(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry.name === "string" &&
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name))
+    .map((entry) => ({
+      name: entry.name,
+      description: typeof entry.description === "string"
+        ? sanitizeOutput(entry.description).slice(0, 500)
+        : ""
+    }));
 }
 
 export async function readPromptPreviewFile(path) {
@@ -134,6 +181,7 @@ export function createController({
   let workspaceLastConnectedAt = "";
   let workspaceLastError = "";
   let workspaceFailureCount = 0;
+  let mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
 
   async function refreshWorkspaceIndex() {
     try {
@@ -145,10 +193,8 @@ export function createController({
     }
   }
 
-  function agentctlCommand(args) {
-    return process.platform === "win32"
-      ? { executable: "bash", args: [agentctl, ...args] }
-      : { executable: agentctl, args };
+  function controllerCommand(executable, args) {
+    return bashScriptCommand(executable, args);
   }
 
   async function runJson(script, args, label, env = {}) {
@@ -159,9 +205,18 @@ export function createController({
     return parseJsonOutput(await run(executable, args, { env }), label);
   }
 
+  async function runController(executable, args, env = {}) {
+    const command = controllerCommand(executable, args);
+    return run(command.executable, command.args, { env });
+  }
+
+  async function runControllerJson(executable, args, label, env = {}) {
+    const command = controllerCommand(executable, args);
+    return runExecutableJson(command.executable, command.args, label, env);
+  }
+
   async function runAgentctlJson(args, label) {
-    const command = agentctlCommand(args);
-    return runExecutableJson(command.executable, command.args, label);
+    return runControllerJson(agentctl, args, label);
   }
 
   async function providerDashboard(target = "codex") {
@@ -208,7 +263,7 @@ export function createController({
         runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
         runAgentctlJson(["status", "all", "--json"], "agentctl status"),
         runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
-        runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
+        runControllerJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
         runAgentctlJson(["account", "status", "--json"], "Codex account status"),
         connectionPromise
       ]);
@@ -302,12 +357,12 @@ export function createController({
         } else if (doctorResult.data?.targets && (availability.mcp || availability.skills)) {
           await Promise.all(doctorResult.data.targets.map(async (report) => {
             if (availability.mcp) {
-              const result = await runExecutableJson(tools.mcp,
+              const result = await runControllerJson(tools.mcp,
                 ["current", "--target", report.target, "--json"], "Workspace MCP current", env);
               report.mcp = { ok: result.ok, data: result.data, error: result.error };
             }
             if (availability.skills) {
-              const result = await runExecutableJson(tools.skills,
+              const result = await runControllerJson(tools.skills,
                 ["current", "--target", report.target, "--json"], "Workspace Skills current", env);
               report.skills = { ok: result.ok, data: result.data, error: result.error };
             }
@@ -381,7 +436,7 @@ export function createController({
       };
     }
     if (source !== "local") throw new Error(`unsupported Prompt preview source: ${source}`);
-    const result = await runExecutableJson(
+    const result = await runControllerJson(
       tools.prompts,
       ["path", target, "--name", selection, "--json"],
       "Prompt path"
@@ -484,7 +539,7 @@ export function createController({
   async function localMcpRepair(profile, target) {
     if (!profile) throw new Error("No current local MCP profile is available to repair.");
     if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
-    const result = await run(tools.mcp, [
+    const result = await runController(tools.mcp, [
       "apply", "--target", target, "--profile", profile, "--force"
     ]);
     return {
@@ -497,10 +552,191 @@ export function createController({
     };
   }
 
+  async function localMcpReadiness({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && mcpReadinessCache.data &&
+        now - mcpReadinessCache.checkedAt < MCP_READINESS_CACHE_MS) {
+      return mcpReadinessCache.data;
+    }
+    if (!refresh && mcpReadinessCache.pending) return mcpReadinessCache.pending;
+    const pending = runControllerJson(
+      tools.mcp,
+      ["server", "doctor", "--all", "--json"],
+      "Local MCP readiness"
+    ).then((result) => {
+      if (result.data) {
+        mcpReadinessCache = { checkedAt: Date.now(), data: result.data, pending: null };
+      } else {
+        mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
+      }
+      return result.data;
+    }).catch((error) => {
+      mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
+      throw error;
+    });
+    mcpReadinessCache = { ...mcpReadinessCache, pending };
+    return pending;
+  }
+
+  async function localMcpServers(target, { refreshReadiness = false } = {}) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const [catalog, doctors] = await Promise.all([
+      runControllerJson(
+        tools.mcp,
+        ["server", "list", "--target", target, "--json"],
+        "Local MCP server catalog"
+      ),
+      localMcpReadiness({ refresh: refreshReadiness })
+    ]);
+    if (!catalog.ok) throw new Error(catalog.error || "Local MCP server catalog is unavailable.");
+    return normalizeMcpServerCatalog(catalog.data, doctors);
+  }
+
+  async function localMcpState(target) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const result = await runControllerJson(
+      tools.mcp,
+      ["current", "--target", target, "--json"],
+      "Current MCP state"
+    );
+    if (!result.ok || !result.data || result.data.target !== target) {
+      throw new Error(result.error || "Current MCP state is unavailable.");
+    }
+    return result.data;
+  }
+
+  async function localMcpPreflight(server, target) {
+    if (!server || !/^[A-Za-z0-9._-]+$/.test(server)) {
+      throw new Error("No valid MCP server is selected.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const [host, configuration] = await Promise.all([
+      runControllerJson(
+        tools.mcp,
+        ["server", "doctor", server, "--json"],
+        `MCP host check for ${server}`
+      ),
+      runControllerJson(
+        tools.mcp,
+        ["server", "preflight", server, "--target", target, "--json"],
+        `MCP configuration check for ${server}`
+      )
+    ]);
+    const hostCheck = Array.isArray(host.data?.servers) ? host.data.servers[0] : null;
+    const issues = [
+      ...(Array.isArray(hostCheck?.issues) ? hostCheck.issues : []),
+      ...(!host.ok || hostCheck?.ready !== true
+        ? [host.error || hostCheck?.details || "Local host requirements are not ready."]
+        : []),
+      ...(!configuration.ok
+        ? [configuration.error || "Required Secret references or target configuration are unavailable."]
+        : [])
+    ].map((value) => sanitizeOutput(value)).filter(Boolean);
+    return {
+      server,
+      target,
+      ready: host.ok && hostCheck?.ready === true && configuration.ok,
+      issues: [...new Set(issues)].slice(0, 8),
+      detail: issues.length > 0
+        ? issues.join("\n")
+        : `${server} passed platform, executable/service, and Secret reference checks for ${target}.`
+    };
+  }
+
+  async function localMcpToggle(actionName, server, target) {
+    if (!server || !/^[A-Za-z0-9._-]+$/.test(server)) {
+      throw new Error("No valid MCP server is selected.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const operation = actionName === "mcp-enable" ? "enable" : "disable";
+    const result = await runControllerJson(tools.mcp, [
+      "server", "set", "--target", target, `--${operation}`, server, "--json"
+    ], `MCP ${operation}`);
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { server, target, operation, state },
+      detail: state
+        ? `${server} was ${operation}d for ${target}; mcpctl now owns this target-specific override, unrelated MCP entries were preserved, and a new ${target} session is recommended.`
+        : result.error || `MCP ${operation} did not return the updated local state.`
+    };
+  }
+
+  async function localMcpBatch(changes, target) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    if (!Array.isArray(changes) || changes.length === 0) {
+      throw new Error("No staged MCP changes are available.");
+    }
+    const normalized = changes.map((change) => {
+      if (!change || !/^[A-Za-z0-9._-]+$/.test(change.name || "") ||
+          typeof change.enabled !== "boolean") {
+        throw new Error("A staged MCP change is invalid.");
+      }
+      return { name: change.name, enabled: change.enabled };
+    });
+    const args = ["server", "set", "--target", target];
+    for (const change of normalized) {
+      args.push(change.enabled ? "--enable" : "--disable", change.name);
+    }
+    args.push("--json");
+    const result = await runControllerJson(tools.mcp, args, "MCP batch update");
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { target, changes: normalized, state },
+      detail: state
+        ? `${normalized.length} staged MCP change(s) were written for ${target} in one mcpctl transaction; unrelated entries were preserved and a new session is recommended.`
+        : result.error || "MCP batch update did not return the updated local state."
+    };
+  }
+
+  async function localMcpSave(profile, target, replace = false) {
+    if (!profile || !/^[A-Za-z0-9._-]+$/.test(profile)) {
+      throw new Error("MCP Profile names may contain only letters, numbers, dot, underscore, and hyphen.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const saveArgs = ["profile", "save", profile, "--target", target];
+    if (replace) saveArgs.push("--force");
+    const saved = await runController(tools.mcp, saveArgs);
+    if (saved.code !== 0) {
+      return {
+        ok: false,
+        data: { profile, target },
+        detail: sanitizeOutput(saved.stderr || saved.stdout) ||
+          `MCP Profile save failed with code ${saved.code}`
+      };
+    }
+    const applied = await runController(tools.mcp, ["apply", "--target", target, "--profile", profile]);
+    const state = applied.code === 0 ? await localMcpState(target) : null;
+    return {
+      ok: applied.code === 0,
+      data: { profile, target, state },
+      detail: applied.code === 0
+        ? `The current ${target} MCP selection was saved as '${profile}' and reapplied as a named Profile.`
+        : sanitizeOutput(applied.stderr || applied.stdout) ||
+          `Profile '${profile}' was saved, but applying it failed with code ${applied.code}`
+    };
+  }
+
+  async function localMcpBackup(profile) {
+    if (!profile || !/^[A-Za-z0-9._-]+$/.test(profile)) {
+      throw new Error("Save the current MCP selection as a named Profile before backing it up.");
+    }
+    const result = await runController(tools.mcp, ["backup"]);
+    return {
+      ok: result.code === 0,
+      data: { profile },
+      detail: result.code === 0
+        ? `The encrypted MCP Store was backed up with Profile '${profile}', its catalog dependencies, portable artifacts, and referenced Secret ciphertext. No Secret value was printed.`
+        : sanitizeOutput(result.stderr || result.stdout) ||
+          `Encrypted MCP Store backup failed with code ${result.code}`
+    };
+  }
+
   async function localSkillsRepair(pack, target) {
     if (!pack) throw new Error("No current local Skills pack is available to repair.");
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
-    const result = await run(tools.skills, [
+    const result = await runController(tools.skills, [
       "apply", "--target", target, "--pack", pack, "--yes"
     ]);
     return {
@@ -510,6 +746,132 @@ export function createController({
         ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.`
         : sanitizeOutput(result.stderr || result.stdout) ||
           `Skills repair failed with code ${result.code}`
+    };
+  }
+
+  async function localSkillsState(target) {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const result = await runControllerJson(
+      tools.skills,
+      ["current", "--target", target, "--json"],
+      `Current ${target} Skills state`
+    );
+    if (!result.ok || !result.data || result.data.target !== target) {
+      throw new Error(result.error || `Current ${target} Skills state is unavailable.`);
+    }
+    return result.data;
+  }
+
+  async function localSkillsDashboard() {
+    const catalogPromise = runControllerJson(
+      tools.skills,
+      ["list", "--json"],
+      "Local Skills catalog"
+    );
+    const statePromises = [...AGENT_CLIENTS].map(async (target) => {
+      try {
+        return [target, await localSkillsState(target), ""];
+      } catch (error) {
+        return [target, null, sanitizeOutput(error?.message || error)];
+      }
+    });
+    const [catalog, stateResults] = await Promise.all([
+      catalogPromise,
+      Promise.all(statePromises)
+    ]);
+    if (!catalog.ok) throw new Error(catalog.error || "Local Skills catalog is unavailable.");
+    return {
+      catalog: normalizeSkillsCatalog(catalog.data),
+      states: Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state])),
+      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+    };
+  }
+
+  async function localSkillsBatch(changes, target) {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    if (!Array.isArray(changes) || changes.length === 0) {
+      throw new Error("No staged Skill changes are available.");
+    }
+    const normalized = changes.map((change) => {
+      if (!change || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(change.name || "") ||
+          typeof change.enabled !== "boolean") {
+        throw new Error("A staged Skill change is invalid.");
+      }
+      return { name: change.name, enabled: change.enabled };
+    });
+    const args = ["skill", "set", "--target", target];
+    for (const change of normalized) {
+      args.push(change.enabled ? "--enable" : "--disable", change.name);
+    }
+    args.push("--yes", "--json");
+    const result = await runControllerJson(tools.skills, args, "Skills batch update");
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { target, changes: normalized, state },
+      detail: state
+        ? `${normalized.length} Skill change(s) were written for ${target} in one skillsctl transaction; other clients and the canonical Store were preserved.`
+        : result.error || "Skills batch update did not return the updated local state."
+    };
+  }
+
+  async function localSkillsToggle(actionName, skill, target) {
+    if (!skill || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill)) {
+      throw new Error("No valid Skill is selected.");
+    }
+    const enabled = actionName === "skills-enable";
+    const result = await localSkillsBatch([{ name: skill, enabled }], target);
+    return {
+      ...result,
+      data: { ...result.data, skill, operation: enabled ? "enable" : "disable" },
+      detail: result.ok
+        ? `${skill} was ${enabled ? "enabled" : "disabled"} for ${target}; other clients and the canonical Skill Store were preserved.`
+        : result.detail
+    };
+  }
+
+  async function localSkillsSave(pack, target, replace = false) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("Skill Pack names must use lowercase letters, digits, and single hyphens.");
+    }
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const saveArgs = ["pack", "save", pack, "--target", target, "--yes"];
+    if (replace) saveArgs.push("--force");
+    const saved = await runController(tools.skills, saveArgs);
+    if (saved.code !== 0) {
+      return {
+        ok: false,
+        data: { pack, target },
+        detail: sanitizeOutput(saved.stderr || saved.stdout) ||
+          `Skill Pack save failed with code ${saved.code}`
+      };
+    }
+    const applied = await runController(tools.skills, [
+      "apply", "--target", target, "--pack", pack, "--yes"
+    ]);
+    const state = applied.code === 0 ? await localSkillsState(target) : null;
+    return {
+      ok: Boolean(state),
+      data: { pack, target, state },
+      detail: state
+        ? `The current ${target} Skill selection was saved as '${pack}' and reapplied as a named Pack.`
+        : sanitizeOutput(applied.stderr || applied.stdout) ||
+          `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`
+    };
+  }
+
+  async function localSkillsBackup(pack) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("Save the current Skill selection as a named Pack before backing it up.");
+    }
+    const result = await runController(tools.skills, ["backup"]);
+    return {
+      ok: result.code === 0,
+      data: { pack },
+      detail: result.code === 0
+        ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.`
+        : sanitizeOutput(result.stderr || result.stdout) ||
+          `Skills Store backup failed with code ${result.code}`
     };
   }
 
@@ -539,7 +901,7 @@ export function createController({
         : type === "skills"
           ? ["apply", "--target", target, "--pack", name, "--yes"]
           : ["apply", "--target", target, "--profile", name, "--yes"];
-      const result = await run(tools[type], args, { env });
+      const result = await runController(tools[type], args, env);
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection);
       return {
         ok: result.code === 0,
@@ -587,7 +949,9 @@ export function createController({
     preset = "",
     selection = "",
     source = "local",
-    target = "codex"
+    target = "codex",
+    changes = [],
+    replace = false
   } = {}) {
     if (actionName === "provider-plan" || actionName === "provider-apply") {
       return providerAction(actionName, selection, target, source);
@@ -595,7 +959,23 @@ export function createController({
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
       return providerSync(actionName, selection);
     }
+    if (actionName === "mcp-enable" || actionName === "mcp-disable") {
+      return localMcpToggle(actionName, selection, target);
+    }
+    if (actionName === "mcp-batch") return localMcpBatch(changes, target);
+    if (actionName === "mcp-profile-save" || actionName === "mcp-profile-update") {
+      return localMcpSave(selection, target, actionName === "mcp-profile-update" || replace);
+    }
+    if (actionName === "mcp-profile-upload") return localMcpBackup(selection);
     if (actionName === "mcp-repair") return localMcpRepair(selection, target);
+    if (actionName === "skills-enable" || actionName === "skills-disable") {
+      return localSkillsToggle(actionName, selection, target);
+    }
+    if (actionName === "skills-batch") return localSkillsBatch(changes, target);
+    if (actionName === "skills-pack-save" || actionName === "skills-pack-update") {
+      return localSkillsSave(selection, target, actionName === "skills-pack-update" || replace);
+    }
+    if (actionName === "skills-pack-upload") return localSkillsBackup(selection);
     if (actionName === "skills-repair") return localSkillsRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
@@ -617,7 +997,7 @@ export function createController({
     if (actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
       const args = ["uninstall", agent, "--yes"];
-      const command = agentctlCommand(args);
+      const command = controllerCommand(agentctl, args);
       const result = await run(command.executable, command.args);
       return {
         ok: result.code === 0,
@@ -627,7 +1007,7 @@ export function createController({
       };
     }
     if (actionName === "snippet-copy") {
-      const result = await run(tools.prompts, ["snippet", "copy", selection]);
+      const result = await runController(tools.prompts, ["snippet", "copy", selection]);
       return {
         ok: result.code === 0,
         data: { name: selection },
@@ -679,6 +1059,11 @@ export function createController({
     action,
     promptPreview,
     providerDashboard,
+    localMcpServers,
+    localMcpPreflight,
+    localMcpState,
+    localSkillsDashboard,
+    localSkillsState,
     remoteCatalog
   };
 }

@@ -2,9 +2,10 @@
 
 import { spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bashScriptCommand } from "../platform-command.mjs";
+import { platformConfigHome, platformStateHome } from "../platform-paths.mjs";
 import { loadWorkspace, saveWorkspace } from "./workspace-client.mjs";
 
 const SCHEMA = 2;
@@ -51,6 +52,8 @@ Environment:
 
 function parseArguments(argv) {
   const positional = [];
+  const configHome = platformConfigHome();
+  const stateHome = platformStateHome();
   const options = {
     target: "",
     mcp: "",
@@ -61,11 +64,11 @@ function parseArguments(argv) {
     json: false,
     local: false,
     catalog: resolve(process.env.AGENTCTL_PRESETS_FILE ||
-      join(homedir(), ".config", "agentctl", "presets.json")),
+      join(configHome, "agentctl", "presets.json")),
     state: resolve(process.env.AGENTCTL_PRESET_STATE_FILE ||
-      join(homedir(), ".local", "state", "agentctl", "presets.json")),
+      join(stateHome, "agentctl", "presets.json")),
     workspaceConfig: resolve(process.env.AGENTCTL_WORKSPACE_CONFIG ||
-      join(homedir(), ".config", "agentctl", "workspace-remote.json"))
+      join(configHome, "agentctl", "workspace-remote.json"))
   };
   while (argv.length > 0) {
     const argument = argv.shift();
@@ -192,7 +195,8 @@ async function loadState(path) {
 }
 
 function run(executable, args, { allowFailure = false } = {}) {
-  const result = spawnSync(executable, args, {
+  const command = bashScriptCommand(executable, args);
+  const result = spawnSync(command.executable, command.args, {
     encoding: "utf8",
     env: process.env,
     maxBuffer: 8 * 1024 * 1024

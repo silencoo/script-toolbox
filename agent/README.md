@@ -215,6 +215,27 @@ The scripts are compatible with macOS `/bin/bash` 3.2 and do not require
 associative arrays or Bash lowercase expansion. CI runs the complete
 `agent/test.sh` suite through the macOS system Bash 3.2 binary.
 
+## Platform support and CI contract
+
+| Host | Supported entrypoint | Automated coverage |
+| --- | --- | --- |
+| macOS | Native Terminal with system Bash 3.2+ | Complete `agent/test.sh`, TUI build, and installed-runtime tests on `macos-latest` |
+| Linux | Native Bash on an XDG-style home | Complete `agent/test.sh`, TUI build, controller integration, and Worker tests on `ubuntu-latest` |
+| Windows | Git for Windows/MSYS2 Bash with Node.js 22, Python, and jq | Portable Node controller suites, real Skills junction operations, Provider/Preset transactions, TUI launch, and an isolated Git Bash MCP apply on `windows-latest` |
+
+Windows controller scripts are launched through Bash rather than relying on
+Windows to execute a Unix shebang. `SCRIPT_TOOLBOX_BASH` can select a specific
+`bash.exe`; script paths and arguments remain separate argv values, including
+paths containing spaces or non-ASCII characters. Portable configuration uses
+`%APPDATA%` for catalogs and `%LOCALAPPDATA%` for device state. Pure
+PowerShell controller entrypoints and a native Windows standalone installer
+are not claimed yet.
+
+The Windows integration test is
+[`tests/windows-git-bash-smoke.sh`](./tests/windows-git-bash-smoke.sh). It
+mutates only temporary HOME/AppData/client paths and never touches a runner's
+real agent configuration.
+
 ## Task-oriented MCP profiles
 
 The per-agent `mcp.sh` files remain simple installers for the standard MCP

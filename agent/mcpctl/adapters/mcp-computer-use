@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Locate the Computer Use MCP client bundled with the ChatGPT macOS app.
+# Diagnostics stay on stderr because stdout belongs to MCP JSON-RPC.
+
+set -euo pipefail
+
+die() {
+  printf 'mcpctl computer-use adapter: %s\n' "$*" >&2
+  exit 1
+}
+
+[ "$(uname -s)" = "Darwin" ] ||
+  die "the bundled Computer Use client is currently available only on macOS"
+
+client="${MCPCTL_COMPUTER_USE_CLIENT:-}"
+if [ -n "$client" ]; then
+  case "$client" in
+    /*) ;;
+    *) die "MCPCTL_COMPUTER_USE_CLIENT must be an absolute path" ;;
+  esac
+else
+  for app in "/Applications/ChatGPT.app" "${HOME}/Applications/ChatGPT.app"; do
+    [ -d "$app" ] || continue
+    candidate="${app}/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+    if [ -x "$candidate" ]; then
+      client="$candidate"
+      break
+    fi
+    # Keep working if a ChatGPT update moves the nested @oai/sky package.
+    candidate="$(find "${app}/Contents/Resources" -type f \
+      -path '*/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient' \
+      -print -quit 2>/dev/null || true)"
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      client="$candidate"
+      break
+    fi
+  done
+fi
+
+[ -n "$client" ] && [ -x "$client" ] ||
+  die "install the ChatGPT macOS app or set MCPCTL_COMPUTER_USE_CLIENT to its SkyComputerUseClient executable"
+
+exec "$client" mcp "$@"

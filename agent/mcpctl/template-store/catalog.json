@@ -279,6 +279,40 @@
         "opencode"
       ]
     },
+    "computer-use": {
+      "category": "browser",
+      "description": "Native macOS application control through the Computer Use runtime bundled with ChatGPT",
+      "transport": "stdio",
+      "command": [
+        "@mcpctl/adapters/mcp-computer-use"
+      ],
+      "setup": "Requires the ChatGPT macOS app. The adapter locates its bundled SkyComputerUseClient after app updates; MCPCTL_COMPUTER_USE_CLIENT can override the executable path.",
+      "host": {
+        "lifecycle": "client",
+        "install": {
+          "type": "manual"
+        },
+        "requirements": [
+          {
+            "type": "path",
+            "paths": [
+              "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+              "~/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+            ],
+            "path_kind": "executable",
+            "label": "ChatGPT bundled Computer Use client"
+          }
+        ],
+        "platforms": [
+          "darwin"
+        ]
+      },
+      "startup_timeout_sec": 60,
+      "tool_timeout_sec": 300,
+      "supported_targets": [
+        "codex"
+      ]
+    },
     "js-reverse": {
       "category": "web-reverse",
       "description": "JavaScript debugging, breakpoints, network, and WebSocket analysis in persistent headed Chrome",

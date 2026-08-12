@@ -97,6 +97,18 @@ for expected_server in \
     fail "server list omitted ${expected_server}"
 done
 
+codex_server_json="$(HOME="$TEST_HOME" "$MCPCTL" server list --target codex --json --store "$STORE")"
+claude_server_json="$(HOME="$TEST_HOME" "$MCPCTL" server list --target claude --json --store "$STORE")"
+printf '%s' "$codex_server_json" | jq -e '
+  type == "array"
+  and any(.[]; .name == "computer-use" and .category == "browser")
+  and all(.[]; has("command") | not)
+' >/dev/null || fail "targeted JSON server list omitted safe Codex display metadata"
+printf '%s' "$claude_server_json" | jq -e '
+  type == "array"
+  and (any(.[]; .name == "computer-use") | not)
+' >/dev/null || fail "targeted JSON server list ignored supported_targets"
+
 jq -e '
   .servers.keenable.url == "https://api.keenable.ai/mcp"
   and .servers.keenable.auth.required == false
@@ -453,9 +465,14 @@ mv "$TEST_ROOT/private-wheel.good" "$STORE/artifacts/$ARTIFACT_NAME"
 cat > "$FAKE_BIN/uv" <<'EOF'
 #!/usr/bin/env sh
 set -eu
-mkdir -p "$UV_TOOL_BIN_DIR"
-cp "$MCP_FAKE_ENTRY" "$UV_TOOL_BIN_DIR/private-mcp"
-chmod +x "$UV_TOOL_BIN_DIR/private-mcp"
+mkdir -p "$UV_TOOL_BIN_DIR" "$UV_TOOL_DIR/private-wheel/bin"
+cp "$MCP_FAKE_ENTRY" "$UV_TOOL_DIR/private-wheel/bin/private-mcp"
+chmod +x "$UV_TOOL_DIR/private-wheel/bin/private-mcp"
+# Match uv's real behavior: its exposed executables are absolute symlinks into
+# UV_TOOL_DIR. mcpctl must make them relocatable before renaming the staging
+# directory into its final owned location.
+ln -s "$UV_TOOL_DIR/private-wheel/bin/private-mcp" \
+  "$UV_TOOL_BIN_DIR/private-mcp"
 EOF
 chmod +x "$FAKE_BIN/uv"
 HOME="$TEST_HOME" MCPCTL_HOST_ROOT="$HOST_ROOT" \
@@ -469,6 +486,9 @@ jq -e --arg artifact "$ARTIFACT_NAME" '
   and .with == ["mcp<2"]
 ' "$HOST_ROOT/private-wheel/manifest.json" >/dev/null ||
   fail "portable wheel installation lost its logical Store reference"
+[ "$(readlink "$HOST_ROOT/private-wheel/bin/private-mcp")" = \
+  "../tools/private-wheel/bin/private-mcp" ] ||
+  fail "uv package installation retained a staging-directory symlink"
 MCP_PACKAGE_CAPTURE="$TEST_ROOT/owned-private-wheel.args" \
   MCPCTL_HOST_ROOT="$HOST_ROOT" PATH="$FAKE_BIN:$PATH" \
   "$SCRIPT_DIR/adapters/mcp-package" uv private-wheel \
@@ -541,6 +561,80 @@ current_custom="$(
 )"
 printf '%s' "$current_custom" | grep -q '^Profile: custom (based on off)$' ||
   fail "current did not explain the custom selection base"
+
+doctor_json="$(
+  HOME="$LIFECYCLE_HOME" "$MCPCTL" server doctor --all --json --store "$STORE"
+)"
+printf '%s' "$doctor_json" | jq -e '
+  .schema == 1
+  and (.platform | type == "string")
+  and (.servers | type == "array")
+  and all(.servers[];
+    (.name | type == "string")
+    and (.ready | type == "boolean")
+    and (.issues | type == "array")
+  )
+' >/dev/null || fail "server doctor --json did not emit bounded readiness metadata"
+
+HOME="$LIFECYCLE_HOME" "$MCPCTL" server preflight playwright \
+  --target claude --json --store "$STORE" |
+  jq -e '.ready == true and .configuration == "renderable"' >/dev/null ||
+  fail "server preflight rejected a renderable Secret-free server"
+if HOME="$LIFECYCLE_HOME" "$MCPCTL" server preflight github \
+  --target claude --json --store "$STORE" \
+  >"$TEST_ROOT/preflight-missing.out" 2>&1; then
+  fail "server preflight accepted a missing required Secret"
+fi
+grep -q "no secret 'github_mcp_pat'" "$TEST_ROOT/preflight-missing.out" ||
+  fail "server preflight missing-Secret error was not actionable"
+
+# Batch changes are rendered and written once. Saving turns the exact manual
+# target selection into a portable named Profile, while --force updates only
+# that target override and preserves other clients.
+batch_selection_json="$(
+  HOME="$LIFECYCLE_HOME" "$MCPCTL" server set --target claude \
+    --enable playwright --enable js-reverse --store "$STORE" --json
+)"
+printf '%s' "$batch_selection_json" | jq -e '
+  .target == "claude"
+  and .selection_mode == "manual"
+  and .profile == "custom"
+  and .healthy == true
+  and (.servers | sort) == ["js-reverse", "playwright"]
+' >/dev/null || fail "server set --json did not return its final local state"
+jq -e '
+  .targets.claude.selection_mode == "manual"
+  and (.targets.claude.servers | sort) == ["js-reverse", "playwright"]
+' "$LIFECYCLE_HOME/.local/state/mcpctl/applied.json" >/dev/null ||
+  fail "server set did not persist one exact batch selection"
+HOME="$LIFECYCLE_HOME" "$MCPCTL" profile save daily-test --target claude \
+  --store "$STORE" >/dev/null
+jq -e '
+  .name == "daily-test"
+  and .extends == ["off"]
+  and (.target_overrides.claude.enable | sort) == ["js-reverse", "playwright"]
+' "$STORE/profiles/daily-test.json" >/dev/null ||
+  fail "profile save did not capture the current target selection"
+jq '.target_overrides.codex = {enable:["fetch"],disable:[]}' \
+  "$STORE/profiles/daily-test.json" > "$TEST_ROOT/daily-test.with-codex.json"
+mv "$TEST_ROOT/daily-test.with-codex.json" "$STORE/profiles/daily-test.json"
+chmod 600 "$STORE/profiles/daily-test.json"
+HOME="$LIFECYCLE_HOME" "$MCPCTL" server set --target claude \
+  --disable playwright --store "$STORE" >/dev/null
+HOME="$LIFECYCLE_HOME" "$MCPCTL" profile save daily-test --target claude \
+  --force --store "$STORE" >/dev/null
+jq -e '
+  .target_overrides.codex.enable == ["fetch"]
+  and .target_overrides.claude.enable == ["js-reverse"]
+' "$STORE/profiles/daily-test.json" >/dev/null ||
+  fail "profile save --force did not preserve another target override"
+HOME="$LIFECYCLE_HOME" "$MCPCTL" apply --target claude \
+  --profile daily-test --store "$STORE" >/dev/null
+jq -e '
+  .targets.claude.profile == "daily-test"
+  and ((.targets.claude.selection_mode // "profile") == "profile")
+' "$LIFECYCLE_HOME/.local/state/mcpctl/applied.json" >/dev/null ||
+  fail "saved MCP Profile could not be reapplied as a named selection"
 
 # No arguments open the guided menu. Listing is read-only and works with the
 # same store used by explicit commands.
@@ -1164,7 +1258,7 @@ HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
   ' >/dev/null ||
   fail "Codex current state did not distinguish a suppressed server"
 
-HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+HOME="$TEST_HOME" \
   "$MCPCTL" server enable plugin-default \
   --target codex --store "$STORE" >/dev/null
 HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
@@ -1174,7 +1268,7 @@ HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
     and .suppressed_servers == []
   ' >/dev/null ||
   fail "Codex server enable did not lift the explicit suppression"
-HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
+HOME="$TEST_HOME" \
   "$MCPCTL" server disable plugin-default \
   --target codex --store "$STORE" >/dev/null
 HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
@@ -1184,6 +1278,9 @@ HOME="$TEST_HOME" "$MCPCTL" current --target codex --store "$STORE" --json |
     and .suppressed_servers == ["plugin-default"]
   ' >/dev/null ||
   fail "Codex server disable did not restore the explicit suppression"
+grep -qF '"Authorization" = "Bearer test-exa"' \
+  "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex incremental switch rewrote an unchanged Secret-backed server"
 
 # --force adopts a same-name Codex table without touching unrelated TOML.
 printf '%s\n' \

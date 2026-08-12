@@ -652,7 +652,8 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       join(root, "proxy", "usage.jsonl"),
       join(root, "proxy", "daemon.log")
     ]) {
-      assert.equal((await lstat(path)).mode & 0o077, 0);
+      if (process.platform === "win32") assert.equal((await lstat(path)).isFile(), true);
+      else assert.equal((await lstat(path)).mode & 0o077, 0);
     }
     const runtimeLog = await readFile(join(root, "proxy", "daemon.log"), "utf8");
     assert.equal(runtimeLog.includes("REAL-UPSTREAM-SECRET"), false);
@@ -821,8 +822,13 @@ test("failover never replays by default, persists circuits, and replays only whe
     const metadataText = JSON.stringify(metadata);
     assert.equal(metadataText.includes("FAILOVER-CONTENT-MARKER"), false);
     assert.equal(metadataText.includes(`127.0.0.1:${primaryPort}`), false);
-    assert.equal((await lstat(circuitPath)).mode & 0o077, 0);
-    assert.equal((await lstat(replayCircuit)).mode & 0o077, 0);
+    if (process.platform === "win32") {
+      assert.equal((await lstat(circuitPath)).isFile(), true);
+      assert.equal((await lstat(replayCircuit)).isFile(), true);
+    } else {
+      assert.equal((await lstat(circuitPath)).mode & 0o077, 0);
+      assert.equal((await lstat(replayCircuit)).mode & 0o077, 0);
+    }
   } finally {
     if (proxyPid) {
       try { process.kill(proxyPid, "SIGTERM"); } catch {}

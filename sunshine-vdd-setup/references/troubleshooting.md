@@ -45,6 +45,13 @@ Do not add many fallback modes merely to hide a mismatch. Decide whether the wor
 - Confirm Windows restored the physical path even if the panel is dark.
 - If a previous DDC/CI hard-off command was used, turn the monitor on physically once. Do not add DDC hard-off to the normal workflow.
 - Use the recorded topology and safe-mode/device-manager recovery path if display enumeration is broken.
+- Preview the reported native snapshot with `Restore-DisplayTopology.ps1`; if validation passes and recovery access is available, apply it from an elevated session. The restore operation saves the current topology before replacing it.
+
+## Stream state is unknown
+
+- Inspect `Sunshine.Streaming.LastRelevantEvents` and confirm the log belongs to the current Sunshine process epoch.
+- Disconnect every Moonlight client and re-run inventory. Prefer restarting Sunshine only after warning that sessions will disconnect.
+- Do not treat `-ConfirmNoActiveStream` alone as detection. Use `-AllowUnknownStreamState` only after an independent check; the scripts never override a positively detected `Active` state.
 
 ## UAC is invisible remotely
 

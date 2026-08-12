@@ -311,6 +311,18 @@ function normalizeImportedCommand(command, server, warnings) {
   const executable = result[0];
   if (typeof executable !== "string" || executable.length === 0) return result;
 
+  const portableExecutable = executable.replaceAll("\\", "/");
+  if (portableExecutable.endsWith(
+    "/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+  ) && portableExecutable.includes("/Codex Computer Use.app/")) {
+    const remaining = result.slice(result[1] === "mcp" ? 2 : 1);
+    warnings.push(
+      `${server}: replaced the ChatGPT bundle-relative Computer Use client ` +
+      "with mcpctl's portable macOS adapter"
+    );
+    return ["@mcpctl/adapters/mcp-computer-use", ...remaining];
+  }
+
   const normalizedExecutable = normalize(executable);
   const knownBinDirectories = new Set([
     normalize(join(homedir(), ".local", "bin")),
@@ -338,6 +350,26 @@ function normalizeImportedCommand(command, server, warnings) {
 }
 
 function importedHost(command) {
+  if (command[0] === "@mcpctl/adapters/mcp-computer-use") {
+    return {
+      lifecycle: "client",
+      install: { type: "manual" },
+      requirements: [{
+        type: "path",
+        paths: [
+          "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/" +
+            "@oai/sky/Codex Computer Use.app/Contents/SharedSupport/" +
+            "SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+          "~/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/" +
+            "@oai/sky/Codex Computer Use.app/Contents/SharedSupport/" +
+            "SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+        ],
+        path_kind: "executable",
+        label: "ChatGPT bundled Computer Use client"
+      }],
+      platforms: ["darwin"]
+    };
+  }
   return {
     lifecycle: "client",
     install: { type: "manual" },
@@ -701,7 +733,8 @@ function parseCodexList(document) {
         secrets
       );
       if (Object.keys(environment).length > 0) definition.environment = environment;
-      if (typeof transport.cwd === "string" && transport.cwd.length > 0) {
+      if (typeof transport.cwd === "string" && transport.cwd.length > 0 &&
+          command[0] !== "@mcpctl/adapters/mcp-computer-use") {
         definition.cwd = transport.cwd;
       }
       const envVars = validateStringArray(

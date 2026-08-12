@@ -22489,8 +22489,22 @@ import { spawnSync } from "node:child_process";
 // src/controller.mjs
 import { spawn } from "node:child_process";
 import { lstat as lstat3, readFile as readFile3 } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute, join as join4, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, isAbsolute, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// ../platform-command.mjs
+function bashScriptCommand(script, args = [], {
+  platform: platform2 = process.platform,
+  bash = process.env.SCRIPT_TOOLBOX_BASH || "bash"
+} = {}) {
+  if (typeof script !== "string" || script.length === 0) {
+    throw new TypeError("Bash script path is required");
+  }
+  if (!Array.isArray(args) || args.some((argument) => typeof argument !== "string")) {
+    throw new TypeError("Bash script arguments must be an array of strings");
+  }
+  return platform2 === "win32" ? { executable: bash, args: [script, ...args] } : { executable: script, args: [...args] };
+}
 
 // src/remote-workspace.mjs
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
@@ -22504,8 +22518,32 @@ import {
   rm as rm2,
   writeFile
 } from "node:fs/promises";
-import { homedir as homedir2, tmpdir } from "node:os";
-import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
+import { homedir as homedir3, tmpdir } from "node:os";
+import { dirname as dirname3, join as join4, resolve as resolve3 } from "node:path";
+
+// ../platform-paths.mjs
+import { homedir } from "node:os";
+import { join } from "node:path";
+function platformConfigHome({
+  platform: platform2 = process.platform,
+  environment = process.env,
+  home = homedir()
+} = {}) {
+  if (platform2 === "win32") {
+    return environment.APPDATA || join(home, "AppData", "Roaming");
+  }
+  return environment.XDG_CONFIG_HOME || join(home, ".config");
+}
+function platformDataHome({
+  platform: platform2 = process.platform,
+  environment = process.env,
+  home = homedir()
+} = {}) {
+  if (platform2 === "win32") {
+    return environment.LOCALAPPDATA || environment.APPDATA || join(home, "AppData", "Local");
+  }
+  return environment.XDG_DATA_HOME || join(home, ".local", "share");
+}
 
 // ../remote-store.mjs
 import {
@@ -22523,7 +22561,7 @@ import {
   rename,
   rm
 } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join as join2, resolve } from "node:path";
 var SCHEMA = 1;
 var STORE_ID_PATTERN = /^[a-f0-9]{32}$/;
 var VERSION_ID_PATTERN = /^[0-9]{13}-[a-f0-9-]{36}$/;
@@ -22919,7 +22957,7 @@ async function writeJsonAtomic(filePath, value) {
     }
   }
   await mkdir(parentPath, { recursive: true, mode: 448 });
-  const temporaryPath = join(
+  const temporaryPath = join2(
     parentPath,
     `.${targetPath.slice(parentPath.length + 1)}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`
   );
@@ -23894,8 +23932,8 @@ function normalizeWorkspaceSchema(snapshot) {
 }
 
 // ../agentctl/provider-renderer.mjs
-import { homedir } from "node:os";
-import { dirname as dirname2, join as join2, resolve as resolve2, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname2, join as join3, resolve as resolve2, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 var MODULE_DIR = dirname2(fileURLToPath(import.meta.url));
 var DEFAULT_AGENT_ROOT = resolve2(MODULE_DIR, "..");
@@ -23968,59 +24006,59 @@ function compatibilityIssue(resolved) {
   }
   return "";
 }
-function targetPaths(target, { home = homedir() } = {}) {
+function targetPaths(target, { home = homedir2() } = {}) {
   validateTarget(target);
   if (target === "claude") {
-    const root2 = join2(home, ".claude");
+    const root2 = join3(home, ".claude");
     return {
       root: root2,
-      config_files: [join2(root2, "settings.json")],
+      config_files: [join3(root2, "settings.json")],
       state_files: [
-        join2(root2, ".script-toolbox-provider"),
-        join2(root2, ".script-toolbox-provider-context.json")
+        join3(root2, ".script-toolbox-provider"),
+        join3(root2, ".script-toolbox-provider-context.json")
       ],
       key_dir: "",
       key_file: ""
     };
   }
   if (target === "codex") {
-    const root2 = join2(home, ".codex");
-    const keyDir2 = join2(root2, "provider-keys");
+    const root2 = join3(home, ".codex");
+    const keyDir2 = join3(root2, "provider-keys");
     return {
       root: root2,
-      config_files: [join2(root2, "config.toml")],
+      config_files: [join3(root2, "config.toml")],
       state_files: [
-        join2(root2, ".script-toolbox-provider-key"),
-        join2(root2, ".script-toolbox-defaults-backup.toml")
+        join3(root2, ".script-toolbox-provider-key"),
+        join3(root2, ".script-toolbox-defaults-backup.toml")
       ],
       key_dir: keyDir2,
-      key_file: join2(keyDir2, "script_toolbox_custom.key")
+      key_file: join3(keyDir2, "script_toolbox_custom.key")
     };
   }
   if (target === "opencode") {
-    const root2 = join2(home, ".config", "opencode");
-    const keyDir2 = join2(root2, "provider-keys");
+    const root2 = join3(home, ".config", "opencode");
+    const keyDir2 = join3(root2, "provider-keys");
     return {
       root: root2,
-      config_files: [join2(root2, "opencode.json")],
-      state_files: [join2(root2, ".script-toolbox-provider")],
+      config_files: [join3(root2, "opencode.json")],
+      state_files: [join3(root2, ".script-toolbox-provider")],
       key_dir: keyDir2,
-      key_file: join2(keyDir2, "script-toolbox-custom.key")
+      key_file: join3(keyDir2, "script-toolbox-custom.key")
     };
   }
-  const root = join2(home, ".pi", "agent");
-  const keyDir = join2(root, "provider-keys");
+  const root = join3(home, ".pi", "agent");
+  const keyDir = join3(root, "provider-keys");
   return {
     root,
-    config_files: [join2(root, "models.json"), join2(root, "settings.json")],
-    state_files: [join2(root, ".script-toolbox-provider")],
+    config_files: [join3(root, "models.json"), join3(root, "settings.json")],
+    state_files: [join3(root, ".script-toolbox-provider")],
     key_dir: keyDir,
-    key_file: join2(keyDir, "script-toolbox-custom.key")
+    key_file: join3(keyDir, "script-toolbox-custom.key")
   };
 }
 function backendPath(target, agentRoot) {
   const [directory, file] = TARGET_BACKENDS[target];
-  return join2(agentRoot, directory, file);
+  return join3(agentRoot, directory, file);
 }
 function tokenLabel(value) {
   return value === null ? "auto" : new Intl.NumberFormat("en-US").format(value);
@@ -24046,7 +24084,7 @@ function renderContextPolicy(resolved) {
 }
 function renderProviderPlan(resolved, {
   secretPresent = false,
-  home = homedir(),
+  home = homedir2(),
   agentRoot = process.env.AGENTCTL_AGENT_ROOT || DEFAULT_AGENT_ROOT
 } = {}) {
   validateTarget(resolved.target);
@@ -24087,7 +24125,7 @@ function renderProviderPlan(resolved, {
     official_identity: resolved.target === "codex" ? {
       policy: "preserve",
       account: "current",
-      config_file: join2(paths.root, "auth.json"),
+      config_file: join3(paths.root, "auth.json"),
       managed: false
     } : null,
     backend: backendPath(resolved.target, agentRoot),
@@ -24108,7 +24146,7 @@ var PROTOCOLS = Object.freeze({
   prompts: PROMPT_REMOTE_PROTOCOL
 });
 function snippetsDirectory(home) {
-  return join3(home, ".local", "share", "script-toolbox", "snippets");
+  return join4(home, ".local", "share", "script-toolbox", "snippets");
 }
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
@@ -24164,25 +24202,14 @@ var RemoteWorkspaceError = class extends Error {
   }
 };
 function defaultConfigPath() {
-  const configHome = process.env.XDG_CONFIG_HOME || join3(homedir2(), ".config");
-  return resolve3(process.env.AGENTCTL_WORKSPACE_CONFIG || join3(configHome, "agentctl", "workspace-remote.json"));
+  const configHome = platformConfigHome();
+  return resolve3(process.env.AGENTCTL_WORKSPACE_CONFIG || join4(configHome, "agentctl", "workspace-remote.json"));
 }
 function defaultRuntimeRoot() {
   if (process.env.AGENTCTL_WORKSPACE_RUNTIME) {
     return resolve3(process.env.AGENTCTL_WORKSPACE_RUNTIME);
   }
-  if (process.platform === "win32") {
-    return resolve3(
-      process.env.LOCALAPPDATA || join3(homedir2(), "AppData", "Local"),
-      "script-toolbox",
-      "workspaces"
-    );
-  }
-  return resolve3(
-    process.env.XDG_DATA_HOME || join3(homedir2(), ".local", "share"),
-    "agentctl",
-    "workspaces"
-  );
+  return process.platform === "win32" ? resolve3(platformDataHome(), "script-toolbox", "workspaces") : resolve3(platformDataHome(), "agentctl", "workspaces");
 }
 function assertObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -24447,28 +24474,28 @@ function decodeFile(file, label) {
 }
 async function writeSkill(runtime, name, skill) {
   assertName(name, SKILL_NAME, "Skill name");
-  const root = join3(runtime, "skills");
+  const root = join4(runtime, "skills");
   await ensureDirectory(root);
-  const temporary = join3(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
+  const temporary = join4(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
   await ensureDirectory(temporary);
   try {
     for (const [path, file] of Object.entries(assertObject(skill.files, `Skill '${name}' files`))) {
       validateRelativePath(path);
-      const destination2 = join3(temporary, ...path.split("/"));
+      const destination2 = join4(temporary, ...path.split("/"));
       await ensureDirectory(dirname3(destination2));
       await writeFile(destination2, decodeFile(file, `${name}/${path}`), {
         flag: "wx",
         mode: (file.mode & 73) !== 0 ? 448 : 384
       });
     }
-    if (!await pathExists2(join3(temporary, "SKILL.md"))) {
+    if (!await pathExists2(join4(temporary, "SKILL.md"))) {
       throw new RemoteWorkspaceError(`remote Skill '${name}' has no SKILL.md`);
     }
-    const destination = join3(root, name);
+    const destination = join4(root, name);
     if (await pathExists2(destination)) {
-      const backupRoot = join3(runtime, "backups", `remote-${Date.now()}`);
+      const backupRoot = join4(runtime, "backups", `remote-${Date.now()}`);
       await ensureDirectory(backupRoot);
-      await rename2(destination, join3(backupRoot, name));
+      await rename2(destination, join4(backupRoot, name));
     }
     await rename2(temporary, destination);
   } finally {
@@ -24488,7 +24515,7 @@ function publicPreset(name, preset) {
 }
 function publicProviderProfile(profile, bundle, target, {
   platform: platform2 = normalizeRuntimePlatform(),
-  home = homedir2()
+  home = homedir3()
 } = {}) {
   const resolved = resolveProviderProfile(profile, { target, platform: platform2 });
   const secretReference = resolved.auth.secret || "";
@@ -24526,7 +24553,7 @@ function publicProviderProfile(profile, bundle, target, {
 function createRemoteWorkspace({
   workspaceConfig = defaultConfigPath(),
   runtimeRoot = defaultRuntimeRoot(),
-  localHome = homedir2(),
+  localHome = homedir3(),
   loadWorkspaceFn = loadRemoteWorkspace,
   readConfigFn = readRemoteConfig,
   statusFn = loadRemoteStatus,
@@ -24703,10 +24730,10 @@ function createRemoteWorkspace({
         workspace.agent.secrets.secrets[resolved.auth.secret]
       );
     }
-    const temporary = await mkdtemp(join3(tmpdir(), "agentctl-tui-provider-"));
+    const temporary = await mkdtemp(join4(tmpdir(), "agentctl-tui-provider-"));
     await chmod2(temporary, 448);
-    const storePath = join3(temporary, "providers.json");
-    const secretsPath = join3(temporary, "provider-secrets.json");
+    const storePath = join4(temporary, "providers.json");
+    const secretsPath = join4(temporary, "provider-secrets.json");
     try {
       await Promise.all([
         writeJsonAtomic(storePath, providerStore),
@@ -24719,16 +24746,16 @@ function createRemoteWorkspace({
   }
   async function runtimePaths() {
     if (!masterConfig) await index();
-    const root = join3(runtimeRoot, masterConfig.store_id);
+    const root = join4(runtimeRoot, masterConfig.store_id);
     return {
       root,
-      mcp: join3(root, "mcp"),
-      mcpRemote: join3(root, "mcp-remote.json"),
-      skills: join3(root, "skills"),
-      presets: join3(root, "presets.json"),
-      presetState: join3(root, "preset-state.json"),
-      promptBackups: join3(root, "prompt-backups"),
-      snippetBackups: join3(root, "snippet-backups")
+      mcp: join4(root, "mcp"),
+      mcpRemote: join4(root, "mcp-remote.json"),
+      skills: join4(root, "skills"),
+      presets: join4(root, "presets.json"),
+      presetState: join4(root, "preset-state.json"),
+      promptBackups: join4(root, "prompt-backups"),
+      snippetBackups: join4(root, "snippet-backups")
     };
   }
   async function runtimeEnvironment() {
@@ -24744,8 +24771,8 @@ function createRemoteWorkspace({
   async function runtimeAvailability() {
     const paths = await runtimePaths();
     return {
-      mcp: await pathExists2(join3(paths.mcp, "catalog.json")),
-      skills: await pathExists2(join3(paths.skills, "catalog.json")),
+      mcp: await pathExists2(join4(paths.mcp, "catalog.json")),
+      skills: await pathExists2(join4(paths.skills, "catalog.json")),
       presets: await pathExists2(paths.presets)
     };
   }
@@ -24754,8 +24781,8 @@ function createRemoteWorkspace({
     const selection = mcpSelection(snapshot, name, target);
     const paths = await runtimePaths();
     await ensureDirectory(paths.mcp);
-    await ensureDirectory(join3(paths.mcp, "profiles"));
-    const catalogPath = join3(paths.mcp, "catalog.json");
+    await ensureDirectory(join4(paths.mcp, "profiles"));
+    const catalogPath = join4(paths.mcp, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, servers: {} });
     if (catalog2.schema !== 1 || !catalog2.servers || typeof catalog2.servers !== "object") {
       throw new RemoteWorkspaceError("Workspace MCP runtime catalog is invalid");
@@ -24767,14 +24794,14 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const profile of selection.profiles) {
-      await writeJsonAtomic(join3(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
+      await writeJsonAtomic(join4(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
     }
     const neededSecrets = secretNames(selectedDefinitions);
     const secrets = {};
     for (const secret of neededSecrets) {
       if (typeof snapshot.secrets[secret] === "string") secrets[secret] = snapshot.secrets[secret];
     }
-    await writeJsonAtomic(join3(paths.mcp, "secrets.remote.enc"), encryptValue(
+    await writeJsonAtomic(join4(paths.mcp, "secrets.remote.enc"), encryptValue(
       "mcpctl-local-secrets",
       LOCAL_SECRETS_INFO,
       config,
@@ -24789,9 +24816,9 @@ function createRemoteWorkspace({
     const paths = await runtimePaths();
     await ensureDirectory(paths.skills);
     for (const directory of ["skills", "packs", "state", "backups"]) {
-      await ensureDirectory(join3(paths.skills, directory));
+      await ensureDirectory(join4(paths.skills, directory));
     }
-    const catalogPath = join3(paths.skills, "catalog.json");
+    const catalogPath = join4(paths.skills, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, skills: {} });
     if (catalog2.schema !== 1 || !catalog2.skills || typeof catalog2.skills !== "object") {
       throw new RemoteWorkspaceError("Workspace Skills runtime catalog is invalid");
@@ -24802,7 +24829,7 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const pack of selection.packs) {
-      await writeJsonAtomic(join3(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
+      await writeJsonAtomic(join4(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
     }
     return { name, ...selection, store: paths.skills };
   }
@@ -24820,8 +24847,8 @@ function createRemoteWorkspace({
   }
   async function promptSelection(name, target) {
     const document2 = await promptDocument(name, target);
-    const directory = join3(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
-    const path = join3(directory, `${name}.md`);
+    const directory = join4(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
+    const path = join4(directory, `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24845,9 +24872,9 @@ function createRemoteWorkspace({
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join3(paths.promptBackups, `${Date.now()}-${selection.target}`);
+      const backupDirectory = join4(paths.promptBackups, `${Date.now()}-${selection.target}`);
       await ensureDirectory(backupDirectory);
-      backup = join3(backupDirectory, `${selection.name}.md`);
+      backup = join4(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -24882,7 +24909,7 @@ function createRemoteWorkspace({
     assertName(name, MCP_NAME, "Snippet name");
     const snippet = snapshot.snippets?.[name];
     if (!snippet) throw new RemoteWorkspaceError(`unknown remote Snippet '${name}'`);
-    const path = join3(snippetsDirectory(localHome), `${name}.md`);
+    const path = join4(snippetsDirectory(localHome), `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24905,9 +24932,9 @@ function createRemoteWorkspace({
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join3(paths.snippetBackups, `${Date.now()}`);
+      const backupDirectory = join4(paths.snippetBackups, `${Date.now()}`);
       await ensureDirectory(backupDirectory);
-      backup = join3(backupDirectory, `${selection.name}.md`);
+      backup = join4(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -25029,11 +25056,12 @@ function createRemoteWorkspace({
 // src/controller.mjs
 var moduleDirectory = dirname4(fileURLToPath2(import.meta.url));
 var defaultAgentRoot = resolve4(
-  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join4(moduleDirectory, "..", "..")
+  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join5(moduleDirectory, "..", "..")
 );
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 var WORKSPACE_RETRY_DELAY_MS = 250;
+var MCP_READINESS_CACHE_MS = 5 * 60 * 1e3;
 var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
 var MCP_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode"]);
 var PROMPT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex"]);
@@ -25063,6 +25091,34 @@ function normalizeSnippetMetadata(value) {
     name: entry.name,
     path: typeof entry.path === "string" ? entry.path : "",
     state: typeof entry.state === "string" ? entry.state : ""
+  }));
+}
+function normalizeMcpServerCatalog(value, doctorReport = null) {
+  if (!Array.isArray(value)) return [];
+  const checks = new Map(
+    Array.isArray(doctorReport?.servers) ? doctorReport.servers.filter((entry) => entry && typeof entry.name === "string").map((entry) => [entry.name, entry]) : []
+  );
+  const text = (entry, field, limit) => typeof entry[field] === "string" ? sanitizeOutput(entry[field]).slice(0, limit) : "";
+  return value.filter((entry) => entry && typeof entry.name === "string" && /^[A-Za-z0-9._-]+$/.test(entry.name)).map((entry) => {
+    const check2 = checks.get(entry.name);
+    return {
+      name: entry.name,
+      category: text(entry, "category", 80),
+      description: text(entry, "description", 500),
+      setup: text(entry, "setup", 1e3),
+      variant_group: text(entry, "variant_group", 128),
+      checked: Boolean(check2),
+      ready: check2 ? check2.ready === true : null,
+      issues: Array.isArray(check2?.issues) ? check2.issues.map((issue) => sanitizeOutput(issue).slice(0, 240)).filter(Boolean).slice(0, 8) : [],
+      check_details: text(check2 || {}, "details", 1600)
+    };
+  });
+}
+function normalizeSkillsCatalog(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => entry && typeof entry.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name)).map((entry) => ({
+    name: entry.name,
+    description: typeof entry.description === "string" ? sanitizeOutput(entry.description).slice(0, 500) : ""
   }));
 }
 async function readPromptPreviewFile(path) {
@@ -25136,17 +25192,18 @@ function createController({
   remoteWorkspace = createRemoteWorkspace()
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
-  const orchestrator = join4(agentRoot, "agentctl", "orchestrator-client.mjs");
-  const agentctl = join4(agentRoot, "agentctl", "agentctl");
+  const orchestrator = join5(agentRoot, "agentctl", "orchestrator-client.mjs");
+  const agentctl = join5(agentRoot, "agentctl", "agentctl");
   const tools = {
-    mcp: join4(agentRoot, "mcpctl", "mcpctl"),
-    skills: join4(agentRoot, "skillsctl", "skillsctl"),
-    prompts: join4(agentRoot, "promptctl", "promptctl")
+    mcp: join5(agentRoot, "mcpctl", "mcpctl"),
+    skills: join5(agentRoot, "skillsctl", "skillsctl"),
+    prompts: join5(agentRoot, "promptctl", "promptctl")
   };
   let cachedWorkspace = null;
   let workspaceLastConnectedAt = "";
   let workspaceLastError = "";
   let workspaceFailureCount = 0;
+  let mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
   async function refreshWorkspaceIndex() {
     try {
       return await remoteWorkspace.index({ refresh: true });
@@ -25156,8 +25213,8 @@ function createController({
       return remoteWorkspace.index({ refresh: true });
     }
   }
-  function agentctlCommand(args) {
-    return process.platform === "win32" ? { executable: "bash", args: [agentctl, ...args] } : { executable: agentctl, args };
+  function controllerCommand(executable, args) {
+    return bashScriptCommand(executable, args);
   }
   async function runJson(script, args, label, env3 = {}) {
     return parseJsonOutput(await run(process.execPath, [script, ...args], { env: env3 }), label);
@@ -25165,9 +25222,16 @@ function createController({
   async function runExecutableJson(executable, args, label, env3 = {}) {
     return parseJsonOutput(await run(executable, args, { env: env3 }), label);
   }
+  async function runController(executable, args, env3 = {}) {
+    const command = controllerCommand(executable, args);
+    return run(command.executable, command.args, { env: env3 });
+  }
+  async function runControllerJson(executable, args, label, env3 = {}) {
+    const command = controllerCommand(executable, args);
+    return runExecutableJson(command.executable, command.args, label, env3);
+  }
   async function runAgentctlJson(args, label) {
-    const command = agentctlCommand(args);
-    return runExecutableJson(command.executable, command.args, label);
+    return runControllerJson(agentctl, args, label);
   }
   async function providerDashboard(target = "codex") {
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
@@ -25206,7 +25270,7 @@ function createController({
       runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
       runAgentctlJson(["status", "all", "--json"], "agentctl status"),
       runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
-      runExecutableJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
+      runControllerJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
       runAgentctlJson(["account", "status", "--json"], "Codex account status"),
       connectionPromise
     ]);
@@ -25293,7 +25357,7 @@ function createController({
         } else if (doctorResult.data?.targets && (availability.mcp || availability.skills)) {
           await Promise.all(doctorResult.data.targets.map(async (report) => {
             if (availability.mcp) {
-              const result = await runExecutableJson(
+              const result = await runControllerJson(
                 tools.mcp,
                 ["current", "--target", report.target, "--json"],
                 "Workspace MCP current",
@@ -25302,7 +25366,7 @@ function createController({
               report.mcp = { ok: result.ok, data: result.data, error: result.error };
             }
             if (availability.skills) {
-              const result = await runExecutableJson(
+              const result = await runControllerJson(
                 tools.skills,
                 ["current", "--target", report.target, "--json"],
                 "Workspace Skills current",
@@ -25376,7 +25440,7 @@ function createController({
       };
     }
     if (source !== "local") throw new Error(`unsupported Prompt preview source: ${source}`);
-    const result = await runExecutableJson(
+    const result = await runControllerJson(
       tools.prompts,
       ["path", target, "--name", selection, "--json"],
       "Prompt path"
@@ -25466,7 +25530,7 @@ No remote catalog was written locally.`;
   async function localMcpRepair(profile, target) {
     if (!profile) throw new Error("No current local MCP profile is available to repair.");
     if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
-    const result = await run(tools.mcp, [
+    const result = await runController(tools.mcp, [
       "apply",
       "--target",
       target,
@@ -25480,10 +25544,170 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? `${profile} was reapplied to ${target}; only same-name MCP entries were adopted, unrelated client configuration was preserved, and a new ${target} session is recommended.` : sanitizeOutput(result.stderr || result.stdout) || `MCP repair failed with code ${result.code}`
     };
   }
+  async function localMcpReadiness({ refresh = false } = {}) {
+    const now = Date.now();
+    if (!refresh && mcpReadinessCache.data && now - mcpReadinessCache.checkedAt < MCP_READINESS_CACHE_MS) {
+      return mcpReadinessCache.data;
+    }
+    if (!refresh && mcpReadinessCache.pending) return mcpReadinessCache.pending;
+    const pending = runControllerJson(
+      tools.mcp,
+      ["server", "doctor", "--all", "--json"],
+      "Local MCP readiness"
+    ).then((result) => {
+      if (result.data) {
+        mcpReadinessCache = { checkedAt: Date.now(), data: result.data, pending: null };
+      } else {
+        mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
+      }
+      return result.data;
+    }).catch((error) => {
+      mcpReadinessCache = { checkedAt: 0, data: null, pending: null };
+      throw error;
+    });
+    mcpReadinessCache = { ...mcpReadinessCache, pending };
+    return pending;
+  }
+  async function localMcpServers(target, { refreshReadiness = false } = {}) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const [catalog, doctors] = await Promise.all([
+      runControllerJson(
+        tools.mcp,
+        ["server", "list", "--target", target, "--json"],
+        "Local MCP server catalog"
+      ),
+      localMcpReadiness({ refresh: refreshReadiness })
+    ]);
+    if (!catalog.ok) throw new Error(catalog.error || "Local MCP server catalog is unavailable.");
+    return normalizeMcpServerCatalog(catalog.data, doctors);
+  }
+  async function localMcpState(target) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const result = await runControllerJson(
+      tools.mcp,
+      ["current", "--target", target, "--json"],
+      "Current MCP state"
+    );
+    if (!result.ok || !result.data || result.data.target !== target) {
+      throw new Error(result.error || "Current MCP state is unavailable.");
+    }
+    return result.data;
+  }
+  async function localMcpPreflight(server, target) {
+    if (!server || !/^[A-Za-z0-9._-]+$/.test(server)) {
+      throw new Error("No valid MCP server is selected.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const [host, configuration] = await Promise.all([
+      runControllerJson(
+        tools.mcp,
+        ["server", "doctor", server, "--json"],
+        `MCP host check for ${server}`
+      ),
+      runControllerJson(
+        tools.mcp,
+        ["server", "preflight", server, "--target", target, "--json"],
+        `MCP configuration check for ${server}`
+      )
+    ]);
+    const hostCheck = Array.isArray(host.data?.servers) ? host.data.servers[0] : null;
+    const issues = [
+      ...Array.isArray(hostCheck?.issues) ? hostCheck.issues : [],
+      ...!host.ok || hostCheck?.ready !== true ? [host.error || hostCheck?.details || "Local host requirements are not ready."] : [],
+      ...!configuration.ok ? [configuration.error || "Required Secret references or target configuration are unavailable."] : []
+    ].map((value) => sanitizeOutput(value)).filter(Boolean);
+    return {
+      server,
+      target,
+      ready: host.ok && hostCheck?.ready === true && configuration.ok,
+      issues: [...new Set(issues)].slice(0, 8),
+      detail: issues.length > 0 ? issues.join("\n") : `${server} passed platform, executable/service, and Secret reference checks for ${target}.`
+    };
+  }
+  async function localMcpToggle(actionName, server, target) {
+    if (!server || !/^[A-Za-z0-9._-]+$/.test(server)) {
+      throw new Error("No valid MCP server is selected.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const operation = actionName === "mcp-enable" ? "enable" : "disable";
+    const result = await runControllerJson(tools.mcp, [
+      "server",
+      "set",
+      "--target",
+      target,
+      `--${operation}`,
+      server,
+      "--json"
+    ], `MCP ${operation}`);
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { server, target, operation, state },
+      detail: state ? `${server} was ${operation}d for ${target}; mcpctl now owns this target-specific override, unrelated MCP entries were preserved, and a new ${target} session is recommended.` : result.error || `MCP ${operation} did not return the updated local state.`
+    };
+  }
+  async function localMcpBatch(changes, target) {
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    if (!Array.isArray(changes) || changes.length === 0) {
+      throw new Error("No staged MCP changes are available.");
+    }
+    const normalized = changes.map((change) => {
+      if (!change || !/^[A-Za-z0-9._-]+$/.test(change.name || "") || typeof change.enabled !== "boolean") {
+        throw new Error("A staged MCP change is invalid.");
+      }
+      return { name: change.name, enabled: change.enabled };
+    });
+    const args = ["server", "set", "--target", target];
+    for (const change of normalized) {
+      args.push(change.enabled ? "--enable" : "--disable", change.name);
+    }
+    args.push("--json");
+    const result = await runControllerJson(tools.mcp, args, "MCP batch update");
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { target, changes: normalized, state },
+      detail: state ? `${normalized.length} staged MCP change(s) were written for ${target} in one mcpctl transaction; unrelated entries were preserved and a new session is recommended.` : result.error || "MCP batch update did not return the updated local state."
+    };
+  }
+  async function localMcpSave(profile, target, replace = false) {
+    if (!profile || !/^[A-Za-z0-9._-]+$/.test(profile)) {
+      throw new Error("MCP Profile names may contain only letters, numbers, dot, underscore, and hyphen.");
+    }
+    if (!MCP_CLIENTS.has(target)) throw new Error(`unsupported MCP target: ${target}`);
+    const saveArgs = ["profile", "save", profile, "--target", target];
+    if (replace) saveArgs.push("--force");
+    const saved = await runController(tools.mcp, saveArgs);
+    if (saved.code !== 0) {
+      return {
+        ok: false,
+        data: { profile, target },
+        detail: sanitizeOutput(saved.stderr || saved.stdout) || `MCP Profile save failed with code ${saved.code}`
+      };
+    }
+    const applied = await runController(tools.mcp, ["apply", "--target", target, "--profile", profile]);
+    const state = applied.code === 0 ? await localMcpState(target) : null;
+    return {
+      ok: applied.code === 0,
+      data: { profile, target, state },
+      detail: applied.code === 0 ? `The current ${target} MCP selection was saved as '${profile}' and reapplied as a named Profile.` : sanitizeOutput(applied.stderr || applied.stdout) || `Profile '${profile}' was saved, but applying it failed with code ${applied.code}`
+    };
+  }
+  async function localMcpBackup(profile) {
+    if (!profile || !/^[A-Za-z0-9._-]+$/.test(profile)) {
+      throw new Error("Save the current MCP selection as a named Profile before backing it up.");
+    }
+    const result = await runController(tools.mcp, ["backup"]);
+    return {
+      ok: result.code === 0,
+      data: { profile },
+      detail: result.code === 0 ? `The encrypted MCP Store was backed up with Profile '${profile}', its catalog dependencies, portable artifacts, and referenced Secret ciphertext. No Secret value was printed.` : sanitizeOutput(result.stderr || result.stdout) || `Encrypted MCP Store backup failed with code ${result.code}`
+    };
+  }
   async function localSkillsRepair(pack, target) {
     if (!pack) throw new Error("No current local Skills pack is available to repair.");
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
-    const result = await run(tools.skills, [
+    const result = await runController(tools.skills, [
       "apply",
       "--target",
       target,
@@ -25495,6 +25719,119 @@ No remote catalog was written locally.`;
       ok: result.code === 0,
       data: { pack, target },
       detail: result.code === 0 ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.` : sanitizeOutput(result.stderr || result.stdout) || `Skills repair failed with code ${result.code}`
+    };
+  }
+  async function localSkillsState(target) {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const result = await runControllerJson(
+      tools.skills,
+      ["current", "--target", target, "--json"],
+      `Current ${target} Skills state`
+    );
+    if (!result.ok || !result.data || result.data.target !== target) {
+      throw new Error(result.error || `Current ${target} Skills state is unavailable.`);
+    }
+    return result.data;
+  }
+  async function localSkillsDashboard() {
+    const catalogPromise = runControllerJson(
+      tools.skills,
+      ["list", "--json"],
+      "Local Skills catalog"
+    );
+    const statePromises = [...AGENT_CLIENTS].map(async (target) => {
+      try {
+        return [target, await localSkillsState(target), ""];
+      } catch (error) {
+        return [target, null, sanitizeOutput(error?.message || error)];
+      }
+    });
+    const [catalog, stateResults] = await Promise.all([
+      catalogPromise,
+      Promise.all(statePromises)
+    ]);
+    if (!catalog.ok) throw new Error(catalog.error || "Local Skills catalog is unavailable.");
+    return {
+      catalog: normalizeSkillsCatalog(catalog.data),
+      states: Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state])),
+      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+    };
+  }
+  async function localSkillsBatch(changes, target) {
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    if (!Array.isArray(changes) || changes.length === 0) {
+      throw new Error("No staged Skill changes are available.");
+    }
+    const normalized = changes.map((change) => {
+      if (!change || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(change.name || "") || typeof change.enabled !== "boolean") {
+        throw new Error("A staged Skill change is invalid.");
+      }
+      return { name: change.name, enabled: change.enabled };
+    });
+    const args = ["skill", "set", "--target", target];
+    for (const change of normalized) {
+      args.push(change.enabled ? "--enable" : "--disable", change.name);
+    }
+    args.push("--yes", "--json");
+    const result = await runControllerJson(tools.skills, args, "Skills batch update");
+    const state = result.ok && result.data?.target === target ? result.data : null;
+    return {
+      ok: Boolean(state),
+      data: { target, changes: normalized, state },
+      detail: state ? `${normalized.length} Skill change(s) were written for ${target} in one skillsctl transaction; other clients and the canonical Store were preserved.` : result.error || "Skills batch update did not return the updated local state."
+    };
+  }
+  async function localSkillsToggle(actionName, skill, target) {
+    if (!skill || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill)) {
+      throw new Error("No valid Skill is selected.");
+    }
+    const enabled = actionName === "skills-enable";
+    const result = await localSkillsBatch([{ name: skill, enabled }], target);
+    return {
+      ...result,
+      data: { ...result.data, skill, operation: enabled ? "enable" : "disable" },
+      detail: result.ok ? `${skill} was ${enabled ? "enabled" : "disabled"} for ${target}; other clients and the canonical Skill Store were preserved.` : result.detail
+    };
+  }
+  async function localSkillsSave(pack, target, replace = false) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("Skill Pack names must use lowercase letters, digits, and single hyphens.");
+    }
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const saveArgs = ["pack", "save", pack, "--target", target, "--yes"];
+    if (replace) saveArgs.push("--force");
+    const saved = await runController(tools.skills, saveArgs);
+    if (saved.code !== 0) {
+      return {
+        ok: false,
+        data: { pack, target },
+        detail: sanitizeOutput(saved.stderr || saved.stdout) || `Skill Pack save failed with code ${saved.code}`
+      };
+    }
+    const applied = await runController(tools.skills, [
+      "apply",
+      "--target",
+      target,
+      "--pack",
+      pack,
+      "--yes"
+    ]);
+    const state = applied.code === 0 ? await localSkillsState(target) : null;
+    return {
+      ok: Boolean(state),
+      data: { pack, target, state },
+      detail: state ? `The current ${target} Skill selection was saved as '${pack}' and reapplied as a named Pack.` : sanitizeOutput(applied.stderr || applied.stdout) || `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`
+    };
+  }
+  async function localSkillsBackup(pack) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("Save the current Skill selection as a named Pack before backing it up.");
+    }
+    const result = await runController(tools.skills, ["backup"]);
+    return {
+      ok: result.code === 0,
+      data: { pack },
+      detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : sanitizeOutput(result.stderr || result.stdout) || `Skills Store backup failed with code ${result.code}`
     };
   }
   async function remoteComponentAction(actionName, type, name, target) {
@@ -25519,7 +25856,7 @@ No remote catalog was written locally.`;
         promptWritten = true;
       }
       const args = type === "mcp" ? ["apply", "--target", target, "--profile", name] : type === "skills" ? ["apply", "--target", target, "--pack", name, "--yes"] : ["apply", "--target", target, "--profile", name, "--yes"];
-      const result = await run(tools[type], args, { env: env3 });
+      const result = await runController(tools[type], args, env3);
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection);
       return {
         ok: result.code === 0,
@@ -25571,7 +25908,9 @@ No remote catalog was written locally.`;
     preset = "",
     selection = "",
     source = "local",
-    target = "codex"
+    target = "codex",
+    changes = [],
+    replace = false
   } = {}) {
     if (actionName === "provider-plan" || actionName === "provider-apply") {
       return providerAction(actionName, selection, target, source);
@@ -25579,7 +25918,23 @@ No remote catalog was written locally.`;
     if (actionName === "provider-sync-push" || actionName === "provider-sync-pull") {
       return providerSync(actionName, selection);
     }
+    if (actionName === "mcp-enable" || actionName === "mcp-disable") {
+      return localMcpToggle(actionName, selection, target);
+    }
+    if (actionName === "mcp-batch") return localMcpBatch(changes, target);
+    if (actionName === "mcp-profile-save" || actionName === "mcp-profile-update") {
+      return localMcpSave(selection, target, actionName === "mcp-profile-update" || replace);
+    }
+    if (actionName === "mcp-profile-upload") return localMcpBackup(selection);
     if (actionName === "mcp-repair") return localMcpRepair(selection, target);
+    if (actionName === "skills-enable" || actionName === "skills-disable") {
+      return localSkillsToggle(actionName, selection, target);
+    }
+    if (actionName === "skills-batch") return localSkillsBatch(changes, target);
+    if (actionName === "skills-pack-save" || actionName === "skills-pack-update") {
+      return localSkillsSave(selection, target, actionName === "skills-pack-update" || replace);
+    }
+    if (actionName === "skills-pack-upload") return localSkillsBackup(selection);
     if (actionName === "skills-repair") return localSkillsRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
@@ -25597,7 +25952,7 @@ No remote catalog was written locally.`;
     if (actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
       const args2 = ["uninstall", agent, "--yes"];
-      const command = agentctlCommand(args2);
+      const command = controllerCommand(agentctl, args2);
       const result2 = await run(command.executable, command.args);
       return {
         ok: result2.code === 0,
@@ -25606,7 +25961,7 @@ No remote catalog was written locally.`;
       };
     }
     if (actionName === "snippet-copy") {
-      const result2 = await run(tools.prompts, ["snippet", "copy", selection]);
+      const result2 = await runController(tools.prompts, ["snippet", "copy", selection]);
       return {
         ok: result2.code === 0,
         data: { name: selection },
@@ -25654,6 +26009,11 @@ No remote catalog was written locally.`;
     action,
     promptPreview,
     providerDashboard,
+    localMcpServers,
+    localMcpPreflight,
+    localMcpState,
+    localSkillsDashboard,
+    localSkillsState,
     remoteCatalog
   };
 }
@@ -25673,6 +26033,7 @@ var SECTIONS = Object.freeze([
 ]);
 var TARGETS = Object.freeze(["codex", "claude"]);
 var PROVIDER_TARGETS2 = Object.freeze(["claude", "codex", "opencode", "pi"]);
+var SKILL_TARGETS = Object.freeze(["codex", "claude", "opencode", "pi"]);
 function targetLabel(target) {
   if (target === "claude") return "Claude Code";
   if (target === "codex") return "Codex";
@@ -25713,6 +26074,7 @@ function componentTargetState(snapshot, component, target) {
     check: check2,
     data,
     selection,
+    baseSelection: typeof data.base_profile === "string" ? data.base_profile : "",
     items: [...items],
     suppressed: component === "mcp" ? [...data.suppressed_servers || []] : [],
     drift: Array.isArray(data.drift) ? [...data.drift] : data.drift === true ? ["configuration"] : [],
@@ -25912,6 +26274,79 @@ function mcpTargetComparison(snapshot) {
     }
   };
 }
+function mcpServerEntries(catalogItems, snapshot, target) {
+  const comparison = mcpTargetComparison(snapshot);
+  const active = comparison.targets[target];
+  const other = comparison.targets[otherTarget(target)];
+  const enabled = new Set(active.items);
+  const otherEnabled = new Set(other.items);
+  const suppressed = new Set(active.suppressed);
+  return (Array.isArray(catalogItems) ? catalogItems : []).filter((item) => item && typeof item.name === "string" && item.name.length > 0).map((item) => ({
+    name: item.name,
+    category: typeof item.category === "string" ? item.category : "",
+    description: typeof item.description === "string" ? item.description : "",
+    setup: typeof item.setup === "string" ? item.setup : "",
+    variantGroup: typeof item.variant_group === "string" ? item.variant_group : "",
+    checked: item.checked === true,
+    ready: typeof item.ready === "boolean" ? item.ready : null,
+    issues: Array.isArray(item.issues) ? item.issues.filter((issue) => typeof issue === "string") : [],
+    checkDetails: typeof item.check_details === "string" ? item.check_details : "",
+    enabled: enabled.has(item.name),
+    otherEnabled: otherEnabled.has(item.name),
+    suppressed: suppressed.has(item.name)
+  })).sort((left, right) => Number(right.enabled) - Number(left.enabled) || Number(right.otherEnabled) - Number(left.otherEnabled) || left.name.localeCompare(right.name));
+}
+function filterMcpServerEntries(entries, {
+  query = "",
+  filter = "all",
+  grouped = false
+} = {}) {
+  const normalizedQuery = String(query).trim().toLocaleLowerCase();
+  const filtered = (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (filter === "enabled" && !entry.enabled) return false;
+    if (filter === "problems" && entry.ready !== false) return false;
+    if (!normalizedQuery) return true;
+    return [entry.name, entry.category, entry.description].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedQuery));
+  });
+  if (!grouped) return filtered;
+  return [...filtered].sort((left, right) => Number(right.enabled) - Number(left.enabled) || String(left.category || "other").localeCompare(String(right.category || "other")) || left.name.localeCompare(right.name));
+}
+function skillTargetState(states, target) {
+  const data = states?.[target] && typeof states[target] === "object" ? states[target] : {};
+  return {
+    target,
+    label: targetLabel(target),
+    selection: data.selection_mode === "manual" ? "custom" : data.pack || "none",
+    selectionMode: data.selection_mode || "unknown",
+    basePack: typeof data.base_pack === "string" ? data.base_pack : "",
+    baseSkills: Array.isArray(data.base_skills) ? [...data.base_skills] : [],
+    skills: Array.isArray(data.skills) ? [...data.skills] : [],
+    drift: Array.isArray(data.drift) ? [...data.drift] : [],
+    healthy: data.healthy === true,
+    data
+  };
+}
+function skillEntries(catalogItems, states, target) {
+  const active = new Set(skillTargetState(states, target).skills);
+  const enabledByTarget = Object.fromEntries(SKILL_TARGETS.map((client) => [
+    client,
+    new Set(skillTargetState(states, client).skills)
+  ]));
+  return (Array.isArray(catalogItems) ? catalogItems : []).filter((item) => item && typeof item.name === "string" && item.name.length > 0).map((item) => ({
+    name: item.name,
+    description: typeof item.description === "string" ? item.description : "",
+    enabled: active.has(item.name),
+    enabledTargets: SKILL_TARGETS.filter((client) => client !== target && enabledByTarget[client].has(item.name))
+  })).sort((left, right) => Number(right.enabled) - Number(left.enabled) || Number(right.enabledTargets.length > 0) - Number(left.enabledTargets.length > 0) || left.name.localeCompare(right.name));
+}
+function filterSkillEntries(entries, { query = "", enabledOnly = false } = {}) {
+  const normalizedQuery = String(query).trim().toLocaleLowerCase();
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (enabledOnly && !entry.enabled) return false;
+    if (!normalizedQuery) return true;
+    return [entry.name, entry.description].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedQuery));
+  });
+}
 function presetEntries(snapshot) {
   return Object.entries(snapshot?.presets || {}).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -26056,7 +26491,9 @@ function actionForKey(section, input) {
     if (input === "a") return `${section}-apply`;
   }
   if (section === "mcp" && input === "f") return "mcp-repair";
+  if (section === "mcp" && input === " ") return "mcp-toggle";
   if (section === "skills" && input === "f") return "skills-repair";
+  if (section === "skills" && input === " ") return "skills-toggle";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
   if (section === "snippets" && input === "c") return "snippet-copy";
@@ -26068,7 +26505,7 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "skills-repair" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
@@ -26086,8 +26523,44 @@ function actionLabel(action, selection, target) {
   if (action === "mcp-repair") {
     return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }
+  if (action === "mcp-enable") {
+    return `Enable MCP ${selection || "server"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-disable") {
+    return `Disable MCP ${selection || "server"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-batch") {
+    return `Apply staged MCP changes for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-save") {
+    return `Save current MCP selection as ${selection || "a Profile"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-update") {
+    return `Update MCP Profile ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "mcp-profile-upload") {
+    return `Back up MCP Store containing ${selection || "the selected Profile"}`;
+  }
   if (action === "skills-repair") {
     return `Repair local Skills pack ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-enable") {
+    return `Enable Skill ${selection || "skill"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-disable") {
+    return `Disable Skill ${selection || "skill"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-batch") {
+    return `Apply staged Skill changes for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-save") {
+    return `Save current Skill selection as ${selection || "a Pack"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-update") {
+    return `Update Skill Pack ${selection || "selection"} for ${targetLabel(target)}`;
+  }
+  if (action === "skills-pack-upload") {
+    return `Back up Skills Store containing ${selection || "the selected Pack"}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
@@ -26279,7 +26752,7 @@ Usage:
 Keys:
   [ / ] / Tab / Shift+Tab / Left / Right
                                     Switch section
-  t                                 Switch target (four clients in Providers)
+  t                                 Switch target (four clients in Providers / Skills)
   r                                 Refresh live status
   Up / Down                         Select previous / next list item
   p / a                             Plan / apply selected configuration
@@ -26288,7 +26761,8 @@ Keys:
   Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
   Accounts: a/Enter switch \xB7 x delete saved account
   Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
-  MCP: f                            Repair current local profile drift
+  MCP: l/w panes \xB7 / search \xB7 e/x filters \xB7 m batch \xB7 Space toggle
+  Skills: l/w panes \xB7 / search \xB7 e enabled \xB7 m batch \xB7 Space toggle
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -26361,7 +26835,8 @@ function SummaryRow({ name, summary }) {
 }
 function TargetStatusRow({ state, selected }) {
   const count = state.items.length;
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: state.target, selected }), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: state.summary.kind }, state.summary.label.padEnd(11)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, state.selection), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\xB7 ", count, " ", count === 1 ? "server" : "servers"));
+  const selection = state.selection === "custom" && state.baseSelection ? `custom \xB7 base ${state.baseSelection}` : state.selection;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: state.target, selected }), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: state.summary.kind }, state.summary.label.padEnd(11)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, selection), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\xB7 ", count, " ", count === 1 ? "server" : "servers"));
 }
 function ItemGroup({ label, items, kind = "value" }) {
   return /* @__PURE__ */ import_react34.default.createElement(
@@ -26557,40 +27032,196 @@ function CloudCatalog({ catalog, selected, target, component }) {
   const catalogLabel = component === "mcp" ? "MCP profiles" : component === "skills" ? "Skill packs" : "Prompt profiles";
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
 }
-function McpView({ snapshot, target, catalog, selected }) {
+function LocalMcpCatalog({
+  target,
+  catalog,
+  entries,
+  selectedName,
+  staged,
+  batchMode,
+  query,
+  filter,
+  grouped,
+  searching
+}) {
+  if (catalog.loading && catalog.items.length === 0) {
+    return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Loading the local MCP catalog\u2026");
+  }
+  if (catalog.error && catalog.items.length === 0) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error });
+  if (entries.length === 0) {
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local MCP servers match the current search or filter."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Press Esc while searching, or toggle e/x to return to all servers."));
+  }
+  const selectedIndex = Math.max(0, entries.findIndex((entry) => entry.name === selectedName));
+  const item = entries[selectedIndex];
+  const visible = selectionWindow(entries, selectedIndex, 9);
+  const activeCount = catalog.activeCount || 0;
+  const other = otherTarget(target);
+  const stagedMap = staged instanceof Map ? staged : /* @__PURE__ */ new Map();
+  const selectedDesired = stagedMap.has(item.name) ? stagedMap.get(item.name) : item.enabled;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: searching ? "black" : "cyan", backgroundColor: searching ? "cyan" : void 0, bold: true }, ` / ${query || (searching ? "type to search" : "search")} `), /* @__PURE__ */ import_react34.default.createElement(Text, { color: filter === "enabled" ? "black" : "green", backgroundColor: filter === "enabled" ? "green" : void 0, bold: true }, " e ENABLED "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: filter === "problems" ? "black" : "red", backgroundColor: filter === "problems" ? "red" : void 0, bold: true }, " x PROBLEMS "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: grouped ? "black" : "yellow", backgroundColor: grouped ? "yellow" : void 0, bold: true }, " g GROUP "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: batchMode ? "black" : "magenta", backgroundColor: batchMode ? "magenta" : void 0, bold: true }, ` m BATCH${stagedMap.size > 0 ? ` ${stagedMap.size}` : ""} `)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 94 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local servers ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " \xB7 ", activeCount, " active"), visible.items.map(({ item: entry, index }) => {
+    const stagedDesired = stagedMap.get(entry.name);
+    const marker = stagedMap.has(entry.name) ? stagedDesired ? "+" : "\u2212" : entry.suppressed ? "\xD7" : entry.enabled ? "\u25CF" : "\u25CB";
+    const markerColor = stagedMap.has(entry.name) ? stagedDesired ? "green" : "red" : entry.suppressed ? "red" : entry.enabled ? "green" : "gray";
+    const readiness = entry.ready === false ? "!" : entry.ready === true ? "\u2713" : "?";
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: entry.name, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === selectedIndex ? "white" : "gray", bold: index === selectedIndex }, index === selectedIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: markerColor, bold: true }, marker), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === selectedIndex ? "cyan" : "white", bold: index === selectedIndex }, entry.name), /* @__PURE__ */ import_react34.default.createElement(Text, { color: entry.ready === false ? "red" : entry.ready === true ? "green" : "gray" }, readiness), entry.otherEnabled && !entry.enabled && /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[other] }, "[", targetLabel(other), "]"));
+  })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: item.enabled ? "green" : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected local server"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, item.name), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: targetLabel(target),
+      value: stagedMap.has(item.name) ? `${selectedDesired ? "enable" : "disable"} staged` : item.suppressed ? "disabled override" : item.enabled ? "enabled" : "disabled",
+      kind: stagedMap.has(item.name) ? "selected" : item.enabled ? "good" : item.suppressed ? "bad" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: targetLabel(other),
+      value: item.otherEnabled ? "enabled" : "disabled",
+      kind: item.otherEnabled ? other : "muted"
+    }
+  ), item.category && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Category", value: item.category }), item.variantGroup && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Alternative group", value: item.variantGroup, kind: "warn" }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Readiness",
+      value: item.ready === false ? "requirements missing" : item.ready === true ? "host ready" : "not checked",
+      kind: item.ready === false ? "bad" : item.ready === true ? "good" : "muted"
+    }
+  ), item.issues.slice(0, 3).map((issue, index) => /* @__PURE__ */ import_react34.default.createElement(Row, { key: `${item.name}-issue-${index}`, label: index === 0 ? "Issue" : "", value: issue, kind: "bad" })), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }), item.setup && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Setup", value: item.setup, kind: "muted" }))), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "Space"), " ", batchMode ? "stage" : selectedDesired ? "disable" : "enable", " \xB7 ", batchMode ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "c"), " clear \xB7 ") : null, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s/S/u"), " save/update/backup \xB7 \u25CF active \xB7 \u25CB inactive \xB7 \xD7 override \xB7 ! setup"));
+}
+function McpView({
+  snapshot,
+  target,
+  catalog,
+  selected,
+  localCatalog,
+  localEntries,
+  selectedServerName,
+  focus,
+  staged,
+  batchMode,
+  query,
+  filter,
+  grouped,
+  searching
+}) {
   const comparison = mcpTargetComparison(snapshot);
   const active = comparison.targets[target];
   const repairable = active?.drift?.length > 0 && active?.data?.selection_mode !== "manual" && active?.selection && active.selection !== "none";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local assignments by client; the highlighted client receives Workspace actions."), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
+  const baseServers = new Set(Array.isArray(active?.data?.base_servers) ? active.data.base_servers : []);
+  const currentServers = new Set(active?.items || []);
+  const customAdded = [...currentServers].filter((name) => !baseServers.has(name));
+  const customDisabled = [...baseServers].filter((name) => !currentServers.has(name));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "The highlighted client receives target-specific local and Workspace actions."), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
     TargetStatusRow,
     {
       key: entry,
       state: comparison.targets[entry],
       selected: entry === target
     }
-  )), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Shared", items: comparison.shared }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Codex only", items: comparison.only.codex, kind: "codex" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Claude only", items: comparison.only.claude, kind: "claude" }), TARGETS.map((entry) => comparison.targets[entry].suppressed.length > 0 && /* @__PURE__ */ import_react34.default.createElement(
-    ItemGroup,
-    {
-      key: `${entry}-disabled`,
-      label: `${targetLabel(entry)} disabled`,
-      items: comparison.targets[entry].suppressed,
-      kind: "warn"
-    }
-  )), TARGETS.map((entry) => comparison.targets[entry].drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(
-    ItemGroup,
-    {
-      key: `${entry}-drift`,
-      label: `${targetLabel(entry)} drift`,
-      items: comparison.targets[entry].drift,
-      kind: "bad"
-    }
-  ))), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
+  )), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "local" ? "black" : "cyan", backgroundColor: focus === "local" ? "cyan" : void 0, bold: true }, " l LOCAL SWITCHES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "workspace" ? "black" : "blue", backgroundColor: focus === "workspace" ? "blue" : void 0, bold: true }, " w WORKSPACE PROFILES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, comparison.shared.length, " shared \xB7 ", comparison.only.codex.length, " Codex only \xB7 ", comparison.only.claude.length, " Claude only")), active?.data?.selection_mode === "manual" && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom added", items: customAdded, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom disabled", items: customDisabled, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s"), " save new \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "S"), " update base for this target \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "u"), " encrypted Store backup after saving")), TARGETS.map((entry) => /* @__PURE__ */ import_react34.default.createElement(
     ErrorText,
     {
       key: `${entry}-error`,
       value: !comparison.targets[entry].check?.ok ? `${targetLabel(entry)}: ${comparison.targets[entry].check?.summary || comparison.targets[entry].check?.error || snapshot.doctorError || "status unavailable"}` : ""
     }
-  )), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local profile ", active.selection, " for ", targetLabel(target), " \xB7 replaces same-name MCP entries only"), active?.drift?.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current MCP selection uses manual state; apply a named profile before automatic repair."), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
+  )), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local profile ", active.selection, " for ", targetLabel(target), " \xB7 replaces same-name MCP entries only"), active?.drift?.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current MCP selection uses manual state; apply a named profile before automatic repair."), focus === "local" ? /* @__PURE__ */ import_react34.default.createElement(
+    LocalMcpCatalog,
+    {
+      target,
+      catalog: localCatalog,
+      entries: localEntries,
+      selectedName: selectedServerName,
+      staged,
+      batchMode,
+      query,
+      filter,
+      grouped,
+      searching
+    }
+  ) : snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "mcp" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
+}
+function LocalSkillsCatalog({
+  target,
+  dashboard,
+  entries,
+  selectedName,
+  staged,
+  batchMode,
+  query,
+  enabledOnly,
+  searching
+}) {
+  if (dashboard.loading && dashboard.catalog.length === 0) {
+    return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Loading the local Skills catalog\u2026");
+  }
+  if (dashboard.error && dashboard.catalog.length === 0) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: dashboard.error });
+  if (entries.length === 0) {
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local Skills match the current search or filter."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Press Esc while searching, or toggle e to return to all Skills."));
+  }
+  const selectedIndex = Math.max(0, entries.findIndex((entry) => entry.name === selectedName));
+  const item = entries[selectedIndex];
+  const visible = selectionWindow(entries, selectedIndex, 9);
+  const stagedMap = staged instanceof Map ? staged : /* @__PURE__ */ new Map();
+  const selectedDesired = stagedMap.has(item.name) ? stagedMap.get(item.name) : item.enabled;
+  const activeCount = skillTargetState(dashboard.states, target).skills.length;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: searching ? "black" : "green", backgroundColor: searching ? "green" : void 0, bold: true }, ` / ${query || (searching ? "type to search" : "search")} `), /* @__PURE__ */ import_react34.default.createElement(Text, { color: enabledOnly ? "black" : "green", backgroundColor: enabledOnly ? "green" : void 0, bold: true }, " e ENABLED "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: batchMode ? "black" : "magenta", backgroundColor: batchMode ? "magenta" : void 0, bold: true }, ` m BATCH${stagedMap.size > 0 ? ` ${stagedMap.size}` : ""} `)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 94 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", minWidth: 36 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Local Skills ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " \xB7 ", activeCount, " active"), visible.items.map(({ item: entry, index }) => {
+    const stagedDesired = stagedMap.get(entry.name);
+    const marker = stagedMap.has(entry.name) ? stagedDesired ? "+" : "\u2212" : entry.enabled ? "\u25CF" : "\u25CB";
+    const markerColor = stagedMap.has(entry.name) ? stagedDesired ? "green" : "red" : entry.enabled ? "green" : "gray";
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: entry.name, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === selectedIndex ? "white" : "gray", bold: index === selectedIndex }, index === selectedIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: markerColor, bold: true }, marker), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === selectedIndex ? "green" : "white", bold: index === selectedIndex }, entry.name), !entry.enabled && entry.enabledTargets.slice(0, 2).map((client) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${entry.name}-${client}`, color: COLORS[client] }, "[", targetLabel(client), "]")));
+  })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: item.enabled ? "green" : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected canonical Skill"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "green" }, item.name), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: targetLabel(target),
+      value: stagedMap.has(item.name) ? `${selectedDesired ? "enable" : "disable"} staged` : item.enabled ? "enabled" : "disabled",
+      kind: stagedMap.has(item.name) ? "selected" : item.enabled ? "good" : "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Other clients",
+      value: item.enabledTargets.length > 0 ? item.enabledTargets.map(targetLabel).join(", ") : "disabled everywhere else",
+      kind: item.enabledTargets.length > 0 ? "accent" : "muted"
+    }
+  ), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Canonical copy", value: "kept in Skills Store", kind: "good" }))), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: dashboard.error }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "Space"), " ", batchMode ? "stage" : selectedDesired ? "disable" : "enable", " \xB7 ", batchMode ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "c"), " clear \xB7 ") : null, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s/S/u"), " save/update/backup \xB7 \u25CF active \xB7 \u25CB inactive"));
+}
+function SkillsView({
+  snapshot,
+  target,
+  catalog,
+  selected,
+  dashboard,
+  localEntries,
+  selectedSkillName,
+  focus,
+  staged,
+  batchMode,
+  query,
+  enabledOnly,
+  searching
+}) {
+  const active = skillTargetState(dashboard.states, target);
+  const baseSkills = new Set(active.baseSkills);
+  const currentSkills = new Set(active.skills);
+  const customAdded = [...currentSkills].filter((name) => !baseSkills.has(name));
+  const customDisabled = [...baseSkills].filter((name) => !currentSkills.has(name));
+  const repairable = active.drift.length > 0 && active.selectionMode !== "manual" && active.selection !== "none";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Each client receives its own local Skill links; the canonical Store remains shared."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, SKILL_TARGETS.map((client) => {
+    const state = skillTargetState(dashboard.states, client);
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: client, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: client, selected: client === target }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.healthy ? "green" : state.data.target ? "red" : "gray" }, state.selection, " \xB7 ", state.skills.length));
+  })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "local" ? "black" : "green", backgroundColor: focus === "local" ? "green" : void 0, bold: true }, " l LOCAL SWITCHES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "workspace" ? "black" : "blue", backgroundColor: focus === "workspace" ? "blue" : void 0, bold: true }, " w WORKSPACE PACKS ")), active.selectionMode === "manual" && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom added", items: customAdded, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom disabled", items: customDisabled, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s"), " save new \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "S"), " update base for this target \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "u"), " encrypted Store backup after saving")), Object.entries(dashboard.errors || {}).map(([client, error]) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: `${client}-skills-error`, value: `${targetLabel(client)}: ${error}` })), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local pack ", active.selection, " for ", targetLabel(target), " \xB7 restores managed links only"), active.drift.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current Skills selection uses manual state; save it as a Pack before automatic repair."), focus === "local" ? /* @__PURE__ */ import_react34.default.createElement(
+    LocalSkillsCatalog,
+    {
+      target,
+      dashboard,
+      entries: localEntries,
+      selectedName: selectedSkillName,
+      staged,
+      batchMode,
+      query,
+      enabledOnly,
+      searching
+    }
+  ) : snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "skills" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }
 function PromptView({ snapshot, target, catalog, selected }) {
   const states = Object.fromEntries(TARGETS.map((entry) => [
@@ -26628,12 +27259,6 @@ function SnippetView({ snapshot, catalog, selected }) {
   const remoteCount = entries.filter((entry) => entry.remote).length;
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Reusable prompts shared by every client. Content is never rendered or automatically injected."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, marginTop: 1, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 32 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Library \xB7 ", localCount, " local / ", remoteCount, " cloud"), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: item.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", item.name, " ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.local ? "green" : "gray" }, "L"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: item.remote ? "cyan" : "gray" }, "C"))), entries.length === 0 && !catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no snippets)")), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected snippet"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local", value: current?.local ? displayPath(current.local.path) : "not installed", kind: current?.local ? "good" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: current?.remote ? "available" : "not backed up", kind: current?.remote ? "accent" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Content", value: "hidden", kind: "muted" }))), catalog.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting the Workspace Snippets catalog in memory\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Snippets are connecting in the background; local Snippets are ready."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.snippetsError }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "c"), " copy local \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect cloud pull \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " pull selected"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Create: promptctl snippet create <name> --yes \xB7 Edit: promptctl snippet path <name>"));
 }
-function ComponentView({ snapshot, target, component, catalog, selected }) {
-  const state = componentTargetState(snapshot, component, target);
-  const { check: check2, data, selection, items, summary } = state;
-  const skillsRepairable = component === "skills" && data?.drift?.length > 0 && data?.selection_mode !== "manual" && selection && selection !== "none";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Active client"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: COMPONENT_LABELS[component], summary }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Selection", value: selection }), component === "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Managed", value: data.managed ? "yes" : "no", kind: data.managed ? "good" : "bad" }), component !== "prompts" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Items", value: items?.length ? items.join(", ") : "none" }), Array.isArray(data.drift) && data.drift.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Drift", value: data.drift.join(", "), kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: !check2?.ok ? check2?.summary || check2?.error || snapshot.doctorError : "" }), skillsRepairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local pack ", selection, " for ", targetLabel(target), " \xB7 restores managed links only"), component === "skills" && data?.drift?.length > 0 && !skillsRepairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current Skills selection uses manual state; apply a named pack before automatic repair."), snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
-}
 function Presets({ snapshot, selected, target }) {
   const entries = presetEntries(snapshot);
   if (entries.length === 0) {
@@ -26664,19 +27289,52 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
   const [section, setSection] = (0, import_react34.useState)(initialSection);
   const [target, setTarget] = (0, import_react34.useState)("codex");
   const [providerTarget, setProviderTarget] = (0, import_react34.useState)("codex");
+  const [skillsTarget, setSkillsTarget] = (0, import_react34.useState)("codex");
   const [snapshot, setSnapshot] = (0, import_react34.useState)(null);
   const [loading, setLoading] = (0, import_react34.useState)(true);
   const [busy, setBusy] = (0, import_react34.useState)(false);
   const [selected, setSelected] = (0, import_react34.useState)(0);
   const [selectedAgent, setSelectedAgent] = (0, import_react34.useState)(0);
   const [componentSelected, setComponentSelected] = (0, import_react34.useState)({ accounts: 0, providers: 0, mcp: 0, skills: 0, prompts: 0, snippets: 0 });
+  const [mcpFocus, setMcpFocus] = (0, import_react34.useState)("local");
+  const [selectedMcpServerName, setSelectedMcpServerName] = (0, import_react34.useState)("");
+  const [mcpQuery, setMcpQuery] = (0, import_react34.useState)("");
+  const [mcpSearching, setMcpSearching] = (0, import_react34.useState)(false);
+  const [mcpFilter, setMcpFilter] = (0, import_react34.useState)("all");
+  const [mcpGrouped, setMcpGrouped] = (0, import_react34.useState)(false);
+  const [mcpBatchMode, setMcpBatchMode] = (0, import_react34.useState)(false);
+  const [mcpStaged, setMcpStaged] = (0, import_react34.useState)(/* @__PURE__ */ new Map());
+  const [mcpProfilePrompt, setMcpProfilePrompt] = (0, import_react34.useState)(null);
+  const [localMcpCatalog, setLocalMcpCatalog] = (0, import_react34.useState)({
+    items: [],
+    target: "codex",
+    loading: false,
+    error: "",
+    key: ""
+  });
+  const [skillsFocus, setSkillsFocus] = (0, import_react34.useState)("local");
+  const [selectedSkillName, setSelectedSkillName] = (0, import_react34.useState)("");
+  const [skillsQuery, setSkillsQuery] = (0, import_react34.useState)("");
+  const [skillsSearching, setSkillsSearching] = (0, import_react34.useState)(false);
+  const [skillsEnabledOnly, setSkillsEnabledOnly] = (0, import_react34.useState)(false);
+  const [skillsBatchMode, setSkillsBatchMode] = (0, import_react34.useState)(false);
+  const [skillsStaged, setSkillsStaged] = (0, import_react34.useState)(/* @__PURE__ */ new Map());
+  const [skillsPackPrompt, setSkillsPackPrompt] = (0, import_react34.useState)(null);
+  const [localSkillsDashboard, setLocalSkillsDashboard] = (0, import_react34.useState)({
+    catalog: [],
+    states: {},
+    errors: {},
+    loading: false,
+    error: "",
+    key: ""
+  });
   const [catalogs, setCatalogs] = (0, import_react34.useState)({
     mcp: { items: [], loading: false, error: "", key: "" },
     skills: { items: [], loading: false, error: "", key: "" },
@@ -26749,18 +27407,29 @@ function App2({ initialSection, controller, onLaunch }) {
     setPromptPreview(null);
     setPromptPreviewOffset(0);
   }, [section, target]);
+  (0, import_react34.useEffect)(() => {
+    setMcpStaged(/* @__PURE__ */ new Map());
+    setMcpBatchMode(false);
+    setMcpProfilePrompt(null);
+  }, [target]);
+  (0, import_react34.useEffect)(() => {
+    setSkillsStaged(/* @__PURE__ */ new Map());
+    setSkillsBatchMode(false);
+    setSkillsPackPrompt(null);
+  }, [skillsTarget]);
   const workspaceStoreId = snapshot?.workspace?.store_id || "";
+  const catalogTarget = section === "skills" ? skillsTarget : target;
   const catalogStore = section === "snippets" ? "prompts" : section;
   const workspaceCatalogVersion = ["mcp", "skills", "prompts", "snippets"].includes(section) ? snapshot?.workspace?.stores?.[catalogStore]?.latest?.version || snapshot?.workspace?.latest?.version || "empty" : "";
   (0, import_react34.useEffect)(() => {
     if (!["mcp", "skills", "prompts", "snippets"].includes(section) || !workspaceStoreId) return;
-    const key = `${workspaceStoreId}:${workspaceCatalogVersion}:${target}`;
+    const key = `${workspaceStoreId}:${workspaceCatalogVersion}:${catalogTarget}`;
     let cancelled = false;
     setCatalogs((value) => ({
       ...value,
       [section]: { ...value[section], loading: true, error: "", key }
     }));
-    void controller.remoteCatalog(section, target).then((result) => {
+    void controller.remoteCatalog(section, catalogTarget).then((result) => {
       if (cancelled) return;
       setCatalogs((value) => ({
         ...value,
@@ -26774,7 +27443,7 @@ function App2({ initialSection, controller, onLaunch }) {
     return () => {
       cancelled = true;
     };
-  }, [controller, section, target, workspaceCatalogVersion, workspaceStoreId]);
+  }, [catalogTarget, controller, section, workspaceCatalogVersion, workspaceStoreId]);
   (0, import_react34.useEffect)(() => {
     if (section !== "providers" || !snapshot) return;
     const key = `${snapshot.updatedAt}:${workspaceStoreId || "local"}:${snapshot.workspace?.latest?.version || "none"}:${providerTarget}`;
@@ -26835,6 +27504,55 @@ function App2({ initialSection, controller, onLaunch }) {
       cancelled = true;
     };
   }, [controller, providerTarget, section, snapshot, workspaceStoreId]);
+  (0, import_react34.useEffect)(() => {
+    if (section !== "mcp" || !snapshot || typeof controller.localMcpServers !== "function") return;
+    const key = `${target}:${snapshot.updatedAt || "local"}`;
+    let cancelled = false;
+    setLocalMcpCatalog((value) => ({
+      items: value.target === target ? value.items : [],
+      target,
+      loading: true,
+      error: "",
+      key
+    }));
+    void controller.localMcpServers(target).then((items) => {
+      if (cancelled) return;
+      setLocalMcpCatalog({ items, target, loading: false, error: "", key });
+    }).catch((error) => {
+      if (cancelled) return;
+      setLocalMcpCatalog((value) => ({
+        ...value,
+        target,
+        loading: false,
+        error: String(error?.message || error),
+        key
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller, section, snapshot?.updatedAt, target]);
+  (0, import_react34.useEffect)(() => {
+    if (section !== "skills" || !snapshot || typeof controller.localSkillsDashboard !== "function") return;
+    const key = `${snapshot.updatedAt || "local"}`;
+    let cancelled = false;
+    setLocalSkillsDashboard((value) => ({ ...value, loading: true, error: "", key }));
+    void controller.localSkillsDashboard().then((dashboard) => {
+      if (cancelled) return;
+      setLocalSkillsDashboard({ ...dashboard, loading: false, error: "", key });
+    }).catch((error) => {
+      if (cancelled) return;
+      setLocalSkillsDashboard((value) => ({
+        ...value,
+        loading: false,
+        error: String(error?.message || error),
+        key
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller, section, snapshot?.updatedAt]);
   const selectedPreset = (0, import_react34.useMemo)(() => presetEntries(snapshot)[selected]?.[0] || "", [snapshot, selected]);
   const selectedAgentId = Array.isArray(snapshot?.agents) ? snapshot.agents[selectedAgent]?.client || "" : "";
   const mergedSnippets = snippetEntries(snapshot?.snippets, catalogs.snippets.items);
@@ -26856,11 +27574,181 @@ function App2({ initialSection, controller, onLaunch }) {
   const selectedSnippet = mergedSnippets[clampSelection(componentSelected.snippets, mergedSnippets.length)] || null;
   const selectedRemote = section === "snippets" ? selectedSnippet?.remote ? selectedSnippet.name : "" : ["mcp", "skills", "prompts"].includes(section) ? catalogs[section].items[componentSelected[section]]?.name || "" : "";
   const selectedLocalSnippet = section === "snippets" && selectedSnippet?.local ? selectedSnippet.name : "";
+  const allLocalMcpEntries = (0, import_react34.useMemo)(
+    () => mcpServerEntries(localMcpCatalog.items, snapshot, target),
+    [localMcpCatalog.items, snapshot, target]
+  );
+  const localMcpEntries = (0, import_react34.useMemo)(
+    () => filterMcpServerEntries(allLocalMcpEntries, {
+      query: mcpQuery,
+      filter: mcpFilter,
+      grouped: mcpGrouped
+    }),
+    [allLocalMcpEntries, mcpFilter, mcpGrouped, mcpQuery]
+  );
+  const selectedMcpServerIndex = Math.max(
+    0,
+    localMcpEntries.findIndex((entry) => entry.name === selectedMcpServerName)
+  );
+  const selectedMcpServer = localMcpEntries[selectedMcpServerIndex] || null;
+  (0, import_react34.useEffect)(() => {
+    if (localMcpEntries.length === 0) {
+      if (selectedMcpServerName) setSelectedMcpServerName("");
+      return;
+    }
+    if (!localMcpEntries.some((entry) => entry.name === selectedMcpServerName)) {
+      setSelectedMcpServerName(localMcpEntries[0].name);
+    }
+  }, [localMcpEntries, selectedMcpServerName]);
+  const allLocalSkillEntries = (0, import_react34.useMemo)(
+    () => skillEntries(localSkillsDashboard.catalog, localSkillsDashboard.states, skillsTarget),
+    [localSkillsDashboard.catalog, localSkillsDashboard.states, skillsTarget]
+  );
+  const localSkillEntries = (0, import_react34.useMemo)(
+    () => filterSkillEntries(allLocalSkillEntries, {
+      query: skillsQuery,
+      enabledOnly: skillsEnabledOnly
+    }),
+    [allLocalSkillEntries, skillsEnabledOnly, skillsQuery]
+  );
+  const selectedSkillIndex = Math.max(
+    0,
+    localSkillEntries.findIndex((entry) => entry.name === selectedSkillName)
+  );
+  const selectedSkill = localSkillEntries[selectedSkillIndex] || null;
+  (0, import_react34.useEffect)(() => {
+    if (localSkillEntries.length === 0) {
+      if (selectedSkillName) setSelectedSkillName("");
+      return;
+    }
+    if (!localSkillEntries.some((entry) => entry.name === selectedSkillName)) {
+      setSelectedSkillName(localSkillEntries[0].name);
+    }
+  }, [localSkillEntries, selectedSkillName]);
   const selectedMcpState = componentTargetState(snapshot, "mcp", target);
   const selectedMcpProfile = selectedMcpState.data?.selection_mode === "manual" ? "" : selectedMcpState.selection === "none" ? "" : selectedMcpState.selection;
-  const selectedSkillsState = componentTargetState(snapshot, "skills", target);
-  const selectedSkillsPack = selectedSkillsState.data?.selection_mode === "manual" ? "" : selectedSkillsState.selection === "none" ? "" : selectedSkillsState.selection;
+  const selectedSkillsState = skillTargetState(localSkillsDashboard.states, skillsTarget);
+  const selectedSkillsPack = selectedSkillsState.selectionMode === "manual" ? "" : selectedSkillsState.selection === "none" ? "" : selectedSkillsState.selection;
   const promptPreviewPageSize = Math.max(5, Math.min(18, (process.stdout.rows || 30) - 14));
+  const patchLocalMcpState = (0, import_react34.useCallback)((state) => {
+    if (!state?.target) return;
+    setSnapshot((current) => {
+      if (!current?.doctor?.targets) return current;
+      return {
+        ...current,
+        doctor: {
+          ...current.doctor,
+          targets: current.doctor.targets.map((report) => report.target === state.target ? {
+            ...report,
+            mcp: {
+              ...report.mcp || {},
+              ok: true,
+              code: 0,
+              error: "",
+              summary: "",
+              data: state
+            }
+          } : report)
+        }
+      };
+    });
+  }, []);
+  const patchLocalSkillsState = (0, import_react34.useCallback)((state) => {
+    if (!state?.target) return;
+    setLocalSkillsDashboard((current) => ({
+      ...current,
+      states: { ...current.states, [state.target]: state },
+      errors: { ...current.errors, [state.target]: "" }
+    }));
+    setSnapshot((current) => {
+      if (!current?.doctor?.targets) return current;
+      return {
+        ...current,
+        doctor: {
+          ...current.doctor,
+          targets: current.doctor.targets.map((report) => report.target === state.target ? {
+            ...report,
+            skills: {
+              ...report.skills || {},
+              ok: true,
+              code: 0,
+              error: "",
+              summary: "",
+              data: state
+            }
+          } : report)
+        }
+      };
+    });
+  }, []);
+  const stageMcpToggle = (0, import_react34.useCallback)((entry) => {
+    if (!entry) return;
+    setMcpStaged((current) => {
+      const next = new Map(current);
+      const effective = next.has(entry.name) ? next.get(entry.name) : entry.enabled;
+      const desired = !effective;
+      if (desired === entry.enabled) next.delete(entry.name);
+      else next.set(entry.name, desired);
+      if (desired && entry.variantGroup) {
+        for (const candidate of allLocalMcpEntries) {
+          if (candidate.name === entry.name || candidate.variantGroup !== entry.variantGroup) continue;
+          const candidateEffective = next.has(candidate.name) ? next.get(candidate.name) : candidate.enabled;
+          if (candidateEffective) {
+            if (candidate.enabled) next.set(candidate.name, false);
+            else next.delete(candidate.name);
+          }
+        }
+      }
+      return next;
+    });
+  }, [allLocalMcpEntries]);
+  const stageSkillToggle = (0, import_react34.useCallback)((entry) => {
+    if (!entry) return;
+    setSkillsStaged((current) => {
+      const next = new Map(current);
+      const effective = next.has(entry.name) ? next.get(entry.name) : entry.enabled;
+      const desired = !effective;
+      if (desired === entry.enabled) next.delete(entry.name);
+      else next.set(entry.name, desired);
+      return next;
+    });
+  }, []);
+  const prepareMcpConfirmation = (0, import_react34.useCallback)(async (action, changes, selection = "") => {
+    const enabling = changes.filter((change) => change.enabled).filter((change) => {
+      const current = allLocalMcpEntries.find((entry) => entry.name === change.name);
+      return !current?.enabled;
+    });
+    setBusy(true);
+    setLastDetail("");
+    setMessage(enabling.length > 0 ? `Checking ${enabling.length} MCP server requirement(s)\u2026` : "Preparing target-specific MCP change\u2026");
+    try {
+      const results = await Promise.all(enabling.map(
+        (change) => controller.localMcpPreflight(change.name, target)
+      ));
+      const failed = results.filter((result) => !result.ready);
+      const detail = failed.length > 0 ? [
+        `Preflight warning: ${failed.length} server(s) have unmet requirements.`,
+        ...failed.flatMap((result) => [
+          `${result.server}:`,
+          ...result.issues.map((issue) => `  ${issue}`)
+        ])
+      ].join("\n") : enabling.length > 0 ? `Preflight passed for ${enabling.map((entry) => entry.name).join(", ")}.` : "No enable preflight is needed for disable-only changes.";
+      const labelSelection = selection || (changes.length === 1 ? changes[0].name : "");
+      setConfirm({
+        action,
+        changes,
+        selection: labelSelection,
+        detail,
+        warning: failed.length > 0,
+        label: actionLabel(action, labelSelection, target)
+      });
+      setMessage(failed.length > 0 ? "Preflight found missing requirements; review the warning before confirming." : "MCP preflight complete.");
+    } catch (error) {
+      setMessage(`MCP preflight failed: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [allLocalMcpEntries, controller, target]);
   const openPromptPreview = (0, import_react34.useCallback)(async (source) => {
     const local = promptTargetState(snapshot, target);
     const selection = source === "cloud" ? selectedRemote : local.selection;
@@ -26886,7 +27774,7 @@ function App2({ initialSection, controller, onLaunch }) {
       setBusy(false);
     }
   }, [controller, selectedRemote, snapshot, target]);
-  const executeAction = (0, import_react34.useCallback)(async (action) => {
+  const executeAction = (0, import_react34.useCallback)(async (action, payload = {}) => {
     setConfirm(null);
     if (action === "agent-provider") {
       setProviderTarget(selectedAgentId);
@@ -26898,23 +27786,56 @@ function App2({ initialSection, controller, onLaunch }) {
     setBusy(true);
     const providerAction = action.startsWith("provider-");
     const accountAction = action.startsWith("account-");
+    const localMcpAction = [
+      "mcp-enable",
+      "mcp-disable",
+      "mcp-batch",
+      "mcp-profile-save",
+      "mcp-profile-update",
+      "mcp-profile-upload"
+    ].includes(action);
+    const localSkillsAction = [
+      "skills-enable",
+      "skills-disable",
+      "skills-batch",
+      "skills-pack-save",
+      "skills-pack-update",
+      "skills-pack-upload"
+    ].includes(action);
     const localRepairAction = action === "mcp-repair" || action === "skills-repair";
     const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
-    const actionTarget = providerAction ? providerTarget : target;
-    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
-    setMessage(`${actionLabel(action, selection, actionTarget)}\u2026`);
+    const actionTarget = providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target;
+    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    const runningLabel = actionLabel(action, selection, actionTarget);
+    setMessage(action === "mcp-disable" ? `${runningLabel} \xB7 removing only the changed target entry\u2026` : action === "mcp-enable" || action === "mcp-batch" ? `${runningLabel} \xB7 updating changed target entries atomically\u2026` : action === "skills-disable" || action === "skills-enable" || action === "skills-batch" ? `${runningLabel} \xB7 updating managed links atomically\u2026` : `${runningLabel}\u2026`);
     setLastDetail("");
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
         source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
-        target: actionTarget
+        target: actionTarget,
+        changes: payload.changes || [],
+        replace: action === "mcp-profile-update"
       });
       setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
-      await refresh(true);
+      if (localMcpAction) {
+        if (result.data?.state) patchLocalMcpState(result.data.state);
+        if (result.ok && action === "mcp-batch") {
+          setMcpStaged(/* @__PURE__ */ new Map());
+          setMcpBatchMode(false);
+        }
+      } else if (localSkillsAction) {
+        if (result.data?.state) patchLocalSkillsState(result.data.state);
+        if (result.ok && action === "skills-batch") {
+          setSkillsStaged(/* @__PURE__ */ new Map());
+          setSkillsBatchMode(false);
+        }
+      } else {
+        await refresh(true);
+      }
     } catch (error) {
       setMessage(`Failed: ${error.message}`);
     } finally {
@@ -26922,27 +27843,142 @@ function App2({ initialSection, controller, onLaunch }) {
     }
   }, [
     controller,
+    patchLocalMcpState,
+    patchLocalSkillsState,
     providerTarget,
     refresh,
     selectedAccountName,
     selectedAgentId,
     selectedLocalSnippet,
     selectedMcpProfile,
+    selectedMcpServer,
     selectedPreset,
     selectedProviderName,
     selectedProviderSource,
     selectedRemote,
+    selectedSkill,
     selectedSkillsPack,
+    skillsTarget,
     snapshot?.presetSource,
     target
   ]);
   use_input_default((input, key) => {
     if (busy) return;
     if (confirm) {
-      if (input === "y" || input === "Y") void executeAction(confirm.action);
+      if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
       else if (input === "n" || input === "N" || key.escape) {
         setMessage("Cancelled; no changes were made.");
         setConfirm(null);
+      }
+      return;
+    }
+    if (mcpProfilePrompt) {
+      if (key.escape) {
+        setMcpProfilePrompt(null);
+        setMessage("MCP Profile save cancelled.");
+        return;
+      }
+      if (key.return) {
+        const name = mcpProfilePrompt.value.trim();
+        if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+          setMcpProfilePrompt((value) => ({
+            ...value,
+            error: "Use only letters, numbers, dot, underscore, and hyphen."
+          }));
+          return;
+        }
+        const action2 = mcpProfilePrompt.mode === "update" ? "mcp-profile-update" : "mcp-profile-save";
+        setMcpProfilePrompt(null);
+        setConfirm({
+          action: action2,
+          selection: name,
+          label: actionLabel(action2, name, target),
+          detail: action2 === "mcp-profile-update" ? "Only this target override is replaced; other target overrides remain intact." : "The current target selection is saved and then reapplied as a named Profile."
+        });
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setMcpProfilePrompt((value) => ({ ...value, value: value.value.slice(0, -1), error: "" }));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && /^[A-Za-z0-9._-]+$/.test(input)) {
+        setMcpProfilePrompt((value) => ({ ...value, value: `${value.value}${input}`, error: "" }));
+      }
+      return;
+    }
+    if (skillsPackPrompt) {
+      if (key.escape) {
+        setSkillsPackPrompt(null);
+        setMessage("Skill Pack save cancelled.");
+        return;
+      }
+      if (key.return) {
+        const name = skillsPackPrompt.value.trim();
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+          setSkillsPackPrompt((value) => ({
+            ...value,
+            error: "Use lowercase letters, numbers, and single hyphens."
+          }));
+          return;
+        }
+        const action2 = skillsPackPrompt.mode === "update" ? "skills-pack-update" : "skills-pack-save";
+        setSkillsPackPrompt(null);
+        setConfirm({
+          action: action2,
+          selection: name,
+          label: actionLabel(action2, name, skillsTarget),
+          detail: action2 === "skills-pack-update" ? "Only this target override is replaced; other target overrides remain intact." : "The current target selection is saved and then reapplied as a named Pack."
+        });
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSkillsPackPrompt((value) => ({ ...value, value: value.value.slice(0, -1), error: "" }));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && /^[a-z0-9-]+$/.test(input)) {
+        setSkillsPackPrompt((value) => ({ ...value, value: `${value.value}${input}`.slice(0, 64), error: "" }));
+      }
+      return;
+    }
+    if (mcpSearching) {
+      if (key.escape) {
+        setMcpSearching(false);
+        setMcpQuery("");
+        setMessage("MCP search cleared.");
+        return;
+      }
+      if (key.return) {
+        setMcpSearching(false);
+        setMessage(mcpQuery ? `MCP search kept: ${mcpQuery}` : "MCP search closed.");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setMcpQuery((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !/[\u0000-\u001f\u007f]/.test(input)) {
+        setMcpQuery((value) => `${value}${input}`.slice(0, 80));
+      }
+      return;
+    }
+    if (skillsSearching) {
+      if (key.escape) {
+        setSkillsSearching(false);
+        setSkillsQuery("");
+        setMessage("Skills search cleared.");
+        return;
+      }
+      if (key.return) {
+        setSkillsSearching(false);
+        setMessage(skillsQuery ? `Skills search kept: ${skillsQuery}` : "Skills search closed.");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSkillsQuery((value) => value.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !/[\u0000-\u001f\u007f]/.test(input)) {
+        setSkillsQuery((value) => `${value}${input}`.slice(0, 80));
       }
       return;
     }
@@ -26976,12 +28012,152 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     if (input === "?") return setShowHelp((value) => !value);
     if (showHelp && key.escape) return setShowHelp(false);
+    if (section === "mcp" && (input === "l" || input === "w")) {
+      const nextFocus = input === "l" ? "local" : "workspace";
+      setMcpFocus(nextFocus);
+      setMessage(nextFocus === "local" ? "Local MCP switches focused; Space changes only the highlighted target." : "Workspace MCP profiles focused; p inspects and a applies the selected profile.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "/") {
+      setMcpSearching(true);
+      setMessage("Type to filter MCP servers; Enter keeps the query and Esc clears it.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && (input === "e" || input === "x")) {
+      const requested = input === "e" ? "enabled" : "problems";
+      setMcpFilter((value) => value === requested ? "all" : requested);
+      setMessage(requested === "enabled" ? "Enabled-only MCP filter toggled." : "MCP readiness-problem filter toggled.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "g") {
+      setMcpGrouped((value) => !value);
+      setMessage(mcpGrouped ? "MCP category grouping disabled." : "MCP category grouping enabled.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "m") {
+      setMcpBatchMode((value) => !value);
+      setMessage(mcpBatchMode ? `Batch mode closed${mcpStaged.size > 0 ? "; staged changes remain available" : ""}.` : "Batch mode enabled; Space stages changes and a applies them once.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "c" && mcpBatchMode) {
+      setMcpStaged(/* @__PURE__ */ new Map());
+      setMessage("Staged MCP changes cleared.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && (input === "s" || input === "S")) {
+      if (mcpStaged.size > 0) {
+        setMessage("Apply or clear staged MCP changes before saving a Profile.");
+        return;
+      }
+      const updateName = selectedMcpState.baseSelection || (selectedMcpState.selection !== "custom" && selectedMcpState.selection !== "none" ? selectedMcpState.selection : "");
+      if (input === "S" && !updateName) {
+        setMessage("No named base MCP Profile is available to update.");
+        return;
+      }
+      setMcpProfilePrompt({
+        mode: input === "S" ? "update" : "save",
+        value: input === "S" ? updateName : "",
+        error: ""
+      });
+      setMessage(input === "S" ? "Edit or confirm the Profile name to update for this target." : "Enter a new MCP Profile name.");
+      return;
+    }
+    if (section === "mcp" && mcpFocus === "local" && input === "u") {
+      if (mcpStaged.size > 0) {
+        setMessage("Apply or clear staged MCP changes before backing up the MCP Store.");
+        return;
+      }
+      if (!selectedMcpProfile) {
+        setMessage("Save the current custom MCP selection as a named Profile before backing it up.");
+        return;
+      }
+      if (!workspaceConfigured(snapshot)) {
+        setMessage("Connect or restore the encrypted Workspace before backing up the MCP Store.");
+        return;
+      }
+      setConfirm({
+        action: "mcp-profile-upload",
+        selection: selectedMcpProfile,
+        label: actionLabel("mcp-profile-upload", selectedMcpProfile, target),
+        detail: "MCP Profiles depend on catalog definitions, artifacts, and Secret ciphertext, so the encrypted MCP Store is backed up as one portable unit."
+      });
+      return;
+    }
+    if (section === "skills" && (input === "l" || input === "w")) {
+      const nextFocus = input === "l" ? "local" : "workspace";
+      setSkillsFocus(nextFocus);
+      setMessage(nextFocus === "local" ? "Local Skill switches focused; Space changes only the highlighted client." : "Workspace Skill Packs focused; p inspects and a applies the selected Pack.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "/") {
+      setSkillsSearching(true);
+      setMessage("Type to filter Skills; Enter keeps the query and Esc clears it.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "e") {
+      setSkillsEnabledOnly((value) => !value);
+      setMessage("Enabled-only Skills filter toggled.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "m") {
+      setSkillsBatchMode((value) => !value);
+      setMessage(skillsBatchMode ? `Skills batch mode closed${skillsStaged.size > 0 ? "; staged changes remain available" : ""}.` : "Skills batch mode enabled; Space stages changes and a applies them once.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "c" && skillsBatchMode) {
+      setSkillsStaged(/* @__PURE__ */ new Map());
+      setMessage("Staged Skill changes cleared.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && (input === "s" || input === "S")) {
+      if (skillsStaged.size > 0) {
+        setMessage("Apply or clear staged Skill changes before saving a Pack.");
+        return;
+      }
+      const updateName = selectedSkillsState.basePack || (selectedSkillsState.selection !== "custom" && selectedSkillsState.selection !== "none" ? selectedSkillsState.selection : "");
+      if (input === "S" && !updateName) {
+        setMessage("No named base Skill Pack is available to update.");
+        return;
+      }
+      setSkillsPackPrompt({
+        mode: input === "S" ? "update" : "save",
+        value: input === "S" ? updateName : "",
+        error: ""
+      });
+      setMessage(input === "S" ? "Edit or confirm the Skill Pack name to update for this client." : "Enter a new lowercase Skill Pack name.");
+      return;
+    }
+    if (section === "skills" && skillsFocus === "local" && input === "u") {
+      if (skillsStaged.size > 0) {
+        setMessage("Apply or clear staged Skill changes before backing up the Skills Store.");
+        return;
+      }
+      if (!selectedSkillsPack) {
+        setMessage("Save the current custom Skill selection as a named Pack before backing it up.");
+        return;
+      }
+      if (!workspaceConfigured(snapshot)) {
+        setMessage("Connect or restore the encrypted Workspace before backing up the Skills Store.");
+        return;
+      }
+      setConfirm({
+        action: "skills-pack-upload",
+        selection: selectedSkillsPack,
+        label: actionLabel("skills-pack-upload", selectedSkillsPack, skillsTarget),
+        detail: "The Skills Store backup includes Pack definitions and canonical Skill files for portable restore."
+      });
+      return;
+    }
     if (input === "t") {
       if (section === "providers") {
         setComponentSelected((value) => ({ ...value, providers: 0 }));
         return setProviderTarget((value) => cycleTarget(value, 1, PROVIDER_TARGETS2));
       }
       if (section === "accounts") return;
+      if (section === "skills") {
+        setComponentSelected((value) => ({ ...value, skills: 0 }));
+        return setSkillsTarget((value) => cycleTarget(value, 1, SKILL_TARGETS));
+      }
       return setTarget((value) => otherTarget(value));
     }
     if (section === "providers" && (input === "i" || input === "I")) {
@@ -27013,15 +28189,107 @@ function App2({ initialSection, controller, onLaunch }) {
         providers: clampSelection(value.providers + delta, mergedProviders.length)
       }));
     }
-    if (["mcp", "skills", "prompts", "snippets"].includes(section) && delta !== 0) {
+    if (section === "mcp" && delta !== 0) {
+      if (mcpFocus === "local") {
+        if (localMcpEntries.length === 0) return;
+        const index = clampSelection(selectedMcpServerIndex + delta, localMcpEntries.length);
+        setSelectedMcpServerName(localMcpEntries[index].name);
+        return;
+      }
+      return setComponentSelected((value) => ({
+        ...value,
+        mcp: clampSelection(value.mcp + delta, catalogs.mcp.items.length)
+      }));
+    }
+    if (section === "skills" && delta !== 0) {
+      if (skillsFocus === "local") {
+        if (localSkillEntries.length === 0) return;
+        const index = clampSelection(selectedSkillIndex + delta, localSkillEntries.length);
+        setSelectedSkillName(localSkillEntries[index].name);
+        return;
+      }
+      return setComponentSelected((value) => ({
+        ...value,
+        skills: clampSelection(value.skills + delta, catalogs.skills.items.length)
+      }));
+    }
+    if (["prompts", "snippets"].includes(section) && delta !== 0) {
       const length = section === "snippets" ? mergedSnippets.length : catalogs[section].items.length;
       return setComponentSelected((value) => ({
         ...value,
         [section]: clampSelection(value[section] + delta, length)
       }));
     }
-    const action = actionForKey(section, key.return ? "\r" : input);
+    let action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action === "mcp-toggle") {
+      if (mcpFocus !== "local") {
+        setMessage("Press l to focus local MCP switches before toggling a server.");
+        return;
+      }
+      if (!selectedMcpServer) {
+        setMessage("No local MCP server is selected.");
+        return;
+      }
+      if (mcpBatchMode) {
+        stageMcpToggle(selectedMcpServer);
+        setMessage(`${selectedMcpServer.name} toggle staged; press a to apply all staged changes.`);
+        return;
+      }
+      action = selectedMcpServer.enabled ? "mcp-disable" : "mcp-enable";
+      const changes = [{ name: selectedMcpServer.name, enabled: action === "mcp-enable" }];
+      if (action === "mcp-enable") {
+        void prepareMcpConfirmation(action, changes, selectedMcpServer.name);
+        return;
+      }
+    }
+    if (action === "mcp-apply" && mcpFocus === "local" && mcpBatchMode) {
+      const changes = [...mcpStaged.entries()].map(([name, enabled]) => ({ name, enabled }));
+      if (changes.length === 0) {
+        setMessage("No MCP changes are staged; use Space to mark servers first.");
+        return;
+      }
+      void prepareMcpConfirmation("mcp-batch", changes);
+      return;
+    }
+    if ((action === "mcp-plan" || action === "mcp-apply") && mcpFocus !== "workspace") {
+      setMessage("Press w to focus Workspace MCP profiles before planning or applying one.");
+      return;
+    }
+    if (action === "skills-toggle") {
+      if (skillsFocus !== "local") {
+        setMessage("Press l to focus local Skill switches before toggling a Skill.");
+        return;
+      }
+      if (!selectedSkill) {
+        setMessage("No local Skill is selected.");
+        return;
+      }
+      if (skillsBatchMode) {
+        stageSkillToggle(selectedSkill);
+        setMessage(`${selectedSkill.name} toggle staged; press a to apply all staged changes.`);
+        return;
+      }
+      action = selectedSkill.enabled ? "skills-disable" : "skills-enable";
+    }
+    if (action === "skills-apply" && skillsFocus === "local" && skillsBatchMode) {
+      const changes = [...skillsStaged.entries()].map(([name, enabled]) => ({ name, enabled }));
+      if (changes.length === 0) {
+        setMessage("No Skill changes are staged; use Space to mark Skills first.");
+        return;
+      }
+      setConfirm({
+        action: "skills-batch",
+        changes,
+        label: actionLabel("skills-batch", "", skillsTarget),
+        detail: `${changes.length} managed Skill link change(s) will be applied in one target transaction.`
+      });
+      return;
+    }
+    if ((action === "skills-plan" || action === "skills-apply") && skillsFocus !== "workspace") {
+      setMessage("Press w to focus Workspace Skill Packs before planning or applying one.");
+      return;
+    }
     if (action === "prompt-view-local" || action === "prompt-view-cloud") {
       return void openPromptPreview(action.endsWith("cloud") ? "cloud" : "local");
     }
@@ -27062,7 +28330,7 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     if (action === "skills-repair" && selectedSkillsState.drift.length === 0) {
-      setMessage(`${targetLabel(target)} Skills configuration is already healthy.`);
+      setMessage(`${targetLabel(skillsTarget)} Skills configuration is already healthy.`);
       return;
     }
     if (action === "skills-repair" && !selectedSkillsPack) {
@@ -27084,12 +28352,18 @@ function App2({ initialSection, controller, onLaunch }) {
     if (actionNeedsConfirmation(action)) {
       const providerAction = action.startsWith("provider-");
       const accountAction = action.startsWith("account-");
+      const localMcpAction = action === "mcp-enable" || action === "mcp-disable";
+      const localSkillsAction = action === "skills-enable" || action === "skills-disable";
       const localRepairAction = action === "mcp-repair" || action === "skills-repair";
       const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
-      const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+      const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? selectedMcpServer?.name || "" : localSkillsAction ? selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
-        label: actionLabel(action, selection, providerAction ? providerTarget : target)
+        label: actionLabel(
+          action,
+          selection,
+          providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target
+        )
       });
     } else {
       void executeAction(action);
@@ -27110,16 +28384,54 @@ function App2({ initialSection, controller, onLaunch }) {
         showIncompatible: showIncompatibleProviders
       }
     );
-    if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(McpView, { snapshot, target, catalog: catalogs.mcp, selected: componentSelected.mcp });
-    if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(ComponentView, { snapshot, target, component: "skills", catalog: catalogs.skills, selected: componentSelected.skills });
+    if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(
+      McpView,
+      {
+        snapshot,
+        target,
+        catalog: catalogs.mcp,
+        selected: componentSelected.mcp,
+        localCatalog: {
+          ...localMcpCatalog,
+          activeCount: allLocalMcpEntries.filter((entry) => entry.enabled).length
+        },
+        localEntries: localMcpEntries,
+        selectedServerName: selectedMcpServer?.name || selectedMcpServerName,
+        focus: mcpFocus,
+        staged: mcpStaged,
+        batchMode: mcpBatchMode,
+        query: mcpQuery,
+        filter: mcpFilter,
+        grouped: mcpGrouped,
+        searching: mcpSearching
+      }
+    );
+    if (section === "skills") content = /* @__PURE__ */ import_react34.default.createElement(
+      SkillsView,
+      {
+        snapshot,
+        target: skillsTarget,
+        catalog: catalogs.skills,
+        selected: componentSelected.skills,
+        dashboard: localSkillsDashboard,
+        localEntries: localSkillEntries,
+        selectedSkillName: selectedSkill?.name || selectedSkillName,
+        focus: skillsFocus,
+        staged: skillsStaged,
+        batchMode: skillsBatchMode,
+        query: skillsQuery,
+        enabledOnly: skillsEnabledOnly,
+        searching: skillsSearching
+      }
+    );
     if (section === "prompts") content = promptPreview ? /* @__PURE__ */ import_react34.default.createElement(PromptPreview, { preview: promptPreview, offset: promptPreviewOffset, pageSize: promptPreviewPageSize }) : /* @__PURE__ */ import_react34.default.createElement(PromptView, { snapshot, target, catalog: catalogs.prompts, selected: componentSelected.prompts });
     if (section === "snippets") content = /* @__PURE__ */ import_react34.default.createElement(SnippetView, { snapshot, catalog: catalogs.snippets, selected: componentSelected.snippets });
     if (section === "presets") content = /* @__PURE__ */ import_react34.default.createElement(Presets, { snapshot, selected, target });
     if (section === "cloud") content = /* @__PURE__ */ import_react34.default.createElement(Cloud, { snapshot });
   }
   const sectionLabel = SECTIONS.find((item) => item.id === section)?.label || "Overview";
-  const activeTarget = section === "providers" ? providerTarget : section === "accounts" ? "codex" : target;
-  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "providers" ? `Providers \xB7 ${targetLabel(providerTarget)}` : section === "accounts" ? "Accounts \xB7 Codex official Identity" : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "skills", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
+  const activeTarget = section === "providers" ? providerTarget : section === "skills" ? skillsTarget : section === "accounts" ? "codex" : target;
+  const panelTitle = promptPreview ? `Prompts \xB7 ${promptPreview.source === "cloud" ? "Workspace" : "Local"} preview` : ["mcp", "prompts"].includes(section) ? `${sectionLabel} \xB7 Claude Code vs Codex` : section === "providers" ? `Providers \xB7 ${targetLabel(providerTarget)}` : section === "skills" ? `Skills \xB7 ${targetLabel(skillsTarget)}` : section === "accounts" ? "Accounts \xB7 Codex official Identity" : section === "snippets" ? "Snippets \xB7 Shared library" : ["overview", "prompts", "presets"].includes(section) ? `${sectionLabel} \xB7 ${targetLabel(target)}` : sectionLabel;
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "script-toolbox / agents"), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, section === "snippets" ? "shared library" : section === "accounts" ? "identity target" : "active target"), section !== "snippets" && /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: activeTarget, selected: true }), !["snippets", "accounts"].includes(section) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t switch"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1, flexWrap: "wrap" }, SECTIONS.map((item) => /* @__PURE__ */ import_react34.default.createElement(
     Text,
     {
@@ -27130,7 +28442,7 @@ function App2({ initialSection, controller, onLaunch }) {
       dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), mcpProfilePrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "magenta", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, mcpProfilePrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), mcpProfilePrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, mcpProfilePrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 allowed: letters, numbers, . _ -")) : skillsPackPrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, skillsPackPrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), skillsPackPrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, skillsPackPrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 lowercase letters, numbers, single hyphens")) : confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, flexDirection: "column" }, confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: confirm.warning ? "red" : "gray" }, line)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {

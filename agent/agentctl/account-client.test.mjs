@@ -77,8 +77,13 @@ test("Codex accounts save, refresh, and switch without exposing OAuth material",
     assert.equal(JSON.parse(saved.stdout).preview, false);
     assert.equal(saved.stdout.includes(primaryId), false);
     assert.equal(saved.stdout.includes("primary-v1"), false);
-    assert.equal((await lstat(store)).mode & 0o077, 0);
-    assert.equal((await lstat(join(store, "primary.auth.json"))).mode & 0o077, 0);
+    if (process.platform === "win32") {
+      assert.equal((await lstat(store)).isDirectory(), true);
+      assert.equal((await lstat(join(store, "primary.auth.json"))).isFile(), true);
+    } else {
+      assert.equal((await lstat(store)).mode & 0o077, 0);
+      assert.equal((await lstat(join(store, "primary.auth.json"))).mode & 0o077, 0);
+    }
 
     const current = JSON.parse(run(root, ["list", "--json"]).stdout);
     assert.deepEqual(current.map(({ name, current: selected }) => [name, selected]), [

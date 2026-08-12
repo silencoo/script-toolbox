@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bashScriptCommand } from "../platform-command.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const agentRoot = resolve(directory, "..");
@@ -11,14 +12,19 @@ const agentctl = join(directory, "agentctl");
 const mcpctl = join(agentRoot, "mcpctl", "mcpctl");
 const skillsctl = join(agentRoot, "skillsctl", "skillsctl");
 const promptctl = join(agentRoot, "promptctl", "promptctl");
+const promptctlForShell = process.platform === "win32"
+  ? promptctl.replaceAll("\\", "/")
+  : promptctl;
 const root = await mkdtemp(join(tmpdir(), "agentctl-preset-test-"));
 const home = join(root, "home");
 const fakeBin = join(root, "bin");
 const mcpStore = join(root, "mcp-store");
 const skillsStore = join(root, "skills-store");
+const shellHome = process.platform === "win32" ? home.replaceAll("\\", "/") : home;
 const env = {
   ...process.env,
-  HOME: home,
+  HOME: shellHome,
+  ...(process.platform === "win32" ? { USERPROFILE: home } : {}),
   PATH: `${fakeBin}${delimiter}${process.env.PATH || ""}`,
   MCPCTL_STORE: mcpStore,
   MCPCTL_CODEX_CONFIG: join(home, ".codex", "config.toml"),
@@ -26,11 +32,18 @@ const env = {
   SKILLSCTL_STORE: skillsStore,
   SKILLSCTL_CODEX_DIR: join(home, ".agents", "skills"),
   AGENTCTL_PRESETS_FILE: join(root, "presets.json"),
-  AGENTCTL_PRESET_STATE_FILE: join(root, "preset-state.json")
+  AGENTCTL_PRESET_STATE_FILE: join(root, "preset-state.json"),
+  AGENTCTL_WORKSPACE_CONFIG: join(root, "workspace-remote.json")
 };
 
 function run(executable, args) {
-  return execFileSync(executable, args, { encoding: "utf8", env });
+  const command = bashScriptCommand(executable, args);
+  return execFileSync(command.executable, command.args, { encoding: "utf8", env });
+}
+
+function spawnController(executable, args, environment = env) {
+  const command = bashScriptCommand(executable, args);
+  return spawnSync(command.executable, command.args, { encoding: "utf8", env: environment });
 }
 
 await mkdir(home, { recursive: true });
@@ -70,7 +83,7 @@ assert.deepEqual(catalog.presets.dev, {
   prompt: "work"
 });
 for (const action of ["push", "pull"]) {
-  const refused = spawnSync(agentctl, ["preset", action], { encoding: "utf8", env });
+  const refused = spawnController(agentctl, ["preset", action]);
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, new RegExp(`preset ${action} requires --yes`));
 }
@@ -104,13 +117,13 @@ assert.equal(current.actual.prompt.profile, "work");
 const failingPromptctl = join(root, "failing-promptctl");
 await writeFile(
   failingPromptctl,
-  `#!/bin/sh\nif [ "$1" = "apply" ] && [ "$5" = "personal" ]; then echo simulated prompt failure >&2; exit 1; fi\nexec "${promptctl}" "$@"\n`
+  `#!/bin/sh\nif [ "$1" = "apply" ] && [ "$5" = "personal" ]; then echo simulated prompt failure >&2; exit 1; fi\nexec "${promptctlForShell}" "$@"\n`
 );
 await chmod(failingPromptctl, 0o700);
-const failedApply = spawnSync(
+const failedApply = spawnController(
   agentctl,
   ["preset", "apply", "personal", "--target", "codex", "--yes"],
-  { encoding: "utf8", env: { ...env, AGENTCTL_PROMPTCTL: failingPromptctl } }
+  { ...env, AGENTCTL_PROMPTCTL: failingPromptctl }
 );
 assert.notEqual(failedApply.status, 0);
 assert.match(failedApply.stderr, /previous selections were restored/);
@@ -133,9 +146,7 @@ run(promptctl, ["apply", "--target", "codex", "--profile", "personal", "--yes"])
 current = JSON.parse(run(agentctl, ["preset", "current", "--target", "codex", "--json"]));
 assert.equal(current.drift, true);
 assert.equal(current.matches.prompt, false);
-const driftDoctor = spawnSync(agentctl, ["doctor", "codex", "--json"], {
-  encoding: "utf8", env
-});
+const driftDoctor = spawnController(agentctl, ["doctor", "codex", "--json"]);
 assert.notEqual(driftDoctor.status, 0);
 assert.equal(JSON.parse(driftDoctor.stdout).targets[0].preset.drift, true);
 
