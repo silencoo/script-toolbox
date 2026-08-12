@@ -242,6 +242,29 @@ run_config_tests() {
     rm -rf "$test_root"; return 1
   fi
 
+  # Persisted provider URLs must not downgrade remote traffic or smuggle a
+  # credential through a query parameter. Loopback HTTP remains available for
+  # local development providers.
+  if HOME="$test_root/unsafe-url-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider custom --provider-name Unsafe --model model-a --key test-key \
+      --base-url 'http://api.example.test/v1' --dry-run >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
+  if HOME="$test_root/query-url-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider custom --provider-name Unsafe --model model-a --key test-key \
+      --base-url 'https://api.example.test/v1?key=plaintext' \
+      --dry-run >/dev/null 2>&1; then
+    rm -rf "$test_root"; return 1
+  fi
+  HOME="$test_root/loopback-url-home" PATH="${fake_bin}:${system_path}" \
+    "$SCRIPT_DIR/codex/setup.sh" \
+      --provider custom --provider-name Local --model model-a --key test-key \
+      --base-url 'http://127.0.0.1:11434/v1' --dry-run >/dev/null || {
+        rm -rf "$test_root"; return 1;
+      }
+
   # MiniMax presets must follow the current official model ID when --model is
   # omitted. Exercise each client that exposes a MiniMax provider.
   minimax_home="${test_root}/minimax-claude"

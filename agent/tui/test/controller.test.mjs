@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   createController,
+  createProcessRunner,
   normalizeMcpServerCatalog,
   normalizeSkillsCatalog,
   normalizeSnippetMetadata,
@@ -12,6 +13,27 @@ import {
   readPromptPreviewFile,
   sanitizeOutput
 } from "../src/controller.mjs";
+
+test("process runner bounds hung children and honors refresh cancellation", async () => {
+  const runner = createProcessRunner({ cwd: tmpdir(), timeoutMs: 30 });
+  const timedOut = await runner(process.execPath, [
+    "-e", "setInterval(() => {}, 1000)"
+  ]);
+  assert.equal(timedOut.code, 124);
+  assert.equal(timedOut.timedOut, true);
+  assert.match(timedOut.stderr, /timed out/);
+
+  const abortController = new AbortController();
+  const pending = runner(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { signal: abortController.signal, timeoutMs: 2_000 }
+  );
+  abortController.abort();
+  const aborted = await pending;
+  assert.equal(aborted.code, 130);
+  assert.equal(aborted.aborted, true);
+});
 
 test("JSON remains usable when doctor reports unhealthy exit status", () => {
   const result = parseJsonOutput({ code: 1, stdout: '{"healthy":false}', stderr: "" }, "doctor");
@@ -415,6 +437,10 @@ test("controller composes snapshot and confirmed preset action commands", async 
   assert.equal(snapshot.presets.cloud.mcp, "remote");
   assert.deepEqual(snapshot.snippets.map(({ name }) => name), ["review-code"]);
   assert.equal(snapshot.presetSource, "cloud");
+  assert.equal(
+    calls.filter((args) => args.join(" ") === "doctor all --json").length,
+    0
+  );
   const result = await controller.action("apply", { preset: "work", source: "local", target: "codex" });
   assert.equal(result.ok, true);
   assert.match(result.detail, /configuration applied/);

@@ -236,6 +236,45 @@ assert.equal(
 const restored = join(root, "restored");
 run(["restore-file", "--store", restored, "--input", snapshot, "--yes"]);
 assert.match(run(["status", "--store", restored]), /Skills: 2[\s\S]*Packs:\s+7/);
+await mkdir(join(restored, "skills", "stale-skill"), { recursive: true });
+await writeFile(join(restored, "skills", "stale-skill", "SKILL.md"), "# stale\n");
+const forcedRestore = run([
+  "restore-file", "--store", restored, "--input", snapshot, "--force", "--yes"
+]);
+assert.match(forcedRestore, /Preserved previous store at/);
+await assert.rejects(lstat(join(restored, "skills", "stale-skill")), { code: "ENOENT" });
+
+// Validation and staging failures must leave the active store untouched.
+const invalidSnapshot = join(root, "skills-invalid.json");
+const invalidExport = structuredClone(exported);
+invalidExport.skills["frontend-dev"].files["SKILL.md"].content = "not canonical base64!";
+await writeFile(invalidSnapshot, `${JSON.stringify(invalidExport, null, 2)}\n`);
+await writeFile(join(restored, "transaction-marker"), "active\n");
+const failedRestore = spawnSync(process.execPath, [
+  engine, "restore-file", "--store", restored, "--input", invalidSnapshot,
+  "--force", "--yes"
+], { encoding: "utf8" });
+assert.notEqual(failedRestore.status, 0);
+assert.equal(await readFile(join(restored, "transaction-marker"), "utf8"), "active\n");
+
+const stagingFailureSnapshot = join(root, "skills-staging-failure.json");
+const stagingFailureExport = structuredClone(exported);
+stagingFailureExport.skills["frontend-dev"].files.collision = {
+  encoding: "base64", mode: 0o600, content: Buffer.from("file").toString("base64")
+};
+stagingFailureExport.skills["frontend-dev"].files["collision/nested.txt"] = {
+  encoding: "base64", mode: 0o600, content: Buffer.from("nested").toString("base64")
+};
+await writeFile(
+  stagingFailureSnapshot,
+  `${JSON.stringify(stagingFailureExport, null, 2)}\n`
+);
+const stagingFailure = spawnSync(process.execPath, [
+  engine, "restore-file", "--store", restored, "--input", stagingFailureSnapshot,
+  "--force", "--yes"
+], { encoding: "utf8" });
+assert.notEqual(stagingFailure.status, 0);
+assert.equal(await readFile(join(restored, "transaction-marker"), "utf8"), "active\n");
 
 const unsafe = await makeSkill("unsafe-skill", "Contains an accidental secret", {
   ".env": "API_KEY=do-not-copy\n"

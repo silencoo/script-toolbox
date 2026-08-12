@@ -382,6 +382,35 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
       exa_api_key: "remote-test-exa-secret"
     });
 
+    // A forced restore swaps an exact managed snapshot into place. It removes
+    // stale managed files while preserving unrelated local store metadata.
+    await writeFile(
+      join(restoredStore, "profiles", "stale.json"),
+      "{}\n"
+    );
+    await writeFile(join(restoredStore, "artifacts", "stale.bin"), "stale\n");
+    await writeFile(join(restoredStore, "local-note.txt"), "keep me\n");
+    await restoreStore({
+      store: restoredStore,
+      remoteConfig: restoredConfig,
+      recoveryStdin: false,
+      version: "",
+      force: true,
+      quiet: true
+    });
+    await assert.rejects(
+      readFile(join(restoredStore, "profiles", "stale.json")),
+      { code: "ENOENT" }
+    );
+    await assert.rejects(
+      readFile(join(restoredStore, "artifacts", "stale.bin")),
+      { code: "ENOENT" }
+    );
+    assert.equal(
+      await readFile(join(restoredStore, "local-note.txt"), "utf8"),
+      "keep me\n"
+    );
+
     await run(MCPCTL, [
       "apply",
       "--target", "claude",

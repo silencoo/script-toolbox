@@ -204,11 +204,35 @@ test("import refuses URL credentials and extracts credential command arguments",
     }),
     /move it to a Header/
   );
+  assert.throws(
+    () => parseClaudeConfig({
+      mcpServers: {
+        unsafe: { type: "http", url: "https://mcp.example.test/mcp?key=plaintext" }
+      }
+    }),
+    /move it to a Header/
+  );
+  assert.throws(
+    () => parseClaudeConfig({
+      mcpServers: {
+        unsafe: { type: "http", url: "http://mcp.example.test/mcp" }
+      }
+    }),
+    /must use HTTPS/
+  );
+  assert.doesNotThrow(() => parseClaudeConfig({
+    mcpServers: {
+      local: { type: "http", url: "http://127.0.0.1:8787/mcp" }
+    }
+  }));
   const imported = parseClaudeConfig({
     mcpServers: {
       safe: {
         command: "tool",
-        args: ["--token", "command-token", "--api-key=inline-token"]
+        args: [
+          "--token", "command-token", "--api-key=inline-token",
+          "--key", "plain-key-token"
+        ]
       }
     }
   });
@@ -221,12 +245,14 @@ test("import refuses URL credentials and extracts credential command arguments",
     imported.servers[0].definition.command[3].prefix,
     "--api-key="
   );
+  assert.equal(imported.servers[0].definition.command[4], "--key");
+  assert.equal(typeof imported.servers[0].definition.command[5], "object");
   assert.deepEqual(
     Object.values(imported.secrets).sort(),
-    ["command-token", "inline-token"]
+    ["command-token", "inline-token", "plain-key-token"]
   );
   assert.equal(
-    JSON.stringify(imported.servers).includes("command-token"),
+    /command-token|inline-token|plain-key-token/.test(JSON.stringify(imported.servers)),
     false
   );
 });

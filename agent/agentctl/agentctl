@@ -267,6 +267,34 @@ status_safe_provider() {
   esac
 }
 
+status_cli_version() {
+  local command_name="$1" output pid attempts=0
+  output="$(mktemp "${TMPDIR:-/tmp}/agentctl-version.XXXXXX")"
+  (
+    # A hostile or broken --version implementation must not fill the disk
+    # during the bounded probe. The limit is ample for a version string.
+    ulimit -f 128 2>/dev/null || true
+    exec "$command_name" --version > "$output" 2>/dev/null
+  ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$attempts" -ge 40 ]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f "$output"
+      return 124
+    fi
+    sleep 0.05
+    attempts=$((attempts + 1))
+  done
+  if ! wait "$pid" 2>/dev/null; then
+    rm -f "$output"
+    return 1
+  fi
+  cat "$output"
+  rm -f "$output"
+}
+
 status_set_metadata() {
   CONFIG_FILE_1=""
   CONFIG_FILE_2=""
@@ -369,7 +397,7 @@ status_prepare() {
   if command -v "$CLI_COMMAND" >/dev/null 2>&1; then
     CLI_INSTALLED=true
     CLI_PATH="$(command -v "$CLI_COMMAND" 2>/dev/null | sed -n '1p')"
-    raw_version="$("$CLI_COMMAND" --version 2>/dev/null || true)"
+    raw_version="$(status_cli_version "$CLI_COMMAND" || true)"
     CLI_VERSION="$(printf '%s\n' "$raw_version" |
       LC_ALL=C tr -cd '\11\12\15\40-\176' |
       sed -n '1p' |

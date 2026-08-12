@@ -129,6 +129,28 @@ jq -e '
 ' "$STORE/catalog.json" >/dev/null ||
   fail "bundled search providers do not expose the expected auth modes"
 
+# Effective HTTP definitions enforce transport and credential placement even
+# when a catalog was edited without going through the importer.
+UNSAFE_URL_STORE="${TEST_ROOT}/unsafe-url-store"
+cp -R "$STORE" "$UNSAFE_URL_STORE"
+jq '.servers.context7.url = "http://mcp.example.test/mcp"' \
+  "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
+if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+  --store "$UNSAFE_URL_STORE" >/dev/null 2>&1; then
+  fail "plan accepted cleartext non-loopback HTTP"
+fi
+jq '.servers.context7.url = "https://mcp.example.test/mcp?key=plaintext"' \
+  "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
+if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+  --store "$UNSAFE_URL_STORE" >/dev/null 2>&1; then
+  fail "plan accepted a credential query parameter"
+fi
+jq '.servers.context7.url = "http://127.0.0.1:8787/mcp"' \
+  "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
+HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+  --store "$UNSAFE_URL_STORE" >/dev/null ||
+  fail "plan rejected a loopback HTTP endpoint"
+
 jq -e '
   .servers.gdb.command[1:] == [
     "uv", "gdb", "gdb-mcp==1.0.1", "gdb-mcp", "--"
@@ -524,6 +546,49 @@ LIFECYCLE_HOME="${TEST_ROOT}/lifecycle-home"
 mkdir -p "$LIFECYCLE_HOME"
 HOME="$LIFECYCLE_HOME" "$MCPCTL" apply --target claude --profile off \
   --store "$STORE" >/dev/null
+
+# Config and applied-state updates form one locked transaction. A state-path
+# failure discovered before commit, or a state write failure after the config
+# swap, must leave the original config intact.
+TRANSACTION_HOME="${TEST_ROOT}/transaction-home"
+TRANSACTION_CONFIG="${TRANSACTION_HOME}/claude.json"
+TRANSACTION_STATE="${TRANSACTION_HOME}/state/applied.json"
+TRANSACTION_BIN="${TEST_ROOT}/transaction-bin"
+REAL_MV="$(command -v mv)"
+mkdir -p "$TRANSACTION_HOME" "$TRANSACTION_BIN"
+printf '%s\n' '{"preserved":true}' > "$TRANSACTION_CONFIG"
+cp "$TRANSACTION_CONFIG" "$TEST_ROOT/transaction-config.before"
+printf '%s\n' '#!/usr/bin/env sh' \
+  'if [ "${2:-}" = "${MCPCTL_FAIL_MV_TARGET:-}" ]; then exit 73; fi' \
+  "exec '$REAL_MV' \"\$@\"" > "$TRANSACTION_BIN/mv"
+chmod +x "$TRANSACTION_BIN/mv"
+if HOME="$TRANSACTION_HOME" \
+  MCPCTL_CLAUDE_CONFIG="$TRANSACTION_CONFIG" \
+  MCPCTL_STATE_FILE="$TRANSACTION_STATE" \
+  MCPCTL_FAIL_MV_TARGET="$TRANSACTION_STATE" \
+  PATH="$TRANSACTION_BIN:$PATH" \
+    "$MCPCTL" apply --target claude --profile off --store "$STORE" \
+      >"$TEST_ROOT/transaction-failure.out" 2>&1; then
+  fail "apply succeeded after its state commit was forced to fail"
+fi
+cmp -s "$TEST_ROOT/transaction-config.before" "$TRANSACTION_CONFIG" ||
+  fail "failed state commit did not roll back target config"
+[ ! -e "$TRANSACTION_STATE" ] ||
+  fail "failed state commit left a partial state file"
+[ ! -e "${TRANSACTION_STATE}.apply.lock" ] ||
+  fail "failed state commit left its apply lock behind"
+
+printf '%s\n' blocker > "$TRANSACTION_HOME/state-blocker"
+if HOME="$TRANSACTION_HOME" \
+  MCPCTL_CLAUDE_CONFIG="$TRANSACTION_CONFIG" \
+  MCPCTL_STATE_FILE="$TRANSACTION_HOME/state-blocker/applied.json" \
+    "$MCPCTL" apply --target claude --profile off --store "$STORE" \
+      >"$TEST_ROOT/transaction-parent-failure.out" 2>&1; then
+  fail "apply accepted a non-directory state parent"
+fi
+cmp -s "$TEST_ROOT/transaction-config.before" "$TRANSACTION_CONFIG" ||
+  fail "invalid state parent changed target config"
+
 HOME="$LIFECYCLE_HOME" "$MCPCTL" server enable playwright \
   --target claude --store "$STORE" >/dev/null
 cp "$LIFECYCLE_HOME/.claude.json" "$TEST_ROOT/lifecycle.before"

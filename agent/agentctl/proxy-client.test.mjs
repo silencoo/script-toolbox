@@ -18,6 +18,8 @@ import test from "node:test";
 
 import {
   allowedRoute,
+  circuitPersister,
+  jsonlLogger,
   joinUpstream,
   pruneLogs,
   rotateLog,
@@ -245,6 +247,48 @@ test("metadata and usage log retention is count- and age-bounded", async () => {
     await assert.rejects(() => lstat(`${path}.2`), { code: "ENOENT" });
     await assert.rejects(() => lstat(`${path}.3`), { code: "ENOENT" });
     assert.equal(await readFile(path, "utf8"), "new-active\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hot-path persistence coalesces circuit writes and bounds log backlog", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-persistence-"));
+  try {
+    let revision = 0;
+    const writes = [];
+    const persist = circuitPersister(join(root, "circuits.json"), {
+      snapshot: () => ({ revision, entries: [{ revision }] })
+    }, {
+      delayMs: 5,
+      write: async (_path, snapshot) => {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 2));
+        writes.push(snapshot);
+      }
+    });
+    for (revision = 1; revision <= 100; revision += 1) persist();
+    revision = 100;
+    await persist.flush();
+    assert.ok(writes.length <= 2);
+    assert.equal(writes.at(-1).revision, 100);
+    assert.equal(persist.status().pending, false);
+
+    const logPath = join(root, "bounded.jsonl");
+    const logger = jsonlLogger(
+      logPath,
+      65536,
+      { files: 3, max_age_days: 2 },
+      "bounded test log",
+      { maxQueue: 2 }
+    );
+    for (let index = 0; index < 20; index += 1) logger({ index });
+    await logger.flush();
+    const lines = (await readFile(logPath, "utf8")).trim().split("\n");
+    assert.equal(lines.length, 2);
+    assert.equal(logger.status().pending, 0);
+    assert.equal(logger.status().dropped, 18);
+    assert.equal(logger.status().healthy, false);
+    assert.equal(logger.status().last_error, "queue_full");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -490,6 +534,9 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(running.status, "running");
     assert.equal(running.pid, proxyPid);
     assert.equal(running.pricing_catalog_version, "2026.08-test");
+    assert.equal(running.observability.metadata_log.healthy, true);
+    assert.equal(running.observability.usage_log.healthy, true);
+    assert.equal(running.observability.circuit_state.last_error, null);
     assert.equal(running.pricing_model_source, "response");
     assert.equal(running.compaction.mode, "remote_native");
     assert.equal(Object.hasOwn(running, "token"), false);

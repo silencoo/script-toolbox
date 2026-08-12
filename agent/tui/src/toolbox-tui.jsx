@@ -1372,16 +1372,20 @@ function App({ initialSection, controller, onLaunch }) {
   const [promptPreview, setPromptPreview] = useState(null);
   const [promptPreviewOffset, setPromptPreviewOffset] = useState(0);
   const refreshSequence = useRef(0);
+  const refreshAbort = useRef(null);
 
   const refresh = useCallback(async (quiet = false) => {
+    refreshAbort.current?.abort();
+    const abortController = new AbortController();
+    refreshAbort.current = abortController;
     const sequence = refreshSequence.current + 1;
     refreshSequence.current = sequence;
     setLoading(true);
     if (!quiet) setMessage("Refreshing diagnostics…");
     try {
       const local = typeof controller.localSnapshot === "function"
-        ? await controller.localSnapshot()
-        : await controller.snapshot();
+        ? await controller.localSnapshot({ signal: abortController.signal })
+        : await controller.snapshot({ signal: abortController.signal });
       if (refreshSequence.current !== sequence) return;
       setSnapshot(local);
       setSelected((value) => clampSelection(value, presetEntries(local).length));
@@ -1395,7 +1399,7 @@ function App({ initialSection, controller, onLaunch }) {
         ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} · Workspace ${local.workspace ? "refreshing" : "connecting"}…`
         : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
       if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
-        void controller.hydrateSnapshot(local).then((next) => {
+        void controller.hydrateSnapshot(local, { signal: abortController.signal }).then((next) => {
           if (refreshSequence.current !== sequence) return;
           setSnapshot(next);
           setSelected((value) => clampSelection(value, presetEntries(next).length));
@@ -1418,7 +1422,11 @@ function App({ initialSection, controller, onLaunch }) {
   useEffect(() => {
     void refresh(true);
     const timer = setInterval(() => { void refresh(true); }, 30_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      refreshSequence.current += 1;
+      refreshAbort.current?.abort();
+    };
   }, [refresh]);
 
   useEffect(() => {

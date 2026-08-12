@@ -5,7 +5,6 @@ import { createServer } from "node:http";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import {
-  appendFile,
   chmod,
   lstat,
   mkdir,
@@ -51,6 +50,9 @@ const CAPABILITY_KIND = "agentctl-proxy-capability";
 const STATE_KIND = "agentctl-proxy-state";
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_PRICING_BYTES = 5 * 1024 * 1024;
+const LOG_MAINTENANCE_MS = 60_000;
+const LOG_MAX_QUEUE = 2048;
+const CIRCUIT_PERSIST_DELAY_MS = 50;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -324,13 +326,78 @@ async function readCircuitState(path) {
   return validateCircuitState(value);
 }
 
-function circuitPersister(path, registry) {
-  let queue = Promise.resolve();
+function safePersistenceStatus(error) {
+  return error ? "write_failed" : null;
+}
+
+function persistenceErrorReporter(label) {
+  let lastReportedAt = 0;
   return () => {
+    const now = Date.now();
+    if (now - lastReportedAt < 60_000) return;
+    lastReportedAt = now;
+    process.stderr.write(`[warn] ${label} persistence failed; health reports degraded observability\n`);
+  };
+}
+
+function circuitPersister(path, registry, {
+  delayMs = CIRCUIT_PERSIST_DELAY_MS,
+  write = writeJsonAtomic,
+  onError = () => {}
+} = {}) {
+  let queue = Promise.resolve();
+  let timer = null;
+  let dirty = false;
+  let writes = 0;
+  let failures = 0;
+  let lastError = null;
+  let lastSignature = JSON.stringify(registry.snapshot().entries);
+
+  const writeLatest = () => {
+    if (!dirty) return queue;
+    dirty = false;
     const snapshot = registry.snapshot();
-    queue = queue.catch(() => {}).then(() => writeJsonAtomic(path, snapshot));
+    const signature = JSON.stringify(snapshot.entries);
+    if (signature === lastSignature) return queue;
+    queue = queue.then(() => write(path, snapshot)).then(() => {
+      writes += 1;
+      lastError = null;
+      lastSignature = signature;
+    }).catch((error) => {
+      failures += 1;
+      lastError = error;
+      onError(error);
+    });
     return queue;
   };
+
+  const persist = () => {
+    dirty = true;
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void writeLatest();
+    }, delayMs);
+    timer.unref?.();
+  };
+  persist.flush = async () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    do {
+      await writeLatest();
+      await queue;
+    } while (dirty);
+  };
+  persist.status = () => ({
+    enabled: true,
+    pending: dirty || Boolean(timer),
+    writes,
+    failures,
+    last_error: safePersistenceStatus(lastError)
+  });
+  return persist;
 }
 
 function validateCapability(value) {
@@ -538,23 +605,146 @@ async function pruneLogs(path, retention, label) {
   }
 }
 
-function jsonlLogger(path, maxBytes, retention, label) {
+function jsonlLogger(path, maxBytes, retention, label, {
+  maxQueue = LOG_MAX_QUEUE,
+  maintenanceMs = LOG_MAINTENANCE_MS,
+  onError = () => {}
+} = {}) {
   let queue = Promise.resolve();
-  const append = (record) => {
-    queue = queue.then(async () => {
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      await pruneLogs(path, retention, label);
-      const details = await logDetails(path, label);
-      const expired = details &&
-        details.mtimeMs < Date.now() - retention.max_age_days * 86400000;
-      if (details && (details.size >= maxBytes || expired)) {
-        await rotateLog(path, retention, label);
-      }
-      await appendFile(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-      await chmod(path, 0o600);
-    }).catch(() => {});
+  let initialized = false;
+  let handle = null;
+  let currentSize = 0;
+  let activeMtime = 0;
+  let activeExists = false;
+  let lastMaintenanceAt = 0;
+  let pending = 0;
+  let dropped = 0;
+  let failures = 0;
+  let lastError = null;
+
+  const closeHandle = async ({ sync = false } = {}) => {
+    const current = handle;
+    handle = null;
+    if (!current) return;
+    let failure = null;
+    if (sync) {
+      try { await current.sync(); } catch (error) { failure = error; }
+    }
+    try { await current.close(); } catch (error) { failure ||= error; }
+    if (failure) throw failure;
   };
-  append.flush = () => queue;
+
+  const openActive = async (expected = null) => {
+    const current = await open(path, "a", 0o600);
+    try {
+      const descriptorDetails = await current.stat();
+      const pathDetails = await lstat(path);
+      if (pathDetails.isSymbolicLink() || !pathDetails.isFile() ||
+          pathDetails.dev !== descriptorDetails.dev ||
+          pathDetails.ino !== descriptorDetails.ino) {
+        throw new ProxyDaemonError(`${label} changed while it was being opened`);
+      }
+      if (expected && (expected.dev !== descriptorDetails.dev ||
+          expected.ino !== descriptorDetails.ino)) {
+        throw new ProxyDaemonError(`${label} changed while it was being opened`);
+      }
+      await current.chmod(0o600);
+      handle = current;
+      activeExists = true;
+      currentSize = descriptorDetails.size;
+      activeMtime = descriptorDetails.mtimeMs || Date.now();
+    } catch (error) {
+      await current.close().catch(() => {});
+      throw error;
+    }
+  };
+
+  const initialize = async () => {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await pruneLogs(path, retention, label);
+    const details = await logDetails(path, label);
+    await openActive(details);
+    lastMaintenanceAt = Date.now();
+    initialized = true;
+  };
+
+  const maintain = async () => {
+    const now = Date.now();
+    if (!initialized) {
+      await initialize();
+      return;
+    }
+    if (now - lastMaintenanceAt < maintenanceMs) return;
+    await closeHandle();
+    await pruneLogs(path, retention, label);
+    const details = await logDetails(path, label);
+    await openActive(details);
+    lastMaintenanceAt = now;
+  };
+
+  const append = (record) => {
+    if (pending >= maxQueue) {
+      dropped += 1;
+      return false;
+    }
+    let line;
+    try {
+      line = `${JSON.stringify(record)}\n`;
+    } catch (error) {
+      failures += 1;
+      lastError = error;
+      onError(error);
+      return false;
+    }
+    const lineBytes = Buffer.byteLength(line);
+    pending += 1;
+    queue = queue.then(async () => {
+      await maintain();
+      const expired = activeExists &&
+        activeMtime < Date.now() - retention.max_age_days * 86400000;
+      if (activeExists && currentSize > 0 &&
+          (currentSize + lineBytes > maxBytes || expired)) {
+        await closeHandle();
+        await rotateLog(path, retention, label);
+        await pruneLogs(path, retention, label);
+        activeExists = false;
+        currentSize = 0;
+        await openActive(null);
+      }
+      await handle.appendFile(line);
+      currentSize += lineBytes;
+      activeMtime = Date.now();
+      lastError = null;
+    }).catch((error) => {
+      failures += 1;
+      lastError = error;
+      initialized = false;
+      onError(error);
+    }).finally(() => {
+      pending -= 1;
+    });
+    return true;
+  };
+  append.flush = async () => {
+    await queue;
+    try {
+      await closeHandle({ sync: true });
+    } catch (error) {
+      failures += 1;
+      lastError = error;
+      onError(error);
+    } finally {
+      initialized = false;
+      activeExists = false;
+    }
+  };
+  append.status = () => ({
+    healthy: lastError === null && dropped === 0,
+    pending,
+    dropped,
+    failures,
+    last_error: safePersistenceStatus(lastError) || (dropped > 0 ? "queue_full" : null)
+  });
   return append;
 }
 
@@ -927,7 +1117,7 @@ async function proxyRequest(request, response, context) {
     const circuitStates = config.circuit.enabled
       ? config.backends.map((backend) => circuits.inspect(backend.profile, config.target))
       : [];
-    if (config.circuit.enabled) await persistCircuits().catch(() => {});
+    if (config.circuit.enabled) persistCircuits();
     sendJson(response, 200, {
       schema: 1,
       kind: "agentctl-proxy-health",
@@ -940,7 +1130,12 @@ async function proxyRequest(request, response, context) {
       protocol: config.protocol,
       compaction: config.compaction,
       pricing_catalog_version: pricing?.version || null,
-      pricing_model_source: config.pricing.model_source
+      pricing_model_source: config.pricing.model_source,
+      observability: {
+        circuit_state: persistCircuits.status(),
+        metadata_log: log.status(),
+        usage_log: usageLog.status()
+      }
     });
     return;
   }
@@ -1028,7 +1223,7 @@ async function proxyRequest(request, response, context) {
         });
         continue;
       }
-      if (config.circuit.enabled) await persistCircuits().catch(() => {});
+      if (config.circuit.enabled) persistCircuits();
       attempted += 1;
       const laterAvailable = config.backends.slice(index + 1).some((candidate) =>
         !config.circuit.enabled || circuits.inspect(candidate.profile, config.target).state !== "open"
@@ -1063,7 +1258,7 @@ async function proxyRequest(request, response, context) {
         if (result.failure) circuits.failure(backend.profile, config.target);
         else if (result.kind === "response") circuits.success(backend.profile, config.target);
         else circuits.release(backend.profile, config.target);
-        await persistCircuits().catch(() => {});
+        persistCircuits();
       }
       if (result.kind === "retry") continue;
       if (result.kind === "response" && (result.mapping.requested_model || result.extracted)) {
@@ -1138,22 +1333,36 @@ async function run(configPath) {
     ? await readCircuitState(config.paths.circuit_state)
     : newCircuitState();
   const circuits = new CircuitRegistry(config.circuit, circuitState);
+  const circuitPersistenceError = persistenceErrorReporter("circuit state");
   const persistCircuits = config.circuit.enabled
-    ? circuitPersister(config.paths.circuit_state, circuits)
-    : async () => {};
+    ? circuitPersister(config.paths.circuit_state, circuits, {
+        onError: circuitPersistenceError
+      })
+    : Object.assign(() => {}, {
+        flush: async () => {},
+        status: () => ({
+          enabled: false,
+          pending: false,
+          writes: 0,
+          failures: 0,
+          last_error: null
+        })
+      });
 
   await acquireLock(config);
   const log = jsonlLogger(
     config.paths.log,
     config.limits.log_bytes,
     config.retention,
-    "proxy metadata log"
+    "proxy metadata log",
+    { onError: persistenceErrorReporter("proxy metadata log") }
   );
   const usageLog = jsonlLogger(
     config.paths.usage_log,
     config.limits.usage_log_bytes,
     config.retention,
-    "proxy usage log"
+    "proxy usage log",
+    { onError: persistenceErrorReporter("proxy usage log") }
   );
   const sockets = new Set();
   let shuttingDown = false;
@@ -1197,7 +1406,7 @@ async function run(configPath) {
     forceTimer.unref?.();
     server.close(async () => {
       clearTimeout(forceTimer);
-      await Promise.all([log.flush(), usageLog.flush()]);
+      await Promise.all([log.flush(), usageLog.flush(), persistCircuits.flush()]);
       await cleanup();
       process.exit(exitCode);
     });
@@ -1276,6 +1485,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 export {
   allowedRoute,
+  circuitPersister,
   jsonlLogger,
   joinUpstream,
   pruneLogs,

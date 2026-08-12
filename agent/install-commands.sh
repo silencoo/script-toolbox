@@ -294,7 +294,25 @@ RUNTIME_STAGE=""
 RUNTIME_ROLLBACK=""
 RUNTIME_ROLLBACK_KEEP=0
 RUNTIME_INSTALLED=0
+RUNTIME_INSTALLED_ID=""
 NEXT_RUNTIME_BACKUP=""
+LINK_TRANSACTION_ACTIVE=0
+INSTALL_TRANSACTION_COMMITTED=0
+LINK_PREFIX_CREATED=0
+LINK_LOCK_DIR=""
+LINK_MANIFEST_EXISTED=0
+LINK_MANIFEST_SNAPSHOT=""
+LINK_MANIFEST_WRITTEN=0
+LINK_CURRENT_TEMP=""
+LINK_TX_STATES=()
+LINK_TX_LINKS=()
+LINK_TX_TARGETS=()
+LINK_TX_BACKUPS=()
+LINK_TX_ROLLBACK_DIRS=()
+
+path_identity() {
+  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null || true
+}
 
 stage_runtime() {
   local runtime_parent marker_temp
@@ -400,50 +418,255 @@ install_staged_runtime() {
     fi
     [ ! -e "$RUNTIME_ROLLBACK" ] && [ ! -L "$RUNTIME_ROLLBACK" ] ||
       die "runtime backup path already exists: $RUNTIME_ROLLBACK"
+    # Arm rollback before the first rename. If the rename itself fails,
+    # rollback_runtime_install detects that the untouched runtime remains.
+    RUNTIME_INSTALLED=1
     mv "$RUNTIME_DIR" "$RUNTIME_ROLLBACK"
   fi
+  RUNTIME_INSTALLED_ID="$(path_identity "$RUNTIME_STAGE")"
+  [ -n "$RUNTIME_INSTALLED_ID" ] || die "could not identify staged runtime"
+  RUNTIME_INSTALLED=1
   if ! mv "$RUNTIME_STAGE" "$RUNTIME_DIR"; then
-    [ -z "$RUNTIME_ROLLBACK" ] || mv "$RUNTIME_ROLLBACK" "$RUNTIME_DIR"
     die "could not install standalone runtime"
   fi
   RUNTIME_STAGE=""
-  RUNTIME_INSTALLED=1
 }
 
 finish_runtime_install() {
-  if [ -n "$RUNTIME_ROLLBACK" ] && [ "$RUNTIME_ROLLBACK_KEEP" != 1 ]; then
-    rm -rf "$RUNTIME_ROLLBACK"
-  fi
+  local obsolete="$RUNTIME_ROLLBACK"
+  local keep="$RUNTIME_ROLLBACK_KEEP"
   RUNTIME_ROLLBACK=""
   RUNTIME_INSTALLED=0
+  RUNTIME_INSTALLED_ID=""
+  if [ -n "$obsolete" ] && [ "$keep" != 1 ]; then
+    rm -rf "$obsolete" || warn "could not remove obsolete runtime rollback: $obsolete"
+  fi
 }
 
 rollback_runtime_install() {
+  local current_id failed=0
   [ "$RUNTIME_INSTALLED" = 1 ] || return 0
-  if [ -d "$RUNTIME_DIR" ] && [ ! -L "$RUNTIME_DIR" ]; then
-    rm -rf "$RUNTIME_DIR"
+  if [ -n "$RUNTIME_ROLLBACK" ] &&
+     [ ! -e "$RUNTIME_ROLLBACK" ] && [ ! -L "$RUNTIME_ROLLBACK" ] &&
+     [ -d "$RUNTIME_DIR" ] && [ ! -L "$RUNTIME_DIR" ]; then
+    # The first rename failed before changing the existing runtime.
+    RUNTIME_ROLLBACK=""
+    RUNTIME_INSTALLED=0
+    RUNTIME_INSTALLED_ID=""
+    return 0
   fi
-  [ -z "$RUNTIME_ROLLBACK" ] || mv "$RUNTIME_ROLLBACK" "$RUNTIME_DIR"
+  if [ -e "$RUNTIME_DIR" ] || [ -L "$RUNTIME_DIR" ]; then
+    current_id="$(path_identity "$RUNTIME_DIR")"
+    if [ -n "$RUNTIME_INSTALLED_ID" ] &&
+       [ "$current_id" = "$RUNTIME_INSTALLED_ID" ] &&
+       [ -d "$RUNTIME_DIR" ] && [ ! -L "$RUNTIME_DIR" ]; then
+      rm -rf "$RUNTIME_DIR" || failed=1
+    else
+      warn "rollback preserved a concurrently changed runtime: $RUNTIME_DIR"
+      failed=1
+    fi
+  fi
+  if [ -n "$RUNTIME_ROLLBACK" ] &&
+     { [ -e "$RUNTIME_ROLLBACK" ] || [ -L "$RUNTIME_ROLLBACK" ]; }; then
+    if [ ! -e "$RUNTIME_DIR" ] && [ ! -L "$RUNTIME_DIR" ]; then
+      mv "$RUNTIME_ROLLBACK" "$RUNTIME_DIR" || failed=1
+    else
+      failed=1
+    fi
+  fi
   RUNTIME_ROLLBACK=""
   RUNTIME_INSTALLED=0
+  RUNTIME_INSTALLED_ID=""
+  [ "$failed" -eq 0 ]
+}
+
+acquire_command_install_lock() {
+  LINK_LOCK_DIR="${PREFIX}/.${MANIFEST_NAME}.install.lock"
+  if ! mkdir "$LINK_LOCK_DIR" 2>/dev/null; then
+    LINK_LOCK_DIR=""
+    die "another command installation is active in $PREFIX"
+  fi
+  printf '%s\n' "$$" > "$LINK_LOCK_DIR/pid"
+}
+
+release_command_install_lock() {
+  [ -n "$LINK_LOCK_DIR" ] || return 0
+  rm -f "$LINK_LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$LINK_LOCK_DIR" 2>/dev/null || true
+  LINK_LOCK_DIR=""
+}
+
+begin_command_install_transaction() {
+  local index
+  LINK_TX_STATES=()
+  LINK_TX_LINKS=()
+  LINK_TX_TARGETS=()
+  LINK_TX_BACKUPS=()
+  LINK_TX_ROLLBACK_DIRS=()
+  LINK_MANIFEST_EXISTED=0
+  LINK_MANIFEST_SNAPSHOT=""
+  LINK_MANIFEST_WRITTEN=0
+  LINK_CURRENT_TEMP=""
+  INSTALL_TRANSACTION_COMMITTED=0
+  if [ -f "$MANIFEST" ]; then
+    LINK_MANIFEST_SNAPSHOT="$(mktemp "${PREFIX}/.${MANIFEST_NAME}.rollback.XXXXXX")"
+    cp -p "$MANIFEST" "$LINK_MANIFEST_SNAPSHOT"
+    LINK_MANIFEST_EXISTED=1
+  fi
+  index=0
+  while [ "$index" -lt "${#COMMAND_NAMES[@]}" ]; do
+    LINK_TX_STATES[$index]=""
+    LINK_TX_LINKS[$index]="${PREFIX}/${COMMAND_NAMES[$index]}"
+    LINK_TX_TARGETS[$index]="${COMMAND_TARGETS[$index]}"
+    LINK_TX_BACKUPS[$index]=""
+    LINK_TX_ROLLBACK_DIRS[$index]=""
+    index=$((index + 1))
+  done
+  LINK_TRANSACTION_ACTIVE=1
+}
+
+remove_transaction_link() {
+  local link="$1" target="$2"
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+    rm -f "$link"
+    return 0
+  fi
+  if [ ! -e "$link" ] && [ ! -L "$link" ]; then return 0; fi
+  warn "rollback preserved a concurrently changed command: $link"
+  return 1
+}
+
+rollback_command_install() {
+  local index state link target backup rollback_dir original failed=0
+  [ "$LINK_TRANSACTION_ACTIVE" = 1 ] || return 0
+  rm -f "$LINK_CURRENT_TEMP" 2>/dev/null || true
+  LINK_CURRENT_TEMP=""
+  index=$((${#COMMAND_NAMES[@]} - 1))
+  while [ "$index" -ge 0 ]; do
+    state="${LINK_TX_STATES[$index]:-}"
+    link="${LINK_TX_LINKS[$index]:-}"
+    target="${LINK_TX_TARGETS[$index]:-}"
+    backup="${LINK_TX_BACKUPS[$index]:-}"
+    rollback_dir="${LINK_TX_ROLLBACK_DIRS[$index]:-}"
+    case "$state" in
+      create)
+        remove_transaction_link "$link" "$target" || failed=1
+        ;;
+      refresh)
+        original="${rollback_dir}/original"
+        if [ -e "$original" ] || [ -L "$original" ]; then
+          if remove_transaction_link "$link" "$target"; then
+            mv "$original" "$link" || failed=1
+          else
+            failed=1
+          fi
+        fi
+        [ -z "$rollback_dir" ] || rm -rf "$rollback_dir" 2>/dev/null || true
+        ;;
+      backup)
+        if [ -e "$backup" ] || [ -L "$backup" ]; then
+          if remove_transaction_link "$link" "$target"; then
+            mv "$backup" "$link" || failed=1
+          else
+            failed=1
+          fi
+        fi
+        ;;
+    esac
+    index=$((index - 1))
+  done
+
+  if [ "$LINK_MANIFEST_EXISTED" = 1 ] && [ -f "$LINK_MANIFEST_SNAPSHOT" ]; then
+    if [ -L "$MANIFEST" ] || { [ -e "$MANIFEST" ] && [ ! -f "$MANIFEST" ]; }; then
+      warn "rollback preserved a concurrently changed manifest: $MANIFEST"
+      failed=1
+    else
+      rm -f "$MANIFEST"
+      mv "$LINK_MANIFEST_SNAPSHOT" "$MANIFEST" || failed=1
+      LINK_MANIFEST_SNAPSHOT=""
+    fi
+  elif [ "$LINK_MANIFEST_WRITTEN" = 1 ]; then
+    if [ ! -e "$MANIFEST" ] && [ ! -L "$MANIFEST" ]; then
+      :
+    elif [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ]; then
+      rm -f "$MANIFEST"
+    else
+      warn "rollback preserved a concurrently changed manifest: $MANIFEST"
+      failed=1
+    fi
+  fi
+  [ -z "$LINK_MANIFEST_SNAPSHOT" ] || rm -f "$LINK_MANIFEST_SNAPSHOT"
+  LINK_MANIFEST_SNAPSHOT=""
+  LINK_TRANSACTION_ACTIVE=0
+  release_command_install_lock
+  if [ "$LINK_PREFIX_CREATED" = 1 ]; then
+    rmdir "$PREFIX" 2>/dev/null || true
+  fi
+  [ "$failed" -eq 0 ]
+}
+
+finish_command_install() {
+  local rollback_dir snapshot="$LINK_MANIFEST_SNAPSHOT" index=0
+  LINK_TRANSACTION_ACTIVE=0
+  LINK_MANIFEST_SNAPSHOT=""
+  [ -z "$snapshot" ] || rm -f "$snapshot" 2>/dev/null ||
+    warn "could not remove command-manifest rollback snapshot: $snapshot"
+  while [ "$index" -lt "${#COMMAND_NAMES[@]}" ]; do
+    rollback_dir="${LINK_TX_ROLLBACK_DIRS[$index]:-}"
+    [ -z "$rollback_dir" ] || rm -rf "$rollback_dir" 2>/dev/null || true
+    index=$((index + 1))
+  done
+  release_command_install_lock
+}
+
+maybe_fail_install() {
+  [ "${SCRIPT_TOOLBOX_INSTALL_FAIL_AT:-}" != "$1" ] ||
+    die "injected command installation failure at $1"
 }
 
 cleanup_install() {
   local status=$?
   trap - EXIT
   if [ "$status" -ne 0 ]; then
-    rollback_runtime_install || true
+    if [ "$INSTALL_TRANSACTION_COMMITTED" = 1 ]; then
+      finish_runtime_install
+      finish_command_install
+    else
+      rollback_command_install ||
+        warn "command-link rollback was incomplete; inspect $PREFIX"
+      rollback_runtime_install ||
+        warn "runtime rollback was incomplete; inspect $RUNTIME_DIR"
+    fi
     [ -z "$RUNTIME_STAGE" ] || rm -rf "$RUNTIME_STAGE"
+  fi
+  rm -f "$LINK_CURRENT_TEMP" 2>/dev/null || true
+  [ -z "$LINK_MANIFEST_SNAPSHOT" ] || rm -f "$LINK_MANIFEST_SNAPSHOT" 2>/dev/null || true
+  LINK_MANIFEST_SNAPSHOT=""
+  release_command_install_lock
+  if [ "$status" -ne 0 ] && [ "$LINK_PREFIX_CREATED" = 1 ]; then
+    rmdir "$PREFIX" 2>/dev/null || true
   fi
   exit "$status"
 }
 trap cleanup_install EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 install_commands() {
   local index name target source_target link current_target action backup timestamp
-  local conflict_count=0 temp_link manifest_temp
+  local conflict_count=0 temp_link manifest_temp rollback_dir
   local -a plan_actions plan_backups
 
+  if [ "$APPLY" = 1 ]; then
+    if [ ! -e "$PREFIX" ] && [ ! -L "$PREFIX" ]; then
+      mkdir -p "$PREFIX"
+      LINK_PREFIX_CREATED=1
+    else
+      [ -d "$PREFIX" ] || die "command prefix is not a directory: $PREFIX"
+    fi
+    acquire_command_install_lock
+  fi
   validate_manifest
   if [ "$INSTALL_MODE" = "standalone" ]; then
     log "  runtime  ${SCRIPT_DIR} -> ${RUNTIME_DIR}"
@@ -500,11 +723,12 @@ install_commands() {
     return 0
   fi
 
+  begin_command_install_transaction
   if [ "$INSTALL_MODE" = "standalone" ]; then
     stage_runtime
     install_staged_runtime
+    maybe_fail_install after-runtime
   fi
-  mkdir -p "$PREFIX"
   index=0
   while [ "$index" -lt "${#COMMAND_NAMES[@]}" ]; do
     name="${COMMAND_NAMES[$index]}"
@@ -514,20 +738,35 @@ install_commands() {
     backup="${plan_backups[$index]}"
     case "$action" in
       keep) ;;
-      refresh) rm -f "$link" ;;
-      backup) mv "$link" "$backup" ;;
-      create) ;;
+      refresh)
+        rollback_dir="$(mktemp -d "${PREFIX}/.${name}.rollback.XXXXXX")"
+        LINK_TX_STATES[$index]="refresh"
+        LINK_TX_ROLLBACK_DIRS[$index]="$rollback_dir"
+        mv "$link" "$rollback_dir/original"
+        ;;
+      backup)
+        LINK_TX_STATES[$index]="backup"
+        LINK_TX_BACKUPS[$index]="$backup"
+        mv "$link" "$backup"
+        ;;
+      create)
+        LINK_TX_STATES[$index]="create"
+        ;;
     esac
     if [ "$action" != "keep" ]; then
       temp_link="$(mktemp "${PREFIX}/.${name}.tmp.XXXXXX")"
+      LINK_CURRENT_TEMP="$temp_link"
       rm -f "$temp_link"
       ln -s "$target" "$temp_link"
       mv "$temp_link" "$link"
+      LINK_CURRENT_TEMP=""
     fi
+    maybe_fail_install "after-link-${name}"
     index=$((index + 1))
   done
 
   manifest_temp="$(mktemp "${PREFIX}/.${MANIFEST_NAME}.tmp.XXXXXX")"
+  LINK_CURRENT_TEMP="$manifest_temp"
   {
     if [ "$INSTALL_MODE" = "standalone" ]; then
       printf '%s\t%s\t%s\t%s\n' \
@@ -543,8 +782,16 @@ install_commands() {
     done
   } > "$manifest_temp"
   chmod 600 "$manifest_temp"
+  maybe_fail_install before-manifest
+  LINK_MANIFEST_WRITTEN=1
   mv "$manifest_temp" "$MANIFEST"
+  LINK_CURRENT_TEMP=""
+  maybe_fail_install after-manifest
+  # The manifest is the commit record. Flip one shared guard before deleting
+  # rollback material so a signal cannot commit only the runtime or links.
+  INSTALL_TRANSACTION_COMMITTED=1
   finish_runtime_install
+  finish_command_install
   ok "installed agentctl, mcpctl, promptctl, and skillsctl in $PREFIX"
   [ "$INSTALL_MODE" != "standalone" ] || ok "standalone runtime: $RUNTIME_DIR"
   case ":${PATH}:" in *":${PREFIX}:"*) ;; *) warn "$PREFIX is not currently on PATH; add it in your shell startup file" ;; esac

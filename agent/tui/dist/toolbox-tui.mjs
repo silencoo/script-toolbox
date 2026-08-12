@@ -22573,6 +22573,7 @@ var VERSION_ID_PATTERN = /^[0-9]{13}-[a-f0-9-]{36}$/;
 var FETCH_TIMEOUT_MS = 3e4;
 var MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 var MAX_ERROR_BYTES = 64 * 1024;
+var responseDeadlines = /* @__PURE__ */ new WeakMap();
 var MCP_REMOTE_PROTOCOL = Object.freeze({
   id: "mcpctl",
   recoveryPrefix: "mcpstore1_",
@@ -22664,6 +22665,7 @@ async function downloadRemoteSnapshot(configOrPath, protocol, version = "") {
   await requireApiSuccess(response, [200]);
   const contentType = (response.headers.get("Content-Type") || "").split(";", 1)[0].trim().toLowerCase();
   if (contentType !== protocol.contentType) {
+    await discardResponse(response);
     throw new RemoteStoreError(
       `remote snapshot type '${contentType || "(missing)"}' does not match ${protocol.id}`
     );
@@ -22835,22 +22837,24 @@ async function request(config, _protocol, path, options2 = {}) {
   const headers = new Headers(options2.headers);
   headers.set("Accept", "application/json");
   const controller = new AbortController();
+  const deadline = Date.now() + FETCH_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(`${config.endpoint}${path}`, {
+    const response = await fetch(`${config.endpoint}${path}`, {
       method: options2.method || "GET",
       headers,
       body: options2.body,
       redirect: "error",
       signal: controller.signal
     });
+    responseDeadlines.set(response, { controller, deadline, timer });
+    return response;
   } catch (error) {
+    clearTimeout(timer);
     if (error?.name === "AbortError") {
       throw new RemoteStoreError("remote request timed out");
     }
     throw new RemoteStoreError("could not reach the remote toolbox store");
-  } finally {
-    clearTimeout(timer);
   }
 }
 async function requireApiSuccess(response, expectedStatuses) {
@@ -22866,7 +22870,10 @@ async function requireApiSuccess(response, expectedStatuses) {
     if (typeof body?.error?.code === "string" && typeof body?.error?.message === "string") {
       message = `${body.error.code}: ${sanitizeRemoteMessage(body.error.message)}`;
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof RemoteStoreError && /timed out$/.test(error.message)) {
+      throw error;
+    }
   }
   throw new RemoteStoreError(message);
 }
@@ -22879,18 +22886,32 @@ async function readApiJson(response, expectedStatuses) {
   );
   return parseJson(text, "remote service returned invalid JSON");
 }
-async function readResponseTextLimited(response, maxBytes, label) {
-  const contentLength = response.headers.get("Content-Length");
-  if (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maxBytes)) {
-    throw new RemoteStoreError(`${label} exceeds the safe size limit`);
+async function readResponseTextLimited(response, maxBytes, label, { timeoutMs = null } = {}) {
+  if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > FETCH_TIMEOUT_MS)) {
+    throw new RemoteStoreError("response timeout must be a positive bounded number");
   }
-  if (response.body === null) return "";
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
+  const requestDeadline = responseDeadlines.get(response);
+  const localDeadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+  const deadline = requestDeadline ? Math.min(requestDeadline.deadline, localDeadline ?? requestDeadline.deadline) : localDeadline ?? Date.now() + FETCH_TIMEOUT_MS;
+  let reader;
   try {
+    const contentLength = response.headers.get("Content-Length");
+    if (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maxBytes)) {
+      await response.body?.cancel().catch(() => {
+      });
+      throw new RemoteStoreError(`${label} exceeds the safe size limit`);
+    }
+    if (response.body === null) return "";
+    reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkBeforeDeadline(
+        reader,
+        deadline,
+        label,
+        requestDeadline?.controller
+      );
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
@@ -22899,10 +22920,55 @@ async function readResponseTextLimited(response, maxBytes, label) {
       }
       chunks.push(Buffer.from(value));
     }
+    return Buffer.concat(chunks, total).toString("utf8");
   } finally {
-    reader.releaseLock();
+    if (reader) reader.releaseLock();
+    releaseResponseDeadline(response);
   }
-  return Buffer.concat(chunks, total).toString("utf8");
+}
+async function readChunkBeforeDeadline(reader, deadline, label, controller) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    controller?.abort();
+    await reader.cancel().catch(() => {
+    });
+    throw new RemoteStoreError(`${label} timed out`);
+  }
+  let timer;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, rejectPromise) => {
+        timer = setTimeout(() => {
+          controller?.abort();
+          rejectPromise(new RemoteStoreError(`${label} timed out`));
+        }, remaining);
+      })
+    ]);
+  } catch (error) {
+    if (error instanceof RemoteStoreError) {
+      await reader.cancel().catch(() => {
+      });
+      throw error;
+    }
+    if (controller?.signal.aborted || error?.name === "AbortError") {
+      throw new RemoteStoreError(`${label} timed out`);
+    }
+    throw new RemoteStoreError(`could not read ${label}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function releaseResponseDeadline(response) {
+  const requestDeadline = responseDeadlines.get(response);
+  if (!requestDeadline) return;
+  clearTimeout(requestDeadline.timer);
+  responseDeadlines.delete(response);
+}
+async function discardResponse(response) {
+  await response.body?.cancel().catch(() => {
+  });
+  releaseResponseDeadline(response);
 }
 function sanitizeRemoteMessage(value) {
   return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300) || "remote request failed";
@@ -23126,9 +23192,9 @@ function validateEndpoint(value, label = "endpoint") {
     );
   }
   for (const name of endpoint.searchParams.keys()) {
-    if (/^(?:api[-_]?key|access[-_]?token|token|secret|auth|authorization|signature|sig|credential)$/i.test(name)) {
+    if (/(?:^|[-_])(?:api[-_]?key|key|token|secret|password|credential|auth|authorization|signature|sig)(?:$|[-_])/i.test(name) || /^(?:apiKey|accessToken|clientSecret|privateKey|subscriptionKey)$/i.test(name)) {
       throw new ProviderSchemaError(
-        `${label} must reference credentials through auth.secret, not a URL query parameter`
+        `${label} must reference credentials through auth.secret, not URL query parameters`
       );
     }
   }
@@ -25072,6 +25138,8 @@ var defaultAgentRoot = resolve4(
 );
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+var PROCESS_TIMEOUT_MS = 2e4;
+var PROCESS_KILL_GRACE_MS = 1e3;
 var WORKSPACE_RETRY_DELAY_MS = 250;
 var MCP_READINESS_CACHE_MS = 5 * 60 * 1e3;
 var AGENT_CLIENTS = /* @__PURE__ */ new Set(["claude", "codex", "opencode", "pi"]);
@@ -25084,7 +25152,7 @@ function wait(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 function sanitizeOutput(value) {
-  return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
+  return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:(?:x[_-])?api[_-]?key|key|client[_-]?secret|private[_-]?key|subscription[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
 }
 function parseJsonOutput(result, label) {
   const output = String(result.stdout || "").trim();
@@ -25161,18 +25229,78 @@ async function readPromptPreviewFile(path) {
     throw new Error("Prompt file is not valid UTF-8.");
   }
 }
-function createProcessRunner({ cwd: cwd2 = defaultAgentRoot, environment = process.env } = {}) {
-  return function run(executable, args, { env: env3 = {} } = {}) {
+function createProcessRunner({
+  cwd: cwd2 = defaultAgentRoot,
+  environment = process.env,
+  timeoutMs: defaultTimeoutMs = PROCESS_TIMEOUT_MS
+} = {}) {
+  return function run(executable, args, {
+    env: env3 = {},
+    signal,
+    timeoutMs = defaultTimeoutMs
+  } = {}) {
     return new Promise((resolvePromise) => {
+      if (signal?.aborted) {
+        resolvePromise({ code: 130, stdout: "", stderr: "operation cancelled", aborted: true });
+        return;
+      }
       const child = spawn(executable, args, {
         cwd: cwd2,
         env: { ...environment, ...env3 },
         stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true
+        windowsHide: true,
+        detached: process.platform !== "win32"
       });
       let stdout = "";
       let stderr = "";
       let overflow = false;
+      let settled = false;
+      let timedOut = false;
+      let aborted = false;
+      let killTimer;
+      let timer;
+      const sendSignal = (signalName) => {
+        if (process.platform !== "win32" && child.pid) {
+          try {
+            process.kill(-child.pid, signalName);
+            return;
+          } catch {
+          }
+        }
+        try {
+          child.kill(signalName);
+        } catch {
+        }
+      };
+      const terminate = () => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        sendSignal("SIGTERM");
+        killTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) sendSignal("SIGKILL");
+        }, PROCESS_KILL_GRACE_MS);
+        killTimer.unref?.();
+      };
+      const onAbort = () => {
+        aborted = true;
+        terminate();
+      };
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        signal?.removeEventListener("abort", onAbort);
+        resolvePromise(result);
+      };
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          terminate();
+        }, timeoutMs);
+        timer.unref?.();
+      }
       const append = (current, chunk) => {
         if (current.length >= MAX_OUTPUT) {
           overflow = true;
@@ -25188,12 +25316,18 @@ function createProcessRunner({ cwd: cwd2 = defaultAgentRoot, environment = proce
       child.stderr.on("data", (chunk) => {
         stderr = append(stderr, chunk);
       });
-      child.on("error", (error) => resolvePromise({ code: 127, stdout, stderr: error.message }));
-      child.on("close", (code) => resolvePromise({
-        code: Number.isInteger(code) ? code : 1,
+      child.on("error", (error) => finish({ code: 127, stdout, stderr: error.message }));
+      child.on("close", (code) => finish({
+        code: timedOut ? 124 : aborted ? 130 : Number.isInteger(code) ? code : 1,
         stdout,
-        stderr: overflow ? `${stderr}
-[output truncated]` : stderr
+        stderr: [
+          stderr,
+          overflow ? "[output truncated]" : "",
+          timedOut ? `process timed out after ${timeoutMs} ms` : "",
+          aborted ? "operation cancelled" : ""
+        ].filter(Boolean).join("\n"),
+        timedOut,
+        aborted
       }));
     });
   };
@@ -25228,22 +25362,25 @@ function createController({
   function controllerCommand(executable, args) {
     return bashScriptCommand(executable, args);
   }
-  async function runJson(script, args, label, env3 = {}) {
-    return parseJsonOutput(await run(process.execPath, [script, ...args], { env: env3 }), label);
+  async function runJson(script, args, label, env3 = {}, runOptions = {}) {
+    return parseJsonOutput(
+      await run(process.execPath, [script, ...args], { env: env3, ...runOptions }),
+      label
+    );
   }
-  async function runExecutableJson(executable, args, label, env3 = {}) {
-    return parseJsonOutput(await run(executable, args, { env: env3 }), label);
+  async function runExecutableJson(executable, args, label, env3 = {}, runOptions = {}) {
+    return parseJsonOutput(await run(executable, args, { env: env3, ...runOptions }), label);
   }
   async function runController(executable, args, env3 = {}) {
     const command = controllerCommand(executable, args);
     return run(command.executable, command.args, { env: env3 });
   }
-  async function runControllerJson(executable, args, label, env3 = {}) {
+  async function runControllerJson(executable, args, label, env3 = {}, runOptions = {}) {
     const command = controllerCommand(executable, args);
-    return runExecutableJson(command.executable, command.args, label, env3);
+    return runExecutableJson(command.executable, command.args, label, env3, runOptions);
   }
-  async function runAgentctlJson(args, label) {
-    return runControllerJson(agentctl, args, label);
+  async function runAgentctlJson(args, label, runOptions = {}) {
+    return runControllerJson(agentctl, args, label, {}, runOptions);
   }
   async function providerDashboard(target = "codex") {
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
@@ -25276,14 +25413,35 @@ function createController({
       errors
     };
   }
-  async function localSnapshot() {
+  async function localSnapshot({ signal } = {}) {
     const connectionPromise = typeof remoteWorkspace.connection === "function" ? remoteWorkspace.connection().then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) })) : Promise.resolve({ data: null, error: "remote configuration not found" });
-    const [doctorResult, agentsResult, presetsResult, snippetsResult, accountsResult, connectionResult] = await Promise.all([
-      runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
-      runAgentctlJson(["status", "all", "--json"], "agentctl status"),
-      runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
-      runControllerJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
-      runAgentctlJson(["account", "status", "--json"], "Codex account status"),
+    const [doctorResult, presetsResult, snippetsResult, accountsResult, connectionResult] = await Promise.all([
+      runJson(
+        orchestrator,
+        ["doctor", "all", "--local", "--json"],
+        "local agentctl doctor",
+        {},
+        { signal }
+      ),
+      runJson(
+        orchestrator,
+        ["preset", "list", "--json"],
+        "preset list",
+        {},
+        { signal }
+      ),
+      runControllerJson(
+        tools.prompts,
+        ["snippet", "list", "--json"],
+        "snippet list",
+        {},
+        { signal }
+      ),
+      runAgentctlJson(
+        ["account", "status", "--json"],
+        "Codex account status",
+        { signal }
+      ),
       connectionPromise
     ]);
     const accounts = accountsResult.data?.kind === "agentctl-codex-account-store" ? accountsResult.data : {
@@ -25294,7 +25452,18 @@ function createController({
       accounts: []
     };
     const accountLabel = typeof accounts.active?.saved_as === "string" ? accounts.active.saved_as : "";
-    const agents = Array.isArray(agentsResult.data) ? agentsResult.data.map((agent) => agent?.client === "codex" && agent.identity && accountLabel ? { ...agent, identity: { ...agent.identity, account: accountLabel } } : agent) : agentsResult.data;
+    let agents = Array.isArray(doctorResult.data?.targets) ? doctorResult.data.targets.map((report) => report?.provider?.data ? { ...report.provider.data, client: report.provider.data.client || report.target } : null).filter(Boolean) : null;
+    let agentsError = "";
+    if (!Array.isArray(agents) || agents.length === 0 || agents.length !== doctorResult.data?.targets?.length) {
+      const agentsResult = await runAgentctlJson(
+        ["status", "all", "--json"],
+        "agentctl status",
+        { signal }
+      );
+      agents = agentsResult.data;
+      agentsError = agentsResult.error;
+    }
+    agents = Array.isArray(agents) ? agents.map((agent) => agent?.client === "codex" && agent.identity && accountLabel ? { ...agent, identity: { ...agent.identity, account: accountLabel } } : agent) : agents;
     const doctor = doctorResult.data ? structuredClone(doctorResult.data) : doctorResult.data;
     const codexReport = doctor?.targets?.find((report) => report.target === "codex");
     if (codexReport?.provider?.data?.identity && accountLabel) {
@@ -25313,7 +25482,7 @@ function createController({
       doctor,
       doctorError: doctorResult.error,
       agents,
-      agentsError: agentsResult.error,
+      agentsError,
       accounts,
       accountsError: accountsResult.ok ? "" : accountsResult.error,
       presets: presetsResult.data || {},
@@ -25330,7 +25499,7 @@ function createController({
       workspaceFailureCount
     };
   }
-  async function hydrateSnapshot(local) {
+  async function hydrateSnapshot(local, { signal } = {}) {
     const remoteResult = refreshWorkspaceIndex().then((data) => ({
       data,
       connection: {
@@ -25347,13 +25516,8 @@ function createController({
       error: sanitizeOutput(error?.message || error),
       fresh: false
     }));
-    let [remote, doctorResult] = await Promise.all([
-      remoteResult,
-      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor")
-    ]);
-    if (!doctorResult.data) {
-      doctorResult = { data: local.doctor, error: local.doctorError };
-    }
+    const remote = await remoteResult;
+    let doctorResult = { data: structuredClone(local.doctor), error: local.doctorError };
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
       try {
         const availability = await remoteWorkspace.runtimeAvailability();
@@ -25363,7 +25527,8 @@ function createController({
             orchestrator,
             ["doctor", "all", "--json"],
             "Workspace runtime doctor",
-            env3
+            env3,
+            { signal }
           );
           if (runtimeDoctor.data) doctorResult = runtimeDoctor;
         } else if (doctorResult.data?.targets && (availability.mcp || availability.skills)) {
@@ -25373,7 +25538,8 @@ function createController({
                 tools.mcp,
                 ["current", "--target", report.target, "--json"],
                 "Workspace MCP current",
-                env3
+                env3,
+                { signal }
               );
               report.mcp = { ok: result.ok, data: result.data, error: result.error };
             }
@@ -25382,7 +25548,8 @@ function createController({
                 tools.skills,
                 ["current", "--target", report.target, "--json"],
                 "Workspace Skills current",
-                env3
+                env3,
+                { signal }
               );
               report.skills = { ok: result.ok, data: result.data, error: result.error };
             }
@@ -25424,9 +25591,9 @@ function createController({
       workspaceFailureCount
     };
   }
-  async function snapshot() {
-    const local = await localSnapshot();
-    return hydrateSnapshot(local);
+  async function snapshot(options2 = {}) {
+    const local = await localSnapshot(options2);
+    return hydrateSnapshot(local, options2);
   }
   async function remoteCatalog(type, target, options2 = {}) {
     try {
@@ -27371,13 +27538,17 @@ function App2({ initialSection, controller, onLaunch }) {
   const [promptPreview, setPromptPreview] = (0, import_react34.useState)(null);
   const [promptPreviewOffset, setPromptPreviewOffset] = (0, import_react34.useState)(0);
   const refreshSequence = (0, import_react34.useRef)(0);
+  const refreshAbort = (0, import_react34.useRef)(null);
   const refresh = (0, import_react34.useCallback)(async (quiet = false) => {
+    refreshAbort.current?.abort();
+    const abortController = new AbortController();
+    refreshAbort.current = abortController;
     const sequence = refreshSequence.current + 1;
     refreshSequence.current = sequence;
     setLoading(true);
     if (!quiet) setMessage("Refreshing diagnostics\u2026");
     try {
-      const local = typeof controller.localSnapshot === "function" ? await controller.localSnapshot() : await controller.snapshot();
+      const local = typeof controller.localSnapshot === "function" ? await controller.localSnapshot({ signal: abortController.signal }) : await controller.snapshot({ signal: abortController.signal });
       if (refreshSequence.current !== sequence) return;
       setSnapshot(local);
       setSelected((value) => clampSelection(value, presetEntries(local).length));
@@ -27389,7 +27560,7 @@ function App2({ initialSection, controller, onLaunch }) {
       setLoading(false);
       setMessage(local.workspaceLoading ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} \xB7 Workspace ${local.workspace ? "refreshing" : "connecting"}\u2026` : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
       if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
-        void controller.hydrateSnapshot(local).then((next) => {
+        void controller.hydrateSnapshot(local, { signal: abortController.signal }).then((next) => {
           if (refreshSequence.current !== sequence) return;
           setSnapshot(next);
           setSelected((value) => clampSelection(value, presetEntries(next).length));
@@ -27413,7 +27584,11 @@ function App2({ initialSection, controller, onLaunch }) {
     const timer = setInterval(() => {
       void refresh(true);
     }, 3e4);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      refreshSequence.current += 1;
+      refreshAbort.current?.abort();
+    };
   }, [refresh]);
   (0, import_react34.useEffect)(() => {
     setPromptPreview(null);

@@ -266,6 +266,21 @@ case "$all_status" in
     ;;
 esac
 
+# A broken CLI must not block aggregate status or the TUI forever. Version
+# probing is bounded and the remaining configuration metadata is still usable.
+cp "$FAKE_BIN/pi" "$FAKE_BIN/pi.fast"
+printf '%s\n' '#!/usr/bin/env bash' 'sleep 30' > "$FAKE_BIN/pi"
+chmod +x "$FAKE_BIN/pi"
+version_probe_started="$(date +%s)"
+bounded_status="$(run_agentctl status pi --json)"
+version_probe_elapsed=$(( $(date +%s) - version_probe_started ))
+[ "$version_probe_elapsed" -lt 8 ] ||
+  fail "CLI version probe exceeded its bounded timeout"
+printf '%s' "$bounded_status" | jq -e \
+  '.client == "pi" and .cli_installed == true and .cli_version == null' \
+  >/dev/null || fail "timed-out CLI version probe corrupted status metadata"
+mv "$FAKE_BIN/pi.fast" "$FAKE_BIN/pi"
+
 # A corrupted ownership marker is not trusted as a path or echoed back.
 printf '%s\n' 'CORRUPTED-STATE-SECRET-MUST-STAY-HIDDEN' \
   > "$TEST_HOME/.codex/.script-toolbox-provider-key"

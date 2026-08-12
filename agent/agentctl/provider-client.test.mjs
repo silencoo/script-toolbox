@@ -148,6 +148,14 @@ test("provider schema is strict and rejects machine state or insecure endpoints"
   const querySecret = structuredClone(base);
   querySecret.profiles.lab.endpoint = "https://api.example.com/v1?api_key=secret";
   assert.throws(() => validateProviderStore(querySecret), /auth\.secret/);
+
+  const plainKeyQuery = structuredClone(base);
+  plainKeyQuery.profiles.lab.endpoint = "https://api.example.com/v1?key=secret";
+  assert.throws(() => validateProviderStore(plainKeyQuery), /query parameters/);
+
+  const ambiguousQuery = structuredClone(base);
+  ambiguousQuery.profiles.lab.endpoint = "https://api.example.com/v1?api-version=2026-08-01";
+  assert.doesNotThrow(() => validateProviderStore(ambiguousQuery));
 });
 
 test("schema 1 migration grants native compaction only to exact official built-ins", () => {

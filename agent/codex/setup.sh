@@ -267,6 +267,8 @@ esac
 [ -n "$KEY_ENV_OVERRIDE" ] && KEY_ENV="$KEY_ENV_OVERRIDE"
 [ -n "$BASE_URL_OVERRIDE" ] && BASE_URL="$BASE_URL_OVERRIDE"
 [ -n "$MODELS_URL_OVERRIDE" ] && MODELS_URL="$MODELS_URL_OVERRIDE"
+validate_provider_url "$BASE_URL" "provider base URL"
+validate_provider_url "$MODELS_URL" "models URL"
 
 if [ -z "$MODEL" ]; then
   if [ "$INTERACTIVE" = 1 ]; then

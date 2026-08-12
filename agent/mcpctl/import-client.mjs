@@ -230,13 +230,21 @@ function assertSafeUrl(url, server) {
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new ImportError(`HTTP MCP '${server}' uses an unsupported URL protocol`);
   }
-  if (parsed.username || parsed.password) {
+  if (parsed.username || parsed.password || parsed.hash) {
     throw new ImportError(
-      `HTTP MCP '${server}' embeds credentials in its URL; move them to a Header before importing`
+      `HTTP MCP '${server}' embeds credentials or a fragment in its URL; move credentials to a Header before importing`
+    );
+  }
+  const loopback = parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new ImportError(
+      `HTTP MCP '${server}' must use HTTPS unless it is loopback-only`
     );
   }
   for (const key of parsed.searchParams.keys()) {
-    if (/(?:api.?key|token|secret|password|credential|auth)/i.test(key)) {
+    if (/(?:^|[-_])(?:api[-_]?key|key|token|secret|password|credential|auth|authorization|signature|sig)(?:$|[-_])/i.test(key) ||
+        /^(?:apiKey|accessToken|clientSecret|privateKey|subscriptionKey)$/i.test(key)) {
       throw new ImportError(
         `HTTP MCP '${server}' appears to embed a credential in its URL query; move it to a Header before importing`
       );
@@ -254,7 +262,7 @@ function importCommand(target, server, command, secrets) {
   const result = clone(command);
   for (let index = 1; index < command.length; index += 1) {
     const value = command[index];
-    const inline = /^(--?(?:api[-_]?key|token|secret|password|credential|auth))=(.*)$/i.exec(
+    const inline = /^(--?(?:api[-_]?key|key|access[-_]?token|token|client[-_]?secret|private[-_]?key|subscription[-_]?key|secret|password|credential|auth))=(.*)$/i.exec(
       value
     );
     let flag = "";
@@ -264,7 +272,7 @@ function importCommand(target, server, command, secrets) {
       flag = inline[1];
       secretValue = inline[2];
       outerPrefix = `${flag}=`;
-    } else if (/^--?(?:api[-_]?key|token|secret|password|credential|auth)$/i.test(
+    } else if (/^--?(?:api[-_]?key|key|access[-_]?token|token|client[-_]?secret|private[-_]?key|subscription[-_]?key|secret|password|credential|auth)$/i.test(
       command[index - 1]
     )) {
       flag = command[index - 1];

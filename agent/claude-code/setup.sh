@@ -489,6 +489,8 @@ esac
 [ -n "$KEY_ENV_OVERRIDE" ] && KEY_ENV="$KEY_ENV_OVERRIDE"
 [ -n "$BASE_URL_OVERRIDE" ] && BASE_URL="$BASE_URL_OVERRIDE"
 [ -n "$MODELS_URL_OVERRIDE" ] && MODELS_URL="$MODELS_URL_OVERRIDE"
+validate_provider_url "$BASE_URL" "provider base URL"
+validate_provider_url "$MODELS_URL" "models URL"
 [ -n "$AUTH_MODE_OVERRIDE" ] && AUTH_MODE="$AUTH_MODE_OVERRIDE"
 case "$AUTH_MODE" in api-key|auth-token) ;; *) die "--auth-mode must be api-key or auth-token" ;; esac
 

@@ -445,6 +445,7 @@ async function inspectStatus(options) {
     route: health.body?.route ?? state.route ?? null,
     backends: health.body?.backends ?? state.backend_profiles ?? [state.profile],
     circuits: health.body?.circuits ?? [],
+    observability: health.body?.observability ?? null,
     pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
     pricing_model_source: health.body?.pricing_model_source ?? null,
     compaction: health.body?.compaction ?? state.compaction ?? null,
@@ -467,6 +468,14 @@ function emitStatus(status, options) {
     process.stdout.write(`Pricing:    ${status.pricing_catalog_version || "catalog unavailable"} (${status.pricing_model_source} model)\n`);
   }
   if (status.compaction) process.stdout.write(`Compaction: ${status.compaction.label || status.compaction.mode}\n`);
+  if (status.observability) {
+    const degraded = Object.entries(status.observability)
+      .filter(([, value]) => value?.last_error || value?.dropped > 0)
+      .map(([name]) => name);
+    process.stdout.write(
+      `Observability: ${degraded.length ? `degraded (${degraded.join(", ")})` : "healthy"}\n`
+    );
+  }
   process.stdout.write(`Capability: ${status.capability_present ? "present" : "missing"} (${status.capability_file})\n`);
   process.stdout.write(`Metadata:   ${status.metadata_log}\n`);
   process.stdout.write(`Usage:      ${status.usage_log}\n`);

@@ -35,6 +35,60 @@ if "$INSTALLER" --prefix "$TEST_ROOT/unsafe/bin" --runtime "$TEST_ROOT" --yes \
   fail "installer accepted a runtime containing the command prefix"
 fi
 
+# Any failure after runtime replacement or an individual link update restores
+# the complete pre-install state, including user-owned conflicts and manifest.
+ATOMIC_PREFIX="${TEST_ROOT}/atomic-bin"
+ATOMIC_RUNTIME="${TEST_ROOT}/atomic-runtime"
+if SCRIPT_TOOLBOX_INSTALL_FAIL_AT=after-link-mcpctl \
+  "$INSTALLER" --prefix "$ATOMIC_PREFIX" --runtime "$ATOMIC_RUNTIME" \
+    --release-id atomic-fresh --yes >"$TEST_ROOT/atomic-fresh.out" 2>&1; then
+  fail "fault-injected fresh install unexpectedly succeeded"
+fi
+[ ! -e "$ATOMIC_RUNTIME" ] || fail "failed fresh install left a runtime"
+for name in agentctl mcpctl promptctl skillsctl; do
+  [ ! -e "$ATOMIC_PREFIX/$name" ] && [ ! -L "$ATOMIC_PREFIX/$name" ] ||
+    fail "failed fresh install left command $name"
+done
+[ ! -e "$ATOMIC_PREFIX/.script-toolbox-agent-commands" ] ||
+  fail "failed fresh install left a manifest"
+
+mkdir -p "$ATOMIC_PREFIX"
+printf '%s\n' user-owned > "$ATOMIC_PREFIX/mcpctl"
+cp "$ATOMIC_PREFIX/mcpctl" "$TEST_ROOT/atomic-mcpctl.before"
+if SCRIPT_TOOLBOX_INSTALL_FAIL_AT=after-link-mcpctl \
+  "$INSTALLER" --prefix "$ATOMIC_PREFIX" --runtime "$ATOMIC_RUNTIME" \
+    --release-id atomic-conflict --force --yes \
+      >"$TEST_ROOT/atomic-conflict.out" 2>&1; then
+  fail "fault-injected forced install unexpectedly succeeded"
+fi
+cmp -s "$ATOMIC_PREFIX/mcpctl" "$TEST_ROOT/atomic-mcpctl.before" ||
+  fail "failed forced install did not restore the user-owned command"
+[ ! -e "$ATOMIC_PREFIX/agentctl" ] && [ ! -L "$ATOMIC_PREFIX/agentctl" ] ||
+  fail "failed forced install left an earlier command link"
+[ -z "$(find "$ATOMIC_PREFIX" -maxdepth 1 -name 'mcpctl.backup.*' -print -quit)" ] ||
+  fail "failed forced install leaked a persistent command backup"
+[ ! -e "$ATOMIC_RUNTIME" ] || fail "failed forced install left a runtime"
+rm -f "$ATOMIC_PREFIX/mcpctl"
+
+"$INSTALLER" --prefix "$ATOMIC_PREFIX" --runtime "$ATOMIC_RUNTIME" \
+  --release-id atomic-v1 --yes >/dev/null 2>&1
+cp "$ATOMIC_PREFIX/.script-toolbox-agent-commands" "$TEST_ROOT/atomic-manifest.before"
+if SCRIPT_TOOLBOX_INSTALL_FAIL_AT=after-manifest \
+  "$INSTALLER" --prefix "$ATOMIC_PREFIX" --runtime "$ATOMIC_RUNTIME" \
+    --release-id atomic-v2 --yes >"$TEST_ROOT/atomic-update.out" 2>&1; then
+  fail "fault-injected update unexpectedly succeeded"
+fi
+grep -q '^release_id=atomic-v1$' "$ATOMIC_RUNTIME/.script-toolbox-agent-runtime" ||
+  fail "failed update did not restore the prior runtime"
+cmp -s "$ATOMIC_PREFIX/.script-toolbox-agent-commands" \
+  "$TEST_ROOT/atomic-manifest.before" ||
+  fail "failed update did not restore the prior manifest"
+for name in agentctl mcpctl promptctl skillsctl; do
+  [ -L "$ATOMIC_PREFIX/$name" ] || fail "failed update lost command $name"
+done
+"$ATOMIC_RUNTIME/install-commands.sh" --prefix "$ATOMIC_PREFIX" \
+  --uninstall --yes >/dev/null
+
 "$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v1 --yes \
   >"$TEST_ROOT/install.out" 2>&1
 for name in agentctl mcpctl promptctl skillsctl; do

@@ -11,6 +11,8 @@ export const defaultAgentRoot = resolve(
 );
 const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+const PROCESS_TIMEOUT_MS = 20_000;
+const PROCESS_KILL_GRACE_MS = 1_000;
 const WORKSPACE_RETRY_DELAY_MS = 250;
 const MCP_READINESS_CACHE_MS = 5 * 60 * 1000;
 const AGENT_CLIENTS = new Set(["claude", "codex", "opencode", "pi"]);
@@ -31,7 +33,7 @@ export function sanitizeOutput(value) {
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]")
-    .replace(/(["']?\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]")
+    .replace(/(["']?\b(?:(?:x[_-])?api[_-]?key|key|client[_-]?secret|private[_-]?key|subscription[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]")
     .trim();
 }
 
@@ -131,18 +133,77 @@ export async function readPromptPreviewFile(path) {
   }
 }
 
-export function createProcessRunner({ cwd = defaultAgentRoot, environment = process.env } = {}) {
-  return function run(executable, args, { env = {} } = {}) {
+export function createProcessRunner({
+  cwd = defaultAgentRoot,
+  environment = process.env,
+  timeoutMs: defaultTimeoutMs = PROCESS_TIMEOUT_MS
+} = {}) {
+  return function run(executable, args, {
+    env = {},
+    signal,
+    timeoutMs = defaultTimeoutMs
+  } = {}) {
     return new Promise((resolvePromise) => {
+      if (signal?.aborted) {
+        resolvePromise({ code: 130, stdout: "", stderr: "operation cancelled", aborted: true });
+        return;
+      }
       const child = spawn(executable, args, {
         cwd,
         env: { ...environment, ...env },
         stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true
+        windowsHide: true,
+        detached: process.platform !== "win32"
       });
       let stdout = "";
       let stderr = "";
       let overflow = false;
+      let settled = false;
+      let timedOut = false;
+      let aborted = false;
+      let killTimer;
+      let timer;
+      const sendSignal = (signalName) => {
+        if (process.platform !== "win32" && child.pid) {
+          try {
+            process.kill(-child.pid, signalName);
+            return;
+          } catch {
+            // The process may have exited between the state check and signal.
+          }
+        }
+        try { child.kill(signalName); } catch {}
+      };
+      const terminate = () => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        sendSignal("SIGTERM");
+        killTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) sendSignal("SIGKILL");
+        }, PROCESS_KILL_GRACE_MS);
+        killTimer.unref?.();
+      };
+      const onAbort = () => {
+        aborted = true;
+        terminate();
+      };
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        signal?.removeEventListener("abort", onAbort);
+        resolvePromise(result);
+      };
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      // The signal can flip between the pre-spawn check and listener setup.
+      if (signal?.aborted) onAbort();
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          terminate();
+        }, timeoutMs);
+        timer.unref?.();
+      }
       const append = (current, chunk) => {
         if (current.length >= MAX_OUTPUT) {
           overflow = true;
@@ -154,11 +215,18 @@ export function createProcessRunner({ cwd = defaultAgentRoot, environment = proc
       };
       child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
       child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
-      child.on("error", (error) => resolvePromise({ code: 127, stdout, stderr: error.message }));
-      child.on("close", (code) => resolvePromise({
-        code: Number.isInteger(code) ? code : 1,
+      child.on("error", (error) => finish({ code: 127, stdout, stderr: error.message }));
+      child.on("close", (code) => finish({
+        code: timedOut ? 124 : aborted ? 130 : Number.isInteger(code) ? code : 1,
         stdout,
-        stderr: overflow ? `${stderr}\n[output truncated]` : stderr
+        stderr: [
+          stderr,
+          overflow ? "[output truncated]" : "",
+          timedOut ? `process timed out after ${timeoutMs} ms` : "",
+          aborted ? "operation cancelled" : ""
+        ].filter(Boolean).join("\n"),
+        timedOut,
+        aborted
       }));
     });
   };
@@ -197,12 +265,15 @@ export function createController({
     return bashScriptCommand(executable, args);
   }
 
-  async function runJson(script, args, label, env = {}) {
-    return parseJsonOutput(await run(process.execPath, [script, ...args], { env }), label);
+  async function runJson(script, args, label, env = {}, runOptions = {}) {
+    return parseJsonOutput(
+      await run(process.execPath, [script, ...args], { env, ...runOptions }),
+      label
+    );
   }
 
-  async function runExecutableJson(executable, args, label, env = {}) {
-    return parseJsonOutput(await run(executable, args, { env }), label);
+  async function runExecutableJson(executable, args, label, env = {}, runOptions = {}) {
+    return parseJsonOutput(await run(executable, args, { env, ...runOptions }), label);
   }
 
   async function runController(executable, args, env = {}) {
@@ -210,13 +281,13 @@ export function createController({
     return run(command.executable, command.args, { env });
   }
 
-  async function runControllerJson(executable, args, label, env = {}) {
+  async function runControllerJson(executable, args, label, env = {}, runOptions = {}) {
     const command = controllerCommand(executable, args);
-    return runExecutableJson(command.executable, command.args, label, env);
+    return runExecutableJson(command.executable, command.args, label, env, runOptions);
   }
 
-  async function runAgentctlJson(args, label) {
-    return runControllerJson(agentctl, args, label);
+  async function runAgentctlJson(args, label, runOptions = {}) {
+    return runControllerJson(agentctl, args, label, {}, runOptions);
   }
 
   async function providerDashboard(target = "codex") {
@@ -252,19 +323,22 @@ export function createController({
     };
   }
 
-  async function localSnapshot() {
+  async function localSnapshot({ signal } = {}) {
     const connectionPromise = typeof remoteWorkspace.connection === "function"
       ? remoteWorkspace.connection()
           .then((data) => ({ data, error: "" }))
           .catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) }))
       : Promise.resolve({ data: null, error: "remote configuration not found" });
-    const [doctorResult, agentsResult, presetsResult, snippetsResult, accountsResult, connectionResult] =
+    const [doctorResult, presetsResult, snippetsResult, accountsResult, connectionResult] =
       await Promise.all([
-        runJson(orchestrator, ["doctor", "all", "--local", "--json"], "local agentctl doctor"),
-        runAgentctlJson(["status", "all", "--json"], "agentctl status"),
-        runJson(orchestrator, ["preset", "list", "--json"], "preset list"),
-        runControllerJson(tools.prompts, ["snippet", "list", "--json"], "snippet list"),
-        runAgentctlJson(["account", "status", "--json"], "Codex account status"),
+        runJson(orchestrator, ["doctor", "all", "--local", "--json"],
+          "local agentctl doctor", {}, { signal }),
+        runJson(orchestrator, ["preset", "list", "--json"],
+          "preset list", {}, { signal }),
+        runControllerJson(tools.prompts, ["snippet", "list", "--json"],
+          "snippet list", {}, { signal }),
+        runAgentctlJson(["account", "status", "--json"],
+          "Codex account status", { signal }),
         connectionPromise
       ]);
     const accounts = accountsResult.data?.kind === "agentctl-codex-account-store"
@@ -279,11 +353,27 @@ export function createController({
     const accountLabel = typeof accounts.active?.saved_as === "string"
       ? accounts.active.saved_as
       : "";
-    const agents = Array.isArray(agentsResult.data)
-      ? agentsResult.data.map((agent) => agent?.client === "codex" && agent.identity && accountLabel
+    let agents = Array.isArray(doctorResult.data?.targets)
+      ? doctorResult.data.targets.map((report) => report?.provider?.data
+        ? { ...report.provider.data, client: report.provider.data.client || report.target }
+        : null).filter(Boolean)
+      : null;
+    let agentsError = "";
+    if (!Array.isArray(agents) || agents.length === 0 ||
+        agents.length !== doctorResult.data?.targets?.length) {
+      const agentsResult = await runAgentctlJson(
+        ["status", "all", "--json"],
+        "agentctl status",
+        { signal }
+      );
+      agents = agentsResult.data;
+      agentsError = agentsResult.error;
+    }
+    agents = Array.isArray(agents)
+      ? agents.map((agent) => agent?.client === "codex" && agent.identity && accountLabel
         ? { ...agent, identity: { ...agent.identity, account: accountLabel } }
         : agent)
-      : agentsResult.data;
+      : agents;
     const doctor = doctorResult.data ? structuredClone(doctorResult.data) : doctorResult.data;
     const codexReport = doctor?.targets?.find((report) => report.target === "codex");
     if (codexReport?.provider?.data?.identity && accountLabel) {
@@ -302,7 +392,7 @@ export function createController({
       doctor,
       doctorError: doctorResult.error,
       agents,
-      agentsError: agentsResult.error,
+      agentsError,
       accounts,
       accountsError: accountsResult.ok ? "" : accountsResult.error,
       presets: presetsResult.data || {},
@@ -320,7 +410,7 @@ export function createController({
     };
   }
 
-  async function hydrateSnapshot(local) {
+  async function hydrateSnapshot(local, { signal } = {}) {
     const remoteResult = refreshWorkspaceIndex()
       .then((data) => ({
         data,
@@ -339,31 +429,28 @@ export function createController({
         error: sanitizeOutput(error?.message || error),
         fresh: false
       }));
-    let [remote, doctorResult] = await Promise.all([
-      remoteResult,
-      runJson(orchestrator, ["doctor", "all", "--json"], "agentctl doctor")
-    ]);
-    if (!doctorResult.data) {
-      doctorResult = { data: local.doctor, error: local.doctorError };
-    }
+    const remote = await remoteResult;
+    let doctorResult = { data: structuredClone(local.doctor), error: local.doctorError };
     if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
       try {
         const availability = await remoteWorkspace.runtimeAvailability();
         const env = await remoteWorkspace.runtimeEnvironment();
         if (availability.presets) {
           const runtimeDoctor = await runJson(orchestrator, ["doctor", "all", "--json"],
-            "Workspace runtime doctor", env);
+            "Workspace runtime doctor", env, { signal });
           if (runtimeDoctor.data) doctorResult = runtimeDoctor;
         } else if (doctorResult.data?.targets && (availability.mcp || availability.skills)) {
           await Promise.all(doctorResult.data.targets.map(async (report) => {
             if (availability.mcp) {
               const result = await runControllerJson(tools.mcp,
-                ["current", "--target", report.target, "--json"], "Workspace MCP current", env);
+                ["current", "--target", report.target, "--json"],
+                "Workspace MCP current", env, { signal });
               report.mcp = { ok: result.ok, data: result.data, error: result.error };
             }
             if (availability.skills) {
               const result = await runControllerJson(tools.skills,
-                ["current", "--target", report.target, "--json"], "Workspace Skills current", env);
+                ["current", "--target", report.target, "--json"],
+                "Workspace Skills current", env, { signal });
               report.skills = { ok: result.ok, data: result.data, error: result.error };
             }
           }));
@@ -406,9 +493,9 @@ export function createController({
     };
   }
 
-  async function snapshot() {
-    const local = await localSnapshot();
-    return hydrateSnapshot(local);
+  async function snapshot(options = {}) {
+    const local = await localSnapshot(options);
+    return hydrateSnapshot(local, options);
   }
 
   async function remoteCatalog(type, target, options = {}) {

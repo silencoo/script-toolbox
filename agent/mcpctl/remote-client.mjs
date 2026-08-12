@@ -10,6 +10,7 @@ import {
 } from "node:crypto";
 import {
   chmod,
+  cp,
   lstat,
   mkdir,
   open,
@@ -639,8 +640,42 @@ async function restoreStore(options) {
   );
   validateSnapshot(snapshot);
 
-  await writeRestoredStore(storePath, config, snapshot, options.force);
-  if (writeConfig) await writeJsonAtomic(remoteConfigPath, config);
+  const storeTransaction = await prepareRestoredStore(
+    storePath,
+    config,
+    snapshot,
+    options.force
+  );
+  let configSnapshot = null;
+  try {
+    configSnapshot = writeConfig
+      ? await captureOptionalFile(remoteConfigPath)
+      : null;
+    await storeTransaction.commit();
+    if (writeConfig) await writeJsonAtomic(remoteConfigPath, config);
+  } catch (error) {
+    const rollbackFailures = [];
+    try {
+      await storeTransaction.rollback();
+    } catch {
+      rollbackFailures.push("store");
+    }
+    if (configSnapshot) {
+      try {
+        await restoreOptionalFile(remoteConfigPath, configSnapshot);
+      } catch {
+        rollbackFailures.push("remote configuration");
+      }
+    }
+    if (rollbackFailures.length > 0) {
+      throw new RemoteError(
+        `${error?.message || "restore failed"}; rollback was incomplete for ` +
+        rollbackFailures.join(" and ")
+      );
+    }
+    throw error;
+  }
+  await storeTransaction.finalize().catch(() => {});
 
   if (!options.quiet) {
     process.stdout.write(
@@ -675,12 +710,16 @@ async function configForRestore(options, remoteConfigPath) {
   };
 }
 
-async function writeRestoredStore(storePath, config, snapshot, force) {
-  if (await pathExists(storePath)) {
+async function prepareRestoredStore(storePath, config, snapshot, force) {
+  validateSnapshot(snapshot);
+  const targetExisted = await pathExists(storePath);
+  let targetIdentity = null;
+  if (targetExisted) {
     const details = await lstat(storePath);
     if (details.isSymbolicLink() || !details.isDirectory()) {
       throw new RemoteError(`store path must be a real directory: ${storePath}`);
     }
+    targetIdentity = { dev: details.dev, ino: details.ino };
   }
 
   const catalogPath = join(storePath, "catalog.json");
@@ -690,29 +729,97 @@ async function writeRestoredStore(storePath, config, snapshot, force) {
     );
   }
 
-  const profilesPath = join(storePath, "profiles");
-  if (await pathExists(profilesPath)) {
-    const details = await lstat(profilesPath);
-    if (details.isSymbolicLink() || !details.isDirectory()) {
-      throw new RemoteError(`profiles path must be a real directory: ${profilesPath}`);
+  await mkdir(dirname(storePath), { recursive: true, mode: 0o700 });
+  const suffix = `${process.pid}-${randomBytes(8).toString("hex")}`;
+  const stagePath = `${storePath}.restore-stage-${suffix}`;
+  const backupPath = `${storePath}.restore-backup-${suffix}`;
+  let committed = false;
+  let backupCreated = false;
+  try {
+    if (targetExisted) {
+      await cp(storePath, stagePath, {
+        recursive: true,
+        dereference: false,
+        errorOnExist: true,
+        force: false
+      });
+    } else {
+      await mkdir(stagePath, { mode: 0o700 });
     }
-  }
-  const artifactsPath = join(storePath, "artifacts");
-  if (await pathExists(artifactsPath)) {
-    const details = await lstat(artifactsPath);
-    if (details.isSymbolicLink() || !details.isDirectory()) {
-      throw new RemoteError(`artifacts path must be a real directory: ${artifactsPath}`);
+    for (const managedName of [
+      "catalog.json",
+      "profiles",
+      "artifacts",
+      "secrets.remote.enc"
+    ]) {
+      await rm(join(stagePath, managedName), { recursive: true, force: true });
     }
+    await writeRestoredStoreContents(stagePath, config, snapshot);
+  } catch (error) {
+    await rm(stagePath, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
 
-  await mkdir(storePath, { recursive: true, mode: 0o700 });
+  return {
+    async commit() {
+      if (targetExisted) {
+        const current = await lstat(storePath).catch(() => null);
+        if (!current || current.isSymbolicLink() || !current.isDirectory() ||
+            current.dev !== targetIdentity.dev || current.ino !== targetIdentity.ino) {
+          throw new RemoteError("store changed while the restore was being prepared");
+        }
+        await rename(storePath, backupPath);
+        backupCreated = true;
+      } else if (await pathExists(storePath)) {
+        throw new RemoteError("store appeared while the restore was being prepared");
+      }
+      try {
+        await rename(stagePath, storePath);
+        committed = true;
+      } catch (error) {
+        if (backupCreated) {
+          try {
+            await rename(backupPath, storePath);
+            backupCreated = false;
+          } catch {
+            // The outer restore transaction retries and reports rollback
+            // failure without losing the backup location.
+          }
+        }
+        throw error;
+      }
+    },
+    async rollback() {
+      if (committed) {
+        await rm(storePath, { recursive: true, force: true });
+        committed = false;
+      } else {
+        await rm(stagePath, { recursive: true, force: true });
+      }
+      if (backupCreated) {
+        await rename(backupPath, storePath);
+        backupCreated = false;
+      }
+    },
+    async finalize() {
+      if (backupCreated) {
+        await rm(backupPath, { recursive: true, force: true });
+        backupCreated = false;
+      }
+    }
+  };
+}
+
+async function writeRestoredStoreContents(storePath, config, snapshot) {
+  const profilesPath = join(storePath, "profiles");
+  const artifactsPath = join(storePath, "artifacts");
   await mkdir(profilesPath, { recursive: true, mode: 0o700 });
   await mkdir(artifactsPath, { recursive: true, mode: 0o700 });
   await chmod(storePath, 0o700);
   await chmod(profilesPath, 0o700);
   await chmod(artifactsPath, 0o700);
 
-  await writeJsonAtomic(catalogPath, snapshot.catalog);
+  await writeJsonAtomic(join(storePath, "catalog.json"), snapshot.catalog);
   for (const [profileName, profile] of Object.entries(snapshot.profiles)) {
     await writeJsonAtomic(join(profilesPath, `${profileName}.json`), profile);
   }
@@ -733,6 +840,28 @@ async function writeRestoredStore(storePath, config, snapshot, force) {
     join(storePath, "secrets.remote.enc"),
     localSecretsEnvelope
   );
+}
+
+async function captureOptionalFile(filePath) {
+  if (!await pathExists(filePath)) return { exists: false, bytes: null, mode: 0o600 };
+  const details = await lstat(filePath);
+  if (details.isSymbolicLink() || !details.isFile()) {
+    throw new RemoteError(`remote configuration must be a regular file: ${filePath}`);
+  }
+  return {
+    exists: true,
+    bytes: await readFile(filePath),
+    mode: details.mode & 0o777
+  };
+}
+
+async function restoreOptionalFile(filePath, snapshot) {
+  if (!snapshot.exists) {
+    await rm(filePath, { force: true });
+    return;
+  }
+  await writeBinaryAtomic(filePath, snapshot.bytes);
+  if (process.platform !== "win32") await chmod(filePath, snapshot.mode);
 }
 
 async function printStatus(options) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
   cp,
@@ -1512,26 +1512,32 @@ function validateSnapshot(snapshot) {
 
 async function writeSnapshotToStore(storePath, snapshot, force) {
   validateSnapshot(snapshot);
-  if (await pathExists(storePath)) {
-    await assertRealDirectory(storePath, "skills store");
-    const entries = await readdir(storePath);
-    if (entries.length > 0 && !force) {
-      throw new SkillsError(`store is not empty: ${storePath} (use --force)`);
-    }
-    if (entries.length > 0) {
-      const backup = `${storePath}.restore-backup-${Date.now()}`;
-      await rename(storePath, backup);
-      process.stdout.write(`Preserved previous store at ${backup}\n`);
+  const resolvedStore = resolve(storePath);
+  const targetExisted = await pathExists(resolvedStore);
+  let targetIdentity = null;
+  let existingEntries = [];
+  if (targetExisted) {
+    await assertRealDirectory(resolvedStore, "skills store");
+    const details = await lstat(resolvedStore);
+    targetIdentity = { dev: details.dev, ino: details.ino };
+    existingEntries = await readdir(resolvedStore);
+    if (existingEntries.length > 0 && !force) {
+      throw new SkillsError(`store is not empty: ${resolvedStore} (use --force)`);
     }
   }
-  await mkdirStoreLayout(storePath);
+
+  await mkdir(dirname(resolvedStore), { recursive: true, mode: 0o700 });
+  const suffix = `${Date.now()}-${process.pid}-${randomBytes(6).toString("hex")}`;
+  const stage = `${resolvedStore}.restore-stage-${suffix}`;
+  const backup = `${resolvedStore}.restore-backup-${suffix}`;
+  await mkdirStoreLayout(stage);
   try {
-    await writeJsonAtomic(join(storePath, "catalog.json"), snapshot.catalog);
+    await writeJsonAtomic(join(stage, "catalog.json"), snapshot.catalog);
     for (const [name, pack] of Object.entries(snapshot.packs)) {
-      await writeJsonAtomic(packPath(storePath, name), pack);
+      await writeJsonAtomic(packPath(stage, name), pack);
     }
     for (const [name, skill] of Object.entries(snapshot.skills)) {
-      const destination = skillPath(storePath, name);
+      const destination = skillPath(stage, name);
       await mkdir(destination, { recursive: true, mode: 0o700 });
       for (const [filePath, file] of Object.entries(skill.files)) {
         const destinationFile = join(destination, ...filePath.split("/"));
@@ -1543,10 +1549,50 @@ async function writeSnapshotToStore(storePath, snapshot, force) {
         });
       }
     }
-    await loadStore(storePath);
+    await loadStore(stage);
   } catch (error) {
-    await rm(storePath, { recursive: true, force: true });
+    await rm(stage, { recursive: true, force: true });
     throw error;
+  }
+
+  let backupCreated = false;
+  try {
+    if (targetExisted) {
+      const current = await lstat(resolvedStore).catch(() => null);
+      if (!current || current.isSymbolicLink() || !current.isDirectory() ||
+          current.dev !== targetIdentity.dev || current.ino !== targetIdentity.ino) {
+        throw new SkillsError("skills store changed while restore was being prepared");
+      }
+      await rename(resolvedStore, backup);
+      backupCreated = true;
+    } else if (await pathExists(resolvedStore)) {
+      throw new SkillsError("skills store appeared while restore was being prepared");
+    }
+    try {
+      await rename(stage, resolvedStore);
+    } catch (error) {
+      if (backupCreated) {
+        try {
+          await rename(backup, resolvedStore);
+          backupCreated = false;
+        } catch {
+          throw new SkillsError(
+            `${error?.message || "restore commit failed"}; ` +
+            `the previous store remains at ${backup}`
+          );
+        }
+      }
+      throw error;
+    }
+  } catch (error) {
+    await rm(stage, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+
+  if (backupCreated && existingEntries.length > 0) {
+    process.stdout.write(`Preserved previous store at ${backup}\n`);
+  } else if (backupCreated) {
+    await rm(backup, { recursive: true, force: true });
   }
 }
 

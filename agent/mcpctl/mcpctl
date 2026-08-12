@@ -27,12 +27,28 @@ TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
 . "${SCRIPT_DIR}/../ctl-lib.sh"
 
 TMP_FILES=()
+APPLY_TRANSACTION_ACTIVE=0
+APPLY_LOCK_DIR=""
+APPLY_CONFIG_EXISTED=0
+APPLY_CONFIG_BACKUP=""
+APPLY_CONFIG_MODE="600"
+APPLY_STATE_EXISTED=0
+APPLY_STATE_BACKUP=""
+APPLY_STATE_MODE="600"
 
 cleanup() {
-  local path
+  local status="$?" path
+  trap - EXIT
+  if [ "$APPLY_TRANSACTION_ACTIVE" -eq 1 ]; then
+    set +e
+    rollback_apply_transaction
+    [ "$status" -ne 0 ] || status=1
+  fi
+  release_apply_lock
   for path in ${TMP_FILES[@]+"${TMP_FILES[@]}"}; do
     [ -n "$path" ] && rm -f "$path"
   done
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -178,6 +194,89 @@ make_temp_near() {
   chmod 600 "$path"
   TMP_FILES+=("$path")
   TEMP_RESULT="$path"
+}
+
+mode_of_file() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || printf '600'
+}
+
+snapshot_apply_file() {
+  local path="$1" kind="$2"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    [ -f "$path" ] && [ ! -L "$path" ] ||
+      die "refusing to replace non-regular file $path"
+    make_temp
+    cat "$path" > "$TEMP_RESULT"
+    chmod 600 "$TEMP_RESULT"
+    if [ "$kind" = "config" ]; then
+      APPLY_CONFIG_EXISTED=1
+      APPLY_CONFIG_BACKUP="$TEMP_RESULT"
+      APPLY_CONFIG_MODE="$(mode_of_file "$path")"
+    else
+      APPLY_STATE_EXISTED=1
+      APPLY_STATE_BACKUP="$TEMP_RESULT"
+      APPLY_STATE_MODE="$(mode_of_file "$path")"
+    fi
+  fi
+}
+
+restore_apply_file() {
+  local path="$1" existed="$2" backup="$3" mode="$4" temporary
+  if [ "$existed" -eq 0 ]; then
+    rm -f "$path"
+    return
+  fi
+  temporary="$(mktemp "${path}.rollback.XXXXXX")" || return 1
+  chmod 600 "$temporary" || { rm -f "$temporary"; return 1; }
+  cat "$backup" > "$temporary" || { rm -f "$temporary"; return 1; }
+  chmod "$mode" "$temporary" 2>/dev/null || true
+  mv "$temporary" "$path"
+}
+
+release_apply_lock() {
+  [ -n "$APPLY_LOCK_DIR" ] || return 0
+  rm -f "$APPLY_LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$APPLY_LOCK_DIR" 2>/dev/null || true
+  APPLY_LOCK_DIR=""
+}
+
+rollback_apply_transaction() {
+  local failed=0
+  [ "$APPLY_TRANSACTION_ACTIVE" -eq 1 ] || return 0
+  restore_apply_file "$CONFIG_FILE" "$APPLY_CONFIG_EXISTED" \
+    "$APPLY_CONFIG_BACKUP" "$APPLY_CONFIG_MODE" || failed=1
+  restore_apply_file "$STATE_FILE" "$APPLY_STATE_EXISTED" \
+    "$APPLY_STATE_BACKUP" "$APPLY_STATE_MODE" || failed=1
+  APPLY_TRANSACTION_ACTIVE=0
+  release_apply_lock
+  if [ "$failed" -ne 0 ]; then
+    warn "automatic rollback was incomplete; inspect $CONFIG_FILE and $STATE_FILE"
+    return 1
+  fi
+}
+
+begin_apply_transaction() {
+  local config_dir state_dir
+  config_dir="$(dirname "$CONFIG_FILE")"
+  state_dir="$(dirname "$STATE_FILE")"
+  mkdir -p "$state_dir" || die "could not create state directory $state_dir"
+  mkdir -p "$config_dir" || die "could not create configuration directory $config_dir"
+
+  APPLY_LOCK_DIR="${STATE_FILE}.apply.lock"
+  if ! mkdir "$APPLY_LOCK_DIR" 2>/dev/null; then
+    APPLY_LOCK_DIR=""
+    die "another mcpctl apply is active (remove ${STATE_FILE}.apply.lock only if it is stale)"
+  fi
+  printf '%s\n' "$$" > "$APPLY_LOCK_DIR/pid"
+
+  snapshot_apply_file "$CONFIG_FILE" config
+  snapshot_apply_file "$STATE_FILE" state
+  APPLY_TRANSACTION_ACTIVE=1
+}
+
+finish_apply_transaction() {
+  APPLY_TRANSACTION_ACTIVE=0
+  release_apply_lock
 }
 
 require_jq() {
@@ -1983,8 +2082,56 @@ resolve_suppressed_servers() {
   )
 }
 
+validate_mcp_http_url() {
+  local server="$1" url="$2" remainder authority lower_authority host_port query part name has_port=0
+  case "$url" in
+    *[[:space:]]*|*\#*)
+      die "HTTP MCP '$server' URL must not contain whitespace or a fragment"
+      ;;
+    https://*) remainder="${url#https://}" ;;
+    http://*) remainder="${url#http://}" ;;
+    *) die "HTTP MCP '$server' URL must use HTTP(S)" ;;
+  esac
+  authority="${remainder%%[/?#]*}"
+  [ -n "$authority" ] || die "HTTP MCP '$server' URL must include a host"
+  case "$authority" in
+    *@*) die "HTTP MCP '$server' URL must not contain embedded credentials" ;;
+  esac
+
+  case "$url" in
+    http://*)
+      lower_authority="$(printf '%s' "$authority" | tr '[:upper:]' '[:lower:]')"
+      case "$lower_authority" in
+        localhost) ;;
+        localhost:*) host_port="${lower_authority#localhost:}"; has_port=1 ;;
+        127.0.0.1) ;;
+        127.0.0.1:*) host_port="${lower_authority#127.0.0.1:}"; has_port=1 ;;
+        \[::1\]) ;;
+        \[::1\]:*) host_port="${lower_authority#\[::1\]:}"; has_port=1 ;;
+        *) die "HTTP MCP '$server' URL must use HTTPS unless it is loopback-only" ;;
+      esac
+      if [ "$has_port" -eq 1 ]; then
+        case "$host_port" in ""|*[!0-9]*) die "HTTP MCP '$server' URL has an invalid loopback port" ;; esac
+      fi
+      ;;
+  esac
+
+  case "$url" in *\?*) query="${url#*\?}" ;; *) return 0 ;; esac
+  while [ -n "$query" ]; do
+    part="${query%%&*}"
+    if [ "$part" = "$query" ]; then query=""; else query="${query#*&}"; fi
+    name="${part%%=*}"
+    name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+    case "$name" in
+      *%*|key|api-key|api_key|apikey|x-api-key|x_api_key|access-key|access_key|secret-key|secret_key|access-token|access_token|token|secret|password|credential|auth|authorization|signature|sig|*-key|*_key|key-*|key_*|*-token|*_token|token-*|token_*|*-secret|*_secret|secret-*|secret_*|*-password|*_password|password-*|password_*|*-credential|*_credential|credential-*|credential_*|*-auth|*_auth|auth-*|auth_*)
+        die "HTTP MCP '$server' URL query must not contain credentials; move them to a Header"
+        ;;
+    esac
+  done
+}
+
 validate_effective_server() {
-  local server="$1" definition="$2" package_ref artifact expected_sha actual_sha requirement
+  local server="$1" definition="$2" package_ref artifact expected_sha actual_sha requirement url
   if ! printf '%s' "$definition" | jq -e --arg target "$TARGET" '
     type == "object"
     and (
@@ -2072,6 +2219,11 @@ validate_effective_server() {
     and ((.variant_label // "") | type == "string")
   ' >/dev/null 2>&1; then
     die "server '$server' is invalid or unsupported by target '$TARGET'"
+  fi
+
+  if [ "$(printf '%s' "$definition" | jq -r '.transport')" = "http" ]; then
+    url="$(printf '%s' "$definition" | jq -r '.url')"
+    validate_mcp_http_url "$server" "$url"
   fi
 
   package_ref="$(printf '%s' "$definition" | jq -r '.host.install.package // empty')"
@@ -3740,12 +3892,14 @@ if [ "$COMMAND" = "server-enable" ] ||
     die "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names"
   fi
   validate_state_file
+  begin_apply_transaction
   if [ "$TARGET" = "codex" ]; then
     apply_codex_target_patch
   else
     apply_json_target_patch
   fi
   update_state
+  finish_apply_transaction
   if [ "$JSON_OUTPUT" -eq 1 ]; then
     emit_updated_selection_json
   elif [ "$COMMAND" = "server-set" ]; then
@@ -3915,10 +4069,12 @@ if [ ${#CONFLICTS[@]} -gt 0 ] && [ "$FORCE" -ne 1 ]; then
 fi
 
 validate_state_file
+begin_apply_transaction
 if [ "$TARGET" = "codex" ]; then
   apply_codex_target
 else
   apply_json_target
 fi
 update_state
+finish_apply_transaction
 ok "applied profile '$PROFILE' to $TARGET"

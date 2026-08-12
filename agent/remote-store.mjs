@@ -25,6 +25,7 @@ const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
 const MIN_CREATE_TOKEN_LENGTH = 32;
 const MAX_CREATE_TOKEN_LENGTH = 512;
+const responseDeadlines = new WeakMap();
 
 const MCP_REMOTE_PROTOCOL = Object.freeze({
   id: "mcpctl",
@@ -249,6 +250,7 @@ async function downloadRemoteSnapshot(configOrPath, protocol, version = "") {
     .trim()
     .toLowerCase();
   if (contentType !== protocol.contentType) {
+    await discardResponse(response);
     throw new RemoteStoreError(
       `remote snapshot type '${contentType || "(missing)"}' does not match ${protocol.id}`
     );
@@ -508,22 +510,26 @@ async function request(config, _protocol, path, options = {}) {
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   const controller = new AbortController();
+  const deadline = Date.now() + FETCH_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(`${config.endpoint}${path}`, {
+    const response = await fetch(`${config.endpoint}${path}`, {
       method: options.method || "GET",
       headers,
       body: options.body,
       redirect: "error",
       signal: controller.signal
     });
+    // Keep the request deadline active until the response body is consumed.
+    // fetch() resolving only means that headers arrived.
+    responseDeadlines.set(response, { controller, deadline, timer });
+    return response;
   } catch (error) {
+    clearTimeout(timer);
     if (error?.name === "AbortError") {
       throw new RemoteStoreError("remote request timed out");
     }
     throw new RemoteStoreError("could not reach the remote toolbox store");
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -541,7 +547,10 @@ async function requireApiSuccess(response, expectedStatuses) {
         typeof body?.error?.message === "string") {
       message = `${body.error.code}: ${sanitizeRemoteMessage(body.error.message)}`;
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof RemoteStoreError && /timed out$/.test(error.message)) {
+      throw error;
+    }
     // Keep the bounded generic status message.
   }
   throw new RemoteStoreError(message);
@@ -557,19 +566,40 @@ async function readApiJson(response, expectedStatuses) {
   return parseJson(text, "remote service returned invalid JSON");
 }
 
-async function readResponseTextLimited(response, maxBytes, label) {
-  const contentLength = response.headers.get("Content-Length");
-  if (contentLength !== null &&
-      (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maxBytes)) {
-    throw new RemoteStoreError(`${label} exceeds the safe size limit`);
+async function readResponseTextLimited(
+  response,
+  maxBytes,
+  label,
+  { timeoutMs = null } = {}
+) {
+  if (timeoutMs !== null &&
+      (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > FETCH_TIMEOUT_MS)) {
+    throw new RemoteStoreError("response timeout must be a positive bounded number");
   }
-  if (response.body === null) return "";
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
+  const requestDeadline = responseDeadlines.get(response);
+  const localDeadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+  const deadline = requestDeadline
+    ? Math.min(requestDeadline.deadline, localDeadline ?? requestDeadline.deadline)
+    : (localDeadline ?? Date.now() + FETCH_TIMEOUT_MS);
+  let reader;
   try {
+    const contentLength = response.headers.get("Content-Length");
+    if (contentLength !== null &&
+        (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maxBytes)) {
+      cancelResponseBody(response);
+      throw new RemoteStoreError(`${label} exceeds the safe size limit`);
+    }
+    if (response.body === null) return "";
+    reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkBeforeDeadline(
+        reader,
+        deadline,
+        label,
+        requestDeadline?.controller
+      );
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
@@ -578,10 +608,75 @@ async function readResponseTextLimited(response, maxBytes, label) {
       }
       chunks.push(Buffer.from(value));
     }
+    return Buffer.concat(chunks, total).toString("utf8");
   } finally {
-    reader.releaseLock();
+    if (reader) {
+      try { reader.releaseLock(); } catch {}
+    }
+    releaseResponseDeadline(response);
   }
-  return Buffer.concat(chunks, total).toString("utf8");
+}
+
+function cancelReader(reader) {
+  try {
+    const cancellation = reader.cancel();
+    cancellation?.catch?.(() => {});
+  } catch {
+    // Cancellation is best-effort; the request controller is also aborted.
+  }
+}
+
+async function readChunkBeforeDeadline(reader, deadline, label, controller) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    controller?.abort();
+    cancelReader(reader);
+    throw new RemoteStoreError(`${label} timed out`);
+  }
+  let timer;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, rejectPromise) => {
+        timer = setTimeout(() => {
+          controller?.abort();
+          rejectPromise(new RemoteStoreError(`${label} timed out`));
+        }, remaining);
+      })
+    ]);
+  } catch (error) {
+    if (error instanceof RemoteStoreError) {
+      cancelReader(reader);
+      throw error;
+    }
+    if (controller?.signal.aborted || error?.name === "AbortError") {
+      throw new RemoteStoreError(`${label} timed out`);
+    }
+    throw new RemoteStoreError(`could not read ${label}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function releaseResponseDeadline(response) {
+  const requestDeadline = responseDeadlines.get(response);
+  if (!requestDeadline) return;
+  clearTimeout(requestDeadline.timer);
+  responseDeadlines.delete(response);
+}
+
+async function discardResponse(response) {
+  cancelResponseBody(response);
+  releaseResponseDeadline(response);
+}
+
+function cancelResponseBody(response) {
+  try {
+    const cancellation = response.body?.cancel();
+    cancellation?.catch?.(() => {});
+  } catch {
+    // Discarding an unread body must never become another unbounded wait.
+  }
 }
 
 function sanitizeRemoteMessage(value) {
@@ -690,6 +785,7 @@ export {
   listRemoteVersions,
   makeRecoveryCode,
   parseRecoveryCode,
+  readResponseTextLimited,
   readRemoteConfig,
   setRemoteWebUiEnabled,
   uploadRemoteSnapshot,

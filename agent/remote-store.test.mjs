@@ -15,6 +15,7 @@ import {
   listRemoteVersions,
   makeRecoveryCode,
   parseRecoveryCode,
+  readResponseTextLimited,
   setRemoteWebUiEnabled,
   uploadRemoteSnapshot
 } from "./remote-store.mjs";
@@ -126,5 +127,23 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+let bodyCancelled = false;
+const stalledResponse = new Response(new ReadableStream({
+  cancel() {
+    bodyCancelled = true;
+    return new Promise(() => {});
+  }
+}));
+await assert.rejects(
+  readResponseTextLimited(
+    stalledResponse,
+    1024,
+    "stalled response body",
+    { timeoutMs: 25 }
+  ),
+  /stalled response body timed out/
+);
+assert.equal(bodyCancelled, true);
 
 process.stdout.write("ok  : shared encrypted remote protocol supports all Toolbox stores\n");

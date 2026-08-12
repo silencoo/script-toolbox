@@ -160,9 +160,10 @@ export function validateEndpoint(value, label = "endpoint") {
     );
   }
   for (const name of endpoint.searchParams.keys()) {
-    if (/^(?:api[-_]?key|access[-_]?token|token|secret|auth|authorization|signature|sig|credential)$/i.test(name)) {
+    if (/(?:^|[-_])(?:api[-_]?key|key|token|secret|password|credential|auth|authorization|signature|sig)(?:$|[-_])/i.test(name) ||
+        /^(?:apiKey|accessToken|clientSecret|privateKey|subscriptionKey)$/i.test(name)) {
       throw new ProviderSchemaError(
-        `${label} must reference credentials through auth.secret, not a URL query parameter`
+        `${label} must reference credentials through auth.secret, not URL query parameters`
       );
     }
   }

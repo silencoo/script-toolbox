@@ -379,10 +379,63 @@ ensure_npm_cli() {
 }
 
 derive_models_url() {
-  local base="${1%/}"
+  local base="$1" path query=""
   case "$base" in
-    */v1) printf '%s/models' "$base" ;;
-    *)    printf '%s/v1/models' "$base" ;;
+    *\?*) path="${base%%\?*}"; query="?${base#*\?}" ;;
+    *) path="$base" ;;
+  esac
+  path="${path%/}"
+  case "$path" in
+    */v1) printf '%s/models%s' "$path" "$query" ;;
+    *)    printf '%s/v1/models%s' "$path" "$query" ;;
+  esac
+}
+
+validate_provider_url() {
+  # These URLs are persisted in client config and printed in plans. Keep
+  # credentials out of them entirely, and allow cleartext only on loopback.
+  local url="$1" label="${2:-provider URL}" remainder authority lower_authority host_port
+  local query part name
+  [ -n "$url" ] || die "$label must not be empty"
+  case "$url" in
+    *[[:space:]]*) die "$label must not contain whitespace" ;;
+    *\#*) die "$label must not contain a fragment" ;;
+  esac
+  case "$url" in
+    https://*) remainder="${url#https://}" ;;
+    http://*) remainder="${url#http://}" ;;
+    *) die "$label must be an absolute HTTP(S) URL" ;;
+  esac
+  authority="${remainder%%[/?#]*}"
+  [ -n "$authority" ] || die "$label must include a host"
+  case "$authority" in *@*) die "$label must not contain embedded credentials" ;; esac
+
+  case "$url" in *\?*) query="${url#*\?}" ;; *) query="" ;; esac
+  while [ -n "$query" ]; do
+    part="${query%%&*}"
+    if [ "$part" = "$query" ]; then query=""; else query="${query#*&}"; fi
+    name="${part%%=*}"
+    name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+    case "$name" in
+      *%*|key|api-key|api_key|apikey|x-api-key|x_api_key|access-key|access_key|secret-key|secret_key|access-token|access_token|token|secret|password|credential|auth|authorization|signature|sig|*-key|*_key|key-*|key_*|*-token|*_token|token-*|token_*|*-secret|*_secret|secret-*|secret_*|*-password|*_password|password-*|password_*|*-credential|*_credential|credential-*|credential_*|*-auth|*_auth|auth-*|auth_*)
+        die "$label must not contain credentials in query parameters; pass credentials with --key-file or the provider environment variable"
+        ;;
+    esac
+  done
+
+  case "$url" in https://*) return 0 ;; esac
+  lower_authority="$(printf '%s' "$authority" | tr '[:upper:]' '[:lower:]')"
+  case "$lower_authority" in
+    localhost) return 0 ;;
+    localhost:*) host_port="${lower_authority#localhost:}" ;;
+    127.0.0.1) return 0 ;;
+    127.0.0.1:*) host_port="${lower_authority#127.0.0.1:}" ;;
+    \[::1\]) return 0 ;;
+    \[::1\]:*) host_port="${lower_authority#\[::1\]:}" ;;
+    *) die "$label must use HTTPS unless it is loopback-only" ;;
+  esac
+  case "$host_port" in
+    ""|*[!0-9]*) die "$label has an invalid loopback port" ;;
   esac
 }
 
