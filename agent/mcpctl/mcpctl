@@ -185,6 +185,23 @@ require_jq() {
     die "jq is required; install jq and re-run"
 }
 
+enable_windows_jq_lf() {
+  local jq_binary
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) return 0 ;;
+  esac
+  jq_binary="$(type -P jq 2>/dev/null || true)"
+  [ -n "$jq_binary" ] || die "jq executable is unavailable"
+  MCPCTL_JQ_BINARY="$jq_binary"
+  # Native Windows jq writes CRLF even when Bash captures a scalar. Strip the
+  # transport CR so profile/server identifiers remain portable; JSON escapes
+  # such as "\\r" are two ordinary bytes and are not altered here.
+  jq() {
+    "$MCPCTL_JQ_BINARY" "$@" | tr -d '\r'
+  }
+}
+
 validate_id() {
   local kind="$1" value="$2"
   if [ "$kind" = "server name" ]; then
@@ -620,6 +637,7 @@ run_interactive() {
   done
 
   require_jq
+  enable_windows_jq_lf
   default_config_home="$(platform_config_home)"
   default_state_home="$(platform_state_home)"
   preferences_file="${MCPCTL_PREFERENCES:-${default_config_home}/mcpctl/preferences.json}"
@@ -1316,6 +1334,7 @@ while [ $# -gt 0 ]; do
 done
 
 require_jq
+enable_windows_jq_lf
 
 DEFAULT_CONFIG_HOME="$(platform_config_home)"
 DEFAULT_STATE_HOME="$(platform_state_home)"

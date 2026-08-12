@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, posix, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -132,54 +132,62 @@ export function proxyCompatibilityIssue(target, protocol) {
   return "";
 }
 
-export function targetPaths(target, { home = homedir() } = {}) {
+function targetPathApi(platform) {
+  return platform === "windows" || platform === "win32" ? win32 : posix;
+}
+
+export function targetPaths(target, {
+  home = homedir(),
+  platform = normalizeRuntimePlatform()
+} = {}) {
   validateTarget(target);
+  const targetPath = targetPathApi(platform);
   if (target === "claude") {
-    const root = join(home, ".claude");
+    const root = targetPath.join(home, ".claude");
     return {
       root,
-      config_files: [join(root, "settings.json")],
+      config_files: [targetPath.join(root, "settings.json")],
       state_files: [
-        join(root, ".script-toolbox-provider"),
-        join(root, ".script-toolbox-provider-context.json")
+        targetPath.join(root, ".script-toolbox-provider"),
+        targetPath.join(root, ".script-toolbox-provider-context.json")
       ],
       key_dir: "",
       key_file: ""
     };
   }
   if (target === "codex") {
-    const root = join(home, ".codex");
-    const keyDir = join(root, "provider-keys");
+    const root = targetPath.join(home, ".codex");
+    const keyDir = targetPath.join(root, "provider-keys");
     return {
       root,
-      config_files: [join(root, "config.toml")],
+      config_files: [targetPath.join(root, "config.toml")],
       state_files: [
-        join(root, ".script-toolbox-provider-key"),
-        join(root, ".script-toolbox-defaults-backup.toml")
+        targetPath.join(root, ".script-toolbox-provider-key"),
+        targetPath.join(root, ".script-toolbox-defaults-backup.toml")
       ],
       key_dir: keyDir,
-      key_file: join(keyDir, "script_toolbox_custom.key")
+      key_file: targetPath.join(keyDir, "script_toolbox_custom.key")
     };
   }
   if (target === "opencode") {
-    const root = join(home, ".config", "opencode");
-    const keyDir = join(root, "provider-keys");
+    const root = targetPath.join(home, ".config", "opencode");
+    const keyDir = targetPath.join(root, "provider-keys");
     return {
       root,
-      config_files: [join(root, "opencode.json")],
-      state_files: [join(root, ".script-toolbox-provider")],
+      config_files: [targetPath.join(root, "opencode.json")],
+      state_files: [targetPath.join(root, ".script-toolbox-provider")],
       key_dir: keyDir,
-      key_file: join(keyDir, "script-toolbox-custom.key")
+      key_file: targetPath.join(keyDir, "script-toolbox-custom.key")
     };
   }
-  const root = join(home, ".pi", "agent");
-  const keyDir = join(root, "provider-keys");
+  const root = targetPath.join(home, ".pi", "agent");
+  const keyDir = targetPath.join(root, "provider-keys");
   return {
     root,
-    config_files: [join(root, "models.json"), join(root, "settings.json")],
-    state_files: [join(root, ".script-toolbox-provider")],
+    config_files: [targetPath.join(root, "models.json"), targetPath.join(root, "settings.json")],
+    state_files: [targetPath.join(root, ".script-toolbox-provider")],
     key_dir: keyDir,
-    key_file: join(keyDir, "script-toolbox-custom.key")
+    key_file: targetPath.join(keyDir, "script-toolbox-custom.key")
   };
 }
 
@@ -220,7 +228,7 @@ export function renderProviderPlan(resolved, {
 } = {}) {
   validateTarget(resolved.target);
   validatePlatform(resolved.platform);
-  const paths = targetPaths(resolved.target, { home });
+  const paths = targetPaths(resolved.target, { home, platform: resolved.platform });
   const directIssue = resolved.enabled ? compatibilityIssue(resolved) : "";
   const compaction = effectiveProviderCompaction(resolved);
   const context = renderContextPolicy(resolved);
@@ -262,7 +270,7 @@ export function renderProviderPlan(resolved, {
       ? {
           policy: "preserve",
           account: "current",
-          config_file: join(paths.root, "auth.json"),
+          config_file: targetPathApi(resolved.platform).join(paths.root, "auth.json"),
           managed: false
         }
       : null,

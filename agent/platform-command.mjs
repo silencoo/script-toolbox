@@ -16,7 +16,10 @@ export function bashScriptCommand(script, args = [], {
     throw new TypeError("Bash script arguments must be an array of strings");
   }
   const bashScript = platform === "win32" ? script.replaceAll("\\", "/") : script;
+  const bashArgs = platform === "win32"
+    ? args.map((argument) => argument.replaceAll("\\", "/"))
+    : [...args];
   return platform === "win32"
-    ? { executable: bash, args: [bashScript, ...args] }
-    : { executable: script, args: [...args] };
+    ? { executable: bash, args: [bashScript, ...bashArgs] }
+    : { executable: script, args: bashArgs };
 }

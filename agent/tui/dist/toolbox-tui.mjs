@@ -22489,7 +22489,7 @@ import { spawnSync } from "node:child_process";
 // src/controller.mjs
 import { spawn } from "node:child_process";
 import { lstat as lstat3, readFile as readFile3 } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute, join as join5, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, isAbsolute, join as join4, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // ../platform-command.mjs
@@ -22503,7 +22503,9 @@ function bashScriptCommand(script, args = [], {
   if (!Array.isArray(args) || args.some((argument) => typeof argument !== "string")) {
     throw new TypeError("Bash script arguments must be an array of strings");
   }
-  return platform2 === "win32" ? { executable: bash, args: [script, ...args] } : { executable: script, args: [...args] };
+  const bashScript = platform2 === "win32" ? script.replaceAll("\\", "/") : script;
+  const bashArgs = platform2 === "win32" ? args.map((argument) => argument.replaceAll("\\", "/")) : [...args];
+  return platform2 === "win32" ? { executable: bash, args: [bashScript, ...bashArgs] } : { executable: script, args: bashArgs };
 }
 
 // src/remote-workspace.mjs
@@ -22519,20 +22521,23 @@ import {
   writeFile
 } from "node:fs/promises";
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname3, join as join4, resolve as resolve3 } from "node:path";
+import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 
 // ../platform-paths.mjs
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
+function pathApi(platform2) {
+  return platform2 === "win32" ? win32 : posix;
+}
 function platformConfigHome({
   platform: platform2 = process.platform,
   environment = process.env,
   home = homedir()
 } = {}) {
   if (platform2 === "win32") {
-    return environment.APPDATA || join(home, "AppData", "Roaming");
+    return environment.APPDATA || pathApi(platform2).join(home, "AppData", "Roaming");
   }
-  return environment.XDG_CONFIG_HOME || join(home, ".config");
+  return environment.XDG_CONFIG_HOME || pathApi(platform2).join(home, ".config");
 }
 function platformDataHome({
   platform: platform2 = process.platform,
@@ -22540,9 +22545,9 @@ function platformDataHome({
   home = homedir()
 } = {}) {
   if (platform2 === "win32") {
-    return environment.LOCALAPPDATA || environment.APPDATA || join(home, "AppData", "Local");
+    return environment.LOCALAPPDATA || environment.APPDATA || pathApi(platform2).join(home, "AppData", "Local");
   }
-  return environment.XDG_DATA_HOME || join(home, ".local", "share");
+  return environment.XDG_DATA_HOME || pathApi(platform2).join(home, ".local", "share");
 }
 
 // ../remote-store.mjs
@@ -22561,7 +22566,7 @@ import {
   rename,
   rm
 } from "node:fs/promises";
-import { dirname, join as join2, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 var SCHEMA = 1;
 var STORE_ID_PATTERN = /^[a-f0-9]{32}$/;
 var VERSION_ID_PATTERN = /^[0-9]{13}-[a-f0-9-]{36}$/;
@@ -22957,7 +22962,7 @@ async function writeJsonAtomic(filePath, value) {
     }
   }
   await mkdir(parentPath, { recursive: true, mode: 448 });
-  const temporaryPath = join2(
+  const temporaryPath = join(
     parentPath,
     `.${targetPath.slice(parentPath.length + 1)}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`
   );
@@ -23933,7 +23938,7 @@ function normalizeWorkspaceSchema(snapshot) {
 
 // ../agentctl/provider-renderer.mjs
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join3, resolve as resolve2, sep } from "node:path";
+import { dirname as dirname2, join as join2, posix as posix2, resolve as resolve2, sep, win32 as win322 } from "node:path";
 import { fileURLToPath } from "node:url";
 var MODULE_DIR = dirname2(fileURLToPath(import.meta.url));
 var DEFAULT_AGENT_ROOT = resolve2(MODULE_DIR, "..");
@@ -24006,59 +24011,66 @@ function compatibilityIssue(resolved) {
   }
   return "";
 }
-function targetPaths(target, { home = homedir2() } = {}) {
+function targetPathApi(platform2) {
+  return platform2 === "windows" || platform2 === "win32" ? win322 : posix2;
+}
+function targetPaths(target, {
+  home = homedir2(),
+  platform: platform2 = normalizeRuntimePlatform()
+} = {}) {
   validateTarget(target);
+  const targetPath = targetPathApi(platform2);
   if (target === "claude") {
-    const root2 = join3(home, ".claude");
+    const root2 = targetPath.join(home, ".claude");
     return {
       root: root2,
-      config_files: [join3(root2, "settings.json")],
+      config_files: [targetPath.join(root2, "settings.json")],
       state_files: [
-        join3(root2, ".script-toolbox-provider"),
-        join3(root2, ".script-toolbox-provider-context.json")
+        targetPath.join(root2, ".script-toolbox-provider"),
+        targetPath.join(root2, ".script-toolbox-provider-context.json")
       ],
       key_dir: "",
       key_file: ""
     };
   }
   if (target === "codex") {
-    const root2 = join3(home, ".codex");
-    const keyDir2 = join3(root2, "provider-keys");
+    const root2 = targetPath.join(home, ".codex");
+    const keyDir2 = targetPath.join(root2, "provider-keys");
     return {
       root: root2,
-      config_files: [join3(root2, "config.toml")],
+      config_files: [targetPath.join(root2, "config.toml")],
       state_files: [
-        join3(root2, ".script-toolbox-provider-key"),
-        join3(root2, ".script-toolbox-defaults-backup.toml")
+        targetPath.join(root2, ".script-toolbox-provider-key"),
+        targetPath.join(root2, ".script-toolbox-defaults-backup.toml")
       ],
       key_dir: keyDir2,
-      key_file: join3(keyDir2, "script_toolbox_custom.key")
+      key_file: targetPath.join(keyDir2, "script_toolbox_custom.key")
     };
   }
   if (target === "opencode") {
-    const root2 = join3(home, ".config", "opencode");
-    const keyDir2 = join3(root2, "provider-keys");
+    const root2 = targetPath.join(home, ".config", "opencode");
+    const keyDir2 = targetPath.join(root2, "provider-keys");
     return {
       root: root2,
-      config_files: [join3(root2, "opencode.json")],
-      state_files: [join3(root2, ".script-toolbox-provider")],
+      config_files: [targetPath.join(root2, "opencode.json")],
+      state_files: [targetPath.join(root2, ".script-toolbox-provider")],
       key_dir: keyDir2,
-      key_file: join3(keyDir2, "script-toolbox-custom.key")
+      key_file: targetPath.join(keyDir2, "script-toolbox-custom.key")
     };
   }
-  const root = join3(home, ".pi", "agent");
-  const keyDir = join3(root, "provider-keys");
+  const root = targetPath.join(home, ".pi", "agent");
+  const keyDir = targetPath.join(root, "provider-keys");
   return {
     root,
-    config_files: [join3(root, "models.json"), join3(root, "settings.json")],
-    state_files: [join3(root, ".script-toolbox-provider")],
+    config_files: [targetPath.join(root, "models.json"), targetPath.join(root, "settings.json")],
+    state_files: [targetPath.join(root, ".script-toolbox-provider")],
     key_dir: keyDir,
-    key_file: join3(keyDir, "script-toolbox-custom.key")
+    key_file: targetPath.join(keyDir, "script-toolbox-custom.key")
   };
 }
 function backendPath(target, agentRoot) {
   const [directory, file] = TARGET_BACKENDS[target];
-  return join3(agentRoot, directory, file);
+  return join2(agentRoot, directory, file);
 }
 function tokenLabel(value) {
   return value === null ? "auto" : new Intl.NumberFormat("en-US").format(value);
@@ -24089,7 +24101,7 @@ function renderProviderPlan(resolved, {
 } = {}) {
   validateTarget(resolved.target);
   validatePlatform(resolved.platform);
-  const paths = targetPaths(resolved.target, { home });
+  const paths = targetPaths(resolved.target, { home, platform: resolved.platform });
   const directIssue = resolved.enabled ? compatibilityIssue(resolved) : "";
   const compaction = effectiveProviderCompaction(resolved);
   const context = renderContextPolicy(resolved);
@@ -24125,7 +24137,7 @@ function renderProviderPlan(resolved, {
     official_identity: resolved.target === "codex" ? {
       policy: "preserve",
       account: "current",
-      config_file: join3(paths.root, "auth.json"),
+      config_file: targetPathApi(resolved.platform).join(paths.root, "auth.json"),
       managed: false
     } : null,
     backend: backendPath(resolved.target, agentRoot),
@@ -24146,7 +24158,7 @@ var PROTOCOLS = Object.freeze({
   prompts: PROMPT_REMOTE_PROTOCOL
 });
 function snippetsDirectory(home) {
-  return join4(home, ".local", "share", "script-toolbox", "snippets");
+  return join3(home, ".local", "share", "script-toolbox", "snippets");
 }
 function validateWorkspaceSnapshot(snapshot) {
   snapshot = normalizeWorkspaceSchema(snapshot);
@@ -24203,7 +24215,7 @@ var RemoteWorkspaceError = class extends Error {
 };
 function defaultConfigPath() {
   const configHome = platformConfigHome();
-  return resolve3(process.env.AGENTCTL_WORKSPACE_CONFIG || join4(configHome, "agentctl", "workspace-remote.json"));
+  return resolve3(process.env.AGENTCTL_WORKSPACE_CONFIG || join3(configHome, "agentctl", "workspace-remote.json"));
 }
 function defaultRuntimeRoot() {
   if (process.env.AGENTCTL_WORKSPACE_RUNTIME) {
@@ -24474,28 +24486,28 @@ function decodeFile(file, label) {
 }
 async function writeSkill(runtime, name, skill) {
   assertName(name, SKILL_NAME, "Skill name");
-  const root = join4(runtime, "skills");
+  const root = join3(runtime, "skills");
   await ensureDirectory(root);
-  const temporary = join4(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
+  const temporary = join3(root, `.${name}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`);
   await ensureDirectory(temporary);
   try {
     for (const [path, file] of Object.entries(assertObject(skill.files, `Skill '${name}' files`))) {
       validateRelativePath(path);
-      const destination2 = join4(temporary, ...path.split("/"));
+      const destination2 = join3(temporary, ...path.split("/"));
       await ensureDirectory(dirname3(destination2));
       await writeFile(destination2, decodeFile(file, `${name}/${path}`), {
         flag: "wx",
         mode: (file.mode & 73) !== 0 ? 448 : 384
       });
     }
-    if (!await pathExists2(join4(temporary, "SKILL.md"))) {
+    if (!await pathExists2(join3(temporary, "SKILL.md"))) {
       throw new RemoteWorkspaceError(`remote Skill '${name}' has no SKILL.md`);
     }
-    const destination = join4(root, name);
+    const destination = join3(root, name);
     if (await pathExists2(destination)) {
-      const backupRoot = join4(runtime, "backups", `remote-${Date.now()}`);
+      const backupRoot = join3(runtime, "backups", `remote-${Date.now()}`);
       await ensureDirectory(backupRoot);
-      await rename2(destination, join4(backupRoot, name));
+      await rename2(destination, join3(backupRoot, name));
     }
     await rename2(temporary, destination);
   } finally {
@@ -24730,10 +24742,10 @@ function createRemoteWorkspace({
         workspace.agent.secrets.secrets[resolved.auth.secret]
       );
     }
-    const temporary = await mkdtemp(join4(tmpdir(), "agentctl-tui-provider-"));
+    const temporary = await mkdtemp(join3(tmpdir(), "agentctl-tui-provider-"));
     await chmod2(temporary, 448);
-    const storePath = join4(temporary, "providers.json");
-    const secretsPath = join4(temporary, "provider-secrets.json");
+    const storePath = join3(temporary, "providers.json");
+    const secretsPath = join3(temporary, "provider-secrets.json");
     try {
       await Promise.all([
         writeJsonAtomic(storePath, providerStore),
@@ -24746,16 +24758,16 @@ function createRemoteWorkspace({
   }
   async function runtimePaths() {
     if (!masterConfig) await index();
-    const root = join4(runtimeRoot, masterConfig.store_id);
+    const root = join3(runtimeRoot, masterConfig.store_id);
     return {
       root,
-      mcp: join4(root, "mcp"),
-      mcpRemote: join4(root, "mcp-remote.json"),
-      skills: join4(root, "skills"),
-      presets: join4(root, "presets.json"),
-      presetState: join4(root, "preset-state.json"),
-      promptBackups: join4(root, "prompt-backups"),
-      snippetBackups: join4(root, "snippet-backups")
+      mcp: join3(root, "mcp"),
+      mcpRemote: join3(root, "mcp-remote.json"),
+      skills: join3(root, "skills"),
+      presets: join3(root, "presets.json"),
+      presetState: join3(root, "preset-state.json"),
+      promptBackups: join3(root, "prompt-backups"),
+      snippetBackups: join3(root, "snippet-backups")
     };
   }
   async function runtimeEnvironment() {
@@ -24771,8 +24783,8 @@ function createRemoteWorkspace({
   async function runtimeAvailability() {
     const paths = await runtimePaths();
     return {
-      mcp: await pathExists2(join4(paths.mcp, "catalog.json")),
-      skills: await pathExists2(join4(paths.skills, "catalog.json")),
+      mcp: await pathExists2(join3(paths.mcp, "catalog.json")),
+      skills: await pathExists2(join3(paths.skills, "catalog.json")),
       presets: await pathExists2(paths.presets)
     };
   }
@@ -24781,8 +24793,8 @@ function createRemoteWorkspace({
     const selection = mcpSelection(snapshot, name, target);
     const paths = await runtimePaths();
     await ensureDirectory(paths.mcp);
-    await ensureDirectory(join4(paths.mcp, "profiles"));
-    const catalogPath = join4(paths.mcp, "catalog.json");
+    await ensureDirectory(join3(paths.mcp, "profiles"));
+    const catalogPath = join3(paths.mcp, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, servers: {} });
     if (catalog2.schema !== 1 || !catalog2.servers || typeof catalog2.servers !== "object") {
       throw new RemoteWorkspaceError("Workspace MCP runtime catalog is invalid");
@@ -24794,14 +24806,14 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const profile of selection.profiles) {
-      await writeJsonAtomic(join4(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
+      await writeJsonAtomic(join3(paths.mcp, "profiles", `${profile}.json`), snapshot.profiles[profile]);
     }
     const neededSecrets = secretNames(selectedDefinitions);
     const secrets = {};
     for (const secret of neededSecrets) {
       if (typeof snapshot.secrets[secret] === "string") secrets[secret] = snapshot.secrets[secret];
     }
-    await writeJsonAtomic(join4(paths.mcp, "secrets.remote.enc"), encryptValue(
+    await writeJsonAtomic(join3(paths.mcp, "secrets.remote.enc"), encryptValue(
       "mcpctl-local-secrets",
       LOCAL_SECRETS_INFO,
       config,
@@ -24816,9 +24828,9 @@ function createRemoteWorkspace({
     const paths = await runtimePaths();
     await ensureDirectory(paths.skills);
     for (const directory of ["skills", "packs", "state", "backups"]) {
-      await ensureDirectory(join4(paths.skills, directory));
+      await ensureDirectory(join3(paths.skills, directory));
     }
-    const catalogPath = join4(paths.skills, "catalog.json");
+    const catalogPath = join3(paths.skills, "catalog.json");
     const catalog2 = await readJsonOr(catalogPath, { schema: 1, skills: {} });
     if (catalog2.schema !== 1 || !catalog2.skills || typeof catalog2.skills !== "object") {
       throw new RemoteWorkspaceError("Workspace Skills runtime catalog is invalid");
@@ -24829,7 +24841,7 @@ function createRemoteWorkspace({
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const pack of selection.packs) {
-      await writeJsonAtomic(join4(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
+      await writeJsonAtomic(join3(paths.skills, "packs", `${pack}.json`), snapshot.packs[pack]);
     }
     return { name, ...selection, store: paths.skills };
   }
@@ -24847,8 +24859,8 @@ function createRemoteWorkspace({
   }
   async function promptSelection(name, target) {
     const document2 = await promptDocument(name, target);
-    const directory = join4(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
-    const path = join4(directory, `${name}.md`);
+    const directory = join3(localHome, target === "claude" ? ".claude" : ".codex", "instructions");
+    const path = join3(directory, `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24872,9 +24884,9 @@ function createRemoteWorkspace({
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join4(paths.promptBackups, `${Date.now()}-${selection.target}`);
+      const backupDirectory = join3(paths.promptBackups, `${Date.now()}-${selection.target}`);
       await ensureDirectory(backupDirectory);
-      backup = join4(backupDirectory, `${selection.name}.md`);
+      backup = join3(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -24909,7 +24921,7 @@ function createRemoteWorkspace({
     assertName(name, MCP_NAME, "Snippet name");
     const snippet = snapshot.snippets?.[name];
     if (!snippet) throw new RemoteWorkspaceError(`unknown remote Snippet '${name}'`);
-    const path = join4(snippetsDirectory(localHome), `${name}.md`);
+    const path = join3(snippetsDirectory(localHome), `${name}.md`);
     let current = null;
     if (await pathExists2(path)) {
       const details = await lstat2(path);
@@ -24932,9 +24944,9 @@ function createRemoteWorkspace({
     let backup = "";
     if (selection.previous !== null) {
       const paths = await runtimePaths();
-      const backupDirectory = join4(paths.snippetBackups, `${Date.now()}`);
+      const backupDirectory = join3(paths.snippetBackups, `${Date.now()}`);
       await ensureDirectory(backupDirectory);
-      backup = join4(backupDirectory, `${selection.name}.md`);
+      backup = join3(backupDirectory, `${selection.name}.md`);
       await rename2(selection.path, backup);
     }
     const temporary = `${selection.path}.tmp-${process.pid}-${randomBytes2(6).toString("hex")}`;
@@ -25056,7 +25068,7 @@ function createRemoteWorkspace({
 // src/controller.mjs
 var moduleDirectory = dirname4(fileURLToPath2(import.meta.url));
 var defaultAgentRoot = resolve4(
-  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join5(moduleDirectory, "..", "..")
+  process.env.SCRIPT_TOOLBOX_AGENT_ROOT || join4(moduleDirectory, "..", "..")
 );
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
@@ -25192,12 +25204,12 @@ function createController({
   remoteWorkspace = createRemoteWorkspace()
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
-  const orchestrator = join5(agentRoot, "agentctl", "orchestrator-client.mjs");
-  const agentctl = join5(agentRoot, "agentctl", "agentctl");
+  const orchestrator = join4(agentRoot, "agentctl", "orchestrator-client.mjs");
+  const agentctl = join4(agentRoot, "agentctl", "agentctl");
   const tools = {
-    mcp: join5(agentRoot, "mcpctl", "mcpctl"),
-    skills: join5(agentRoot, "skillsctl", "skillsctl"),
-    prompts: join5(agentRoot, "promptctl", "promptctl")
+    mcp: join4(agentRoot, "mcpctl", "mcpctl"),
+    skills: join4(agentRoot, "skillsctl", "skillsctl"),
+    prompts: join4(agentRoot, "promptctl", "promptctl")
   };
   let cachedWorkspace = null;
   let workspaceLastConnectedAt = "";

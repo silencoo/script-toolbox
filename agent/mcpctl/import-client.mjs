@@ -1017,7 +1017,7 @@ async function assertRegularFile(path, label) {
 
 async function assertPrivateFile(path, label) {
   const details = await assertRegularFile(path, label);
-  if ((details.mode & 0o077) !== 0) {
+  if (process.platform !== "win32" && (details.mode & 0o077) !== 0) {
     throw new ImportError(`${label} must not allow group or other access: ${path}`);
   }
 }

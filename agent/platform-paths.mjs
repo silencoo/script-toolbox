@@ -1,5 +1,9 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
+
+function pathApi(platform) {
+  return platform === "win32" ? win32 : posix;
+}
 
 export function platformConfigHome({
   platform = process.platform,
@@ -7,9 +11,9 @@ export function platformConfigHome({
   home = homedir()
 } = {}) {
   if (platform === "win32") {
-    return environment.APPDATA || join(home, "AppData", "Roaming");
+    return environment.APPDATA || pathApi(platform).join(home, "AppData", "Roaming");
   }
-  return environment.XDG_CONFIG_HOME || join(home, ".config");
+  return environment.XDG_CONFIG_HOME || pathApi(platform).join(home, ".config");
 }
 
 export function platformStateHome({
@@ -18,9 +22,10 @@ export function platformStateHome({
   home = homedir()
 } = {}) {
   if (platform === "win32") {
-    return environment.LOCALAPPDATA || environment.APPDATA || join(home, "AppData", "Local");
+    return environment.LOCALAPPDATA || environment.APPDATA ||
+      pathApi(platform).join(home, "AppData", "Local");
   }
-  return environment.XDG_STATE_HOME || join(home, ".local", "state");
+  return environment.XDG_STATE_HOME || pathApi(platform).join(home, ".local", "state");
 }
 
 export function platformDataHome({
@@ -29,7 +34,8 @@ export function platformDataHome({
   home = homedir()
 } = {}) {
   if (platform === "win32") {
-    return environment.LOCALAPPDATA || environment.APPDATA || join(home, "AppData", "Local");
+    return environment.LOCALAPPDATA || environment.APPDATA ||
+      pathApi(platform).join(home, "AppData", "Local");
   }
-  return environment.XDG_DATA_HOME || join(home, ".local", "share");
+  return environment.XDG_DATA_HOME || pathApi(platform).join(home, ".local", "share");
 }

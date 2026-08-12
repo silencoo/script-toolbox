@@ -836,10 +836,20 @@ async function start(profileName, options) {
   return output;
 }
 
-async function waitForStop(pid, statePath, timeoutMs = 6000) {
+async function waitForStop(pid, options, timeoutMs = 6000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!processAlive(pid) && !(await pathState(statePath))) return;
+    if (!processAlive(pid)) {
+      if (!(await pathState(options.proxyState))) return;
+      // Windows implements process.kill(..., "SIGTERM") with forced process
+      // termination, so the daemon cannot run its signal cleanup handlers.
+      // The PID and health identity were verified by stop() before signaling;
+      // clear only those now-dead, validated runtime files.
+      if (process.platform === "win32") {
+        await clearDeadRuntime(options);
+        return;
+      }
+    }
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
   throw new ProxyClientError("proxy did not stop cleanly; no stronger signal was sent");
@@ -885,7 +895,7 @@ async function stop(options) {
     return;
   }
   process.kill(current.pid, "SIGTERM");
-  await waitForStop(current.pid, options.proxyState);
+  await waitForStop(current.pid, options);
   const output = { ok: true, changed: true, status: "stopped" };
   if (options.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   else process.stdout.write("Proxy stopped cleanly.\n");

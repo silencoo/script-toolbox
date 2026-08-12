@@ -17,7 +17,7 @@ test("Windows uses Bash without flattening paths or arguments", () => {
   assert.deepEqual(
     bashScriptCommand(
       "C:\\Users\\Test User\\工具\\mcpctl",
-      ["apply", "--profile", "daily work"],
+      ["apply", "--profile", "daily work", "--key-file", "D:\\Temp Files\\private.key"],
       { platform: "win32", bash: "C:\\Program Files\\Git\\bin\\bash.exe" }
     ),
     {
@@ -26,7 +26,9 @@ test("Windows uses Bash without flattening paths or arguments", () => {
         "C:/Users/Test User/工具/mcpctl",
         "apply",
         "--profile",
-        "daily work"
+        "daily work",
+        "--key-file",
+        "D:/Temp Files/private.key"
       ]
     }
   );
