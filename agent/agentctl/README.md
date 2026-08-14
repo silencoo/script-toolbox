@@ -315,26 +315,33 @@ user-home paths.
 ## Versioned model pricing
 
 Pricing is an independent catalog, not a field in Provider profiles. It uses
-exact model IDs, effective intervals, optional profile-specific overrides, and
-mandatory source provenance. No vendor price snapshot is hard-coded into this
-repository.
+exact model IDs, Standard/Fast service tiers, prompt-context intervals,
+effective intervals, optional profile-specific overrides, and mandatory source
+provenance. A bundled snapshot is explicitly dated and limited to the current
+GPT-5.6 Sol/Terra/Luna family; it never auto-updates.
 
 ```bash
-agentctl pricing init --version 2026.08 --currency USD --yes
+agentctl pricing init --preset openai-gpt-5.6 --yes
+# Or: agentctl pricing init --version 2026.08 --currency USD --yes
 agentctl pricing set work-model \
   --profile work-gateway \
   --model vendor-model-2026 \
+  --service-tier standard \
+  --context-min-tokens 0 --context-max-tokens unbounded \
   --input 3 --output 15 \
   --cache-read 0.3 --cache-write 3.75 \
   --effective-at 2026-08-01T00:00:00Z \
   --source "vendor price page captured 2026-08-01" \
   --yes
 agentctl pricing calculate work-gateway vendor-model-2026 \
+  --service-tier standard \
   --input-tokens 1000000 --output-tokens 250000 --json
 ```
 
 Decimal strings are calculated with scaled `BigInt`, so neither catalog input
-nor output cost passes through JavaScript floating point. See
+nor output cost passes through JavaScript floating point. Prompt context is
+`input + cache read + cache write`; a matching context band prices the full
+request. See
 [`../pricing/`](../pricing/) for selection and precision rules.
 
 ## Optional native protocol proxy
@@ -350,13 +357,81 @@ agentctl proxy stop
 agentctl proxy stop --yes
 ```
 
+### Pure observation for an official Codex subscription
+
+The reserved `passthrough` profile observes Codex CLI traffic authenticated by
+an official ChatGPT subscription. It does not need a Provider Store profile or
+API key:
+
+```bash
+agentctl proxy plan passthrough --target codex
+agentctl proxy start passthrough --target codex --yes
+agentctl proxy attach
+agentctl proxy attach --yes
+
+# Inspect recent requests or aggregate retained metrics directly in agentctl.
+agentctl proxy usage --last 20
+agentctl proxy usage --summary
+agentctl proxy usage --summary --last 100 --json
+
+# Detach first so Codex never points at a stopped listener.
+agentctl proxy detach --yes
+agentctl proxy stop --yes
+```
+
+In this mode the default upstream remains
+`https://chatgpt.com/backend-api/codex`. The daemon forwards Codex's official
+OpenAI bearer, `ChatGPT-Account-ID`, request model, body, and response without
+substituting a Provider Secret or alias. It disables failover and replay. The
+only intentional transport normalization is `Accept-Encoding: identity` for
+HTTP responses and disabling WebSocket extension compression, so
+the bounded collector can inspect token usage without retaining response
+content. Metadata and usage logs still contain no headers, credentials, or
+request/response bodies. Token counts come from the upstream response. Any
+catalog-derived dollar value is an API-price estimate, not a ChatGPT
+subscription charge or authoritative quota balance.
+
+For OpenAI traffic, the proxy records both requested and returned
+`service_tier`. Returned `priority` is normalized to Fast and returned
+`auto`/`default` to Standard, and the returned value controls pricing. This matters
+when ramp limits downgrade a requested Fast call to Standard billing.
+
+The usage commands read active and rotated owner-only JSONL files and expose
+only a fixed safe projection: model identities, requested/returned/pricing
+tier, token classes, selected rate, cost, status, and duration. Summary mode
+uses fixed-decimal monetary addition and groups requests by model and effective
+pricing tier. Requested/effective Fast totals, response-confirmed downgrade
+counts, and canonical tier transitions are reported separately; missing rates
+remain explicit instead of being treated as zero cost. The daemon may be
+running or stopped.
+
+The TUI Providers section loads the same retained summary and shows an
+**Observed usage** block beneath Pricing/Proxy: retained versus priced requests,
+estimated API-equivalent cost, input/cache/output tokens, requested/effective/
+downgraded Fast counts, and the usage window. Empty and unavailable states stay
+explicit; the value is never labeled as a ChatGPT subscription invoice.
+
+`start` never edits Codex. `attach --yes` separately snapshots the exact
+`$CODEX_HOME/config.toml` bytes and mode, then inserts a marked top-level
+`model_provider = "openai"` plus the loopback `openai_base_url`. This keeps the
+built-in OpenAI/ChatGPT authentication path; both HTTP and WebSocket Responses
+pass through the observable local first hop and then the official upstream. `detach --yes` restores
+the snapshot byte-for-byte. It refuses if the attached config or owner-only
+backup changed, rather than discarding edits. `stop` likewise refuses until
+Codex is detached.
+
 It binds only to loopback and accepts only the selected native protocol's
 allowlisted routes. The local base URL is reported after start: OpenAI
 Responses/Chat use `/v1`, Google uses `/v1beta`, and Anthropic uses the listener
-root. Every request must present the hidden local capability as
+root. In Provider mode every request must present the hidden local capability as
 `x-agentctl-proxy-token`, Bearer, `x-api-key`, or `x-goog-api-key`. The proxy
 strips all of those client credentials before applying the real upstream
 Secret in memory.
+
+The subscription passthrough is the deliberate exception to credential
+replacement: its data routes require and forward the official bearer. The
+hidden local capability remains required for controller health checks and is
+never exposed to Codex configuration.
 
 For `openai_responses`, `/v1/responses/compact` is allowlisted only when every
 backend in the selected single/failover route resolves to native Responses

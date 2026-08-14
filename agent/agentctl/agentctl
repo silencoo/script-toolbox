@@ -16,7 +16,7 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.16.9"
+VERSION="0.17.0"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
@@ -44,7 +44,7 @@ Usage:
   agentctl account <status|list|save|use|delete> ...
   agentctl failover <command> [options]
   agentctl pricing <command> [options]
-  agentctl proxy <plan|start|status|stop|token> ...
+  agentctl proxy <plan|start|status|usage|attach|detach|stop|token> ...
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl workspace <command> [options]
   agentctl preset <list|show|create|delete|plan|apply|current|rollback|push|pull> ...
@@ -64,8 +64,8 @@ Commands:
               circuit-breaker policy. Runtime counters remain device-local.
   pricing     Manage an independent versioned fixed-decimal price catalog and
               calculate normalized token costs without floating point.
-  proxy       Manage the optional loopback-only native protocol proxy. It does
-              not take over client configuration automatically.
+  proxy       Manage the optional loopback-only native protocol proxy, with
+              explicit Codex passthrough attach/detach when requested.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   workspace   Manage one encrypted recovery key for portable Provider,

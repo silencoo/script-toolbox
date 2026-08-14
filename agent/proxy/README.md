@@ -13,6 +13,33 @@ agentctl proxy status
 agentctl proxy stop --yes
 ```
 
+For an official ChatGPT-subscription Codex session, use the reserved
+observation profile and explicit attachment lifecycle:
+
+```bash
+agentctl proxy start passthrough --target codex --yes
+agentctl proxy attach --yes
+agentctl proxy detach --yes
+agentctl proxy stop --yes
+```
+
+Passthrough uses the built-in Codex `openai` provider with a loopback
+`openai_base_url`; HTTP and WebSocket Responses are both relayed, and the default second hop is still the official
+`https://chatgpt.com/backend-api/codex` endpoint. The bearer token,
+`ChatGPT-Account-ID`, model, request bytes, and response bytes are not replaced
+or rewritten. Provider Secrets, aliases, failover, circuits, and replay are
+disabled. `Accept-Encoding` is normalized to `identity` only so token usage can
+be observed in HTTP response streams; WebSocket extension compression is not
+negotiated so the bounded frame observer can read completion usage. Frames and
+content are never written to logs.
+
+Observed token counts and the effective OpenAI `service_tier` are taken from
+the official response. `priority` means Fast and `auto`/`default` mean Standard. The
+response wins over the requested tier because OpenAI can downgrade ramp-limited
+Fast traffic and charge Standard rates. Optional pricing catalog results remain
+estimates against catalog rates; they are not a ChatGPT-subscription invoice or
+quota reading.
+
 The proxy is native pass-through only:
 
 | Store protocol | Local API route |
@@ -27,7 +54,7 @@ authentication belongs to each resolved Provider backend and can differ among
 backends. Protocol conversion and automatic target attachment are absent.
 
 Provider Store schema 2 declares compaction separately from protocol. The
-proxy's generated schema 4 config opens the compact route only when every
+proxy's generated schema 5 config opens the compact route only when every
 selected backend resolves to `responses_v1` or `responses_v2` under an
 `auto`/`remote` policy for Codex. A mixed or unverified failover route stays on
 client-local compaction. Anthropic `anthropic-beta` and `context_management`
@@ -61,12 +88,16 @@ state, never endpoints or Secrets.
 
 - The generated config accepts only `127.0.0.1` or `::1`; no public bind option
   exists.
-- Every request needs a 256-bit local capability. Its value is kept in an
+- Provider-mode requests need a 256-bit local capability. Its value is kept in an
   owner-only device-local file and never printed by status, plan, or token
   commands.
 - The daemon removes the local capability from every supported authentication
   header and injects the real upstream Secret from the owner-only Provider
   Secret Store in memory.
+- OpenAI subscription passthrough instead requires Codex's bearer on data
+  routes and forwards it unchanged with the account header. The hidden
+  capability remains isolated to health/control. The listener is still
+  loopback-only and returns no CORS permission.
 - Incoming routes are allowlisted per selected protocol. The proxy is not a
   general URL forwarder.
 - Request and response bodies and headers are never written to logs. JSONL
@@ -76,6 +107,8 @@ state, never endpoints or Secrets.
 - Request model aliases are exact. Anthropic/OpenAI JSON model fields and the
   Google route model component are rewritten in bounded memory; similarly
   named models are never inferred or changed.
+- Subscription passthrough performs no model mapping and permits only one
+  Responses backend with no retry or failover.
 - Provider endpoints cannot embed credentials in URL userinfo or common secret
   query parameters.
 - State, circuit counters, config, capability, metadata, lifecycle logs, and locks are exact
@@ -93,6 +126,12 @@ agentctl proxy token rotate --yes
 the PID and instance ID match. A live but unverifiable process is never killed.
 Dead state and lock files can be previewed and cleaned with the same stop
 command. No automatic `SIGKILL` fallback is used.
+
+Codex attachment is never automatic. Attach writes an owner-only exact backup
+and a hash-bound state file before changing only the marked top-level
+`model_provider` and `openai_base_url` settings. Detach restores the prior bytes
+and file mode exactly. A changed config or backup causes a safe refusal, and a
+proxy with an active attachment cannot be stopped.
 
 ## Timeout and size controls
 
@@ -131,14 +170,32 @@ cache-read, and cache-creation counts remain distinct.
 
 ```bash
 agentctl pricing status
+agentctl pricing init --preset openai-gpt-5.6 --yes
 agentctl proxy plan work-gateway --target codex \
   --pricing-source response
+agentctl proxy usage --last 20
+agentctl proxy usage --summary
+agentctl proxy usage --summary --last 100 --json
 ```
 
 `response` pricing uses the returned model ID when an exact active rate exists,
 then falls back to the outbound request model with an explicit reason. `request`
 always anchors pricing to the outbound model. Every usage row preserves
 requested, outbound, response, and priced model identities plus catalog/rate
-provenance. A missing catalog or rate never blocks forwarding; the row records
+provenance. For OpenAI it also records requested, response, normalized pricing
+tier, and whether the response or a fallback selected that tier. Total context
+is the sum of uncached input, cache reads, and cache writes; the selected
+context interval applies to the full request. A missing catalog or rate never blocks forwarding; the row records
 why pricing is unavailable. Prompt and response content are not retained by
 the collector or either log.
+
+`agentctl proxy usage` reads the active owner-only usage JSONL and retained
+rotation files without requiring the daemon to be running. The default view
+shows the latest 20 safe projected records; `--last` accepts 1–1000.
+`--summary` aggregates all retained rows unless combined with `--last`, and
+reports exact token totals, priced/unpriced request counts, fixed-decimal costs
+by currency, plus per-model and per-service-tier breakdowns. It also counts
+requested Fast calls, effectively Fast responses, response-confirmed
+downgrades, and canonical tier transitions. Unknown JSON fields are never
+echoed; malformed/non-regular/symlinked or non-owner-only logs
+are rejected, and total input is bounded before parsing.

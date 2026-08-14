@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import * as zlib from "node:zlib";
 
 import {
   ProviderSchemaError,
@@ -32,13 +33,14 @@ import {
 } from "../agentctl/provider-schema.mjs";
 import {
   createPricingEngine,
+  normalizePricingServiceTier,
   validatePricingCatalog
 } from "../pricing/pricing.mjs";
 import {
   mapNativeModelRequest,
   resolveExactModel
 } from "./model-mapper.mjs";
-import { UsageCollector } from "./usage.mjs";
+import { UsageCollector, extractUsage } from "./usage.mjs";
 import {
   CircuitRegistry,
   newCircuitState,
@@ -48,6 +50,9 @@ import {
 const CONFIG_KIND = "agentctl-proxy-config";
 const CAPABILITY_KIND = "agentctl-proxy-capability";
 const STATE_KIND = "agentctl-proxy-state";
+const PASSTHROUGH_MODE = "openai_subscription_passthrough";
+const PROVIDER_MODE = "provider";
+const OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_PRICING_BYTES = 5 * 1024 * 1024;
 const LOG_MAINTENANCE_MS = 60_000;
@@ -128,15 +133,18 @@ function validatePath(value, label) {
 
 function validateConfig(value) {
   exactKeys(value, [
-    "schema", "kind", "instance_id", "created_at", "profile", "target",
+    "schema", "kind", "instance_id", "created_at", "mode", "profile", "target",
     "platform", "protocol", "route", "backends", "retry", "circuit",
     "compaction", "retention", "listen", "timeouts", "limits", "pricing", "paths"
   ], "proxy config");
-  if (value.schema !== 4 || value.kind !== CONFIG_KIND ||
+  if (value.schema !== 5 || value.kind !== CONFIG_KIND ||
       typeof value.instance_id !== "string" ||
       !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
       typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at))) {
     throw new ProxyDaemonError("proxy config identity is invalid");
+  }
+  if (![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode)) {
+    throw new ProxyDaemonError("proxy mode is invalid");
   }
   validateProfileName(value.profile);
   validateTarget(value.target);
@@ -168,8 +176,14 @@ function validateConfig(value) {
     backendNames.add(backend.profile);
     backend.endpoint = validateEndpoint(backend.endpoint, "proxy backend endpoint");
     exactKeys(backend.auth, ["mode", "secret"], "proxy backend auth");
-    validateAuthMode(backend.auth.mode);
-    if (backend.auth.mode === "none") {
+    if (backend.auth.mode === "openai_passthrough") {
+      if (value.mode !== PASSTHROUGH_MODE || backend.auth.secret !== null) {
+        throw new ProxyDaemonError("OpenAI passthrough authentication is limited to passthrough mode");
+      }
+    } else {
+      validateAuthMode(backend.auth.mode);
+    }
+    if (["none", "openai_passthrough"].includes(backend.auth.mode)) {
       if (backend.auth.secret !== null) {
         throw new ProxyDaemonError("unauthenticated proxy backend must not name a Secret");
       }
@@ -194,6 +208,24 @@ function validateConfig(value) {
   if (value.route === null && value.backends.length !== 1) {
     throw new ProxyDaemonError("a proxy without a route must have exactly one backend");
   }
+  if (value.mode === PASSTHROUGH_MODE) {
+    const backend = value.backends[0];
+    const endpoint = new URL(backend.endpoint);
+    const loopbackEndpoint = ["127.0.0.1", "[::1]"].includes(
+      endpoint.hostname
+    );
+    if (value.target !== "codex" || value.protocol !== "openai_responses" ||
+        value.route !== null || value.backends.length !== 1 ||
+        backend.auth.mode !== "openai_passthrough" ||
+        Object.keys(backend.models.aliases).length !== 0 ||
+        (backend.endpoint !== OPENAI_SUBSCRIPTION_ENDPOINT && !loopbackEndpoint) ||
+        value.compaction.mode !== "remote_native" ||
+        !value.compaction.responses_compact) {
+      throw new ProxyDaemonError(
+        "OpenAI subscription passthrough requires one safe, unmapped Codex Responses backend"
+      );
+    }
+  }
   exactKeys(value.retry, ["mode", "max_attempts", "status_codes", "network_errors"], "proxy retry policy");
   if (!["next_request", "same_request"].includes(value.retry.mode)) {
     throw new ProxyDaemonError("proxy retry mode must be next_request or same_request");
@@ -208,6 +240,11 @@ function validateConfig(value) {
   }
   if (typeof value.retry.network_errors !== "boolean") {
     throw new ProxyDaemonError("proxy retry network_errors must be boolean");
+  }
+  if (value.mode === PASSTHROUGH_MODE &&
+      (value.retry.mode !== "next_request" || value.retry.max_attempts !== 1 ||
+       value.retry.status_codes.length !== 0 || value.retry.network_errors)) {
+    throw new ProxyDaemonError("OpenAI subscription passthrough cannot retry or replay requests");
   }
   exactKeys(value.circuit, [
     "enabled", "failure_threshold", "recovery_timeout_ms",
@@ -448,7 +485,16 @@ function clientToken(request) {
   return "";
 }
 
-function allowedRoute(protocol, method, pathname, { responsesCompact = false } = {}) {
+function allowedRoute(protocol, method, pathname, {
+  responsesCompact = false,
+  mode = PROVIDER_MODE
+} = {}) {
+  if (mode === PASSTHROUGH_MODE) {
+    if (method === "GET" && ["/models", "/v1/models"].includes(pathname)) return true;
+    return method === "POST" && [
+      "/responses", "/responses/compact", "/v1/responses", "/v1/responses/compact"
+    ].includes(pathname);
+  }
   if (method === "GET" && pathname === "/v1/models") return true;
   if (protocol === "anthropic_messages") {
     return method === "POST" && [
@@ -467,13 +513,13 @@ function allowedRoute(protocol, method, pathname, { responsesCompact = false } =
     (method === "GET" && pathname === "/v1beta/models");
 }
 
-function joinUpstream(endpoint, localUrl) {
+function joinUpstream(endpoint, localUrl, { stripVersionPrefix = false } = {}) {
   const upstream = new URL(endpoint);
   const incomingPath = localUrl.pathname;
   let suffix = incomingPath;
   for (const prefix of ["/v1beta", "/v1"]) {
-    if (upstream.pathname.replace(/\/$/, "").endsWith(prefix) &&
-        incomingPath.startsWith(`${prefix}/`)) {
+    if ((stripVersionPrefix || upstream.pathname.replace(/\/$/, "").endsWith(prefix)) &&
+        (incomingPath === prefix || incomingPath.startsWith(`${prefix}/`))) {
       suffix = incomingPath.slice(prefix.length);
       break;
     }
@@ -486,19 +532,27 @@ function joinUpstream(endpoint, localUrl) {
   return upstream;
 }
 
-function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefined) {
+function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefined, {
+  mode = PROVIDER_MODE
+} = {}) {
   const headers = {};
   for (const [name, value] of Object.entries(request.headers)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower) || CLIENT_AUTH_HEADERS.has(lower) ||
-        [
+    const localCredential = mode === PASSTHROUGH_MODE
+      ? lower === "x-agentctl-proxy-token"
+      : CLIENT_AUTH_HEADERS.has(lower);
+    const invalidatedByBodyRewrite = mode === PASSTHROUGH_MODE
+      ? ["accept-encoding", "content-length"].includes(lower)
+      : [
           "accept-encoding", "content-length", "content-encoding",
           "content-md5", "digest"
-        ].includes(lower)) continue;
+        ].includes(lower);
+    if (HOP_BY_HOP_HEADERS.has(lower) || localCredential ||
+        invalidatedByBodyRewrite) continue;
     if (value !== undefined) headers[lower] = value;
   }
   headers["accept-encoding"] = "identity";
-  headers["user-agent"] = "agentproxyd/4";
+  if (mode !== PASSTHROUGH_MODE) headers["user-agent"] = "agentproxyd/5";
   if (Number.isSafeInteger(bodyLength)) headers["content-length"] = String(bodyLength);
   if (backend.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
   if (backend.auth.mode === "x-api-key") headers["x-api-key"] = secret;
@@ -507,6 +561,184 @@ function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefi
     headers["anthropic-version"] = "2023-06-01";
   }
   return headers;
+}
+
+function validOpenAiAuthorization(request) {
+  const authorization = request.headers.authorization;
+  return typeof authorization === "string" && authorization.length <= 16_384 &&
+    /^Bearer\s+\S+$/i.test(authorization);
+}
+
+function inspectPassthroughRequest(body, contentEncoding = "", maxBytes = 2 * 1024 * 1024) {
+  let requestedModel = null;
+  let requestedServiceTier = null;
+  let inspected = body;
+  let decoded = null;
+  try {
+    const encoding = String(contentEncoding).trim().toLowerCase();
+    const options = { maxOutputLength: maxBytes };
+    if (encoding === "gzip" && typeof zlib.gunzipSync === "function") {
+      decoded = zlib.gunzipSync(body, options);
+    } else if (encoding === "deflate" && typeof zlib.inflateSync === "function") {
+      decoded = zlib.inflateSync(body, options);
+    } else if (encoding === "br" && typeof zlib.brotliDecompressSync === "function") {
+      decoded = zlib.brotliDecompressSync(body, options);
+    } else if (encoding === "zstd" && typeof zlib.zstdDecompressSync === "function") {
+      decoded = zlib.zstdDecompressSync(body, options);
+    }
+    if (decoded) inspected = decoded;
+    const payload = JSON.parse(inspected.toString("utf8"));
+    if (plainObject(payload) && typeof payload.model === "string" &&
+        payload.model.length > 0 && payload.model.length <= 240) {
+      requestedModel = payload.model;
+    }
+    if (plainObject(payload) && typeof payload.service_tier === "string" &&
+        payload.service_tier.length > 0 && payload.service_tier.length <= 40) {
+      requestedServiceTier = payload.service_tier;
+    }
+  } catch {
+  } finally {
+    decoded?.fill(0);
+  }
+  return {
+    requested_model: requestedModel,
+    requested_service_tier: requestedServiceTier,
+    outbound_model: requestedModel,
+    mapped: false,
+    body
+  };
+}
+
+function writeRawHttp(socket, status, reason, body = "") {
+  const bytes = Buffer.from(body);
+  socket.end(
+    `HTTP/1.1 ${status} ${reason}\r\n` +
+    "Connection: close\r\n" +
+    "Content-Type: application/json; charset=utf-8\r\n" +
+    `Content-Length: ${bytes.length}\r\n\r\n${body}`
+  );
+}
+
+function rawUpgradeResponse(socket, response) {
+  let head = `HTTP/1.1 ${response.statusCode || 101} ${response.statusMessage || "Switching Protocols"}\r\n`;
+  for (let index = 0; index < response.rawHeaders.length; index += 2) {
+    head += `${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}\r\n`;
+  }
+  socket.write(`${head}\r\n`);
+}
+
+function websocketHeaders(request) {
+  const headers = {};
+  for (const [name, value] of Object.entries(request.headers)) {
+    const lower = name.toLowerCase();
+    if (lower === "host" || lower === "x-agentctl-proxy-token" ||
+        lower === "sec-websocket-extensions" || value === undefined) continue;
+    headers[lower] = value;
+  }
+  headers.connection = "Upgrade";
+  headers.upgrade = "websocket";
+  return headers;
+}
+
+function websocketObserver(maxMessageBytes, onJson) {
+  let pending = Buffer.alloc(0);
+  let skip = 0;
+  let fragments = [];
+  let fragmentBytes = 0;
+
+  const resetFragments = () => {
+    for (const fragment of fragments) fragment.fill(0);
+    fragments = [];
+    fragmentBytes = 0;
+  };
+  const acceptText = (payload) => {
+    try {
+      onJson(JSON.parse(payload.toString("utf8")));
+    } catch {}
+  };
+  const acceptFrame = (fin, opcode, payload) => {
+    if (opcode === 0x1) {
+      resetFragments();
+      if (fin) acceptText(payload);
+      else {
+        fragments = [payload];
+        fragmentBytes = payload.length;
+      }
+      return;
+    }
+    if (opcode !== 0x0 || !fragments.length) return;
+    if (fragmentBytes + payload.length > maxMessageBytes) {
+      resetFragments();
+      return;
+    }
+    fragments.push(payload);
+    fragmentBytes += payload.length;
+    if (fin) {
+      const message = Buffer.concat(fragments, fragmentBytes);
+      resetFragments();
+      acceptText(message);
+      message.fill(0);
+    }
+  };
+
+  return (chunk) => {
+    if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
+    let incoming = chunk;
+    if (skip) {
+      const consumed = Math.min(skip, incoming.length);
+      skip -= consumed;
+      incoming = incoming.subarray(consumed);
+      if (!incoming.length) return;
+    }
+    pending = pending.length ? Buffer.concat([pending, incoming]) : Buffer.from(incoming);
+    while (pending.length >= 2) {
+      const first = pending[0];
+      const second = pending[1];
+      const fin = Boolean(first & 0x80);
+      const opcode = first & 0x0f;
+      const masked = Boolean(second & 0x80);
+      let length = second & 0x7f;
+      let headerBytes = 2;
+      if (length === 126) {
+        if (pending.length < 4) return;
+        length = pending.readUInt16BE(2);
+        headerBytes = 4;
+      } else if (length === 127) {
+        if (pending.length < 10) return;
+        const extended = pending.readBigUInt64BE(2);
+        if (extended > BigInt(Number.MAX_SAFE_INTEGER)) {
+          resetFragments();
+          pending.fill(0);
+          pending = Buffer.alloc(0);
+          skip = Number.MAX_SAFE_INTEGER;
+          return;
+        }
+        length = Number(extended);
+        headerBytes = 10;
+      }
+      if (masked) headerBytes += 4;
+      if (length > maxMessageBytes) {
+        if (pending.length < headerBytes) return;
+        pending = pending.subarray(headerBytes);
+        const consumed = Math.min(length, pending.length);
+        pending = pending.subarray(consumed);
+        skip = length - consumed;
+        resetFragments();
+        continue;
+      }
+      if (pending.length < headerBytes + length) return;
+      const frame = Buffer.from(pending.subarray(headerBytes, headerBytes + length));
+      if (masked) {
+        const maskOffset = headerBytes - 4;
+        for (let index = 0; index < frame.length; index += 1) {
+          frame[index] ^= pending[maskOffset + (index % 4)];
+        }
+      }
+      pending = pending.subarray(headerBytes + length);
+      acceptFrame(fin, opcode, frame);
+      if (opcode !== 0x1 && opcode !== 0x0) frame.fill(0);
+    }
+  };
 }
 
 function responseHeaders(headers) {
@@ -533,7 +765,7 @@ function sendJson(response, status, body) {
 function validateState(value, instanceId = "") {
   exactKeys(value, [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
+    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
   ], "proxy state");
   if (value.schema !== 1 || value.kind !== STATE_KIND ||
       (instanceId && value.instance_id !== instanceId) ||
@@ -542,6 +774,7 @@ function validateState(value, instanceId = "") {
       (value.backend_profiles !== undefined &&
        (!Array.isArray(value.backend_profiles) ||
         value.backend_profiles.some((profile) => typeof profile !== "string"))) ||
+      ![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode) ||
       !plainObject(value.compaction) ||
       typeof value.compaction.responses_compact !== "boolean" ||
       !["client_local", "remote_native", "messages_native"].includes(value.compaction.mode)) {
@@ -783,6 +1016,32 @@ function collectRequestBody(request, maxBytes) {
 
 function priceUsage(pricing, config, backend, mapping, extracted, at) {
   const responseModel = extracted?.response_model || null;
+  const responseServiceTier = extracted?.response_service_tier || null;
+  const requestedServiceTier = mapping?.requested_service_tier || null;
+  let pricingServiceTier = "standard";
+  let pricingServiceTierSource = "assumed_standard";
+  try {
+    if (responseServiceTier) {
+      pricingServiceTier = normalizePricingServiceTier(
+        responseServiceTier,
+        "response service tier"
+      );
+      pricingServiceTierSource = "response";
+    } else if (requestedServiceTier) {
+      pricingServiceTier = normalizePricingServiceTier(
+        requestedServiceTier,
+        "request service tier"
+      );
+      pricingServiceTierSource = "request_fallback";
+    }
+  } catch {
+    pricingServiceTier = "standard";
+    pricingServiceTierSource = "unknown_assumed_standard";
+  }
+  const tierDetails = {
+    pricing_service_tier: pricingServiceTier,
+    pricing_service_tier_source: pricingServiceTierSource
+  };
   const candidates = [];
   if (config.pricing.model_source === "response" && responseModel) {
     candidates.push({ model: responseModel, source: "response", fallback: null });
@@ -800,6 +1059,7 @@ function priceUsage(pricing, config, backend, mapping, extracted, at) {
   const primary = candidates[0] || null;
   if (!extracted?.usage) {
     return {
+      ...tierDetails,
       pricing_model: primary?.model || null,
       pricing_model_source: primary?.source || config.pricing.model_source,
       pricing_fallback_reason: primary?.fallback || null,
@@ -809,6 +1069,7 @@ function priceUsage(pricing, config, backend, mapping, extracted, at) {
   }
   if (!pricing) {
     return {
+      ...tierDetails,
       pricing_model: primary?.model || null,
       pricing_model_source: primary?.source || config.pricing.model_source,
       pricing_fallback_reason: primary?.fallback || null,
@@ -822,6 +1083,7 @@ function priceUsage(pricing, config, backend, mapping, extracted, at) {
       quote = pricing.quote({
         profile: backend.profile,
         model: candidate.model,
+        serviceTier: pricingServiceTier,
         at
       }, extracted.usage);
     } catch {
@@ -832,7 +1094,11 @@ function priceUsage(pricing, config, backend, mapping, extracted, at) {
     if (candidate.fallback) {
       cost.estimate_reason = `catalog_calculation_${candidate.fallback}`;
     }
+    if (pricingServiceTierSource !== "response") {
+      cost.estimate_reason = `${cost.estimate_reason}_${pricingServiceTierSource}`;
+    }
     return {
+      ...tierDetails,
       pricing_model: candidate.model,
       pricing_model_source: candidate.source,
       pricing_fallback_reason: candidate.fallback,
@@ -841,6 +1107,7 @@ function priceUsage(pricing, config, backend, mapping, extracted, at) {
     };
   }
   return {
+    ...tierDetails,
     pricing_model: primary?.model || null,
     pricing_model_source: primary?.source || config.pricing.model_source,
     pricing_fallback_reason: primary?.fallback || null,
@@ -865,6 +1132,7 @@ function usageRecord({
     schema: 1,
     timestamp: new Date().toISOString(),
     request_id: requestId,
+    mode: config.mode,
     profile: backend.profile,
     route: config.route,
     target: config.target,
@@ -872,16 +1140,212 @@ function usageRecord({
     status,
     duration_ms: Date.now() - started,
     requested_model: mapping?.requested_model || null,
+    requested_service_tier: mapping?.requested_service_tier || null,
     outbound_model: mapping?.outbound_model || null,
     response_model: extracted?.response_model || null,
+    response_service_tier: extracted?.response_service_tier || null,
     pricing_model: priced.pricing_model,
     pricing_model_source: priced.pricing_model_source,
     pricing_fallback_reason: priced.pricing_fallback_reason,
+    pricing_service_tier: priced.pricing_service_tier,
+    pricing_service_tier_source: priced.pricing_service_tier_source,
     usage_source: extracted?.source || null,
     usage: extracted?.usage || null,
     cost: priced.cost,
     pricing_unavailable: priced.pricing_unavailable
   };
+}
+
+function proxyWebSocket(request, socket, head, context) {
+  const { config, backendSecrets, pricing, log, usageLog } = context;
+  const connectionStarted = Date.now();
+  let localUrl;
+  try {
+    localUrl = new URL(request.url, `http://${config.listen.host}:${config.listen.port}`);
+  } catch {
+    writeRawHttp(socket, 400, "Bad Request", '{"error":"invalid_request_target"}\n');
+    return;
+  }
+  if (config.mode !== PASSTHROUGH_MODE || !validOpenAiAuthorization(request)) {
+    writeRawHttp(socket, 401, "Unauthorized", '{"error":"proxy_authentication_required"}\n');
+    return;
+  }
+  if (!(["/responses", "/v1/responses"].includes(localUrl.pathname))) {
+    writeRawHttp(socket, 404, "Not Found", '{"error":"route_not_available_for_proxy_protocol"}\n');
+    return;
+  }
+
+  const backend = config.backends[0];
+  const destination = joinUpstream(backend.endpoint, localUrl, {
+    stripVersionPrefix: true
+  });
+  const transport = destination.protocol === "https:" ? httpsRequest : httpRequest;
+  const turns = [];
+  let bytesIn = head.length;
+  let bytesOut = 0;
+  let completedTurns = 0;
+  let closed = false;
+
+  const observeClient = websocketObserver(config.limits.request_bytes, (payload) => {
+    const requestPayload = plainObject(payload?.response) ? payload.response : payload;
+    if (!plainObject(requestPayload)) return;
+    const requestedModel = typeof requestPayload.model === "string" &&
+      requestPayload.model.length > 0 && requestPayload.model.length <= 240
+      ? requestPayload.model
+      : null;
+    const requestedServiceTier = typeof requestPayload.service_tier === "string" &&
+      requestPayload.service_tier.length > 0 && requestPayload.service_tier.length <= 40
+      ? requestPayload.service_tier
+      : null;
+    if (!requestedModel && payload?.type !== "response.create" &&
+        !Object.hasOwn(requestPayload, "input")) return;
+    turns.push({
+      requestId: randomUUID(),
+      started: Date.now(),
+      requestStartedAt: new Date().toISOString(),
+      mapping: {
+        requested_model: requestedModel,
+        requested_service_tier: requestedServiceTier,
+        outbound_model: requestedModel,
+        mapped: false
+      }
+    });
+  });
+  const observeServer = websocketObserver(config.limits.usage_capture_bytes, (payload) => {
+    const extracted = extractUsage(config.protocol, payload);
+    if (!extracted?.usage) return;
+    const turn = turns.shift() || {
+      requestId: randomUUID(),
+      started: connectionStarted,
+      requestStartedAt: new Date(connectionStarted).toISOString(),
+      mapping: null
+    };
+    completedTurns += 1;
+    usageLog(usageRecord({
+      config,
+      backend,
+      pricing,
+      mapping: turn.mapping,
+      extracted,
+      requestId: turn.requestId,
+      requestStartedAt: turn.requestStartedAt,
+      started: turn.started,
+      status: 200
+    }));
+    log({
+      schema: 1,
+      timestamp: new Date().toISOString(),
+      request_id: turn.requestId,
+      mode: config.mode,
+      profile: config.profile,
+      failover_route: null,
+      target: config.target,
+      protocol: config.protocol,
+      method: "WS",
+      route: localUrl.pathname,
+      status: 200,
+      outcome: "websocket_response_completed",
+      duration_ms: Date.now() - turn.started,
+      bytes_in: bytesIn,
+      bytes_out: bytesOut,
+      attempts: [{
+        profile: backend.profile,
+        outcome: "websocket_response_completed",
+        circuit: "disabled",
+        status: 200,
+        duration_ms: Date.now() - turn.started
+      }]
+    });
+  });
+  const finishConnection = (outcome) => {
+    if (closed) return;
+    closed = true;
+    log({
+      schema: 1,
+      timestamp: new Date().toISOString(),
+      event: "proxy_websocket_closed",
+      mode: config.mode,
+      profile: config.profile,
+      target: config.target,
+      protocol: config.protocol,
+      route: localUrl.pathname,
+      outcome,
+      duration_ms: Date.now() - connectionStarted,
+      bytes_in: bytesIn,
+      bytes_out: bytesOut,
+      completed_turns: completedTurns
+    });
+  };
+
+  const upstream = transport({
+    protocol: destination.protocol,
+    hostname: destination.hostname,
+    port: destination.port || undefined,
+    method: "GET",
+    path: `${destination.pathname}${destination.search}`,
+    headers: websocketHeaders(request)
+  });
+  const firstByteTimer = setTimeout(() => {
+    upstream.destroy(new Error("websocket_first_byte_timeout"));
+  }, config.timeouts.first_byte_ms);
+  firstByteTimer.unref?.();
+
+  upstream.on("upgrade", (response, upstreamSocket, upstreamHead) => {
+    clearTimeout(firstByteTimer);
+    rawUpgradeResponse(socket, response);
+    if (head.length) {
+      observeClient(head);
+      upstreamSocket.write(head);
+    }
+    if (upstreamHead.length) {
+      bytesOut += upstreamHead.length;
+      observeServer(upstreamHead);
+      socket.write(upstreamHead);
+    }
+    socket.on("data", (chunk) => {
+      bytesIn += chunk.length;
+      observeClient(chunk);
+    });
+    upstreamSocket.on("data", (chunk) => {
+      bytesOut += chunk.length;
+      observeServer(chunk);
+    });
+    socket.on("error", () => upstreamSocket.destroy());
+    upstreamSocket.on("error", () => socket.destroy());
+    socket.on("close", () => {
+      upstreamSocket.destroy();
+      finishConnection("client_closed");
+    });
+    upstreamSocket.on("close", () => {
+      socket.destroy();
+      finishConnection("upstream_closed");
+    });
+    socket.pipe(upstreamSocket);
+    upstreamSocket.pipe(socket);
+  });
+  upstream.on("response", (response) => {
+    clearTimeout(firstByteTimer);
+    let responseHead = `HTTP/1.1 ${response.statusCode || 502} ${response.statusMessage || "Bad Gateway"}\r\n`;
+    for (const [name, value] of Object.entries(response.headers)) {
+      if (["connection", "content-length", "transfer-encoding"].includes(name) ||
+          value === undefined) continue;
+      responseHead += `${name}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`;
+    }
+    socket.write(`${responseHead}Connection: close\r\n\r\n`);
+    response.on("data", (chunk) => socket.write(chunk));
+    response.on("end", () => {
+      socket.end();
+      finishConnection(`upstream_http_${response.statusCode || 502}`);
+    });
+  });
+  upstream.on("error", () => {
+    clearTimeout(firstByteTimer);
+    if (!socket.destroyed) {
+      writeRawHttp(socket, 502, "Bad Gateway", '{"error":"websocket_upstream_failed"}\n');
+    }
+    finishConnection("upstream_error");
+  });
+  upstream.end();
 }
 
 function runUpstreamAttempt({
@@ -895,16 +1359,27 @@ function runUpstreamAttempt({
   allowRetry
 }) {
   const attemptStarted = Date.now();
-  const mapping = mapNativeModelRequest({
-    protocol: config.protocol,
-    method: request.method || "",
-    pathname: localUrl.pathname,
-    body: rawBody,
-    models: backend.models
-  });
+  const mapping = config.mode === PASSTHROUGH_MODE
+    ? {
+        ...inspectPassthroughRequest(
+          rawBody,
+          request.headers["content-encoding"],
+          config.limits.usage_capture_bytes
+        ),
+        pathname: localUrl.pathname
+      }
+    : mapNativeModelRequest({
+        protocol: config.protocol,
+        method: request.method || "",
+        pathname: localUrl.pathname,
+        body: rawBody,
+        models: backend.models
+      });
   const mappedUrl = new URL(localUrl);
   mappedUrl.pathname = mapping.pathname;
-  const destination = joinUpstream(backend.endpoint, mappedUrl);
+  const destination = joinUpstream(backend.endpoint, mappedUrl, {
+    stripVersionPrefix: config.mode === PASSTHROUGH_MODE
+  });
   const transport = destination.protocol === "https:" ? httpsRequest : httpRequest;
   const requestBody = mapping.body ?? rawBody;
 
@@ -982,7 +1457,8 @@ function runUpstreamAttempt({
           config.protocol,
           backend,
           secret,
-          request.method === "GET" ? undefined : requestBody.length
+          request.method === "GET" ? undefined : requestBody.length,
+          { mode: config.mode }
         )
       }, (incoming) => {
         upstreamResponse = incoming;
@@ -1128,6 +1604,7 @@ async function proxyRequest(request, response, context) {
       circuits: circuitStates,
       target: config.target,
       protocol: config.protocol,
+      mode: config.mode,
       compaction: config.compaction,
       pricing_catalog_version: pricing?.version || null,
       pricing_model_source: config.pricing.model_source,
@@ -1145,6 +1622,7 @@ async function proxyRequest(request, response, context) {
       schema: 1,
       timestamp: new Date().toISOString(),
       request_id: requestId,
+      mode: config.mode,
       profile: config.profile,
       failover_route: config.route,
       target: config.target,
@@ -1160,14 +1638,18 @@ async function proxyRequest(request, response, context) {
     });
   };
 
-  if (!safeTokenEqual(clientToken(request), capability.token)) {
+  const authenticated = config.mode === PASSTHROUGH_MODE
+    ? validOpenAiAuthorization(request)
+    : safeTokenEqual(clientToken(request), capability.token);
+  if (!authenticated) {
     sendJson(response, 401, { error: "proxy_authentication_required" });
     finishMetadata(401, "client_auth_failed");
     request.resume();
     return;
   }
   if (!allowedRoute(config.protocol, request.method || "", localUrl.pathname, {
-    responsesCompact: config.compaction.responses_compact
+    responsesCompact: config.compaction.responses_compact,
+    mode: config.mode
   })) {
     sendJson(response, 404, { error: "route_not_available_for_proxy_protocol" });
     finishMetadata(404, "route_rejected");
@@ -1184,7 +1666,8 @@ async function proxyRequest(request, response, context) {
   }
   const contentEncoding = String(request.headers["content-encoding"] || "")
     .trim().toLowerCase();
-  if (contentEncoding && contentEncoding !== "identity") {
+  if (config.mode !== PASSTHROUGH_MODE &&
+      contentEncoding && contentEncoding !== "identity") {
     sendJson(response, 415, { error: "request_content_encoding_not_supported" });
     finishMetadata(415, "request_encoding_rejected");
     request.resume();
@@ -1312,17 +1795,19 @@ async function run(configPath) {
     "proxy capability",
     validateCapability
   );
-  const secrets = await readPrivateJson(
-    config.paths.secrets,
-    "provider Secret Store",
-    validateProviderSecrets
-  );
+  const secrets = config.mode === PASSTHROUGH_MODE
+    ? { secrets: {} }
+    : await readPrivateJson(
+      config.paths.secrets,
+      "provider Secret Store",
+      validateProviderSecrets
+    );
   const backendSecrets = new Map();
   for (const backend of config.backends) {
-    const secret = backend.auth.mode === "none"
+    const secret = ["none", "openai_passthrough"].includes(backend.auth.mode)
       ? ""
       : secrets.secrets[backend.auth.secret]?.value;
-    if (backend.auth.mode !== "none" && !secret) {
+    if (!["none", "openai_passthrough"].includes(backend.auth.mode) && !secret) {
       throw new ProxyDaemonError(`provider Secret '${backend.auth.secret}' is unavailable`);
     }
     backendSecrets.set(backend.profile, secret);
@@ -1366,21 +1851,31 @@ async function run(configPath) {
   );
   const sockets = new Set();
   let shuttingDown = false;
+  const requestContext = {
+    config,
+    capability,
+    backendSecrets,
+    pricing,
+    circuits,
+    persistCircuits,
+    log,
+    usageLog
+  };
   const server = createServer((request, response) => {
-    void proxyRequest(request, response, {
-      config,
-      capability,
-      backendSecrets,
-      pricing,
-      circuits,
-      persistCircuits,
-      log,
-      usageLog
-    }).catch(() => {
+    void proxyRequest(request, response, requestContext).catch(() => {
       request.resume();
       if (!response.headersSent) sendJson(response, 500, { error: "proxy_request_failed" });
       else response.destroy();
     });
+  });
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      proxyWebSocket(request, socket, head, requestContext);
+    } catch {
+      if (!socket.destroyed) {
+        writeRawHttp(socket, 500, "Internal Server Error", '{"error":"proxy_websocket_failed"}\n');
+      }
+    }
   });
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -1438,6 +1933,7 @@ async function run(configPath) {
     host: config.listen.host,
     port: config.listen.port,
     profile: config.profile,
+    mode: config.mode,
     target: config.target,
     protocol: config.protocol,
     compaction: config.compaction,
@@ -1458,6 +1954,7 @@ async function run(configPath) {
     event: "proxy_started",
     instance_id: config.instance_id,
     profile: config.profile,
+    mode: config.mode,
     route: config.route,
     backends: config.backends.map((backend) => backend.profile),
     target: config.target,
@@ -1491,5 +1988,6 @@ export {
   pruneLogs,
   rotateLog,
   upstreamHeaders,
-  validateConfig
+  validateConfig,
+  websocketObserver
 };

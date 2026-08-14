@@ -23811,6 +23811,7 @@ function validateFailoverProviders(route, providerStore) {
 // ../pricing/pricing.mjs
 var PRICING_SCHEMA = 1;
 var PRICING_KIND = "agentctl-pricing-catalog";
+var PRICING_SERVICE_TIERS = Object.freeze(["standard", "fast"]);
 var SCALE_DIGITS = 12;
 var SCALE = 10n ** BigInt(SCALE_DIGITS);
 var DECIMAL_PATTERN = /^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,12})?$/;
@@ -23857,6 +23858,18 @@ function validateRateId(value) {
   }
   return value;
 }
+function normalizePricingServiceTier(value, label = "pricing service tier") {
+  if ([void 0, null, "", "auto", "default", "standard"].includes(value)) return "standard";
+  if (["fast", "priority"].includes(value)) return "fast";
+  throw new PricingError(`${label} must be standard/auto/default or fast/priority`);
+}
+function contextBoundary(value, label, { nullable = false } = {}) {
+  if (nullable && value === null) return null;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new PricingError(`${label} must be a non-negative safe integer${nullable ? " or null" : ""}`);
+  }
+  return value;
+}
 function validatePricingRate(value, expectedId = "") {
   exactKeys2(value, [
     "schema",
@@ -23868,6 +23881,9 @@ function validatePricingRate(value, expectedId = "") {
     "cache_read_per_million",
     "cache_write_per_million",
     "multiplier",
+    "service_tier",
+    "context_min_tokens",
+    "context_max_tokens",
     "effective_at",
     "expires_at",
     "source"
@@ -23877,6 +23893,21 @@ function validatePricingRate(value, expectedId = "") {
   if (expectedId && value.id !== expectedId) throw new PricingError(`pricing rate '${expectedId}' has a mismatched ID`);
   if (value.profile !== "*") validateProfileName(value.profile, "pricing rate profile");
   validateModelId(value.model, "pricing rate model");
+  value.service_tier = normalizePricingServiceTier(value.service_tier);
+  value.context_min_tokens = contextBoundary(
+    value.context_min_tokens ?? 0,
+    "pricing rate context_min_tokens"
+  );
+  value.context_max_tokens = contextBoundary(
+    value.context_max_tokens ?? null,
+    "pricing rate context_max_tokens",
+    { nullable: true }
+  );
+  if (value.context_max_tokens !== null && value.context_max_tokens < value.context_min_tokens) {
+    throw new PricingError(
+      "pricing rate context_max_tokens must be at least context_min_tokens"
+    );
+  }
   for (const field of [
     "input_per_million",
     "output_per_million",
@@ -23918,17 +23949,32 @@ function validatePricingCatalog(value) {
   if (Object.keys(value.rates).length > 4096) {
     throw new PricingError("pricing catalog has more than 4096 rates");
   }
-  const unique = /* @__PURE__ */ new Set();
+  const ranges = /* @__PURE__ */ new Map();
   for (const [id, rate] of Object.entries(value.rates)) {
     validateRateId(id);
     validatePricingRate(rate, id);
-    const composite = `${rate.profile}\0${rate.model}\0${rate.effective_at}`;
-    if (unique.has(composite)) {
-      throw new PricingError(
-        `duplicate profile/model/effective_at pricing rate at '${id}'`
-      );
+    const composite = [
+      rate.profile,
+      rate.model,
+      rate.service_tier,
+      rate.effective_at
+    ].join("\0");
+    const group = ranges.get(composite) || [];
+    group.push(rate);
+    ranges.set(composite, group);
+  }
+  for (const group of ranges.values()) {
+    group.sort(
+      (left, right) => left.context_min_tokens - right.context_min_tokens || left.id.localeCompare(right.id)
+    );
+    for (let index = 1; index < group.length; index += 1) {
+      const previous = group[index - 1];
+      if (previous.context_max_tokens === null || group[index].context_min_tokens <= previous.context_max_tokens) {
+        throw new PricingError(
+          `overlapping service-tier/context pricing rates at '${previous.id}' and '${group[index].id}'`
+        );
+      }
     }
-    unique.add(composite);
   }
   return value;
 }
@@ -25401,12 +25447,13 @@ function createController({
   }
   async function providerDashboard(target = "codex") {
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
-    const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
+    const [providerStatus, providerList, failover, pricing, proxy, proxyUsage] = await Promise.all([
       runAgentctlJson(["provider", "status", "--json"], "provider status"),
       runAgentctlJson(["provider", "list", "--target", target, "--json"], "provider list"),
       runAgentctlJson(["failover", "status", "--json"], "failover status"),
       runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
-      runAgentctlJson(["proxy", "status", "--json"], "proxy status")
+      runAgentctlJson(["proxy", "status", "--json"], "proxy status"),
+      runAgentctlJson(["proxy", "usage", "--summary", "--json"], "proxy usage")
     ]);
     const status = providerStatus.data || {};
     const platform2 = status.platform || process.platform;
@@ -25416,7 +25463,8 @@ function createController({
       ["Provider catalog", providerList],
       ["Failover", failover],
       ["Pricing", pricing],
-      ["Proxy", proxy]
+      ["Proxy", proxy],
+      ["Proxy usage", proxyUsage]
     ].filter(([, result]) => !result.ok && !result.data).map(([label, result]) => `${label}: ${result.error}`);
     return {
       schema: 1,
@@ -25427,6 +25475,20 @@ function createController({
       failover: failover.data || { status: "unavailable", routes: 0 },
       pricing: pricing.data || { status: "unavailable", rates: 0 },
       proxy: proxy.data || { status: "unavailable", running: false },
+      proxyUsage: proxyUsage.data || {
+        requests: 0,
+        priced_requests: 0,
+        unpriced_requests: 0,
+        tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        costs: {},
+        service_tiers: {
+          fast_requested: 0,
+          fast_effective: 0,
+          fast_downgraded: 0,
+          transitions: {}
+        },
+        window: { from: null, to: null }
+      },
       errors
     };
   }
@@ -27121,6 +27183,75 @@ function AccountsView({ snapshot, selected }) {
     }
   ), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.current ? "active" : "saved", kind: current.current ? "good" : "local" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved", value: current.savedAt ? new Date(current.savedAt).toLocaleString() : "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Credential", value: current.credentialPrivate ? "owner-only snapshot" : "unsafe permissions", kind: current.credentialPrivate ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "a/Enter"), " switch or refresh \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " delete non-current snapshot")) : /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Save the current ChatGPT login with an explicit local label:"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "agentctl account save primary --yes")))), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Store", value: displayPath(snapshot.accounts?.store), kind: "local" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Account switching changes only auth.json; the selected inference Provider and Model remain unchanged."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.accountsError }));
 }
+function metricCount(value) {
+  try {
+    return new Intl.NumberFormat("en-US").format(BigInt(value ?? 0));
+  } catch {
+    return String(value ?? 0);
+  }
+}
+function estimatedCosts(costs) {
+  const values = Object.entries(costs || {}).sort(
+    ([left], [right]) => left.localeCompare(right)
+  );
+  return values.length ? values.map(([currency, total]) => `${total} ${currency}`).join(" \xB7 ") : "unavailable";
+}
+function ProxyUsageSummary({ value }) {
+  const usage2 = value || {};
+  const requests = Number(usage2.requests || 0);
+  const priced = Number(usage2.priced_requests || 0);
+  const unpriced = Number(usage2.unpriced_requests || 0);
+  const tokens = usage2.tokens || {};
+  const tiers = usage2.service_tiers || {};
+  if (requests === 0) {
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Observed usage"), /* @__PURE__ */ import_react34.default.createElement(
+      Row,
+      {
+        label: "Requests",
+        value: "No retained proxy usage yet",
+        kind: "muted"
+      }
+    ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Start and attach passthrough, then run Codex to collect token and cost estimates."));
+  }
+  const fastRequested = Number(tiers.fast_requested || 0);
+  const fastEffective = Number(tiers.fast_effective || 0);
+  const fastDowngraded = Number(tiers.fast_downgraded || 0);
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Observed usage"), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Requests",
+      value: `${metricCount(requests)} retained \xB7 ${metricCount(priced)} priced \xB7 ${metricCount(unpriced)} unpriced`,
+      kind: unpriced > 0 ? "warn" : "good"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Estimated API cost",
+      value: estimatedCosts(usage2.costs),
+      kind: priced > 0 ? "good" : "warn"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Tokens",
+      value: `in ${metricCount(tokens.input)} \xB7 cache ${metricCount(tokens.cache_read)}/${metricCount(tokens.cache_write)} \xB7 out ${metricCount(tokens.output)}`
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Fast tier",
+      value: `${metricCount(fastRequested)} requested \xB7 ${metricCount(fastEffective)} effective \xB7 ${metricCount(fastDowngraded)} downgraded`,
+      kind: fastDowngraded > 0 ? "warn" : fastEffective > 0 ? "good" : "muted"
+    }
+  ), usage2.window?.from && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Usage window",
+      value: `${usage2.window.from} \u2192 ${usage2.window.to || usage2.window.from}`,
+      kind: "muted"
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "API-equivalent catalog estimate; not a ChatGPT subscription invoice."));
+}
 function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
   const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
   const entries = showIncompatible ? allEntries : providerEntries(surface.local, surface.cloud);
@@ -27132,6 +27263,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
   const failover = dashboard.failover || {};
   const pricing = dashboard.pricing || {};
   const proxy = dashboard.proxy || {};
+  const proxyUsage = dashboard.proxyUsage || {};
   const remote = snapshot.workspace?.agent || {};
   const runtime = Array.isArray(snapshot.agents) ? snapshot.agents.find((agent) => agent.client === target) || null : null;
   const hiddenCount = allEntries.length - providerEntries(surface.local, surface.cloud).length;
@@ -27216,7 +27348,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       value: `${proxy.status || "unavailable"}${proxy.profile ? ` \xB7 ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`,
       kind: proxyKind
     }
-  )), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
+  ), /* @__PURE__ */ import_react34.default.createElement(ProxyUsageSummary, { value: proxyUsage })), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
 }
 function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");

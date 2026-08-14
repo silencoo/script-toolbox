@@ -57,6 +57,8 @@ The public controllers can be called directly:
 ./agentctl/agentctl failover status
 ./agentctl/agentctl pricing status
 ./agentctl/agentctl proxy status
+./agentctl/agentctl proxy plan passthrough --target codex
+./agentctl/agentctl proxy usage --summary
 ./agentctl/agentctl workspace agent status
 ```
 

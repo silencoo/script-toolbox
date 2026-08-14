@@ -365,6 +365,7 @@ stage_runtime() {
   copy_runtime_file opencode/setup.sh
   copy_runtime_file pi/setup.sh
   copy_runtime_file pricing/pricing.mjs
+  copy_runtime_file pricing/openai-gpt-5.6-2026-08-14.json
   copy_runtime_file proxy/agentproxyd.mjs
   copy_runtime_file proxy/circuit-breaker.mjs
   copy_runtime_file proxy/model-mapper.mjs

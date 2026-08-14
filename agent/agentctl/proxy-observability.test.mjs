@@ -120,16 +120,22 @@ test("usage normalization keeps each vendor's cache semantics separate", () => {
   });
   assert.deepEqual(extractUsage("openai_responses", {
     model: "gpt-response",
+    service_tier: "priority",
     usage: {
       input_tokens: 100,
       output_tokens: 40,
       input_tokens_details: { cached_tokens: 70 }
     }
-  }).usage, {
+  }), {
+    response_model: "gpt-response",
+    response_service_tier: "priority",
+    source: "openai_responses_usage",
+    usage: {
     input_tokens: 30,
     output_tokens: 40,
     cache_read_tokens: 70,
     cache_write_tokens: 0
+    }
   });
   assert.deepEqual(extractUsage("openai_chat", {
     model: "chat-response",
@@ -193,11 +199,12 @@ test("SSE collectors extract final metadata without retaining output content", (
   const responses = new UsageCollector("openai_responses", {
     contentType: "text/event-stream"
   });
-  const frame = 'data: {"type":"response.completed","response":{"model":"gpt-final","output":[{"content":"PRIVATE"}],"usage":{"input_tokens":20,"output_tokens":4,"input_tokens_details":{"cached_tokens":5}}}}\n\n';
+  const frame = 'data: {"type":"response.completed","response":{"model":"gpt-final","service_tier":"default","output":[{"content":"PRIVATE"}],"usage":{"input_tokens":20,"output_tokens":4,"input_tokens_details":{"cached_tokens":5}}}}\n\n';
   responses.feed(Buffer.from(frame.slice(0, 41)));
   responses.feed(Buffer.from(frame.slice(41)));
   assert.deepEqual(responses.finish(), {
     response_model: "gpt-final",
+    response_service_tier: "default",
     usage: {
       input_tokens: 15,
       output_tokens: 4,

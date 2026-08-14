@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validateModelId, validateProfileName } from "./provider-schema.mjs";
 import {
@@ -21,11 +21,18 @@ import {
   newPricingCatalog,
   normalizeDecimal,
   selectPricingRate,
+  usageContextTokens,
   validatePricingCatalog,
   validatePricingRate
 } from "../pricing/pricing.mjs";
 
 const MAX_CATALOG_BYTES = 5 * 1024 * 1024;
+const BUNDLED_PRESETS = Object.freeze({
+  "openai-gpt-5.6": fileURLToPath(new URL(
+    "../pricing/openai-gpt-5.6-2026-08-14.json",
+    import.meta.url
+  ))
+});
 
 export class PricingClientError extends Error {
   constructor(message) {
@@ -38,7 +45,7 @@ function usage() {
   process.stdout.write(`agentctl pricing — versioned fixed-decimal model pricing
 
 Usage:
-  agentctl pricing init --version <version> [--currency <ISO-4217>] [--yes]
+  agentctl pricing init (--version <version> | --preset openai-gpt-5.6) [--yes]
   agentctl pricing status [--json]
   agentctl pricing list [--json]
   agentctl pricing show <rate-id> [--json]
@@ -48,6 +55,10 @@ Usage:
 
 Rate options:
   --profile <name|*>                Provider profile scope (default: *).
+  --service-tier <standard|fast>    Processing tier (default: standard).
+  --context-min-tokens <integer>    Inclusive prompt/context lower bound.
+  --context-max-tokens <integer|unbounded>
+                                      Inclusive upper bound (default: unbounded).
   --input <decimal>                 Input price per million tokens.
   --output <decimal>                Output price per million tokens.
   --cache-read <decimal>            Cache-read price per million tokens.
@@ -63,7 +74,13 @@ Usage options:
   --output-tokens <integer>
   --cache-read-tokens <integer>
   --cache-write-tokens <integer>
+  --service-tier <standard|fast>    Tier used for this request.
   --at <ISO timestamp>              Pricing instant (default: now).
+
+Bundled preset:
+  openai-gpt-5.6                    Versioned 2026-08-14 official snapshot for
+                                      GPT-5.6 Sol/Terra/Luna, Standard/Fast,
+                                      and short/long context. Never auto-updates.
 
 Storage options:
   --pricing <file>                  Pricing catalog path.
@@ -107,6 +124,19 @@ function tokenOption(argv, option) {
   return value;
 }
 
+function contextMaximumOption(argv, option) {
+  const raw = takeValue(argv, option);
+  if (raw === "unbounded") return null;
+  if (!/^(?:0|[1-9][0-9]*)$/.test(raw)) {
+    throw new PricingClientError(`${option} requires a non-negative integer or 'unbounded'`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new PricingClientError(`${option} exceeds the safe integer range`);
+  }
+  return value;
+}
+
 export function parsePricingArguments(argv, defaults = pricingDefaults()) {
   const options = {
     ...defaults,
@@ -123,9 +153,13 @@ export function parsePricingArguments(argv, defaults = pricingDefaults()) {
     const argument = argv.shift();
     switch (argument) {
       case "--pricing": options.pricingPath = takeValue(argv, argument); break;
+      case "--preset": options.preset = takeValue(argv, argument); break;
       case "--version": options.version = takeValue(argv, argument); break;
       case "--currency": options.currency = takeValue(argv, argument); break;
       case "--profile": options.profile = takeValue(argv, argument); break;
+      case "--service-tier": options.serviceTier = takeValue(argv, argument); break;
+      case "--context-min-tokens": options.contextMinTokens = tokenOption(argv, argument); break;
+      case "--context-max-tokens": options.contextMaxTokens = contextMaximumOption(argv, argument); break;
       case "--model": options.model = takeValue(argv, argument); break;
       case "--input": options.input = takeValue(argv, argument); break;
       case "--output": options.output = takeValue(argv, argument); break;
@@ -229,12 +263,26 @@ async function init(options) {
     emit(result, options, [`Pricing catalog already exists: ${options.pricingPath}`]);
     return result;
   }
-  if (!options.version) throw new PricingClientError("pricing init requires --version");
-  const catalog = newPricingCatalog({
-    version: options.version,
-    currency: options.currency || "USD",
-    effectiveAt: options.effectiveAt || new Date().toISOString()
-  });
+  if (options.preset && (options.version || options.currency || options.effectiveAt)) {
+    throw new PricingClientError("--preset cannot be combined with --version, --currency, or --effective-at");
+  }
+  let catalog;
+  if (options.preset) {
+    const presetPath = BUNDLED_PRESETS[options.preset];
+    if (!presetPath) {
+      throw new PricingClientError(
+        `unknown pricing preset '${options.preset}'; available: ${Object.keys(BUNDLED_PRESETS).join(", ")}`
+      );
+    }
+    catalog = structuredClone(await loadPricingCatalog(presetPath));
+  } else {
+    if (!options.version) throw new PricingClientError("pricing init requires --version or --preset");
+    catalog = newPricingCatalog({
+      version: options.version,
+      currency: options.currency || "USD",
+      effectiveAt: options.effectiveAt || new Date().toISOString()
+    });
+  }
   const result = { ok: true, changed: options.yes, preview: !options.yes, catalog: options.pricingPath, value: catalog };
   if (options.yes) await writeCatalog(options.pricingPath, catalog);
   emit(result, options, [
@@ -275,7 +323,7 @@ async function list(options) {
   );
   const result = { version: catalog.version, currency: catalog.currency, rates };
   emit(result, options, rates.length ? rates.map((rate) =>
-    `${rate.id}\t${rate.profile}\t${rate.model}\t${rate.effective_at}`
+    `${rate.id}\t${rate.profile}\t${rate.model}\t${rate.service_tier}\t${rate.context_min_tokens}-${rate.context_max_tokens ?? "unbounded"}\t${rate.effective_at}`
   ) : ["No pricing rates configured."]);
   return result;
 }
@@ -295,6 +343,11 @@ function buildRate(id, options, previous = null) {
     id,
     profile: options.profile ?? previous?.profile ?? "*",
     model: options.model ?? previous?.model,
+    service_tier: options.serviceTier ?? previous?.service_tier ?? "standard",
+    context_min_tokens: options.contextMinTokens ?? previous?.context_min_tokens ?? 0,
+    context_max_tokens: options.contextMaxTokens === undefined
+      ? (previous?.context_max_tokens ?? null)
+      : options.contextMaxTokens,
     input_per_million: normalizeDecimal(options.input ?? previous?.input_per_million ?? "0", "input price"),
     output_per_million: normalizeDecimal(options.output ?? previous?.output_per_million ?? "0", "output price"),
     cache_read_per_million: normalizeDecimal(options.cacheRead ?? previous?.cache_read_per_million ?? "0", "cache-read price"),
@@ -363,18 +416,32 @@ async function calculate(profile, model, options) {
   validateModelId(model, "pricing model");
   const catalog = await loadPricingCatalog(options.pricingPath);
   const at = options.at ? validTimestamp(options.at, "--at") : new Date().toISOString();
-  const rate = selectPricingRate(catalog, { profile, model, at });
-  if (!rate) throw new PricingClientError(`no active pricing rate for ${profile}/${model}`);
   const usageValue = {
     input_tokens: options.inputTokens,
     output_tokens: options.outputTokens,
     cache_read_tokens: options.cacheReadTokens,
     cache_write_tokens: options.cacheWriteTokens
   };
+  const contextTokens = usageContextTokens(usageValue);
+  const serviceTier = options.serviceTier || "standard";
+  const rate = selectPricingRate(catalog, {
+    profile,
+    model,
+    serviceTier,
+    contextTokens,
+    at
+  });
+  if (!rate) {
+    throw new PricingClientError(
+      `no active ${serviceTier} pricing rate for ${profile}/${model} at ${contextTokens} context tokens`
+    );
+  }
   const result = {
     profile,
     model,
     priced_at: at,
+    service_tier: serviceTier,
+    context_tokens: contextTokens,
     usage: usageValue,
     cost: calculateUsageCost(catalog, rate, usageValue)
   };

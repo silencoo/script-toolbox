@@ -167,6 +167,56 @@ test("rate selection is exact, profile-aware, and effective-time-aware", () => {
   }), null);
 });
 
+test("GPT-5.6 snapshot selects the observed tier and full-request context band", async () => {
+  const preset = validatePricingCatalog(JSON.parse(await readFile(
+    join(HERE, "..", "pricing", "openai-gpt-5.6-2026-08-14.json"),
+    "utf8"
+  )));
+  const engine = createPricingEngine(preset);
+  const standardShort = engine.quote({
+    profile: "passthrough",
+    model: "gpt-5.6-sol",
+    serviceTier: "auto",
+    at: "2026-08-14T00:00:00.000Z"
+  }, {
+    input_tokens: 200_000,
+    output_tokens: 1_000,
+    cache_read_tokens: 72_000,
+    cache_write_tokens: 0
+  });
+  assert.equal(standardShort.rate.id, "openai-gpt-5-6-sol-standard-short");
+  assert.equal(standardShort.cost.context_tokens, 272_000);
+
+  const standardLong = engine.quote({
+    profile: "passthrough",
+    model: "gpt-5.6-sol",
+    serviceTier: "standard",
+    at: "2026-08-14T00:00:00.000Z"
+  }, {
+    input_tokens: 272_001,
+    output_tokens: 1,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0
+  });
+  assert.equal(standardLong.rate.id, "openai-gpt-5-6-sol-standard-long");
+  assert.equal(standardLong.cost.total, "2.720055");
+
+  const fast = engine.quote({
+    profile: "passthrough",
+    model: "gpt-5.6-sol",
+    serviceTier: "priority",
+    at: "2026-08-14T00:00:00.000Z"
+  }, {
+    input_tokens: 200_000,
+    output_tokens: 1_000,
+    cache_read_tokens: 72_000,
+    cache_write_tokens: 0
+  });
+  assert.equal(fast.rate.id, "openai-gpt-5-6-sol-fast-short");
+  assert.equal(fast.cost.total, "2.132");
+  assert.equal(standardShort.cost.total, "1.066");
+});
+
 test("pricing rejects floats, signs, exponent notation, and unsafe usage", () => {
   for (const invalid of [3, -1, "-1", "+1", "1e-6", ".5", "01"] ) {
     assert.throws(
@@ -243,6 +293,20 @@ test("pricing CLI previews mutations and calculates without floating point", asy
       "--input-tokens", "9007199254740992",
       ...common, "--json"
     ], 1);
+
+    const presetPath = join(root, "config", "openai-pricing.json");
+    run([
+      "init", "--preset", "openai-gpt-5.6",
+      "--pricing", presetPath, "--yes", "--json"
+    ]);
+    const fast = JSON.parse(run([
+      "calculate", "passthrough", "gpt-5.6-terra",
+      "--service-tier", "fast",
+      "--input-tokens", "1000000",
+      "--pricing", presetPath, "--json"
+    ]).stdout);
+    assert.equal(fast.cost.rate_id, "openai-gpt-5-6-terra-fast-long");
+    assert.equal(fast.cost.total, "8");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

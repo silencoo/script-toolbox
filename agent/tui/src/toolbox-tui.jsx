@@ -418,6 +418,80 @@ function AccountsView({ snapshot, selected }) {
   );
 }
 
+function metricCount(value) {
+  try {
+    return new Intl.NumberFormat("en-US").format(BigInt(value ?? 0));
+  } catch {
+    return String(value ?? 0);
+  }
+}
+
+function estimatedCosts(costs) {
+  const values = Object.entries(costs || {}).sort(([left], [right]) =>
+    left.localeCompare(right)
+  );
+  return values.length
+    ? values.map(([currency, total]) => `${total} ${currency}`).join(" · ")
+    : "unavailable";
+}
+
+function ProxyUsageSummary({ value }) {
+  const usage = value || {};
+  const requests = Number(usage.requests || 0);
+  const priced = Number(usage.priced_requests || 0);
+  const unpriced = Number(usage.unpriced_requests || 0);
+  const tokens = usage.tokens || {};
+  const tiers = usage.service_tiers || {};
+  if (requests === 0) {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="cyan">Observed usage</Text>
+        <Row
+          label="Requests"
+          value="No retained proxy usage yet"
+          kind="muted"
+        />
+        <Text color="gray">Start and attach passthrough, then run Codex to collect token and cost estimates.</Text>
+      </Box>
+    );
+  }
+  const fastRequested = Number(tiers.fast_requested || 0);
+  const fastEffective = Number(tiers.fast_effective || 0);
+  const fastDowngraded = Number(tiers.fast_downgraded || 0);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold color="cyan">Observed usage</Text>
+      <Row
+        label="Requests"
+        value={`${metricCount(requests)} retained · ${metricCount(priced)} priced · ${metricCount(unpriced)} unpriced`}
+        kind={unpriced > 0 ? "warn" : "good"}
+      />
+      <Row
+        label="Estimated API cost"
+        value={estimatedCosts(usage.costs)}
+        kind={priced > 0 ? "good" : "warn"}
+      />
+      <Row
+        label="Tokens"
+        value={`in ${metricCount(tokens.input)} · cache ${metricCount(tokens.cache_read)}/${metricCount(tokens.cache_write)} · out ${metricCount(tokens.output)}`}
+      />
+      <Row
+        label="Fast tier"
+        value={`${metricCount(fastRequested)} requested · ${metricCount(fastEffective)} effective · ${metricCount(fastDowngraded)} downgraded`}
+        kind={fastDowngraded > 0 ? "warn" : fastEffective > 0 ? "good" : "muted"}
+      />
+      {usage.window?.from && (
+        <Row
+          label="Usage window"
+          value={`${usage.window.from} → ${usage.window.to || usage.window.from}`}
+          kind="muted"
+        />
+      )}
+      <Text color="gray">API-equivalent catalog estimate; not a ChatGPT subscription invoice.</Text>
+    </Box>
+  );
+}
+
 function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
   const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
   const entries = showIncompatible
@@ -431,6 +505,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
   const failover = dashboard.failover || {};
   const pricing = dashboard.pricing || {};
   const proxy = dashboard.proxy || {};
+  const proxyUsage = dashboard.proxyUsage || {};
   const remote = snapshot.workspace?.agent || {};
   const runtime = Array.isArray(snapshot.agents)
     ? snapshot.agents.find((agent) => agent.client === target) || null
@@ -596,6 +671,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
           value={`${proxy.status || "unavailable"}${proxy.profile ? ` · ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`}
           kind={proxyKind}
         />
+        <ProxyUsageSummary value={proxyUsage} />
       </Box>
       {surface.loading && <Text color="gray">◌ Loading remaining local or encrypted Workspace Provider data…</Text>}
       {!snapshot.workspace && snapshot.workspaceLoading && (

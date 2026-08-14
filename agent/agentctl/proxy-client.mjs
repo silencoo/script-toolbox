@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import {
@@ -21,6 +21,7 @@ import {
   effectiveProviderCompaction,
   normalizeRuntimePlatform,
   resolveProviderProfile,
+  validateEndpoint,
   validatePlatform,
   validateProfileName,
   validateTarget
@@ -55,6 +56,17 @@ const CONFIG_KIND = "agentctl-proxy-config";
 const CAPABILITY_KIND = "agentctl-proxy-capability";
 const STATE_KIND = "agentctl-proxy-state";
 const LOCK_KIND = "agentctl-proxy-lock";
+const ATTACHMENT_KIND = "agentctl-proxy-attachment";
+const PROVIDER_MODE = "provider";
+const PASSTHROUGH_MODE = "openai_subscription_passthrough";
+const PASSTHROUGH_PROFILE = "passthrough";
+const DEFAULT_OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
+const ATTACH_START = "# >>> agentctl proxy attach >>>";
+const ATTACH_END = "# <<< agentctl proxy attach <<<";
+const MAX_USAGE_LOG_FILES = 20;
+const MAX_USAGE_READ_BYTES = 128 * 1024 * 1024;
+const USAGE_MONEY_SCALE_DIGITS = 12;
+const USAGE_MONEY_SCALE = 10n ** BigInt(USAGE_MONEY_SCALE_DIGITS);
 
 export class ProxyClientError extends Error {
   constructor(message) {
@@ -70,7 +82,11 @@ Usage:
   agentctl proxy plan <profile> --target <target> [options]
   agentctl proxy start <profile> --target <target> [options] [--yes]
   agentctl proxy status [--json]
+  agentctl proxy usage [--last <count>] [--json]
+  agentctl proxy usage --summary [--last <count>] [--json]
   agentctl proxy stop [--yes]
+  agentctl proxy attach [--yes]
+  agentctl proxy detach [--yes]
   agentctl proxy token <status|rotate> [--yes] [--json]
 
 Options:
@@ -91,21 +107,27 @@ Options:
   --circuit-state <file>             Device-local circuit counters/state.
   --retention-files <1-20>           Active + rotated files per JSONL log.
   --retention-days <1-365>           Maximum rotated-log age.
+  --last <1-1000>                    Recent usage rows to show/summarize.
+  --summary                          Aggregate retained usage by model/tier.
   --store <file>                    Portable Provider Store.
   --secrets <file>                  Local provider Secret Store.
   --proxy-config <file>             Generated device-local daemon config.
   --proxy-state <file>              Device-local runtime state.
+  --proxy-lock <file>               Device-local runtime ownership lock.
   --proxy-capability <file>         Owner-only local client capability.
   --proxy-log <file>                Request metadata JSONL (never bodies/headers).
   --proxy-usage-log <file>          Model/token/cost JSONL (never content).
   --proxy-runtime-log <file>        Daemon lifecycle diagnostics.
+  --upstream-base-url <url>         Passthrough upstream (advanced/testing).
+  --codex-config <file>             Codex config.toml managed by attach/detach.
+  --proxy-attach-state <file>       Exact-restore attachment metadata.
+  --proxy-attach-backup <file>      Owner-only pre-attach Codex backup.
   --yes, -y                         Apply start/stop/token mutation.
 
-The proxy never changes Claude/Codex/OpenCode/Pi configuration automatically.
-It accepts only the selected profile's native protocol in this phase. Every
-request requires the local capability through x-agentctl-proxy-token, Bearer,
-x-api-key, or x-goog-api-key; the daemon replaces it with the real upstream
-credential in memory.
+Use the reserved profile 'passthrough' with --target codex to observe an
+official ChatGPT-subscription session without replacing its OpenAI bearer token,
+account header, model, or body. start never edits client configuration; attach
+and detach are separate preview-first, exact-restore operations.
 `);
 }
 
@@ -119,6 +141,7 @@ export function proxyDefaults({
   const failover = failoverDefaults({ platform, environment, home });
   const stateRoot = join(dirname(providers.statePath), "proxy");
   const configRoot = dirname(providers.storePath);
+  const codexRoot = environment.CODEX_HOME || join(home, ".codex");
   const envPort = Number(environment.AGENTCTL_PROXY_PORT || 17321);
   return {
     ...providers,
@@ -135,6 +158,13 @@ export function proxyDefaults({
       join(stateRoot, "daemon.log"),
     proxyCircuitState: environment.AGENTCTL_PROXY_CIRCUIT_STATE ||
       join(stateRoot, "circuits.json"),
+    proxyAttachState: environment.AGENTCTL_PROXY_ATTACH_STATE ||
+      join(stateRoot, "attachment.json"),
+    proxyAttachBackup: environment.AGENTCTL_PROXY_ATTACH_BACKUP ||
+      join(stateRoot, "codex-config.before-attach.toml"),
+    codexConfig: environment.AGENTCTL_CODEX_CONFIG || join(codexRoot, "config.toml"),
+    upstreamBaseUrl: environment.AGENTCTL_PROXY_UPSTREAM_BASE_URL ||
+      DEFAULT_OPENAI_SUBSCRIPTION_ENDPOINT,
     port: Number.isInteger(envPort) ? envPort : 17321,
     firstByteMs: 30000,
     streamIdleMs: 120000,
@@ -169,7 +199,13 @@ function integerOption(argv, option, minimum, maximum) {
 }
 
 export function parseProxyArguments(argv, defaults = proxyDefaults()) {
-  const options = { ...defaults, yes: false, json: false, platform: undefined };
+  const options = {
+    ...defaults,
+    yes: false,
+    json: false,
+    summary: false,
+    platform: undefined
+  };
   const positional = [];
   argv = [...argv];
   while (argv.length) {
@@ -179,10 +215,15 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
       case "--secrets": options.secretsPath = takeValue(argv, argument); break;
       case "--proxy-config": options.proxyConfig = takeValue(argv, argument); break;
       case "--proxy-state": options.proxyState = takeValue(argv, argument); break;
+      case "--proxy-lock": options.proxyLock = takeValue(argv, argument); break;
       case "--proxy-capability": options.proxyCapability = takeValue(argv, argument); break;
       case "--proxy-log": options.proxyLog = takeValue(argv, argument); break;
       case "--proxy-usage-log": options.proxyUsageLog = takeValue(argv, argument); break;
       case "--proxy-runtime-log": options.proxyRuntimeLog = takeValue(argv, argument); break;
+      case "--proxy-attach-state": options.proxyAttachState = takeValue(argv, argument); break;
+      case "--proxy-attach-backup": options.proxyAttachBackup = takeValue(argv, argument); break;
+      case "--codex-config": options.codexConfig = takeValue(argv, argument); break;
+      case "--upstream-base-url": options.upstreamBaseUrl = takeValue(argv, argument); break;
       case "--pricing": options.pricingPath = takeValue(argv, argument); break;
       case "--pricing-source": options.pricingSource = takeValue(argv, argument); break;
       case "--route": options.route = takeValue(argv, argument); break;
@@ -209,6 +250,8 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
         options.retentionFiles = integerOption(argv, argument, 1, 20); break;
       case "--retention-days":
         options.retentionDays = integerOption(argv, argument, 1, 365); break;
+      case "--last": options.last = integerOption(argv, argument, 1, 1000); break;
+      case "--summary": options.summary = true; break;
       case "--yes":
       case "-y": options.yes = true; break;
       case "--json": options.json = true; break;
@@ -222,8 +265,22 @@ export function parseProxyArguments(argv, defaults = proxyDefaults()) {
   for (const key of [
     "storePath", "secretsPath", "daemonPath", "proxyConfig", "proxyState",
     "proxyLock", "proxyCapability", "proxyLog", "proxyUsageLog",
-    "proxyRuntimeLog", "proxyCircuitState", "pricingPath", "failoverPath"
+    "proxyRuntimeLog", "proxyCircuitState", "pricingPath", "failoverPath",
+    "proxyAttachState", "proxyAttachBackup", "codexConfig"
   ]) options[key] = resolve(options[key]);
+  options.upstreamBaseUrl = validateEndpoint(
+    options.upstreamBaseUrl,
+    "--upstream-base-url"
+  );
+  if (new Set([
+    options.codexConfig,
+    options.proxyAttachState,
+    options.proxyAttachBackup
+  ]).size !== 3) {
+    throw new ProxyClientError(
+      "Codex config, attachment state, and attachment backup paths must be distinct"
+    );
+  }
   if (!["request", "response"].includes(options.pricingSource)) {
     throw new ProxyClientError("--pricing-source must be request or response");
   }
@@ -277,6 +334,136 @@ async function writeJsonAtomic(path, value) {
   }
 }
 
+async function writeBytesAtomic(path, bytes, mode = 0o600) {
+  const parent = dirname(path);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  const existing = await pathState(path);
+  if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
+    throw new ProxyClientError(`refusing to replace non-regular path: ${path}`);
+  }
+  const temporary = join(parent, `.${path.split(/[\\/]/).pop()}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, bytes, { flag: "wx", mode });
+    await chmod(temporary, mode);
+    await rename(temporary, path);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function readConfigSnapshot(path, { allowMissing = false } = {}) {
+  const details = await pathState(path);
+  if (!details) {
+    if (allowMissing) return null;
+    throw new ProxyClientError(`Codex config not found: ${path}`);
+  }
+  if (details.isSymbolicLink() || !details.isFile() || details.size > 1024 * 1024) {
+    throw new ProxyClientError("Codex config must be a small regular non-symlink file");
+  }
+  return {
+    bytes: await readFile(path),
+    mode: details.mode & 0o777
+  };
+}
+
+function renderCodexAttachment(original, localBaseUrl) {
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(original);
+  } catch {
+    throw new ProxyClientError("Codex config must be valid UTF-8 TOML");
+  }
+  if (text.includes(ATTACH_START) || text.includes(ATTACH_END)) {
+    throw new ProxyClientError(
+      "Codex config already contains an agentctl attachment marker; detach or repair it first"
+    );
+  }
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  let inTable = false;
+  const retained = text.split(/\r?\n/).filter((line) => {
+    if (/^\s*\[/.test(line)) inTable = true;
+    return inTable || !/^\s*(?:model_provider|openai_base_url)\s*=/.test(line);
+  }).join(newline).replace(/^\s+/, "");
+  const managed = [
+    ATTACH_START,
+    "# Pure observation: Codex keeps official ChatGPT authentication; only the base URL changes.",
+    'model_provider = "openai"',
+    `openai_base_url = ${JSON.stringify(localBaseUrl)}`,
+    ATTACH_END
+  ].join(newline);
+  return Buffer.from(`${managed}${newline}${retained}`, "utf8");
+}
+
+function validateAttachment(value) {
+  const keys = [
+    "schema", "kind", "created_at", "mode", "target", "proxy_instance_id",
+    "local_base_url", "config_file", "backup_file", "config_existed",
+    "original_mode", "original_sha256", "attached_sha256"
+  ];
+  const hash = (candidate) => typeof candidate === "string" && /^[a-f0-9]{64}$/.test(candidate);
+  if (!value || value.schema !== 1 || value.kind !== ATTACHMENT_KIND ||
+      typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at)) ||
+      value.mode !== PASSTHROUGH_MODE || value.target !== "codex" ||
+      typeof value.proxy_instance_id !== "string" ||
+      !/^[a-f0-9-]{36}$/.test(value.proxy_instance_id) ||
+      typeof value.local_base_url !== "string" ||
+      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+$/.test(value.local_base_url) ||
+      typeof value.config_file !== "string" || !isAbsolute(value.config_file) ||
+      typeof value.backup_file !== "string" || !isAbsolute(value.backup_file) ||
+      typeof value.config_existed !== "boolean" ||
+      !Number.isInteger(value.original_mode) || value.original_mode < 0 ||
+      value.original_mode > 0o777 || !hash(value.original_sha256) ||
+      !hash(value.attached_sha256) ||
+      Object.keys(value).some((key) => !keys.includes(key))) {
+    throw new ProxyClientError("proxy attachment state is invalid");
+  }
+  return value;
+}
+
+async function loadAttachment(options, { allowMissing = false } = {}) {
+  if (!(await pathState(options.proxyAttachState))) {
+    if (allowMissing) return null;
+    throw new ProxyClientError("Codex is not attached to the proxy");
+  }
+  const attachment = validateAttachment(
+    await readPrivateJson(options.proxyAttachState, "proxy attachment state")
+  );
+  if (attachment.config_file !== options.codexConfig ||
+      attachment.backup_file !== options.proxyAttachBackup) {
+    throw new ProxyClientError(
+      "attachment paths differ from the requested paths; use the same attach options"
+    );
+  }
+  return attachment;
+}
+
+async function inspectAttachment(options) {
+  const attachment = await loadAttachment(options, { allowMissing: true });
+  if (!attachment) return { status: "detached", attached: false };
+  let currentHash = null;
+  let status = "modified";
+  try {
+    const snapshot = await readConfigSnapshot(attachment.config_file);
+    currentHash = sha256(snapshot.bytes);
+    if (currentHash === attachment.attached_sha256) status = "attached";
+  } catch {}
+  return {
+    status,
+    attached: true,
+    config_file: attachment.config_file,
+    backup_file: attachment.backup_file,
+    local_base_url: attachment.local_base_url,
+    attached_at: attachment.created_at,
+    current_sha256: currentHash,
+    expected_sha256: attachment.attached_sha256
+  };
+}
+
 function validateCapability(value) {
   if (!value || value.schema !== 1 || value.kind !== CAPABILITY_KIND ||
       typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at)) ||
@@ -290,7 +477,7 @@ function validateCapability(value) {
 function validateState(value) {
   const keys = [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
+    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
   ];
   if (!value || value.schema !== 1 || value.kind !== STATE_KIND ||
       typeof value.instance_id !== "string" || !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
@@ -298,6 +485,7 @@ function validateState(value) {
       typeof value.started_at !== "string" || Number.isNaN(Date.parse(value.started_at)) ||
       !["127.0.0.1", "::1"].includes(value.host) ||
       !Number.isInteger(value.port) || value.port < 1024 || value.port > 65535 ||
+      ![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode) ||
       typeof value.config !== "string" || !isAbsolute(value.config) || value.config.length > 4096 ||
       (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
       (value.backend_profiles !== undefined &&
@@ -440,6 +628,7 @@ async function inspectStatus(options) {
     host: state.host,
     port: state.port,
     profile: state.profile,
+    mode: health.body?.mode ?? state.mode,
     target: state.target,
     protocol: state.protocol,
     route: health.body?.route ?? state.route ?? null,
@@ -449,13 +638,19 @@ async function inspectStatus(options) {
     pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
     pricing_model_source: health.body?.pricing_model_source ?? null,
     compaction: health.body?.compaction ?? state.compaction ?? null,
-    local_base_url: localBaseUrl(state.host, state.port, state.protocol)
+    local_base_url: localBaseUrl(
+      state.host,
+      state.port,
+      state.protocol,
+      health.body?.mode ?? state.mode
+    )
   };
 }
 
 function emitStatus(status, options) {
   if (options.json) return process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
   process.stdout.write(`Proxy:      ${status.status}\n`);
+  if (status.mode) process.stdout.write(`Mode:       ${status.mode}\n`);
   if (status.profile) process.stdout.write(`Profile:    ${status.profile} (${status.target})\n`);
   if (status.route) process.stdout.write(`Route:      ${status.route}\n`);
   if (status.backends?.length) process.stdout.write(`Backends:   ${status.backends.join(" -> ")}\n`);
@@ -480,18 +675,385 @@ function emitStatus(status, options) {
   process.stdout.write(`Metadata:   ${status.metadata_log}\n`);
   process.stdout.write(`Usage:      ${status.usage_log}\n`);
   if (status.circuit_state) process.stdout.write(`Circuits:   ${status.circuit_state}\n`);
+  if (status.attachment) {
+    process.stdout.write(`Codex:      ${status.attachment.status}` +
+      `${status.attachment.config_file ? ` (${status.attachment.config_file})` : ""}\n`);
+  }
 }
 
 async function status(options) {
-  const current = await inspectStatus(options);
+  const current = {
+    ...await inspectStatus(options),
+    attachment: await inspectAttachment(options)
+  };
   emitStatus(current, options);
   if (current.status === "stale") process.exitCode = 1;
   return current;
 }
 
-function localBaseUrl(host, port, protocol) {
+function usageText(value, label, maximum, { nullable = true } = {}) {
+  if (nullable && (value === null || value === undefined)) return null;
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum ||
+      /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new ProxyClientError(`proxy usage ${label} is invalid`);
+  }
+  return value;
+}
+
+function usageToken(value, label, { nullable = false } = {}) {
+  if (nullable && (value === null || value === undefined)) return null;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ProxyClientError(`proxy usage ${label} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function usageMoney(value, label) {
+  if (typeof value !== "string" ||
+      !/^(?:0|[1-9][0-9]{0,23})(?:\.[0-9]{1,12})?$/.test(value)) {
+    throw new ProxyClientError(`proxy usage ${label} is not a bounded decimal string`);
+  }
+  return value;
+}
+
+function usageMoneyToScaled(value, label) {
+  const normalized = usageMoney(value, label);
+  const [whole, fraction = ""] = normalized.split(".");
+  return BigInt(whole) * USAGE_MONEY_SCALE +
+    BigInt(fraction.padEnd(USAGE_MONEY_SCALE_DIGITS, "0") || "0");
+}
+
+function scaledUsageMoney(value) {
+  const whole = value / USAGE_MONEY_SCALE;
+  const fraction = (value % USAGE_MONEY_SCALE).toString()
+    .padStart(USAGE_MONEY_SCALE_DIGITS, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+function usageCostView(value) {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProxyClientError("proxy usage cost is invalid");
+  }
+  const currency = usageText(value.currency, "cost currency", 3, { nullable: false });
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new ProxyClientError("proxy usage cost currency is invalid");
+  }
+  return {
+    currency,
+    total: usageMoney(value.total, "cost total"),
+    input: usageMoney(value.input ?? "0", "input cost"),
+    output: usageMoney(value.output ?? "0", "output cost"),
+    cache_read: usageMoney(value.cache_read ?? "0", "cache-read cost"),
+    cache_write: usageMoney(value.cache_write ?? "0", "cache-write cost"),
+    rate_id: usageText(value.rate_id, "rate ID", 100),
+    service_tier: usageText(value.service_tier, "cost service tier", 40),
+    context_tokens: usageToken(value.context_tokens, "cost context tokens", { nullable: true }),
+    estimated: value.estimated === true
+  };
+}
+
+function usageRecordView(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schema !== 1) {
+    throw new ProxyClientError("proxy usage record is invalid");
+  }
+  const timestamp = usageText(value.timestamp, "timestamp", 100, { nullable: false });
+  if (Number.isNaN(Date.parse(timestamp))) {
+    throw new ProxyClientError("proxy usage timestamp is invalid");
+  }
+  let usage = null;
+  if (value.usage !== null && value.usage !== undefined) {
+    if (!value.usage || typeof value.usage !== "object" || Array.isArray(value.usage)) {
+      throw new ProxyClientError("proxy usage token object is invalid");
+    }
+    usage = {
+      input_tokens: usageToken(value.usage.input_tokens ?? 0, "input tokens"),
+      output_tokens: usageToken(value.usage.output_tokens ?? 0, "output tokens"),
+      cache_read_tokens: usageToken(value.usage.cache_read_tokens ?? 0, "cache-read tokens"),
+      cache_write_tokens: usageToken(value.usage.cache_write_tokens ?? 0, "cache-write tokens")
+    };
+  }
+  return {
+    schema: 1,
+    timestamp,
+    request_id: usageText(value.request_id, "request ID", 100),
+    profile: usageText(value.profile, "profile", 100),
+    status: usageToken(value.status, "HTTP status", { nullable: true }),
+    duration_ms: usageToken(value.duration_ms, "duration", { nullable: true }),
+    requested_model: usageText(value.requested_model, "requested model", 240),
+    response_model: usageText(value.response_model, "response model", 240),
+    pricing_model: usageText(value.pricing_model, "pricing model", 240),
+    requested_service_tier: usageText(
+      value.requested_service_tier,
+      "requested service tier",
+      40
+    ),
+    response_service_tier: usageText(
+      value.response_service_tier,
+      "response service tier",
+      40
+    ),
+    pricing_service_tier: usageText(
+      value.pricing_service_tier,
+      "pricing service tier",
+      40
+    ),
+    pricing_service_tier_source: usageText(
+      value.pricing_service_tier_source,
+      "pricing service tier source",
+      80
+    ),
+    usage,
+    cost: usageCostView(value.cost),
+    pricing_unavailable: usageText(
+      value.pricing_unavailable,
+      "pricing unavailable reason",
+      100
+    )
+  };
+}
+
+async function readUsageRecords(options) {
+  const paths = [];
+  for (let index = MAX_USAGE_LOG_FILES - 1; index >= 1; index -= 1) {
+    paths.push(`${options.proxyUsageLog}.${index}`);
+  }
+  paths.push(options.proxyUsageLog);
+  const records = [];
+  const files = [];
+  let totalBytes = 0;
+  for (const path of paths) {
+    const details = await pathState(path);
+    if (!details) continue;
+    if (details.isSymbolicLink() || !details.isFile()) {
+      throw new ProxyClientError(`proxy usage log must be a regular non-symlink file: ${path}`);
+    }
+    if (process.platform !== "win32" && (details.mode & 0o077) !== 0) {
+      throw new ProxyClientError(`proxy usage log must be owner-only (chmod 600): ${path}`);
+    }
+    totalBytes += details.size;
+    if (totalBytes > MAX_USAGE_READ_BYTES) {
+      throw new ProxyClientError(
+        `retained proxy usage logs exceed ${MAX_USAGE_READ_BYTES} bytes; reduce retention before summarizing`
+      );
+    }
+    let contents;
+    try {
+      contents = await readFile(path, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    files.push(path);
+    const lines = contents.split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index].trim();
+      if (!line) continue;
+      try {
+        records.push(usageRecordView(JSON.parse(line)));
+      } catch (error) {
+        const concurrentActiveTail = path === options.proxyUsageLog &&
+          index === lines.length - 1 && !contents.endsWith("\n");
+        if (concurrentActiveTail && error instanceof SyntaxError) continue;
+        if (error instanceof ProxyClientError) throw error;
+        throw new ProxyClientError(`proxy usage log contains invalid JSON: ${path}:${index + 1}`);
+      }
+    }
+  }
+  records.sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+  return { records, files, bytes: totalBytes };
+}
+
+function jsonSafeTokenTotal(value) {
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
+}
+
+function newUsageBucket() {
+  return {
+    requests: 0,
+    priced_requests: 0,
+    input_tokens: 0n,
+    output_tokens: 0n,
+    cache_read_tokens: 0n,
+    cache_write_tokens: 0n,
+    costs: new Map()
+  };
+}
+
+function addUsageBucket(bucket, record) {
+  bucket.requests += 1;
+  if (record.usage) {
+    bucket.input_tokens += BigInt(record.usage.input_tokens);
+    bucket.output_tokens += BigInt(record.usage.output_tokens);
+    bucket.cache_read_tokens += BigInt(record.usage.cache_read_tokens);
+    bucket.cache_write_tokens += BigInt(record.usage.cache_write_tokens);
+  }
+  if (record.cost) {
+    bucket.priced_requests += 1;
+    bucket.costs.set(
+      record.cost.currency,
+      (bucket.costs.get(record.cost.currency) || 0n) +
+        usageMoneyToScaled(record.cost.total, "cost total")
+    );
+  }
+}
+
+function usageBucketView(bucket) {
+  return {
+    requests: bucket.requests,
+    priced_requests: bucket.priced_requests,
+    tokens: {
+      input: jsonSafeTokenTotal(bucket.input_tokens),
+      output: jsonSafeTokenTotal(bucket.output_tokens),
+      cache_read: jsonSafeTokenTotal(bucket.cache_read_tokens),
+      cache_write: jsonSafeTokenTotal(bucket.cache_write_tokens)
+    },
+    costs: Object.fromEntries(
+      [...bucket.costs.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([currency, value]) => [currency, scaledUsageMoney(value)])
+    )
+  };
+}
+
+function observedTier(value) {
+  if (["fast", "priority"].includes(value)) return "fast";
+  if (["auto", "default", "standard"].includes(value)) return "standard";
+  return value || "unspecified";
+}
+
+function usageSummary(records, source) {
+  const total = newUsageBucket();
+  const byModel = new Map();
+  const byTier = new Map();
+  const transitions = new Map();
+  let fastRequested = 0;
+  let fastEffective = 0;
+  let fastDowngraded = 0;
+  for (const record of records) {
+    const model = record.pricing_model || record.response_model ||
+      record.requested_model || "unknown";
+    const tier = record.pricing_service_tier || "unknown";
+    const modelBucket = byModel.get(model) || newUsageBucket();
+    const tierBucket = byTier.get(tier) || newUsageBucket();
+    const requestedTier = observedTier(record.requested_service_tier);
+    const responseTier = observedTier(record.response_service_tier);
+    const transition = `${requestedTier}->${responseTier}`;
+    transitions.set(transition, (transitions.get(transition) || 0) + 1);
+    if (requestedTier === "fast") fastRequested += 1;
+    if (tier === "fast") fastEffective += 1;
+    if (requestedTier === "fast" && tier === "standard" &&
+        responseTier === "standard") fastDowngraded += 1;
+    addUsageBucket(total, record);
+    addUsageBucket(modelBucket, record);
+    addUsageBucket(tierBucket, record);
+    byModel.set(model, modelBucket);
+    byTier.set(tier, tierBucket);
+  }
+  const mapView = (value) => Object.fromEntries(
+    [...value.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, bucket]) => [key, usageBucketView(bucket)])
+  );
+  return {
+    schema: 1,
+    kind: "agentctl-proxy-usage-summary",
+    log: source.log,
+    retained_files: source.files.length,
+    retained_bytes: source.bytes,
+    window: {
+      from: records[0]?.timestamp || null,
+      to: records.at(-1)?.timestamp || null
+    },
+    ...usageBucketView(total),
+    unpriced_requests: total.requests - total.priced_requests,
+    service_tiers: {
+      fast_requested: fastRequested,
+      fast_effective: fastEffective,
+      fast_downgraded: fastDowngraded,
+      transitions: Object.fromEntries(
+        [...transitions.entries()].sort(([left], [right]) => left.localeCompare(right))
+      )
+    },
+    by_model: mapView(byModel),
+    by_service_tier: mapView(byTier)
+  };
+}
+
+function emitUsageRecords(result, options) {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (!result.records.length) {
+    process.stdout.write(`No proxy usage records in ${result.log}\n`);
+    return;
+  }
+  for (const record of result.records) {
+    const tokens = record.usage
+      ? `in ${record.usage.input_tokens} · cache ${record.usage.cache_read_tokens}/${record.usage.cache_write_tokens} · out ${record.usage.output_tokens}`
+      : "tokens unavailable";
+    const cost = record.cost
+      ? `${record.cost.total} ${record.cost.currency}`
+      : `unpriced (${record.pricing_unavailable || "unknown"})`;
+    process.stdout.write(
+      `${record.timestamp}\t${record.response_model || record.requested_model || "unknown"}` +
+      `\t${record.pricing_service_tier || "unknown"}\t${tokens}\t${cost}\n`
+    );
+  }
+}
+
+function emitUsageSummary(result, options) {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`Usage:      ${result.requests} request(s) · ${result.priced_requests} priced · ${result.unpriced_requests} unpriced\n`);
+  process.stdout.write(`Tokens:     in ${result.tokens.input} · cache ${result.tokens.cache_read}/${result.tokens.cache_write} · out ${result.tokens.output}\n`);
+  const costs = Object.entries(result.costs);
+  process.stdout.write(`Cost:       ${costs.length ? costs.map(([currency, total]) => `${total} ${currency}`).join(" · ") : "unavailable"}\n`);
+  process.stdout.write(`Fast:       ${result.service_tiers.fast_requested} requested · ${result.service_tiers.fast_effective} effective · ${result.service_tiers.fast_downgraded} downgraded\n`);
+  process.stdout.write(`Window:     ${result.window.from || "empty"}${result.window.to ? ` -> ${result.window.to}` : ""}\n`);
+  for (const [tier, bucket] of Object.entries(result.by_service_tier)) {
+    process.stdout.write(`Tier:       ${tier} · ${bucket.requests} request(s)\n`);
+  }
+  for (const [model, bucket] of Object.entries(result.by_model)) {
+    process.stdout.write(`Model:      ${model} · ${bucket.requests} request(s)\n`);
+  }
+}
+
+async function proxyUsage(options) {
+  const source = await readUsageRecords(options);
+  const limit = options.last ?? (options.summary ? null : 20);
+  const records = limit === null ? source.records : source.records.slice(-limit);
+  if (options.summary) {
+    const result = usageSummary(records, {
+      log: options.proxyUsageLog,
+      files: source.files,
+      bytes: source.bytes
+    });
+    emitUsageSummary(result, options);
+    return result;
+  }
+  const result = {
+    schema: 1,
+    kind: "agentctl-proxy-usage",
+    log: options.proxyUsageLog,
+    retained_files: source.files.length,
+    retained_bytes: source.bytes,
+    total_records: source.records.length,
+    returned_records: records.length,
+    records
+  };
+  emitUsageRecords(result, options);
+  return result;
+}
+
+function localBaseUrl(host, port, protocol, mode = PROVIDER_MODE) {
   const address = host === "::1" ? `[${host}]` : host;
   const root = `http://${address}:${port}`;
+  if (mode === PASSTHROUGH_MODE) return root;
   if (["openai_responses", "openai_chat"].includes(protocol)) return `${root}/v1`;
   if (protocol === "google_generative") return `${root}/v1beta`;
   return root;
@@ -503,6 +1065,107 @@ async function buildPlan(profileName, options) {
   validateTarget(options.target);
   const platform = options.platform || normalizeRuntimePlatform();
   validatePlatform(platform);
+  if (profileName === PASSTHROUGH_PROFILE) {
+    if (options.target !== "codex") {
+      throw new ProxyClientError("the passthrough profile supports only --target codex");
+    }
+    if (options.route) {
+      throw new ProxyClientError("passthrough observation cannot use a failover route");
+    }
+    const passthroughEndpoint = new URL(options.upstreamBaseUrl);
+    const loopback = ["127.0.0.1", "[::1]"].includes(
+      passthroughEndpoint.hostname
+    );
+    if (options.upstreamBaseUrl !== DEFAULT_OPENAI_SUBSCRIPTION_ENDPOINT && !loopback) {
+      throw new ProxyClientError(
+        "passthrough upstream must be the official ChatGPT Codex endpoint or loopback"
+      );
+    }
+    const pricing = await loadPricingCatalog(options.pricingPath, { allowMissing: true });
+    const models = {
+      default: "passthrough",
+      aliases: {},
+      requested_default: "unchanged",
+      outbound_default: "unchanged"
+    };
+    const auth = { mode: "openai_passthrough", secret: null, present: true };
+    const compaction = {
+      mode: "remote_native",
+      label: "Remote · OpenAI subscription",
+      responses_compact: true
+    };
+    const backend = {
+      profile: PASSTHROUGH_PROFILE,
+      endpoint: options.upstreamBaseUrl,
+      auth,
+      models,
+      compaction
+    };
+    return {
+      schema: 1,
+      action: "start",
+      mode: PASSTHROUGH_MODE,
+      ready: true,
+      issue: "",
+      profile: PASSTHROUGH_PROFILE,
+      route: null,
+      target: "codex",
+      platform,
+      protocol: "openai_responses",
+      endpoint: options.upstreamBaseUrl,
+      models,
+      auth,
+      backends: [backend],
+      compaction,
+      retry: {
+        mode: "next_request",
+        max_attempts: 1,
+        status_codes: [],
+        network_errors: false
+      },
+      circuit: {
+        enabled: false,
+        failure_threshold: 3,
+        recovery_timeout_ms: 30000,
+        half_open_max_requests: 1,
+        state_retention_days: 30
+      },
+      listen: { host: "127.0.0.1", port: options.port },
+      local_base_url: localBaseUrl(
+        "127.0.0.1",
+        options.port,
+        "openai_responses",
+        PASSTHROUGH_MODE
+      ),
+      timeouts: {
+        first_byte_ms: options.firstByteMs,
+        stream_idle_ms: options.streamIdleMs,
+        request_ms: options.requestMs
+      },
+      limits: {
+        request_bytes: options.requestBytes,
+        log_bytes: options.logBytes,
+        usage_log_bytes: options.usageLogBytes,
+        usage_capture_bytes: options.usageCaptureBytes
+      },
+      pricing: {
+        catalog: options.pricingPath,
+        present: Boolean(pricing),
+        version: pricing?.version || null,
+        currency: pricing?.currency || null,
+        model_source: options.pricingSource
+      },
+      retention: {
+        files: options.retentionFiles,
+        max_age_days: options.retentionDays
+      },
+      auto_attach: false,
+      capability_file: options.proxyCapability,
+      metadata_log: options.proxyLog,
+      usage_log: options.proxyUsageLog,
+      circuit_state: options.proxyCircuitState
+    };
+  }
   const [store, secrets, pricing, failover] = await Promise.all([
     loadProviderStore(options.storePath),
     loadProviderSecrets(options.secretsPath, { allowMissing: true }),
@@ -605,6 +1268,7 @@ async function buildPlan(profileName, options) {
   return {
     schema: 1,
     action: "start",
+    mode: PROVIDER_MODE,
     ready: !issue,
     issue,
     profile: profileName,
@@ -620,7 +1284,7 @@ async function buildPlan(profileName, options) {
     retry,
     circuit,
     listen: { host: "127.0.0.1", port: options.port },
-    local_base_url: localBaseUrl("127.0.0.1", options.port, protocol),
+    local_base_url: localBaseUrl("127.0.0.1", options.port, protocol, PROVIDER_MODE),
     timeouts: {
       first_byte_ms: options.firstByteMs,
       stream_idle_ms: options.streamIdleMs,
@@ -657,14 +1321,19 @@ function emitPlan(plan, options, apply) {
     return;
   }
   process.stdout.write(`${apply ? "[apply]" : "[preview]"} loopback provider proxy\n`);
+  process.stdout.write(`  Mode         : ${plan.mode}\n`);
   process.stdout.write(`  Profile      : ${plan.profile} (${plan.target}; ${plan.platform})\n`);
   if (plan.route) process.stdout.write(`  Route        : ${plan.route} · ${plan.backends.length} backends\n`);
   process.stdout.write(`  Protocol     : ${plan.protocol}\n`);
   process.stdout.write(`  Compaction   : ${plan.compaction.label}\n`);
-  process.stdout.write(`  Model        : ${plan.models.requested_default} -> ${plan.models.outbound_default}\n`);
+  process.stdout.write(`  Model        : ${plan.mode === PASSTHROUGH_MODE
+    ? "unchanged from Codex request"
+    : `${plan.models.requested_default} -> ${plan.models.outbound_default}`}\n`);
   process.stdout.write(`  Upstream     : ${plan.endpoint}\n`);
   process.stdout.write(`  Local URL    : ${plan.local_base_url}\n`);
-  process.stdout.write(`  Capability   : ${plan.capability_file} (value hidden)\n`);
+  process.stdout.write(`  Authentication: ${plan.mode === PASSTHROUGH_MODE
+    ? "official OpenAI bearer/account headers forwarded unchanged"
+    : `local capability at ${plan.capability_file} (value hidden)`}\n`);
   process.stdout.write(`  Request log  : metadata only; ${plan.metadata_log}\n`);
   process.stdout.write(`  Usage log    : model/token/cost only; ${plan.usage_log}\n`);
   process.stdout.write(`  Pricing      : ${plan.pricing.present ? `${plan.pricing.version} (${plan.pricing.model_source} model)` : "catalog unavailable; requests still work"}\n`);
@@ -674,7 +1343,7 @@ function emitPlan(plan, options, apply) {
       process.stdout.write(`  Backend ${index + 1}    : ${backend.profile} · ${backend.models.requested_default} -> ${backend.models.outbound_default}\n`);
     }
   }
-  process.stdout.write("  Client config: unchanged (explicit attach comes later)\n");
+  process.stdout.write("  Client config: unchanged; run 'agentctl proxy attach' separately\n");
   if (plan.issue) process.stdout.write(`  Blocked by   : ${plan.issue}\n`);
   if (!apply && plan.ready) process.stdout.write("Re-run with --yes to start.\n");
 }
@@ -716,10 +1385,11 @@ async function clearDeadRuntime(options) {
 
 function daemonConfig(plan, options) {
   return {
-    schema: 4,
+    schema: 5,
     kind: CONFIG_KIND,
     instance_id: randomUUID(),
     created_at: new Date().toISOString(),
+    mode: plan.mode,
     profile: plan.profile,
     target: plan.target,
     platform: plan.platform,
@@ -785,6 +1455,13 @@ async function start(profileName, options) {
       `cannot start the ${options.platform} proxy overlay on ${normalizeRuntimePlatform()}`
     );
   }
+  const attachment = await loadAttachment(options, { allowMissing: true });
+  if (attachment && (plan.mode !== PASSTHROUGH_MODE ||
+      attachment.local_base_url !== plan.local_base_url)) {
+    throw new ProxyClientError(
+      "Codex is attached to another proxy configuration; detach it before starting"
+    );
+  }
   await clearDeadRuntime(options);
   const daemonDetails = await pathState(options.daemonPath);
   if (!daemonDetails || daemonDetails.isSymbolicLink() || !daemonDetails.isFile()) {
@@ -826,6 +1503,7 @@ async function start(profileName, options) {
   const output = {
     ok: true,
     status: "running",
+    mode: plan.mode,
     profile: plan.profile,
     route: plan.route,
     backends: plan.backends.map((backend) => backend.profile),
@@ -864,7 +1542,193 @@ async function waitForStop(pid, options, timeoutMs = 6000) {
   throw new ProxyClientError("proxy did not stop cleanly; no stronger signal was sent");
 }
 
+function emitAttachment(output, options) {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    return;
+  }
+  if (output.preview) {
+    process.stdout.write(
+      `[preview] ${output.action} Codex ${output.config_file}; re-run with --yes.\n`
+    );
+    return;
+  }
+  process.stdout.write(output.changed
+    ? `Codex proxy ${output.status}: ${output.config_file}\n`
+    : `Codex is already ${output.status}: ${output.config_file}\n`);
+}
+
+async function attach(options) {
+  const current = await inspectStatus(options);
+  if (!current.running || current.mode !== PASSTHROUGH_MODE ||
+      current.target !== "codex" || current.protocol !== "openai_responses") {
+    throw new ProxyClientError(
+      "start a healthy 'passthrough' proxy for --target codex before attaching"
+    );
+  }
+  const existingAttachment = await inspectAttachment(options);
+  if (existingAttachment.attached) {
+    if (existingAttachment.status !== "attached") {
+      throw new ProxyClientError(
+        "Codex config changed after attach; refusing to overwrite it (detach requires repair)"
+      );
+    }
+    const output = {
+      ok: true,
+      changed: false,
+      status: "attached",
+      config_file: existingAttachment.config_file,
+      local_base_url: existingAttachment.local_base_url
+    };
+    emitAttachment(output, options);
+    return output;
+  }
+  if (await pathState(options.proxyAttachBackup)) {
+    throw new ProxyClientError(
+      `orphaned attachment backup exists: ${options.proxyAttachBackup}`
+    );
+  }
+  const original = await readConfigSnapshot(options.codexConfig, { allowMissing: true });
+  const originalBytes = original?.bytes || Buffer.alloc(0);
+  const attachedBytes = renderCodexAttachment(originalBytes, current.local_base_url);
+  const output = {
+    ok: true,
+    preview: !options.yes,
+    changed: Boolean(options.yes),
+    action: "attach",
+    status: options.yes ? "attached" : "detached",
+    config_file: options.codexConfig,
+    backup_file: options.proxyAttachBackup,
+    local_base_url: current.local_base_url,
+    exact_restore: true
+  };
+  if (!options.yes) {
+    emitAttachment(output, options);
+    originalBytes.fill(0);
+    attachedBytes.fill(0);
+    return output;
+  }
+  const verifyOriginal = await readConfigSnapshot(options.codexConfig, { allowMissing: true });
+  if (Boolean(verifyOriginal) !== Boolean(original) ||
+      sha256(verifyOriginal?.bytes || Buffer.alloc(0)) !== sha256(originalBytes)) {
+    originalBytes.fill(0);
+    attachedBytes.fill(0);
+    throw new ProxyClientError("Codex config changed while preparing attach; retry");
+  }
+  const attachment = {
+    schema: 1,
+    kind: ATTACHMENT_KIND,
+    created_at: new Date().toISOString(),
+    mode: PASSTHROUGH_MODE,
+    target: "codex",
+    proxy_instance_id: current.instance_id,
+    local_base_url: current.local_base_url,
+    config_file: options.codexConfig,
+    backup_file: options.proxyAttachBackup,
+    config_existed: Boolean(original),
+    original_mode: original ? original.mode : 0o600,
+    original_sha256: sha256(originalBytes),
+    attached_sha256: sha256(attachedBytes)
+  };
+  let configWritten = false;
+  let backupWritten = false;
+  try {
+    if (original) {
+      await writeBytesAtomic(options.proxyAttachBackup, originalBytes, 0o600);
+      backupWritten = true;
+    }
+    await writeBytesAtomic(options.codexConfig, attachedBytes, attachment.original_mode);
+    configWritten = true;
+    await writeJsonAtomic(options.proxyAttachState, attachment);
+  } catch (error) {
+    if (configWritten) {
+      if (original) {
+        await writeBytesAtomic(options.codexConfig, originalBytes, attachment.original_mode)
+          .catch(() => {});
+      } else {
+        await unlink(options.codexConfig).catch(() => {});
+      }
+    }
+    if (backupWritten) await unlink(options.proxyAttachBackup).catch(() => {});
+    await unlink(options.proxyAttachState).catch(() => {});
+    throw error;
+  } finally {
+    originalBytes.fill(0);
+    attachedBytes.fill(0);
+    verifyOriginal?.bytes.fill(0);
+  }
+  emitAttachment(output, options);
+  return output;
+}
+
+async function detach(options) {
+  const attachment = await loadAttachment(options);
+  const current = await readConfigSnapshot(attachment.config_file);
+  if (sha256(current.bytes) !== attachment.attached_sha256) {
+    current.bytes.fill(0);
+    throw new ProxyClientError(
+      "Codex config changed after attach; refusing to discard user edits"
+    );
+  }
+  let backup = null;
+  if (attachment.config_existed) {
+    backup = await readConfigSnapshot(attachment.backup_file);
+    if ((process.platform !== "win32" && (backup.mode & 0o077) !== 0) ||
+        sha256(backup.bytes) !== attachment.original_sha256) {
+      current.bytes.fill(0);
+      backup.bytes.fill(0);
+      throw new ProxyClientError("attachment backup failed integrity or permission checks");
+    }
+  }
+  const output = {
+    ok: true,
+    preview: !options.yes,
+    changed: Boolean(options.yes),
+    action: "detach",
+    status: options.yes ? "detached" : "attached",
+    config_file: attachment.config_file,
+    backup_file: attachment.backup_file,
+    exact_restore: true
+  };
+  if (!options.yes) {
+    emitAttachment(output, options);
+    current.bytes.fill(0);
+    backup?.bytes.fill(0);
+    return output;
+  }
+  const verifyCurrent = await readConfigSnapshot(attachment.config_file);
+  if (sha256(verifyCurrent.bytes) !== attachment.attached_sha256) {
+    current.bytes.fill(0);
+    backup?.bytes.fill(0);
+    verifyCurrent.bytes.fill(0);
+    throw new ProxyClientError("Codex config changed while preparing detach; retry");
+  }
+  try {
+    if (attachment.config_existed) {
+      await writeBytesAtomic(
+        attachment.config_file,
+        backup.bytes,
+        attachment.original_mode
+      );
+    } else {
+      await unlink(attachment.config_file);
+    }
+    await unlink(options.proxyAttachState);
+    if (attachment.config_existed) await unlink(attachment.backup_file);
+  } finally {
+    current.bytes.fill(0);
+    backup?.bytes.fill(0);
+    verifyCurrent.bytes.fill(0);
+  }
+  emitAttachment(output, options);
+  return output;
+}
+
 async function stop(options) {
+  const attachment = await inspectAttachment(options);
+  if (attachment.attached) {
+    throw new ProxyClientError("detach Codex before stopping the proxy");
+  }
   const current = await inspectStatus(options);
   if (current.status === "stopped") {
     if (options.json) process.stdout.write(`${JSON.stringify({ ok: true, changed: false, status: "stopped" }, null, 2)}\n`);
@@ -957,7 +1821,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (action === "start" && positional.length === 1) return start(positional[0], options);
   if (action === "status" && positional.length === 0) return status(options);
+  if (action === "usage" && positional.length === 0) return proxyUsage(options);
   if (action === "stop" && positional.length === 0) return stop(options);
+  if (action === "attach" && positional.length === 0) return attach(options);
+  if (action === "detach" && positional.length === 0) return detach(options);
   if (action === "token" && positional.length === 1) return token(positional[0], options);
   throw new ProxyClientError("invalid proxy command; use agentctl proxy --help");
 }
@@ -974,4 +1841,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   });
 }
 
-export { CAPABILITY_KIND, CONFIG_KIND, LOCK_KIND, STATE_KIND };
+export {
+  ATTACHMENT_KIND,
+  CAPABILITY_KIND,
+  CONFIG_KIND,
+  LOCK_KIND,
+  PASSTHROUGH_MODE,
+  PROVIDER_MODE,
+  STATE_KIND
+};

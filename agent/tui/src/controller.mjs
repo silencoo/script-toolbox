@@ -292,12 +292,13 @@ export function createController({
 
   async function providerDashboard(target = "codex") {
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
-    const [providerStatus, providerList, failover, pricing, proxy] = await Promise.all([
+    const [providerStatus, providerList, failover, pricing, proxy, proxyUsage] = await Promise.all([
       runAgentctlJson(["provider", "status", "--json"], "provider status"),
       runAgentctlJson(["provider", "list", "--target", target, "--json"], "provider list"),
       runAgentctlJson(["failover", "status", "--json"], "failover status"),
       runAgentctlJson(["pricing", "status", "--json"], "pricing status"),
-      runAgentctlJson(["proxy", "status", "--json"], "proxy status")
+      runAgentctlJson(["proxy", "status", "--json"], "proxy status"),
+      runAgentctlJson(["proxy", "usage", "--summary", "--json"], "proxy usage")
     ]);
     const status = providerStatus.data || {};
     const platform = status.platform || process.platform;
@@ -307,7 +308,8 @@ export function createController({
       ["Provider catalog", providerList],
       ["Failover", failover],
       ["Pricing", pricing],
-      ["Proxy", proxy]
+      ["Proxy", proxy],
+      ["Proxy usage", proxyUsage]
     ].filter(([, result]) => !result.ok && !result.data)
       .map(([label, result]) => `${label}: ${result.error}`);
     return {
@@ -319,6 +321,20 @@ export function createController({
       failover: failover.data || { status: "unavailable", routes: 0 },
       pricing: pricing.data || { status: "unavailable", rates: 0 },
       proxy: proxy.data || { status: "unavailable", running: false },
+      proxyUsage: proxyUsage.data || {
+        requests: 0,
+        priced_requests: 0,
+        unpriced_requests: 0,
+        tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        costs: {},
+        service_tiers: {
+          fast_requested: 0,
+          fast_effective: 0,
+          fast_downgraded: 0,
+          transitions: {}
+        },
+        window: { from: null, to: null }
+      },
       errors
     };
   }

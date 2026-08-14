@@ -794,6 +794,29 @@ test("Provider dashboard resolves exact target metadata without exposing Secret 
     if (command === "proxy status --json") {
       return { code: 0, stdout: '{"status":"running","running":true,"profile":"gateway","target":"codex"}', stderr: "" };
     }
+    if (command === "proxy usage --summary --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          requests: 3,
+          priced_requests: 3,
+          unpriced_requests: 0,
+          tokens: { input: 18680, output: 9, cache_read: 6912, cache_write: 0 },
+          costs: { USD: "0.0699628" },
+          service_tiers: {
+            fast_requested: 3,
+            fast_effective: 0,
+            fast_downgraded: 3,
+            transitions: { "fast->standard": 3 }
+          },
+          window: {
+            from: "2026-08-14T00:00:00.000Z",
+            to: "2026-08-14T00:02:00.000Z"
+          }
+        }),
+        stderr: ""
+      };
+    }
     return { code: 1, stdout: "", stderr: "unexpected command" };
   };
   const dashboard = await createController({
@@ -812,6 +835,9 @@ test("Provider dashboard resolves exact target metadata without exposing Secret 
   assert.equal(dashboard.failover.routes, 2);
   assert.equal(dashboard.pricing.version, "2026-08");
   assert.equal(dashboard.proxy.status, "running");
+  assert.equal(dashboard.proxyUsage.costs.USD, "0.0699628");
+  assert.equal(dashboard.proxyUsage.tokens.cache_read, 6912);
+  assert.equal(dashboard.proxyUsage.service_tiers.fast_downgraded, 3);
   assert.equal(JSON.stringify(dashboard).includes("secret-value"), false);
 });
 

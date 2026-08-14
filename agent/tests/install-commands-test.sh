@@ -110,7 +110,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.16.9" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.0" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"
@@ -130,6 +130,7 @@ done
   fail "standalone runtime omitted the proxy daemon"
 [ -f "$RUNTIME/agentctl/pricing-client.mjs" ] &&
 [ -f "$RUNTIME/pricing/pricing.mjs" ] &&
+[ -f "$RUNTIME/pricing/openai-gpt-5.6-2026-08-14.json" ] &&
 [ -f "$RUNTIME/proxy/model-mapper.mjs" ] &&
 [ -f "$RUNTIME/proxy/usage.mjs" ] ||
   fail "standalone runtime omitted pricing/model/usage modules"

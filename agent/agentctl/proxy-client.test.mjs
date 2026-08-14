@@ -24,7 +24,8 @@ import {
   pruneLogs,
   rotateLog,
   upstreamHeaders,
-  validateConfig
+  validateConfig,
+  websocketObserver
 } from "../proxy/agentproxyd.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -48,11 +49,15 @@ function proxyArgs(root, port) {
     "--secrets", join(root, "config", "provider-secrets.json"),
     "--proxy-config", join(root, "proxy", "config.json"),
     "--proxy-state", join(root, "proxy", "state.json"),
+    "--proxy-lock", join(root, "proxy", "runtime.lock"),
     "--proxy-capability", join(root, "config", "proxy-capability.json"),
     "--proxy-log", join(root, "proxy", "requests.jsonl"),
     "--proxy-usage-log", join(root, "proxy", "usage.jsonl"),
     "--circuit-state", join(root, "proxy", "circuits.json"),
     "--proxy-runtime-log", join(root, "proxy", "daemon.log"),
+    "--proxy-attach-state", join(root, "proxy", "attachment.json"),
+    "--proxy-attach-backup", join(root, "proxy", "codex-config.backup.toml"),
+    "--codex-config", join(root, "codex", "config.toml"),
     "--failover-store", join(root, "config", "failover.json"),
     "--pricing", join(root, "config", "pricing.json"),
     "--port", String(port)
@@ -109,6 +114,52 @@ async function waitFor(check, timeoutMs = 3000) {
   throw new Error("condition did not become true");
 }
 
+function websocketFrame(value, { masked = false } = {}) {
+  const payload = Buffer.from(JSON.stringify(value));
+  assert.ok(payload.length < 126);
+  const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+  const frame = Buffer.alloc(2 + (masked ? 4 : 0) + payload.length);
+  frame[0] = 0x81;
+  frame[1] = payload.length | (masked ? 0x80 : 0);
+  let offset = 2;
+  if (masked) {
+    mask.copy(frame, offset);
+    offset += 4;
+  }
+  for (let index = 0; index < payload.length; index += 1) {
+    frame[offset + index] = masked ? payload[index] ^ mask[index % 4] : payload[index];
+  }
+  return frame;
+}
+
+test("WebSocket observer reads split masked requests and unmasked usage without retaining frames", () => {
+  const payloads = [];
+  const observe = websocketObserver(4096, (payload) => payloads.push(payload));
+  const request = websocketFrame({
+    type: "response.create",
+    response: { model: "gpt-ws", input: "private" }
+  }, { masked: true });
+  observe(request.subarray(0, 3));
+  observe(request.subarray(3));
+  observe(websocketFrame({
+    type: "response.completed",
+    response: {
+      model: "gpt-ws",
+      usage: { input_tokens: 11, output_tokens: 2 }
+    }
+  }));
+  assert.deepEqual(payloads, [{
+    type: "response.create",
+    response: { model: "gpt-ws", input: "private" }
+  }, {
+    type: "response.completed",
+    response: {
+      model: "gpt-ws",
+      usage: { input_tokens: 11, output_tokens: 2 }
+    }
+  }]);
+});
+
 test("proxy route and URL projection is protocol-bounded", () => {
   assert.equal(allowedRoute("anthropic_messages", "POST", "/v1/messages"), true);
   assert.equal(allowedRoute("openai_responses", "POST", "/v1/responses"), true);
@@ -143,6 +194,12 @@ test("proxy route and URL projection is protocol-bounded", () => {
     new URL("http://127.0.0.1/v1/messages")
   );
   assert.equal(anthropic.pathname, "/anthropic/v1/messages");
+  const subscription = joinUpstream(
+    "https://chatgpt.com/backend-api/codex",
+    new URL("http://127.0.0.1/v1/responses"),
+    { stripVersionPrefix: true }
+  );
+  assert.equal(subscription.pathname, "/backend-api/codex/responses");
 });
 
 test("proxy header projection removes every local credential before upstream auth", () => {
@@ -166,15 +223,32 @@ test("proxy header projection removes every local credential before upstream aut
   assert.equal(headers.digest, undefined);
   assert.equal(headers["content-length"], "17");
   assert.equal(headers["accept-encoding"], "identity");
+
+  const passthrough = upstreamHeaders({
+    headers: {
+      authorization: "Bearer OFFICIAL-OPENAI-OAUTH",
+      "chatgpt-account-id": "account-123",
+      "x-agentctl-proxy-token": "must-not-leak",
+      "user-agent": "codex-cli/test",
+      "content-type": "application/json"
+    }
+  }, "openai_responses", {
+    auth: { mode: "openai_passthrough" }
+  }, "", 11, { mode: "openai_subscription_passthrough" });
+  assert.equal(passthrough.authorization, "Bearer OFFICIAL-OPENAI-OAUTH");
+  assert.equal(passthrough["chatgpt-account-id"], "account-123");
+  assert.equal(passthrough["user-agent"], "codex-cli/test");
+  assert.equal(passthrough["x-agentctl-proxy-token"], undefined);
 });
 
 test("daemon config rejects a non-loopback listener", () => {
   const root = "/tmp/agentctl-proxy-test";
   const config = {
-    schema: 4,
+    schema: 5,
     kind: "agentctl-proxy-config",
     instance_id: "11111111-1111-4111-8111-111111111111",
     created_at: new Date().toISOString(),
+    mode: "provider",
     profile: "test",
     target: "codex",
     platform: "linux",
@@ -247,6 +321,155 @@ test("metadata and usage log retention is count- and age-bounded", async () => {
     await assert.rejects(() => lstat(`${path}.2`), { code: "ENOENT" });
     await assert.rejects(() => lstat(`${path}.3`), { code: "ENOENT" });
     assert.equal(await readFile(path, "utf8"), "new-active\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agentctl proxy usage safely lists and exactly summarizes retained tier metrics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-usage-cli-"));
+  const port = 17321;
+  const common = proxyArgs(root, port);
+  const usagePath = join(root, "proxy", "usage.jsonl");
+  const record = (overrides = {}) => ({
+    schema: 1,
+    timestamp: "2026-08-14T00:00:00.000Z",
+    request_id: "request-1",
+    profile: "passthrough",
+    status: 200,
+    duration_ms: 100,
+    requested_model: "gpt-5.6-sol",
+    response_model: "gpt-5.6-sol",
+    pricing_model: "gpt-5.6-sol",
+    requested_service_tier: null,
+    response_service_tier: "default",
+    pricing_service_tier: "standard",
+    pricing_service_tier_source: "response",
+    usage: {
+      input_tokens: 10,
+      output_tokens: 1,
+      cache_read_tokens: 2,
+      cache_write_tokens: 0
+    },
+    cost: {
+      currency: "USD",
+      total: "0.1",
+      input: "0.05",
+      output: "0.03",
+      cache_read: "0.02",
+      cache_write: "0",
+      rate_id: "standard-rate",
+      service_tier: "standard",
+      context_tokens: 12,
+      estimated: true
+    },
+    pricing_unavailable: null,
+    ...overrides
+  });
+  try {
+    await mkdir(dirname(usagePath), { recursive: true });
+    await writeFile(`${usagePath}.1`, `${JSON.stringify(record())}\n`, { mode: 0o600 });
+    await writeFile(usagePath, [
+      JSON.stringify(record({
+        timestamp: "2026-08-14T00:01:00.000Z",
+        request_id: "request-2",
+        requested_service_tier: "priority",
+        response_service_tier: "priority",
+        pricing_service_tier: "fast",
+        usage: {
+          input_tokens: 20,
+          output_tokens: 2,
+          cache_read_tokens: 3,
+          cache_write_tokens: 0
+        },
+        cost: {
+          currency: "USD",
+          total: "0.2",
+          input: "0.1",
+          output: "0.06",
+          cache_read: "0.04",
+          cache_write: "0",
+          rate_id: "fast-rate",
+          service_tier: "fast",
+          context_tokens: 23,
+          estimated: true
+        },
+        private_body: "MUST-NOT-BE-EMITTED"
+      })),
+      JSON.stringify(record({
+        timestamp: "2026-08-14T00:02:00.000Z",
+        request_id: "request-3",
+        response_model: "gpt-5.6-luna",
+        pricing_model: "gpt-5.6-luna",
+        requested_service_tier: "priority",
+        response_service_tier: "default",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0
+        },
+        cost: null,
+        pricing_unavailable: "rate_not_found"
+      }))
+    ].join("\n") + "\n", { mode: 0o600 });
+
+    const listed = run(PROXY_CLIENT, [
+      "usage", "--last", "2", ...common, "--json"
+    ]);
+    assert.equal(listed.stdout.includes("MUST-NOT-BE-EMITTED"), false);
+    const listValue = JSON.parse(listed.stdout);
+    assert.equal(listValue.total_records, 3);
+    assert.equal(listValue.returned_records, 2);
+    assert.deepEqual(
+      listValue.records.map((item) => item.request_id),
+      ["request-2", "request-3"]
+    );
+    assert.equal(listValue.records[0].pricing_service_tier, "fast");
+    assert.equal(listValue.records[1].pricing_unavailable, "rate_not_found");
+
+    const summary = JSON.parse(run(PROXY_CLIENT, [
+      "usage", "--summary", ...common, "--json"
+    ]).stdout);
+    assert.equal(summary.requests, 3);
+    assert.equal(summary.priced_requests, 2);
+    assert.equal(summary.unpriced_requests, 1);
+    assert.deepEqual(summary.tokens, {
+      input: 35,
+      output: 3,
+      cache_read: 5,
+      cache_write: 0
+    });
+    assert.deepEqual(summary.costs, { USD: "0.3" });
+    assert.equal(summary.by_service_tier.standard.requests, 2);
+    assert.equal(summary.by_service_tier.fast.requests, 1);
+    assert.deepEqual(summary.service_tiers, {
+      fast_requested: 2,
+      fast_effective: 1,
+      fast_downgraded: 1,
+      transitions: {
+        "fast->fast": 1,
+        "fast->standard": 1,
+        "unspecified->standard": 1
+      }
+    });
+    assert.equal(summary.by_model["gpt-5.6-sol"].requests, 2);
+    assert.equal(summary.by_model["gpt-5.6-luna"].requests, 1);
+
+    const textSummary = run(PROXY_CLIENT, [
+      "usage", "--summary", "--last", "2", ...common
+    ]).stdout;
+    assert.match(textSummary, /2 request\(s\) · 1 priced · 1 unpriced/);
+    assert.match(textSummary, /0\.2 USD/);
+    assert.match(textSummary, /2 requested · 1 effective · 1 downgraded/);
+
+    if (process.platform !== "win32") {
+      await chmod(usagePath, 0o644);
+      const refused = run(PROXY_CLIENT, [
+        "usage", ...common, "--json"
+      ], { status: 1 });
+      assert.match(refused.stderr, /owner-only/);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -705,6 +928,197 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     const runtimeLog = await readFile(join(root, "proxy", "daemon.log"), "utf8");
     assert.equal(runtimeLog.includes("REAL-UPSTREAM-SECRET"), false);
     assert.equal(runtimeLog.includes(beforeRotate), false);
+  } finally {
+    if (proxyPid) {
+      try { process.kill(proxyPid, "SIGTERM"); } catch {}
+      await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    }
+    await closeServer(upstream);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("OpenAI subscription passthrough is byte-preserving and attach/detach restores Codex exactly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-passthrough-"));
+  const observed = [];
+  const upstream = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      observed.push({
+        path: request.url,
+        headers: request.headers,
+        body: Buffer.concat(chunks)
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        id: "resp_passthrough",
+        model: "gpt-5.6-sol",
+        service_tier: "default",
+        usage: { input_tokens: 17, output_tokens: 5 }
+      }));
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  const proxyPort = await freePort();
+  const commonProxy = [
+    ...proxyArgs(root, proxyPort),
+    "--upstream-base-url", `http://127.0.0.1:${upstreamPort}/backend-api/codex`
+  ];
+  const codexConfig = join(root, "codex", "config.toml");
+  const original = Buffer.from([
+    '# user config must return byte-for-byte',
+    'model_provider = "previous-provider"',
+    'openai_base_url = "https://previous.invalid"',
+    'approval_policy = "on-request"',
+    '',
+    '[model_providers.previous-provider]',
+    'name = "Previous"',
+    'base_url = "https://previous.invalid/v1"',
+    ''
+  ].join("\n"));
+  let proxyPid = 0;
+  try {
+    await mkdir(dirname(codexConfig), { recursive: true });
+    await writeFile(codexConfig, original, { mode: 0o640 });
+    run(PRICING_CLIENT, [
+      "init", "--preset", "openai-gpt-5.6",
+      "--pricing", join(root, "config", "pricing.json"),
+      "--yes", "--json"
+    ]);
+
+    const plan = JSON.parse(run(PROXY_CLIENT, [
+      "plan", "passthrough", "--target", "codex", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(plan.mode, "openai_subscription_passthrough");
+    assert.equal(plan.local_base_url, `http://127.0.0.1:${proxyPort}`);
+    assert.equal(plan.auth.mode, "openai_passthrough");
+    assert.equal(plan.models.requested_default, "unchanged");
+    assert.equal(plan.retry.max_attempts, 1);
+    assert.deepEqual(plan.retry.status_codes, []);
+    assert.equal(plan.auto_attach, false);
+    const unsafePlan = run(PROXY_CLIENT, [
+      "plan", "passthrough", "--target", "codex", ...commonProxy,
+      "--upstream-base-url", "https://example.com/backend-api/codex", "--json"
+    ], { status: 1 });
+    assert.match(unsafePlan.stderr, /official ChatGPT Codex endpoint or loopback/);
+
+    const started = JSON.parse(run(PROXY_CLIENT, [
+      "start", "passthrough", "--target", "codex",
+      ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    proxyPid = started.pid;
+    assert.equal(started.mode, "openai_subscription_passthrough");
+
+    const requestBody = Buffer.from(
+      '{"model":"gpt-requested-exactly","service_tier":"fast","input":"PASSTHROUGH-BODY-MARKER","stream":false}'
+    );
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+        "chatgpt-account-id": "official-account-id",
+        "user-agent": "codex-cli/integration-test",
+        "content-type": "application/json"
+      },
+      body: requestBody
+    });
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].path, "/backend-api/codex/responses");
+    assert.equal(observed[0].headers.authorization, "Bearer OFFICIAL-CHATGPT-OAUTH");
+    assert.equal(observed[0].headers["chatgpt-account-id"], "official-account-id");
+    assert.equal(observed[0].headers["user-agent"], "codex-cli/integration-test");
+    assert.equal(observed[0].headers["x-agentctl-proxy-token"], undefined);
+    assert.equal(observed[0].headers["accept-encoding"], "identity");
+    assert.deepEqual(observed[0].body, requestBody);
+
+    const attachPreview = JSON.parse(run(PROXY_CLIENT, [
+      "attach", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(attachPreview.preview, true);
+    assert.deepEqual(await readFile(codexConfig), original);
+
+    const attached = JSON.parse(run(PROXY_CLIENT, [
+      "attach", ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    assert.equal(attached.status, "attached");
+    const attachedText = await readFile(codexConfig, "utf8");
+    assert.match(attachedText, /# >>> agentctl proxy attach >>>/);
+    assert.match(attachedText, /model_provider = "openai"/);
+    assert.match(attachedText, new RegExp(
+      `openai_base_url = "http:\\/\\/127\\.0\\.0\\.1:${proxyPort}"`
+    ));
+    assert.equal(attachedText.includes('model_provider = "previous-provider"'), false);
+    assert.equal(attachedText.includes('openai_base_url = "https://previous.invalid"'), false);
+    assert.equal(attachedText.includes('[model_providers.previous-provider]'), true);
+    assert.deepEqual(
+      await readFile(join(root, "proxy", "codex-config.backup.toml")),
+      original
+    );
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(join(root, "proxy", "codex-config.backup.toml"))).mode & 0o077, 0);
+    }
+    const status = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(status.attachment.status, "attached");
+
+    const refusedStop = run(PROXY_CLIENT, [
+      "stop", ...commonProxy, "--yes", "--json"
+    ], { status: 1 });
+    assert.match(refusedStop.stderr, /detach Codex before stopping/);
+
+    await writeFile(codexConfig, `${attachedText}# concurrent user edit\n`);
+    const refusedDetach = run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--yes", "--json"
+    ], { status: 1 });
+    assert.match(refusedDetach.stderr, /refusing to discard user edits/);
+    assert.equal((await readFile(codexConfig, "utf8")).includes("concurrent user edit"), true);
+    await writeFile(codexConfig, attachedText);
+
+    const detachPreview = JSON.parse(run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(detachPreview.preview, true);
+    assert.notDeepEqual(await readFile(codexConfig), original);
+    const detached = JSON.parse(run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    assert.equal(detached.status, "detached");
+    assert.deepEqual(await readFile(codexConfig), original);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(codexConfig)).mode & 0o777, 0o640);
+    }
+    await assert.rejects(
+      () => lstat(join(root, "proxy", "attachment.json")),
+      { code: "ENOENT" }
+    );
+    await assert.rejects(
+      () => lstat(join(root, "proxy", "codex-config.backup.toml")),
+      { code: "ENOENT" }
+    );
+
+    run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"]);
+    proxyPid = 0;
+    const metadata = await readFile(join(root, "proxy", "requests.jsonl"), "utf8");
+    const usage = await readFile(join(root, "proxy", "usage.jsonl"), "utf8");
+    for (const hidden of [
+      "OFFICIAL-CHATGPT-OAUTH", "official-account-id", "PASSTHROUGH-BODY-MARKER"
+    ]) {
+      assert.equal(metadata.includes(hidden), false);
+      assert.equal(usage.includes(hidden), false);
+    }
+    assert.equal(usage.includes('"requested_model":"gpt-requested-exactly"'), true);
+    assert.equal(usage.includes('"requested_service_tier":"fast"'), true);
+    assert.equal(usage.includes('"response_service_tier":"default"'), true);
+    assert.equal(usage.includes('"pricing_service_tier":"standard"'), true);
+    assert.equal(usage.includes('"input_tokens":17'), true);
+    const priced = usage.split("\n").filter(Boolean).map((line) => JSON.parse(line))[0];
+    assert.equal(priced.pricing_service_tier_source, "response");
+    assert.equal(priced.cost.rate_id, "openai-gpt-5-6-sol-standard-short");
+    assert.equal(priced.cost.total, "0.000235");
   } finally {
     if (proxyPid) {
       try { process.kill(proxyPid, "SIGTERM"); } catch {}

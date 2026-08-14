@@ -8,6 +8,16 @@ function model(value) {
     : null;
 }
 
+function openAiServiceTier(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 40
+    ? value
+    : null;
+}
+
+function withResponseServiceTier(value, tier) {
+  return tier ? { ...value, response_service_tier: tier } : value;
+}
+
 function normalized(input, output, cacheRead = 0, cacheWrite = 0) {
   const values = [input, output, cacheRead, cacheWrite].map(safeTokens);
   if (values.some((value) => value === null)) return null;
@@ -67,11 +77,11 @@ export function extractUsage(protocol, payload) {
     const value = input === null || output === null
       ? null
       : normalized(input, output, cached, 0);
-    return value ? {
+    return value ? withResponseServiceTier({
       response_model: model(response.model || payload.model),
       usage: value,
       source: "openai_responses_usage"
-    } : null;
+    }, openAiServiceTier(response.service_tier ?? payload.service_tier)) : null;
   }
 
   if (protocol === "openai_chat") {
@@ -83,11 +93,11 @@ export function extractUsage(protocol, payload) {
     const value = input === null || output === null
       ? null
       : normalized(input, output, cached, 0);
-    return value ? {
+    return value ? withResponseServiceTier({
       response_model: model(payload.model),
       usage: value,
       source: "openai_chat_usage"
-    } : null;
+    }, openAiServiceTier(payload.service_tier)) : null;
   }
 
   if (protocol === "google_generative") {
@@ -128,6 +138,7 @@ export class UsageCollector {
     this.discardPartialLine = false;
     this.result = null;
     this.responseModel = null;
+    this.responseServiceTier = null;
     this.anthropic = {
       input_tokens: null,
       output_tokens: null,
@@ -200,6 +211,9 @@ export class UsageCollector {
   }
 
   #accept(payload) {
+    this.responseServiceTier = openAiServiceTier(
+      payload?.response?.service_tier ?? payload?.service_tier
+    ) || this.responseServiceTier;
     if (this.protocol === "anthropic_messages") {
       if (payload?.type === "message_start" && payload.message) {
         const value = extractUsage(this.protocol, payload.message);
@@ -222,6 +236,7 @@ export class UsageCollector {
     if (value) {
       this.result = value;
       this.responseModel = value.response_model || this.responseModel;
+      this.responseServiceTier = value.response_service_tier || this.responseServiceTier;
     } else {
       this.responseModel = model(payload?.model || payload?.modelVersion) ||
         model(payload?.response?.model) || this.responseModel;
@@ -260,13 +275,13 @@ export class UsageCollector {
         source: this.anthropic.source || "anthropic_usage"
       };
     }
-    return this.result ? {
+    return this.result ? withResponseServiceTier({
       ...this.result,
       response_model: this.result.response_model || this.responseModel
-    } : (this.responseModel ? {
+    }, this.responseServiceTier) : (this.responseModel ? withResponseServiceTier({
       response_model: this.responseModel,
       usage: null,
       source: null
-    } : null);
+    }, this.responseServiceTier) : null);
   }
 }

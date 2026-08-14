@@ -5,6 +5,7 @@ import {
 
 export const PRICING_SCHEMA = 1;
 export const PRICING_KIND = "agentctl-pricing-catalog";
+export const PRICING_SERVICE_TIERS = Object.freeze(["standard", "fast"]);
 const SCALE_DIGITS = 12;
 const SCALE = 10n ** BigInt(SCALE_DIGITS);
 const PER_MILLION = 1_000_000n;
@@ -69,17 +70,48 @@ function validateRateId(value) {
   return value;
 }
 
+export function normalizePricingServiceTier(value, label = "pricing service tier") {
+  if ([undefined, null, "", "auto", "default", "standard"].includes(value)) return "standard";
+  if (["fast", "priority"].includes(value)) return "fast";
+  throw new PricingError(`${label} must be standard/auto/default or fast/priority`);
+}
+
+function contextBoundary(value, label, { nullable = false } = {}) {
+  if (nullable && value === null) return null;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new PricingError(`${label} must be a non-negative safe integer${nullable ? " or null" : ""}`);
+  }
+  return value;
+}
+
 export function validatePricingRate(value, expectedId = "") {
   exactKeys(value, [
     "schema", "id", "profile", "model", "input_per_million",
     "output_per_million", "cache_read_per_million", "cache_write_per_million",
-    "multiplier", "effective_at", "expires_at", "source"
+    "multiplier", "service_tier", "context_min_tokens", "context_max_tokens",
+    "effective_at", "expires_at", "source"
   ], "pricing rate");
   if (value.schema !== PRICING_SCHEMA) throw new PricingError("pricing rate schema must be 1");
   validateRateId(value.id);
   if (expectedId && value.id !== expectedId) throw new PricingError(`pricing rate '${expectedId}' has a mismatched ID`);
   if (value.profile !== "*") validateProfileName(value.profile, "pricing rate profile");
   validateModelId(value.model, "pricing rate model");
+  value.service_tier = normalizePricingServiceTier(value.service_tier);
+  value.context_min_tokens = contextBoundary(
+    value.context_min_tokens ?? 0,
+    "pricing rate context_min_tokens"
+  );
+  value.context_max_tokens = contextBoundary(
+    value.context_max_tokens ?? null,
+    "pricing rate context_max_tokens",
+    { nullable: true }
+  );
+  if (value.context_max_tokens !== null &&
+      value.context_max_tokens < value.context_min_tokens) {
+    throw new PricingError(
+      "pricing rate context_max_tokens must be at least context_min_tokens"
+    );
+  }
   for (const field of [
     "input_per_million", "output_per_million",
     "cache_read_per_million", "cache_write_per_million", "multiplier"
@@ -138,17 +170,30 @@ export function validatePricingCatalog(value) {
   if (Object.keys(value.rates).length > 4096) {
     throw new PricingError("pricing catalog has more than 4096 rates");
   }
-  const unique = new Set();
+  const ranges = new Map();
   for (const [id, rate] of Object.entries(value.rates)) {
     validateRateId(id);
     validatePricingRate(rate, id);
-    const composite = `${rate.profile}\u0000${rate.model}\u0000${rate.effective_at}`;
-    if (unique.has(composite)) {
-      throw new PricingError(
-        `duplicate profile/model/effective_at pricing rate at '${id}'`
-      );
+    const composite = [
+      rate.profile, rate.model, rate.service_tier, rate.effective_at
+    ].join("\u0000");
+    const group = ranges.get(composite) || [];
+    group.push(rate);
+    ranges.set(composite, group);
+  }
+  for (const group of ranges.values()) {
+    group.sort((left, right) =>
+      left.context_min_tokens - right.context_min_tokens || left.id.localeCompare(right.id)
+    );
+    for (let index = 1; index < group.length; index += 1) {
+      const previous = group[index - 1];
+      if (previous.context_max_tokens === null ||
+          group[index].context_min_tokens <= previous.context_max_tokens) {
+        throw new PricingError(
+          `overlapping service-tier/context pricing rates at '${previous.id}' and '${group[index].id}'`
+        );
+      }
     }
-    unique.add(composite);
   }
   return value;
 }
@@ -168,17 +213,43 @@ function componentCost(tokens, rate, multiplier, label) {
   return (count * price * factor + denominator / 2n) / denominator;
 }
 
-function selectionArguments({ profile, model, at = new Date().toISOString() }) {
+export function usageContextTokens(usage = {}) {
+  let total = 0n;
+  for (const field of ["input_tokens", "cache_read_tokens", "cache_write_tokens"]) {
+    total += tokenCount(usage[field] ?? 0, field);
+  }
+  if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new PricingError("total context tokens exceed the safe integer range");
+  }
+  return Number(total);
+}
+
+function selectionArguments({
+  profile,
+  model,
+  serviceTier = "standard",
+  contextTokens = 0,
+  at = new Date().toISOString()
+}) {
   validateProfileName(profile, "pricing profile");
   validateModelId(model, "pricing model");
   timestamp(at, "pricing timestamp");
-  return { profile, model, at };
+  return {
+    profile,
+    model,
+    serviceTier: normalizePricingServiceTier(serviceTier),
+    contextTokens: contextBoundary(contextTokens, "pricing context tokens"),
+    at
+  };
 }
 
-function selectFromRates(rates, { profile, model, at }) {
+function selectFromRates(rates, { profile, model, serviceTier, contextTokens, at }) {
   const instant = Date.parse(at);
   const candidates = rates.filter((rate) =>
     rate.model === model && [profile, "*"].includes(rate.profile) &&
+    rate.service_tier === serviceTier &&
+    rate.context_min_tokens <= contextTokens &&
+    (rate.context_max_tokens === null || rate.context_max_tokens >= contextTokens) &&
     Date.parse(rate.effective_at) <= instant &&
     (rate.expires_at === null || Date.parse(rate.expires_at) > instant)
   );
@@ -186,7 +257,9 @@ function selectFromRates(rates, { profile, model, at }) {
     const profileOrder = Number(right.profile === profile) - Number(left.profile === profile);
     if (profileOrder) return profileOrder;
     const timeOrder = Date.parse(right.effective_at) - Date.parse(left.effective_at);
-    return timeOrder || left.id.localeCompare(right.id);
+    if (timeOrder) return timeOrder;
+    const contextOrder = right.context_min_tokens - left.context_min_tokens;
+    return contextOrder || left.id.localeCompare(right.id);
   });
   return candidates[0] || null;
 }
@@ -236,6 +309,10 @@ function calculateValidatedUsageCost(catalog, rate, usage) {
     rate_id: rate.id,
     rate_source: rate.source,
     pricing_profile: rate.profile,
+    service_tier: rate.service_tier,
+    context_tokens: usageContextTokens(usage),
+    context_min_tokens: rate.context_min_tokens,
+    context_max_tokens: rate.context_max_tokens,
     multiplier: rate.multiplier,
     input: scaledToDecimal(scaled.input),
     output: scaledToDecimal(scaled.output),
@@ -265,7 +342,10 @@ export function createPricingEngine(catalog) {
     version: catalog.version,
     currency: catalog.currency,
     quote(options, usage) {
-      const selected = selectionArguments(options);
+      const selected = selectionArguments({
+        ...options,
+        contextTokens: options.contextTokens ?? usageContextTokens(usage)
+      });
       const rate = selectFromRates(byModel.get(selected.model) || [], selected);
       if (!rate) return null;
       return {

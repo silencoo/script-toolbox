@@ -1,5 +1,32 @@
 # Changelog — agent/
 
+## 2026-08-14 — observable Codex subscription passthrough
+
+- Added a loopback-only `passthrough` proxy mode for official
+  ChatGPT-subscription Codex sessions. It preserves the OpenAI bearer, account
+  header, model, and request/response bytes across current WebSocket and
+  compressed HTTP transports while collecting bounded token
+  metadata; Provider Secret replacement, aliases, failover, and replay are
+  disabled.
+- Added response-authoritative OpenAI service-tier pricing. Usage rows now
+  distinguish requested versus returned `service_tier`, normalize
+  `priority`/`fast` and `auto`/`default`/Standard, and select non-overlapping prompt
+  context bands. Added an explicitly dated bundled catalog for only GPT-5.6
+  Sol/Terra/Luna Standard/Fast short/long rates and documented the exact cost
+  formula.
+- Added `agentctl proxy usage` for recent safe per-request metrics and
+  `--summary` for retained token/cost totals grouped by exact model and
+  effective service tier. The reader includes rotation files, uses exact
+  fixed-decimal aggregation, surfaces unpriced rows, bounds total input, and
+  refuses symlinked or non-owner-only logs.
+- Surfaced that same calculation in the TUI Providers section as an
+  `Observed usage` block with estimated API cost, token classes, pricing
+  coverage, Fast request/effective/downgrade counts, and the retained window.
+- Added preview-first `agentctl proxy attach/detach` with owner-only backups,
+  hash-bound state, byte-for-byte Codex config restoration, and stop guards.
+  Restricted passthrough upstreams to the official ChatGPT Codex endpoint or
+  literal loopback addresses and bumped `agentctl` to 0.17.0.
+
 ## 2026-08-13 — compact MCP task profiles
 
 - Reduced the bundled MCP profile catalog from 32 overlapping presets and
