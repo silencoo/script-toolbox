@@ -5,9 +5,10 @@
 - Added a loopback-only `passthrough` proxy mode for official
   ChatGPT-subscription Codex sessions. It preserves the OpenAI bearer, account
   header, model, and request/response bytes across current WebSocket and
-  compressed HTTP transports while collecting bounded token
-  metadata; Provider Secret replacement, aliases, failover, and replay are
-  disabled.
+  compressed HTTP transports while collecting bounded token metadata. HTTP
+  content negotiation and compressed response bytes stay end-to-end; only a
+  streaming side branch is decompressed for usage inspection. Provider Secret
+  replacement, aliases, failover, and replay are disabled.
 - Added response-authoritative OpenAI service-tier pricing. Usage rows now
   distinguish requested versus returned `service_tier`, normalize
   `priority`/`fast` and `auto`/`default`/Standard, and select non-overlapping prompt

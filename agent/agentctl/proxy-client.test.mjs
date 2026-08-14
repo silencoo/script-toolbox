@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import {
   chmod,
   lstat,
@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { gzipSync } from "node:zlib";
 
 import {
   allowedRoute,
@@ -102,6 +103,24 @@ async function freePort() {
   const port = await listen(server);
   await closeServer(server);
   return port;
+}
+
+function rawHttp(url, { method = "GET", headers = {}, body = null } = {}) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const request = httpRequest(url, { method, headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolveRequest({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks)
+      }));
+      response.on("error", rejectRequest);
+    });
+    request.on("error", rejectRequest);
+    if (body) request.end(body);
+    else request.end();
+  });
 }
 
 async function waitFor(check, timeoutMs = 3000) {
@@ -230,6 +249,7 @@ test("proxy header projection removes every local credential before upstream aut
       "chatgpt-account-id": "account-123",
       "x-agentctl-proxy-token": "must-not-leak",
       "user-agent": "codex-cli/test",
+      "accept-encoding": "gzip, br",
       "content-type": "application/json"
     }
   }, "openai_responses", {
@@ -238,6 +258,7 @@ test("proxy header projection removes every local credential before upstream aut
   assert.equal(passthrough.authorization, "Bearer OFFICIAL-OPENAI-OAUTH");
   assert.equal(passthrough["chatgpt-account-id"], "account-123");
   assert.equal(passthrough["user-agent"], "codex-cli/test");
+  assert.equal(passthrough["accept-encoding"], "gzip, br");
   assert.equal(passthrough["x-agentctl-proxy-token"], undefined);
 });
 
@@ -941,6 +962,12 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
 test("OpenAI subscription passthrough is byte-preserving and attach/detach restores Codex exactly", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-proxy-passthrough-"));
   const observed = [];
+  const upstreamResponseBody = Buffer.from(
+    'data: {"type":"response.completed","response":{' +
+    '"id":"resp_passthrough","model":"gpt-5.6-sol","service_tier":"default",' +
+    '"usage":{"input_tokens":17,"output_tokens":5}}}\n\n'
+  );
+  const compressedUpstreamResponse = gzipSync(upstreamResponseBody);
   const upstream = createServer((request, response) => {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
@@ -950,13 +977,14 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
         headers: request.headers,
         body: Buffer.concat(chunks)
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        id: "resp_passthrough",
-        model: "gpt-5.6-sol",
-        service_tier: "default",
-        usage: { input_tokens: 17, output_tokens: 5 }
-      }));
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "content-encoding": "gzip",
+        "content-length": compressedUpstreamResponse.length
+      });
+      const split = Math.floor(compressedUpstreamResponse.length / 2);
+      response.write(compressedUpstreamResponse.subarray(0, split));
+      setImmediate(() => response.end(compressedUpstreamResponse.subarray(split)));
     });
   });
   const upstreamPort = await listen(upstream);
@@ -1011,27 +1039,30 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
     assert.equal(started.mode, "openai_subscription_passthrough");
 
     const requestBody = Buffer.from(
-      '{"model":"gpt-requested-exactly","service_tier":"fast","input":"PASSTHROUGH-BODY-MARKER","stream":false}'
+      '{"model":"gpt-requested-exactly","service_tier":"fast","input":"PASSTHROUGH-BODY-MARKER","stream":true}'
     );
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/responses`, {
+    const response = await rawHttp(`http://127.0.0.1:${proxyPort}/responses`, {
       method: "POST",
       headers: {
         authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
         "chatgpt-account-id": "official-account-id",
         "user-agent": "codex-cli/integration-test",
+        "accept-encoding": "gzip",
         "content-type": "application/json"
       },
       body: requestBody
     });
     assert.equal(response.status, 200);
-    await response.arrayBuffer();
+    assert.equal(response.headers["content-encoding"], "gzip");
+    assert.equal(response.headers["content-length"], String(compressedUpstreamResponse.length));
+    assert.deepEqual(response.body, compressedUpstreamResponse);
     assert.equal(observed.length, 1);
     assert.equal(observed[0].path, "/backend-api/codex/responses");
     assert.equal(observed[0].headers.authorization, "Bearer OFFICIAL-CHATGPT-OAUTH");
     assert.equal(observed[0].headers["chatgpt-account-id"], "official-account-id");
     assert.equal(observed[0].headers["user-agent"], "codex-cli/integration-test");
     assert.equal(observed[0].headers["x-agentctl-proxy-token"], undefined);
-    assert.equal(observed[0].headers["accept-encoding"], "identity");
+    assert.equal(observed[0].headers["accept-encoding"], "gzip");
     assert.deepEqual(observed[0].body, requestBody);
 
     const attachPreview = JSON.parse(run(PROXY_CLIENT, [

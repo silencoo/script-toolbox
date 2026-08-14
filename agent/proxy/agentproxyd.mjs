@@ -542,7 +542,7 @@ function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefi
       ? lower === "x-agentctl-proxy-token"
       : CLIENT_AUTH_HEADERS.has(lower);
     const invalidatedByBodyRewrite = mode === PASSTHROUGH_MODE
-      ? ["accept-encoding", "content-length"].includes(lower)
+      ? lower === "content-length"
       : [
           "accept-encoding", "content-length", "content-encoding",
           "content-md5", "digest"
@@ -551,7 +551,7 @@ function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefi
         invalidatedByBodyRewrite) continue;
     if (value !== undefined) headers[lower] = value;
   }
-  headers["accept-encoding"] = "identity";
+  if (mode !== PASSTHROUGH_MODE) headers["accept-encoding"] = "identity";
   if (mode !== PASSTHROUGH_MODE) headers["user-agent"] = "agentproxyd/5";
   if (Number.isSafeInteger(bodyLength)) headers["content-length"] = String(bodyLength);
   if (backend.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
@@ -749,6 +749,140 @@ function responseHeaders(headers) {
     }
   }
   return result;
+}
+
+function responseContentCodings(headers) {
+  const value = headers["content-encoding"];
+  if (value === undefined) return [];
+  const joined = Array.isArray(value) ? value.join(",") : String(value);
+  return joined.split(",")
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding && coding !== "identity");
+}
+
+function responseDecompressor(coding) {
+  if (coding === "gzip" || coding === "x-gzip") return zlib.createGunzip();
+  if (coding === "deflate") return zlib.createInflate();
+  if (coding === "br" && typeof zlib.createBrotliDecompress === "function") {
+    return zlib.createBrotliDecompress();
+  }
+  if (["zstd", "zst"].includes(coding) &&
+      typeof zlib.createZstdDecompress === "function") {
+    return zlib.createZstdDecompress();
+  }
+  return null;
+}
+
+function responseUsageObserver(protocol, headers, {
+  maxJsonBytes,
+  maxSseEventBytes
+} = {}) {
+  const collector = new UsageCollector(protocol, {
+    contentType: headers["content-type"] || "",
+    maxJsonBytes,
+    maxSseEventBytes
+  });
+  const codings = responseContentCodings(headers);
+  if (!codings.length) {
+    return {
+      feed(chunk) {
+        collector.feed(chunk);
+        return true;
+      },
+      async finish() {
+        try { return collector.finish(); } catch { return null; }
+      },
+      abort() {},
+      onDrain() {}
+    };
+  }
+
+  const decoders = [];
+  for (const coding of [...codings].reverse()) {
+    const decoder = responseDecompressor(coding);
+    if (!decoder) {
+      for (const existing of decoders) existing.destroy();
+      return {
+        feed() { return true; },
+        async finish() { return null; },
+        abort() {},
+        onDrain() {}
+      };
+    }
+    decoders.push(decoder);
+  }
+
+  let failed = false;
+  let ending = false;
+  let settled = false;
+  let drainListener = () => {};
+  let resolveDone;
+  const done = new Promise((resolvePromise) => {
+    resolveDone = resolvePromise;
+  });
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    resolveDone();
+  };
+  const abandon = () => {
+    if (failed) return;
+    failed = true;
+    for (const decoder of decoders) decoder.destroy();
+    drainListener();
+    settle();
+  };
+
+  for (let index = 0; index + 1 < decoders.length; index += 1) {
+    decoders[index].pipe(decoders[index + 1]);
+  }
+  for (const decoder of decoders) decoder.on("error", abandon);
+  const first = decoders[0];
+  const last = decoders[decoders.length - 1];
+  first.on("drain", () => drainListener());
+  last.on("data", (chunk) => {
+    if (failed) return;
+    try {
+      collector.feed(chunk);
+    } catch {
+      abandon();
+    }
+  });
+  last.on("end", settle);
+  last.on("close", () => {
+    if (!settled) abandon();
+  });
+
+  return {
+    feed(chunk) {
+      if (failed || ending) return true;
+      try {
+        return first.write(chunk);
+      } catch {
+        abandon();
+        return true;
+      }
+    },
+    async finish() {
+      if (!ending && !failed) {
+        ending = true;
+        try {
+          first.end();
+        } catch {
+          abandon();
+        }
+      }
+      await done;
+      if (failed) return null;
+      try { return collector.finish(); } catch { return null; }
+    },
+    abort() {
+      if (!settled) abandon();
+    },
+    onDrain(listener) {
+      drainListener = typeof listener === "function" ? listener : () => {};
+    }
+  };
 }
 
 function sendJson(response, status, body) {
@@ -1393,6 +1527,9 @@ function runUpstreamAttempt({
     let failureCode = "";
     let bytesOut = 0;
     let cleared = false;
+    let usageObserver = null;
+    let responseBackpressured = false;
+    let observerBackpressured = false;
 
     const clearMappedBody = () => {
       if (cleared) return;
@@ -1406,6 +1543,7 @@ function runUpstreamAttempt({
     };
     const cleanup = () => {
       clearTimers();
+      usageObserver?.abort();
       request.off("aborted", onClientAborted);
       response.off("close", onClientClosed);
       response.off("drain", onDrain);
@@ -1432,7 +1570,17 @@ function runUpstreamAttempt({
       idleTimer = setTimeout(() => fail("stream_idle_timeout"), config.timeouts.stream_idle_ms);
       idleTimer.unref?.();
     };
-    const onDrain = () => upstreamResponse?.resume();
+    const resumeUpstreamResponse = () => {
+      if (!responseBackpressured && !observerBackpressured) upstreamResponse?.resume();
+    };
+    const onDrain = () => {
+      responseBackpressured = false;
+      resumeUpstreamResponse();
+    };
+    const onObserverDrain = () => {
+      observerBackpressured = false;
+      resumeUpstreamResponse();
+    };
     const onClientAborted = () => fail("client_aborted");
     const onClientClosed = () => {
       if (!response.writableEnded) {
@@ -1479,32 +1627,33 @@ function runUpstreamAttempt({
         }
         const streaming = String(incoming.headers["content-type"] || "")
           .toLowerCase().includes("text/event-stream");
-        const collector = new UsageCollector(config.protocol, {
-          contentType: incoming.headers["content-type"] || "",
+        usageObserver = responseUsageObserver(config.protocol, incoming.headers, {
           maxJsonBytes: config.limits.usage_capture_bytes,
           maxSseEventBytes: config.limits.usage_capture_bytes
         });
+        usageObserver.onDrain(onObserverDrain);
         if (streaming) clearTimeout(totalTimer);
         response.writeHead(status, responseHeaders(incoming.headers));
         resetIdle();
         incoming.on("data", (chunk) => {
           bytesOut += chunk.length;
-          collector.feed(chunk);
+          if (!usageObserver.feed(chunk)) observerBackpressured = true;
           resetIdle();
-          if (!response.write(chunk)) incoming.pause();
+          if (!response.write(chunk)) responseBackpressured = true;
+          if (responseBackpressured || observerBackpressured) incoming.pause();
         });
         incoming.on("end", () => {
           clearTimeout(idleTimer);
-          let extracted = null;
-          try { extracted = collector.finish(); } catch {}
           response.end();
-          finish({
-            kind: "response",
-            status,
-            outcome: "upstream_response",
-            failure: retryStatus,
-            network_error: false,
-            extracted
+          usageObserver.finish().then((extracted) => {
+            finish({
+              kind: "response",
+              status,
+              outcome: "upstream_response",
+              failure: retryStatus,
+              network_error: false,
+              extracted
+            });
           });
         });
         incoming.on("error", () => fail("upstream_response_error"));

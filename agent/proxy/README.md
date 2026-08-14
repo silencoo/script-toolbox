@@ -28,10 +28,11 @@ Passthrough uses the built-in Codex `openai` provider with a loopback
 `https://chatgpt.com/backend-api/codex` endpoint. The bearer token,
 `ChatGPT-Account-ID`, model, request bytes, and response bytes are not replaced
 or rewritten. Provider Secrets, aliases, failover, circuits, and replay are
-disabled. `Accept-Encoding` is normalized to `identity` only so token usage can
-be observed in HTTP response streams; WebSocket extension compression is not
-negotiated so the bounded frame observer can read completion usage. Frames and
-content are never written to logs.
+disabled. HTTP `Accept-Encoding` is forwarded unchanged and compressed response
+bytes are relayed unchanged; a streaming decompressor feeds only a bounded
+in-memory usage observer. WebSocket extension compression is not negotiated so
+the bounded frame observer can read completion usage. Frames and content are
+never written to logs.
 
 Observed token counts and the effective OpenAI `service_tier` are taken from
 the official response. `priority` means Fast and `auto`/`default` mean Standard. The

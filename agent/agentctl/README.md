@@ -383,13 +383,13 @@ In this mode the default upstream remains
 `https://chatgpt.com/backend-api/codex`. The daemon forwards Codex's official
 OpenAI bearer, `ChatGPT-Account-ID`, request model, body, and response without
 substituting a Provider Secret or alias. It disables failover and replay. The
-only intentional transport normalization is `Accept-Encoding: identity` for
-HTTP responses and disabling WebSocket extension compression, so
-the bounded collector can inspect token usage without retaining response
-content. Metadata and usage logs still contain no headers, credentials, or
-request/response bodies. Token counts come from the upstream response. Any
-catalog-derived dollar value is an API-price estimate, not a ChatGPT
-subscription charge or authoritative quota balance.
+HTTP path preserves Codex's `Accept-Encoding` and relays compressed upstream
+response bytes unchanged while a streaming decompressor feeds only the bounded
+in-memory usage collector. WebSocket extension compression remains disabled so
+the frame observer can inspect completion usage. Metadata and usage logs still
+contain no headers, credentials, or request/response bodies. Token counts come
+from the upstream response. Any catalog-derived dollar value is an API-price
+estimate, not a ChatGPT subscription charge or authoritative quota balance.
 
 For OpenAI traffic, the proxy records both requested and returned
 `service_tier`. Returned `priority` is normalized to Fast and returned
