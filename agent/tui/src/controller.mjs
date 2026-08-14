@@ -339,6 +339,29 @@ export function createController({
     };
   }
 
+  async function proxyAction(actionName) {
+    const commands = {
+      "proxy-start": ["proxy", "start", "passthrough", "--target", "codex", "--yes", "--json"],
+      "proxy-stop": ["proxy", "stop", "--yes", "--json"],
+      "proxy-attach": ["proxy", "attach", "--yes", "--json"],
+      "proxy-detach": ["proxy", "detach", "--yes", "--json"]
+    };
+    const args = commands[actionName];
+    if (!args) throw new Error(`unsupported proxy action: ${actionName}`);
+    const result = await runAgentctlJson(args, actionName.replace("proxy-", "proxy "));
+    const success = {
+      "proxy-start": "Loopback observer started; Codex remains direct until Attach is confirmed.",
+      "proxy-stop": "Loopback observer stopped; retained usage history remains available.",
+      "proxy-attach": "Codex now uses the local observer as its first hop; official ChatGPT authentication and the OpenAI upstream are preserved. Start a new Codex session.",
+      "proxy-detach": "Codex configuration was restored exactly; new requests now go directly to OpenAI. Start a new Codex session."
+    };
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: result.ok ? success[actionName] : result.error || `${actionName} failed.`
+    };
+  }
+
   async function localSnapshot({ signal } = {}) {
     const connectionPromise = typeof remoteWorkspace.connection === "function"
       ? remoteWorkspace.connection()
@@ -1056,6 +1079,9 @@ export function createController({
     changes = [],
     replace = false
   } = {}) {
+    if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
+      return proxyAction(actionName);
+    }
     if (actionName === "provider-plan" || actionName === "provider-apply") {
       return providerAction(actionName, selection, target, source);
     }

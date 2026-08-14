@@ -72,7 +72,14 @@ For Codex, Overview, Agents, and Providers show two simultaneous rows:
 Provider and Model handling requests. A Codex Provider selection changes only
 Inference and explicitly preserves the current Identity; the detail pane shows
 that `auth.json` is untouched. Provider profiles therefore never silently bind
-or switch an official account.
+or switch an official account. When Codex inference uses the official account,
+the Identity badge reads `ChatGPT`, the Inference badge reads `Subscription`,
+and Providers prints an explicit official-subscription route instead of the
+generic `Configured` label. The same view exposes the observation lifecycle
+without conflating it with Provider selection: uppercase `S` starts or stops
+the loopback observer, and uppercase `A` attaches or detaches Codex. Every
+lifecycle write requires `y` confirmation, attach remains impossible before
+start, and stop remains blocked until detach.
 
 The Accounts section manages that separate Codex Identity layer. It displays
 only local labels, the active marker, save timestamps, and owner-only permission
@@ -154,6 +161,7 @@ the remote snapshot itself cannot be opened.
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
 | Providers: `i` | Show or hide profiles incompatible with the selected client |
+| Providers (Codex): `S` / `A` | Start or stop the subscription observer / attach or detach Codex |
 | MCP: `l` / `w` | Focus target-specific Local server switches / Workspace profiles |
 | MCP: `/` | Search by server name, category, or description; Enter keeps and Esc clears the query |
 | MCP: `e` / `x` / `g` | Toggle enabled-only / readiness-problem filters / category grouping |

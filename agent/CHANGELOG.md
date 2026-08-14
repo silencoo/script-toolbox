@@ -22,6 +22,13 @@
 - Surfaced that same calculation in the TUI Providers section as an
   `Observed usage` block with estimated API cost, token classes, pricing
   coverage, Fast request/effective/downgrade counts, and the retained window.
+- Added confirmed TUI controls for the complete observation lifecycle:
+  uppercase `S` starts/stops the Codex subscription observer and uppercase
+  `A` attaches/detaches Codex, with the same start-before-attach and
+  detach-before-stop safety guards as the CLI.
+- Made official subscription inference unmistakable across Overview, Agents,
+  and Providers with `ChatGPT` Identity, `Subscription` Inference, and a
+  separate live request-path row. Bumped `agentctl` to 0.17.1.
 - Added preview-first `agentctl proxy attach/detach` with owner-only backups,
   hash-bound state, byte-for-byte Codex config restoration, and stop guards.
   Restricted passthrough upstreams to the official ChatGPT Codex endpoint or

@@ -25492,6 +25492,28 @@ function createController({
       errors
     };
   }
+  async function proxyAction(actionName) {
+    const commands = {
+      "proxy-start": ["proxy", "start", "passthrough", "--target", "codex", "--yes", "--json"],
+      "proxy-stop": ["proxy", "stop", "--yes", "--json"],
+      "proxy-attach": ["proxy", "attach", "--yes", "--json"],
+      "proxy-detach": ["proxy", "detach", "--yes", "--json"]
+    };
+    const args = commands[actionName];
+    if (!args) throw new Error(`unsupported proxy action: ${actionName}`);
+    const result = await runAgentctlJson(args, actionName.replace("proxy-", "proxy "));
+    const success = {
+      "proxy-start": "Loopback observer started; Codex remains direct until Attach is confirmed.",
+      "proxy-stop": "Loopback observer stopped; retained usage history remains available.",
+      "proxy-attach": "Codex now uses the local observer as its first hop; official ChatGPT authentication and the OpenAI upstream are preserved. Start a new Codex session.",
+      "proxy-detach": "Codex configuration was restored exactly; new requests now go directly to OpenAI. Start a new Codex session."
+    };
+    return {
+      ok: result.ok,
+      data: result.data,
+      detail: result.ok ? success[actionName] : result.error || `${actionName} failed.`
+    };
+  }
   async function localSnapshot({ signal } = {}) {
     const connectionPromise = typeof remoteWorkspace.connection === "function" ? remoteWorkspace.connection().then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) })) : Promise.resolve({ data: null, error: "remote configuration not found" });
     const [doctorResult, presetsResult, snippetsResult, accountsResult, connectionResult] = await Promise.all([
@@ -26170,6 +26192,9 @@ No remote catalog was written locally.`;
     changes = [],
     replace = false
   } = {}) {
+    if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
+      return proxyAction(actionName);
+    }
     if (actionName === "provider-plan" || actionName === "provider-apply") {
       return providerAction(actionName, selection, target, source);
     }
@@ -26696,12 +26721,13 @@ function identitySummary(data = {}) {
     return { label: "Not logged in", kind: "muted", detail: "No ChatGPT official login" };
   }
   const insecure = identity.credential_exists === true && identity.credential_private === false;
-  const kind = identity.kind === "chatgpt" ? "ChatGPT" : identity.kind || "Official";
+  const chatgpt = identity.kind === "chatgpt";
+  const kind = chatgpt ? "ChatGPT" : identity.kind || "Official";
   const account = identity.account === "current" ? "current account" : identity.account || "current account";
   return {
-    label: "Active",
+    label: chatgpt ? "ChatGPT" : "Active",
     kind: insecure ? "warn" : "good",
-    detail: `${kind} \xB7 ${account} \xB7 official login`
+    detail: chatgpt ? `${account} \xB7 official login` : `${kind} \xB7 ${account} \xB7 official login`
   };
 }
 function inferenceSummary(data = {}) {
@@ -26713,12 +26739,13 @@ function inferenceSummary(data = {}) {
     credential_exists: data.credential_exists,
     credential_private: data.credential_private
   };
-  const label = inference.status === "configured" ? "Configured" : inference.status || "Unknown";
+  const officialSubscription = inference.source === "official-account";
+  const label = officialSubscription ? "Subscription" : inference.status === "configured" ? "Configured" : inference.status || "Unknown";
   const source = {
     agentctl: "agentctl",
     external: "external config",
     "official-login": "official login",
-    "official-account": "ChatGPT subscription"
+    "official-account": "ChatGPT official subscription"
   }[inference.source] || "";
   const configured = inference.status === "configured";
   const insecureCredential = configured && inference.credential_exists === true && inference.credential_private === false;
@@ -26727,6 +26754,42 @@ function inferenceSummary(data = {}) {
     label,
     kind: configured ? insecureCredential ? "warn" : "good" : "bad",
     detail: source ? `${selection} \xB7 ${source}` : selection
+  };
+}
+function proxyPresentation(proxy = {}, { officialSubscription = false } = {}) {
+  const status = typeof proxy.status === "string" ? proxy.status : "unavailable";
+  const running = status === "running" && proxy.running !== false;
+  const attachment = proxy.attachment && typeof proxy.attachment === "object" ? proxy.attachment : {};
+  const attachmentPresent = attachment.attached === true;
+  const attached = attachmentPresent && attachment.status === "attached";
+  const localAddress = proxy.local_base_url || (proxy.host && proxy.port ? `http://${proxy.host}:${proxy.port}` : "loopback");
+  let observerLabel = "Unavailable \xB7 status could not be read";
+  let observerKind = "warn";
+  if (running) {
+    observerLabel = `Running \xB7 ${localAddress}`;
+    observerKind = "good";
+  } else if (status === "stopped") {
+    observerLabel = "Stopped \xB7 no local listener";
+    observerKind = "muted";
+  } else if (status === "stale") {
+    observerLabel = "Stale \xB7 recovery required before reuse";
+    observerKind = "bad";
+  }
+  const attachmentLabel = attached ? "Attached \xB7 recording new Codex requests" : attachmentPresent ? `${attachment.status || "unknown"} \xB7 detach or repair before continuing` : "Detached \xB7 new Codex requests are not recorded";
+  const attachmentKind = attached ? "good" : attachmentPresent ? "bad" : "muted";
+  const inferencePath = officialSubscription ? "OpenAI official subscription" : "active Codex inference Provider";
+  const routeLabel = attached && running ? `Codex \u2192 local observer \u2192 ${inferencePath}` : `Codex \u2192 ${inferencePath} directly`;
+  return {
+    status,
+    running,
+    attachmentPresent,
+    attached,
+    observerLabel,
+    observerKind,
+    attachmentLabel,
+    attachmentKind,
+    routeLabel,
+    routeKind: attached && running ? "good" : "muted"
   };
 }
 function actionForKey(section, input) {
@@ -26743,6 +26806,8 @@ function actionForKey(section, input) {
     if (input === "a") return "provider-apply";
     if (input === "u") return "provider-sync-push";
     if (input === "d") return "provider-sync-pull";
+    if (input === "S") return "proxy-toggle-running";
+    if (input === "A") return "proxy-toggle-attachment";
   }
   if (["mcp", "skills", "prompts", "snippets"].includes(section)) {
     if (input === "p") return `${section}-plan`;
@@ -26763,7 +26828,7 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "provider-sync-push" || action === "provider-sync-pull" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "provider-sync-push" || action === "provider-sync-pull" || action === "proxy-start" || action === "proxy-stop" || action === "proxy-attach" || action === "proxy-detach" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
@@ -26778,6 +26843,10 @@ function actionLabel(action, selection, target) {
   if (action === "provider-sync-pull") {
     return `Use Workspace ${selection || "Provider"} in the local catalog`;
   }
+  if (action === "proxy-start") return "Start the Codex subscription observer";
+  if (action === "proxy-stop") return "Stop the Codex subscription observer";
+  if (action === "proxy-attach") return "Attach Codex to the subscription observer";
+  if (action === "proxy-detach") return "Detach Codex from the subscription observer";
   if (action === "mcp-repair") {
     return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }
@@ -27019,6 +27088,7 @@ Keys:
   Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
   Accounts: a/Enter switch \xB7 x delete saved account
   Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
+  Providers (Codex): S observer start/stop \xB7 A attach/detach
   MCP: l/w panes \xB7 / search \xB7 e/x filters \xB7 m batch \xB7 Space toggle
   Skills: l/w panes \xB7 / search \xB7 e enabled \xB7 m batch \xB7 Space toggle
   ?                                 Toggle help
@@ -27089,7 +27159,7 @@ function Row({ label, value, kind = "value" }) {
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, String(label).padEnd(18)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.value }, value));
 }
 function SummaryRow({ name, summary }) {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "white" }, name.padEnd(10)), /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label.padEnd(12)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, summary.detail));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, null, /* @__PURE__ */ import_react34.default.createElement(Box_default, { width: 12, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "white" }, name)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { width: 14, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, summary.detail)));
 }
 function TargetStatusRow({ state, selected }) {
   const count = state.items.length;
@@ -27266,12 +27336,14 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
   const proxyUsage = dashboard.proxyUsage || {};
   const remote = snapshot.workspace?.agent || {};
   const runtime = Array.isArray(snapshot.agents) ? snapshot.agents.find((agent) => agent.client === target) || null : null;
+  const observerAttachmentPresent = proxy.attachment?.attached === true;
+  const officialSubscription = target === "codex" && (runtime?.inference?.source === "official-account" || proxy.mode === "openai_subscription_passthrough" && observerAttachmentPresent);
+  const proxyState = proxyPresentation(proxy, { officialSubscription });
   const hiddenCount = allEntries.length - providerEntries(surface.local, surface.cloud).length;
   const backedUpCount = allEntries.filter((entry) => entry.syncStatus === "backed-up").length;
   const conflictCount = allEntries.filter((entry) => entry.syncStatus === "conflict").length;
   const stateKind = !current?.enabled ? "muted" : current?.ready ? "good" : current?.nativeAuthPresent ? "local" : current?.compatible ? "warn" : "bad";
-  const proxyKind = proxy.status === "running" ? "good" : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), runtime && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginBottom: 1 }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " visible \xB7 ", allEntries.length, " total \xB7 ", backedUpCount, " backed up", conflictCount > 0 ? ` \xB7 ${conflictCount} conflict` : ""), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[providerStorageKind(item)], bold: true }, providerStorageMark(item).padEnd(3)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.applied && item.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "\u25C7"), item.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "native auth"), (!item.enabled || !item.compatible) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "incompatible"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)"), hiddenCount > 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden \xB7 i show`)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[providerStorageKind(current)] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(ProviderSourceBadge, { entry: current })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"), kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), runtime && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginBottom: 1 }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) })), officialSubscription && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, proxyState.attached ? "Official ChatGPT subscription observed \xB7 Codex \u2192 loopback observer \u2192 OpenAI; official auth and upstream preserved." : `Official ChatGPT subscription active \xB7 ${runtime?.inference?.model || "OpenAI model"} uses the current ChatGPT login, not a Provider API Secret.`), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " visible \xB7 ", allEntries.length, " total \xB7 ", backedUpCount, " backed up", conflictCount > 0 ? ` \xB7 ${conflictCount} conflict` : ""), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[providerStorageKind(item)], bold: true }, providerStorageMark(item).padEnd(3)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.applied && item.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "\u25C7"), item.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "native auth"), (!item.enabled || !item.compatible) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "incompatible"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)"), hiddenCount > 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden \xB7 i show`)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[providerStorageKind(current)] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(ProviderSourceBadge, { entry: current })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"), kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Backup state",
@@ -27341,14 +27413,7 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       value: remote.synced ? `${remote.profiles || 0} profile(s) \xB7 ${remote.secrets || 0} hidden Secret value(s)` : "not backed up",
       kind: remote.synced ? "cloud" : "muted"
     }
-  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Failover", value: `${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Pricing", value: `${pricing.version || "none"} \xB7 ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)` }), /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Proxy",
-      value: `${proxy.status || "unavailable"}${proxy.profile ? ` \xB7 ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`,
-      kind: proxyKind
-    }
-  ), /* @__PURE__ */ import_react34.default.createElement(ProxyUsageSummary, { value: proxyUsage })), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
+  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Failover", value: `${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Pricing", value: `${pricing.version || "none"} \xB7 ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Codex observer", value: proxyState.observerLabel, kind: proxyState.observerKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Attachment", value: proxyState.attachmentLabel, kind: proxyState.attachmentKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Request path", value: proxyState.routeLabel, kind: proxyState.routeKind }), /* @__PURE__ */ import_react34.default.createElement(ProxyUsageSummary, { value: proxyUsage })), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), target === "codex" ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "S"), " start/stop observer \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "A"), " attach/detach Codex \xB7 only attached requests are recorded") : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Switch the Provider render target to Codex to control its subscription observer."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
 }
 function CloudCatalog({ catalog, selected, target, component }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
@@ -27617,7 +27682,7 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -28558,6 +28623,44 @@ function App2({ initialSection, controller, onLaunch }) {
     }
     let action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action === "proxy-toggle-running" || action === "proxy-toggle-attachment") {
+      if (providerTarget !== "codex") {
+        setMessage("Switch the Provider render target to Codex before controlling its subscription observer.");
+        return;
+      }
+      const state = proxyPresentation(providerSurface.dashboard?.proxy || {});
+      let resolved = action;
+      if (action === "proxy-toggle-running") {
+        if (state.status !== "running" && state.status !== "stopped") {
+          setMessage(`Observer state is ${state.status}; inspect agentctl proxy status before changing it.`);
+          return;
+        }
+        if (state.running && state.attachmentPresent) {
+          setMessage("Detach Codex with A before stopping the observer.");
+          return;
+        }
+        resolved = state.running ? "proxy-stop" : "proxy-start";
+      } else if (state.attachmentPresent) {
+        resolved = "proxy-detach";
+      } else if (!state.running) {
+        setMessage("Start the observer with S before attaching Codex.");
+        return;
+      } else {
+        resolved = "proxy-attach";
+      }
+      const detail = {
+        "proxy-start": "Starts a loopback-only passthrough observer. Codex configuration remains unchanged until Attach.",
+        "proxy-stop": "Stops the detached observer. Retained token and cost history is preserved.",
+        "proxy-attach": "Creates an owner-only exact backup, then routes Codex through the local observer. Official ChatGPT auth and the OpenAI upstream remain unchanged.",
+        "proxy-detach": "Restores the pre-attach Codex configuration byte-for-byte. The observer keeps running until separately stopped."
+      }[resolved];
+      setConfirm({
+        action: resolved,
+        label: actionLabel(resolved, "", "codex"),
+        detail
+      });
+      return;
+    }
     if (action === "mcp-toggle") {
       if (mcpFocus !== "local") {
         setMessage("Press l to focus local MCP switches before toggling a server.");

@@ -513,14 +513,17 @@ export function identitySummary(data = {}) {
     return { label: "Not logged in", kind: "muted", detail: "No ChatGPT official login" };
   }
   const insecure = identity.credential_exists === true && identity.credential_private === false;
-  const kind = identity.kind === "chatgpt" ? "ChatGPT" : identity.kind || "Official";
+  const chatgpt = identity.kind === "chatgpt";
+  const kind = chatgpt ? "ChatGPT" : identity.kind || "Official";
   const account = identity.account === "current"
     ? "current account"
     : identity.account || "current account";
   return {
-    label: "Active",
+    label: chatgpt ? "ChatGPT" : "Active",
     kind: insecure ? "warn" : "good",
-    detail: `${kind} · ${account} · official login`
+    detail: chatgpt
+      ? `${account} · official login`
+      : `${kind} · ${account} · official login`
   };
 }
 
@@ -535,12 +538,15 @@ export function inferenceSummary(data = {}) {
         credential_exists: data.credential_exists,
         credential_private: data.credential_private
       };
-  const label = inference.status === "configured" ? "Configured" : inference.status || "Unknown";
+  const officialSubscription = inference.source === "official-account";
+  const label = officialSubscription
+    ? "Subscription"
+    : inference.status === "configured" ? "Configured" : inference.status || "Unknown";
   const source = {
     agentctl: "agentctl",
     external: "external config",
     "official-login": "official login",
-    "official-account": "ChatGPT subscription"
+    "official-account": "ChatGPT official subscription"
   }[inference.source] || "";
   const configured = inference.status === "configured";
   const insecureCredential = configured && inference.credential_exists === true &&
@@ -551,6 +557,54 @@ export function inferenceSummary(data = {}) {
     label,
     kind: configured ? insecureCredential ? "warn" : "good" : "bad",
     detail: source ? `${selection} · ${source}` : selection
+  };
+}
+
+export function proxyPresentation(proxy = {}, { officialSubscription = false } = {}) {
+  const status = typeof proxy.status === "string" ? proxy.status : "unavailable";
+  const running = status === "running" && proxy.running !== false;
+  const attachment = proxy.attachment && typeof proxy.attachment === "object"
+    ? proxy.attachment
+    : {};
+  const attachmentPresent = attachment.attached === true;
+  const attached = attachmentPresent && attachment.status === "attached";
+  const localAddress = proxy.local_base_url ||
+    (proxy.host && proxy.port ? `http://${proxy.host}:${proxy.port}` : "loopback");
+  let observerLabel = "Unavailable · status could not be read";
+  let observerKind = "warn";
+  if (running) {
+    observerLabel = `Running · ${localAddress}`;
+    observerKind = "good";
+  } else if (status === "stopped") {
+    observerLabel = "Stopped · no local listener";
+    observerKind = "muted";
+  } else if (status === "stale") {
+    observerLabel = "Stale · recovery required before reuse";
+    observerKind = "bad";
+  }
+  const attachmentLabel = attached
+    ? "Attached · recording new Codex requests"
+    : attachmentPresent
+      ? `${attachment.status || "unknown"} · detach or repair before continuing`
+      : "Detached · new Codex requests are not recorded";
+  const attachmentKind = attached ? "good" : attachmentPresent ? "bad" : "muted";
+  const inferencePath = officialSubscription
+    ? "OpenAI official subscription"
+    : "active Codex inference Provider";
+  const routeLabel = attached && running
+    ? `Codex → local observer → ${inferencePath}`
+    : `Codex → ${inferencePath} directly`;
+  return {
+    status,
+    running,
+    attachmentPresent,
+    attached,
+    observerLabel,
+    observerKind,
+    attachmentLabel,
+    attachmentKind,
+    routeLabel,
+    routeKind: attached && running ? "good" : "muted"
   };
 }
 
@@ -568,6 +622,8 @@ export function actionForKey(section, input) {
     if (input === "a") return "provider-apply";
     if (input === "u") return "provider-sync-push";
     if (input === "d") return "provider-sync-pull";
+    if (input === "S") return "proxy-toggle-running";
+    if (input === "A") return "proxy-toggle-attachment";
   }
   if (["mcp", "skills", "prompts", "snippets"].includes(section)) {
     if (input === "p") return `${section}-plan`;
@@ -598,6 +654,8 @@ export function actionNeedsConfirmation(action) {
     action === "skills-batch" || action === "skills-pack-save" ||
     action === "skills-pack-update" || action === "skills-pack-upload" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
+    action === "proxy-start" || action === "proxy-stop" ||
+    action === "proxy-attach" || action === "proxy-detach" ||
     action.endsWith("-apply");
 }
 
@@ -614,6 +672,10 @@ export function actionLabel(action, selection, target) {
   if (action === "provider-sync-pull") {
     return `Use Workspace ${selection || "Provider"} in the local catalog`;
   }
+  if (action === "proxy-start") return "Start the Codex subscription observer";
+  if (action === "proxy-stop") return "Stop the Codex subscription observer";
+  if (action === "proxy-attach") return "Attach Codex to the subscription observer";
+  if (action === "proxy-detach") return "Detach Codex from the subscription observer";
   if (action === "mcp-repair") {
     return `Repair local MCP profile ${selection || "selection"} for ${targetLabel(target)}`;
   }

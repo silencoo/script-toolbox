@@ -5,6 +5,7 @@ import {
   SKILL_TARGETS,
   accountEntries,
   actionForKey,
+  actionLabel,
   actionNeedsConfirmation,
   clampSelection,
   componentSummary,
@@ -19,6 +20,7 @@ import {
   otherTarget,
   promptTargetState,
   providerEntries,
+  proxyPresentation,
   safePromptPreviewText,
   sectionDelta,
   selectionDelta,
@@ -483,6 +485,8 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("providers", "a"), "provider-apply");
   assert.equal(actionForKey("providers", "u"), "provider-sync-push");
   assert.equal(actionForKey("providers", "d"), "provider-sync-pull");
+  assert.equal(actionForKey("providers", "S"), "proxy-toggle-running");
+  assert.equal(actionForKey("providers", "A"), "proxy-toggle-attachment");
   assert.equal(actionForKey("cloud", "P"), null);
   assert.equal(actionNeedsConfirmation("plan"), false);
   assert.equal(actionNeedsConfirmation("apply"), true);
@@ -496,6 +500,12 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("provider-apply"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-push"), true);
   assert.equal(actionNeedsConfirmation("provider-sync-pull"), true);
+  assert.equal(actionNeedsConfirmation("proxy-start"), true);
+  assert.equal(actionNeedsConfirmation("proxy-stop"), true);
+  assert.equal(actionNeedsConfirmation("proxy-attach"), true);
+  assert.equal(actionNeedsConfirmation("proxy-detach"), true);
+  assert.match(actionLabel("proxy-attach"), /Attach Codex/);
+  assert.match(actionLabel("proxy-detach"), /Detach Codex/);
   assert.equal(actionNeedsConfirmation("skills-disable"), true);
   assert.equal(actionNeedsConfirmation("skills-batch"), true);
   assert.equal(actionNeedsConfirmation("mcp-repair"), true);
@@ -552,9 +562,26 @@ test("component summaries preserve useful state without raw secrets", () => {
       }
     }
   }), {
-    label: "Active",
+    label: "ChatGPT",
     kind: "good",
-    detail: "ChatGPT · current account · official login"
+    detail: "current account · official login"
+  });
+  assert.deepEqual(componentSummary("inference", {
+    ok: true,
+    data: {
+      inference: {
+        status: "configured",
+        provider: "openai-official",
+        model: "gpt-5.6-sol",
+        source: "official-account",
+        credential_exists: true,
+        credential_private: true
+      }
+    }
+  }), {
+    label: "Subscription",
+    kind: "good",
+    detail: "openai-official / gpt-5.6-sol · ChatGPT official subscription"
   });
   assert.deepEqual(componentSummary("inference", {
     ok: true,
@@ -577,6 +604,39 @@ test("component summaries preserve useful state without raw secrets", () => {
     ok: true,
     data: { managed: false, profile: null }
   }), { label: "Not managed", kind: "warn", detail: "none" });
+});
+
+test("Proxy presentation distinguishes listener, attachment, and official request path", () => {
+  const detached = proxyPresentation({
+    status: "running",
+    running: true,
+    local_base_url: "http://127.0.0.1:17321",
+    attachment: { status: "detached", attached: false }
+  }, { officialSubscription: true });
+  assert.equal(detached.running, true);
+  assert.equal(detached.attached, false);
+  assert.match(detached.observerLabel, /127\.0\.0\.1:17321/);
+  assert.match(detached.attachmentLabel, /not recorded/);
+  assert.match(detached.routeLabel, /directly/);
+
+  const attached = proxyPresentation({
+    status: "running",
+    running: true,
+    mode: "openai_subscription_passthrough",
+    attachment: { status: "attached", attached: true }
+  }, { officialSubscription: true });
+  assert.equal(attached.attachmentPresent, true);
+  assert.equal(attached.attached, true);
+  assert.match(attached.attachmentLabel, /recording new Codex requests/);
+  assert.match(attached.routeLabel, /local observer/);
+  assert.match(attached.routeLabel, /official subscription/);
+
+  const custom = proxyPresentation({
+    status: "stopped",
+    running: false,
+    attachment: { status: "detached", attached: false }
+  });
+  assert.match(custom.routeLabel, /active Codex inference Provider/);
 });
 
 test("Workspace empty states distinguish setup, connectivity, and incompatible data", () => {

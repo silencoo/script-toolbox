@@ -410,6 +410,12 @@ The TUI Providers section loads the same retained summary and shows an
 estimated API-equivalent cost, input/cache/output tokens, requested/effective/
 downgraded Fast counts, and the usage window. Empty and unavailable states stay
 explicit; the value is never labeled as a ChatGPT subscription invoice.
+That section also labels official-account inference as `Subscription` and
+renders the current request path separately from the local listener and
+attachment states. Uppercase `S` confirms start/stop and uppercase `A`
+confirms attach/detach. These controls preserve the CLI safety contract:
+start is detached, attach requires a healthy running passthrough observer,
+and an attached observer cannot be stopped.
 
 `start` never edits Codex. `attach --yes` separately snapshots the exact
 `$CODEX_HOME/config.toml` bytes and mode, then inserts a marked top-level

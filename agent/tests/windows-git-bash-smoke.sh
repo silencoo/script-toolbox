@@ -43,7 +43,7 @@ export APPDATA="$(cygpath -w "$APPDATA_DIR")"
 export LOCALAPPDATA="$(cygpath -w "$LOCALAPPDATA_DIR")"
 
 [ "$(bash "$AGENT_DIR/agentctl/agentctl" --version)" = \
-  "agentctl 0.17.0" ] || fail "agentctl did not launch through Git Bash"
+  "agentctl 0.17.1" ] || fail "agentctl did not launch through Git Bash"
 
 provider_catalog="$(
   bash "$AGENT_DIR/agentctl/agentctl" provider list \

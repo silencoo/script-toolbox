@@ -24,6 +24,7 @@ import {
   otherTarget,
   presetEntries,
   providerEntries,
+  proxyPresentation,
   promptTargetState,
   safePromptPreviewText,
   sectionDelta,
@@ -89,6 +90,7 @@ Keys:
   Agents: c / p / Enter unified Providers · x uninstall owned config
   Accounts: a/Enter switch · x delete saved account
   Providers: p plan · a apply · u upload · d download/merge · i incompatible
+  Providers (Codex): S observer start/stop · A attach/detach
   MCP: l/w panes · / search · e/x filters · m batch · Space toggle
   Skills: l/w panes · / search · e enabled · m batch · Space toggle
   ?                                 Toggle help
@@ -189,10 +191,10 @@ function Row({ label, value, kind = "value" }) {
 
 function SummaryRow({ name, summary }) {
   return (
-    <Box gap={1}>
-      <Text bold color="white">{name.padEnd(10)}</Text>
-      <Badge kind={summary.kind}>{summary.label.padEnd(12)}</Badge>
-      <Text color="white">{summary.detail}</Text>
+    <Box>
+      <Box width={12} flexShrink={0}><Text bold color="white">{name}</Text></Box>
+      <Box width={14} flexShrink={0}><Badge kind={summary.kind}>{summary.label}</Badge></Box>
+      <Box flexGrow={1}><Text color="white">{summary.detail}</Text></Box>
     </Box>
   );
 }
@@ -510,6 +512,12 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
   const runtime = Array.isArray(snapshot.agents)
     ? snapshot.agents.find((agent) => agent.client === target) || null
     : null;
+  const observerAttachmentPresent = proxy.attachment?.attached === true;
+  const officialSubscription = target === "codex" && (
+    runtime?.inference?.source === "official-account" ||
+    (proxy.mode === "openai_subscription_passthrough" && observerAttachmentPresent)
+  );
+  const proxyState = proxyPresentation(proxy, { officialSubscription });
   const hiddenCount = allEntries.length - providerEntries(surface.local, surface.cloud).length;
   const backedUpCount = allEntries.filter((entry) => entry.syncStatus === "backed-up").length;
   const conflictCount = allEntries.filter((entry) => entry.syncStatus === "conflict").length;
@@ -519,9 +527,6 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       ? "good"
       : current?.nativeAuthPresent ? "local"
         : current?.compatible ? "warn" : "bad";
-  const proxyKind = proxy.status === "running"
-    ? "good"
-    : proxy.status === "stale" ? "bad" : proxy.status === "stopped" ? "muted" : "warn";
   return (
     <Box flexDirection="column">
       <Box gap={1} marginBottom={1}>
@@ -538,6 +543,13 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
           )}
           <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: runtime })} />
         </Box>
+      )}
+      {officialSubscription && (
+        <Text color="green" bold>
+          {proxyState.attached
+            ? "Official ChatGPT subscription observed · Codex → loopback observer → OpenAI; official auth and upstream preserved."
+            : `Official ChatGPT subscription active · ${runtime?.inference?.model || "OpenAI model"} uses the current ChatGPT login, not a Provider API Secret.`}
+        </Text>
       )}
       <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 98 ? "column" : "row"}>
         <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={34}>
@@ -666,11 +678,9 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
         />
         <Row label="Failover" value={`${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)`} />
         <Row label="Pricing" value={`${pricing.version || "none"} · ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)`} />
-        <Row
-          label="Proxy"
-          value={`${proxy.status || "unavailable"}${proxy.profile ? ` · ${proxy.profile} for ${targetLabel(proxy.target)}` : ""}`}
-          kind={proxyKind}
-        />
+        <Row label="Codex observer" value={proxyState.observerLabel} kind={proxyState.observerKind} />
+        <Row label="Attachment" value={proxyState.attachmentLabel} kind={proxyState.attachmentKind} />
+        <Row label="Request path" value={proxyState.routeLabel} kind={proxyState.routeKind} />
         <ProxyUsageSummary value={proxyUsage} />
       </Box>
       {surface.loading && <Text color="gray">◌ Loading remaining local or encrypted Workspace Provider data…</Text>}
@@ -686,6 +696,13 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       <Text color="gray">
         <Text color="green" bold>u</Text> keep Local → Workspace · <Text color="blue" bold>d</Text> keep Workspace → Local
       </Text>
+      {target === "codex" ? (
+        <Text color="gray">
+          <Text color="cyan" bold>S</Text> start/stop observer · <Text color="green" bold>A</Text> attach/detach Codex · only attached requests are recorded
+        </Text>
+      ) : (
+        <Text color="gray">Switch the Provider render target to Codex to control its subscription observer.</Text>
+      )}
       <Text color="gray">B template · L local · W Workspace-only · L+W backed up · L≠W conflict</Text>
       <Text color="gray">One row per Provider. Secret values remain hidden.</Text>
     </Box>
@@ -1375,6 +1392,7 @@ function Help() {
       </Text>
       <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
       <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
+      <Text>Providers (Codex): S start/stop subscription observer · A attach/detach · y confirms every lifecycle change</Text>
       <Text>MCP: l local · w Workspace · / search · e enabled · x problems · g group</Text>
       <Text>MCP: Space toggle · m batch · a apply staged · c clear · s save · S update · u backup</Text>
       <Text>Skills: l local · w Workspace · / search · e enabled · Space toggle · m batch</Text>
@@ -2411,6 +2429,44 @@ function App({ initialSection, controller, onLaunch }) {
     }
     let action = actionForKey(section, key.return ? "\r" : input);
     if (!action) return;
+    if (action === "proxy-toggle-running" || action === "proxy-toggle-attachment") {
+      if (providerTarget !== "codex") {
+        setMessage("Switch the Provider render target to Codex before controlling its subscription observer.");
+        return;
+      }
+      const state = proxyPresentation(providerSurface.dashboard?.proxy || {});
+      let resolved = action;
+      if (action === "proxy-toggle-running") {
+        if (state.status !== "running" && state.status !== "stopped") {
+          setMessage(`Observer state is ${state.status}; inspect agentctl proxy status before changing it.`);
+          return;
+        }
+        if (state.running && state.attachmentPresent) {
+          setMessage("Detach Codex with A before stopping the observer.");
+          return;
+        }
+        resolved = state.running ? "proxy-stop" : "proxy-start";
+      } else if (state.attachmentPresent) {
+        resolved = "proxy-detach";
+      } else if (!state.running) {
+        setMessage("Start the observer with S before attaching Codex.");
+        return;
+      } else {
+        resolved = "proxy-attach";
+      }
+      const detail = {
+        "proxy-start": "Starts a loopback-only passthrough observer. Codex configuration remains unchanged until Attach.",
+        "proxy-stop": "Stops the detached observer. Retained token and cost history is preserved.",
+        "proxy-attach": "Creates an owner-only exact backup, then routes Codex through the local observer. Official ChatGPT auth and the OpenAI upstream remain unchanged.",
+        "proxy-detach": "Restores the pre-attach Codex configuration byte-for-byte. The observer keeps running until separately stopped."
+      }[resolved];
+      setConfirm({
+        action: resolved,
+        label: actionLabel(resolved, "", "codex"),
+        detail
+      });
+      return;
+    }
     if (action === "mcp-toggle") {
       if (mcpFocus !== "local") {
         setMessage("Press l to focus local MCP switches before toggling a server.");

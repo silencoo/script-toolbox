@@ -110,7 +110,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.0" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.1" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"

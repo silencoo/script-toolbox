@@ -841,6 +841,30 @@ test("Provider dashboard resolves exact target metadata without exposing Secret 
   assert.equal(JSON.stringify(dashboard).includes("secret-value"), false);
 });
 
+test("Provider TUI proxy lifecycle actions use explicit safe agentctl commands", async () => {
+  const calls = [];
+  const runner = async (_executable, args) => {
+    calls.push(args);
+    return { code: 0, stdout: JSON.stringify({ status: "ok", attachment: { attached: false } }), stderr: "" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  const cases = [
+    ["proxy-start", ["proxy", "start", "passthrough", "--target", "codex", "--yes", "--json"]],
+    ["proxy-attach", ["proxy", "attach", "--yes", "--json"]],
+    ["proxy-detach", ["proxy", "detach", "--yes", "--json"]],
+    ["proxy-stop", ["proxy", "stop", "--yes", "--json"]]
+  ];
+  for (const [action, expected] of cases) {
+    const result = await controller.action(action);
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls.at(-1), expected);
+  }
+  assert.match((await controller.action("proxy-start")).detail, /remains direct until Attach/);
+  assert.match((await controller.action("proxy-attach")).detail, /official ChatGPT authentication/);
+  assert.match((await controller.action("proxy-detach")).detail, /restored exactly/);
+  assert.match((await controller.action("proxy-stop")).detail, /history remains/);
+});
+
 test("Provider actions plan/apply one source and synchronize only after explicit action", async () => {
   const calls = [];
   const temporary = [];
