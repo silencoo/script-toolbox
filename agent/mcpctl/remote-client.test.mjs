@@ -414,7 +414,7 @@ test("backs up ciphertext, restores on a fresh machine, and applies cached secre
     await run(MCPCTL, [
       "apply",
       "--target", "claude",
-      "--profile", "frontend",
+      "--profile", "daily-search",
       "--store", restoredStore,
       "--remote-config", restoredConfig
     ], {

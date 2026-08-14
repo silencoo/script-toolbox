@@ -1,15 +1,14 @@
 {
   "schema": 1,
   "name": "reverse-headless",
-  "description": "Display-free Linux reverse engineering with Radare2, GDB, LLDB, Ghidra, Frida, and Playwright",
-  "extends": [
-    "reverse-native",
-    "reverse-ghidra-headless",
-    "reverse-frida",
-    "browser-headless"
-  ],
+  "description": "Display-free analysis with Ghidra, GDB, LLDB, Radare2, and Playwright",
+  "extends": [],
   "enable": [
-    "gdb"
+    "ghidra-headless",
+    "gdb",
+    "lldb",
+    "radare2",
+    "playwright-headless"
   ],
   "disable": [],
   "target_overrides": {}

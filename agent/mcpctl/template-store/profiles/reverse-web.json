@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "reverse-web",
+  "description": "JavaScript and web reverse engineering with the daily browser suite",
+  "extends": [
+    "daily"
+  ],
+  "enable": [
+    "js-reverse"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

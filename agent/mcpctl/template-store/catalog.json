@@ -21,6 +21,24 @@
         "opencode"
       ]
     },
+    "fetch": {
+      "category": "core",
+      "description": "Fetch and extract web pages over HTTP",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+      "transport": "stdio",
+      "command": [
+        "uvx",
+        "--with",
+        "mcp<2",
+        "mcp-server-fetch"
+      ],
+      "setup": "Requires uv/uvx. The server retrieves public web content and should not be used to bypass access controls.",
+      "supported_targets": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
     "github": {
       "category": "core",
       "description": "GitHub repositories, issues, and pull requests",

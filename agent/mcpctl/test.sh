@@ -65,31 +65,26 @@ mkdir -p "$TEST_HOME" "$FAKE_BIN"
 
 HOME="$TEST_HOME" "$MCPCTL" init --store "$STORE" >/dev/null
 [ -f "$STORE/catalog.json" ] || fail "init did not create catalog.json"
-[ -f "$STORE/profiles/frontend.json" ] || fail "init did not create profiles"
+[ -f "$STORE/profiles/daily.json" ] || fail "init did not create profiles"
 if HOME="$TEST_HOME" "$MCPCTL" init --store "$STORE" >/dev/null 2>&1; then
   fail "init overwrote an existing store"
 fi
 
 profile_list="$(HOME="$TEST_HOME" "$MCPCTL" profile list --store "$STORE")"
-printf '%s' "$profile_list" | grep -q '^frontend' ||
-  fail "profile list omitted frontend"
-printf '%s' "$profile_list" | grep -q '^reverse' ||
-  fail "profile list omitted reverse"
+printf '%s' "$profile_list" | grep -q '^daily' ||
+  fail "profile list omitted daily"
 for expected_profile in \
-  browser-debug browser-flow browser-headless browser-research coding \
-  reverse-android reverse-cutter reverse-debian-headless reverse-frida \
-  reverse-ghidra reverse-ghidra-headless reverse-gui reverse-headless \
-  reverse-ida reverse-js reverse-js-cloak reverse-js-isolated reverse-mobile \
-  reverse-native reverse-windows search-keenable search-tavily-api \
-  search-tavily-keyless search-tavily-oauth web-capture web-reverse \
-  web-reverse-full; do
+  daily daily-search off reverse-headless reverse-mobile reverse-native \
+  reverse-web reverse-windows; do
   printf '%s' "$profile_list" | grep -q "^${expected_profile}" ||
     fail "profile list omitted ${expected_profile}"
 done
+[ "$(printf '%s\n' "$profile_list" | grep -c .)" = 8 ] ||
+  fail "starter profile list was not reduced to eight task profiles"
 
 server_list="$(HOME="$TEST_HOME" "$MCPCTL" server list --store "$STORE")"
 for expected_server in \
-  github playwright playwright-headless chrome-devtools-cloak \
+  fetch github playwright playwright-headless chrome-devtools-cloak \
   playwright-cloak js-reverse js-reverse-isolated js-reverse-cloak radare2 \
   gdb lldb ghidra ghidra-headless idalib frida jadx apktool cutter x64dbg \
   burp anything-analyzer keenable tavily-keyless tavily-api tavily-oauth; do
@@ -135,19 +130,19 @@ UNSAFE_URL_STORE="${TEST_ROOT}/unsafe-url-store"
 cp -R "$STORE" "$UNSAFE_URL_STORE"
 jq '.servers.context7.url = "http://mcp.example.test/mcp"' \
   "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
-if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile daily \
   --store "$UNSAFE_URL_STORE" >/dev/null 2>&1; then
   fail "plan accepted cleartext non-loopback HTTP"
 fi
 jq '.servers.context7.url = "https://mcp.example.test/mcp?key=plaintext"' \
   "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
-if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+if HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile daily \
   --store "$UNSAFE_URL_STORE" >/dev/null 2>&1; then
   fail "plan accepted a credential query parameter"
 fi
 jq '.servers.context7.url = "http://127.0.0.1:8787/mcp"' \
   "$STORE/catalog.json" > "$UNSAFE_URL_STORE/catalog.json"
-HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile base \
+HOME="$TEST_HOME" "$MCPCTL" plan --target codex --profile daily \
   --store "$UNSAFE_URL_STORE" >/dev/null ||
   fail "plan rejected a loopback HTTP endpoint"
 
@@ -199,8 +194,8 @@ jq '
   | .servers.context7.description = "Personal Context7 definition"
 ' "$STORE/catalog.json" > "$LEGACY_STORE/catalog.json"
 jq '
-  .description = "Personal reverse profile"
-' "$STORE/profiles/reverse.json" > "$LEGACY_STORE/profiles/reverse.json"
+  .description = "Personal daily profile"
+' "$STORE/profiles/daily.json" > "$LEGACY_STORE/profiles/daily.json"
 HOME="$TEST_HOME" "$MCPCTL" sync --store "$LEGACY_STORE" \
   >"$TEST_ROOT/sync.out"
 jq -e '
@@ -215,10 +210,10 @@ jq -e '
 ' "$LEGACY_STORE/catalog.json" >/dev/null ||
   fail "sync did not merge missing servers or migrate recognized host launchers"
 jq -e '
-  .description == "Personal reverse profile"
-' "$LEGACY_STORE/profiles/reverse.json" >/dev/null ||
+  .description == "Personal daily profile"
+' "$LEGACY_STORE/profiles/daily.json" >/dev/null ||
   fail "sync overwrote an existing same-name profile"
-[ -f "$LEGACY_STORE/profiles/browser-research.json" ] ||
+[ -f "$LEGACY_STORE/profiles/daily-search.json" ] ||
   fail "sync did not add missing bundled profiles"
 grep -q 'Existing same-name servers and profiles were preserved' \
   "$TEST_ROOT/sync.out" ||
@@ -707,7 +702,7 @@ interactive_list="$(
   printf '4\n' |
     HOME="$TEST_HOME" MCPCTL_STORE="$STORE" "$MCPCTL" 2>/dev/null
 )"
-printf '%s' "$interactive_list" | grep -q '^frontend' ||
+printf '%s' "$interactive_list" | grep -q '^daily' ||
   fail "no-argument interactive menu did not list profiles"
 
 # A missing store can be initialized from the menu before choosing another
@@ -749,7 +744,7 @@ jq -e --arg store "$INTERACTIVE_CHOSEN_STORE" \
 # separate confirmation. The reverse profile needs no required secret.
 INTERACTIVE_APPLY_HOME="${TEST_ROOT}/interactive-apply-home"
 mkdir -p "$INTERACTIVE_APPLY_HOME"
-REVERSE_PROFILE_INDEX="$(profile_menu_index reverse)"
+REVERSE_PROFILE_INDEX="$(profile_menu_index reverse-native)"
 printf '1\n2\n%s\ny\n' "$REVERSE_PROFILE_INDEX" |
   HOME="$INTERACTIVE_APPLY_HOME" \
     "$MCPCTL" interactive --store "$STORE" \
@@ -760,7 +755,7 @@ grep -q '^Target:  codex$' "$TEST_ROOT/interactive-apply.out" ||
 grep -qF '# >>> agent/mcpctl >>>' \
   "$INTERACTIVE_APPLY_HOME/.codex/config.toml" ||
   fail "interactive apply did not write the owned Codex block"
-jq -e '.targets.codex.profile == "reverse"' \
+jq -e '.targets.codex.profile == "reverse-native"' \
   "$INTERACTIVE_APPLY_HOME/.local/state/mcpctl/applied.json" >/dev/null ||
   fail "interactive apply did not update managed state"
 
@@ -779,8 +774,8 @@ printf '1\n2\n%s\nn\n' "$REVERSE_PROFILE_INDEX" |
 # cancellation path without touching the target.
 INTERACTIVE_MISSING_HOME="${TEST_ROOT}/interactive-missing-home"
 mkdir -p "$INTERACTIVE_MISSING_HOME"
-RESEARCH_PROFILE_INDEX="$(profile_menu_index research)"
-printf '1\n2\n%s\n3\n' "$RESEARCH_PROFILE_INDEX" |
+DAILY_SEARCH_PROFILE_INDEX="$(profile_menu_index daily-search)"
+printf '1\n2\n%s\n3\n' "$DAILY_SEARCH_PROFILE_INDEX" |
   HOME="$INTERACTIVE_MISSING_HOME" \
     "$MCPCTL" interactive --store "$STORE" \
       >"$TEST_ROOT/interactive-missing.out" 2>&1 ||
@@ -794,8 +789,11 @@ grep -q 'required Secrets remain missing' "$TEST_ROOT/interactive-missing.out" |
 # value is inherited by apply but is never printed by the guide or plan.
 INTERACTIVE_SESSION_HOME="${TEST_ROOT}/interactive-session-home"
 mkdir -p "$INTERACTIVE_SESSION_HOME"
-CODING_PROFILE_INDEX="$(profile_menu_index coding)"
-printf '1\n2\n%s\n1\nsession-github-token\ny\n' "$CODING_PROFILE_INDEX" |
+HOME="$TEST_HOME" "$MCPCTL" profile create github-test \
+  --extends daily --enable github --description "GitHub test" \
+  --store "$STORE" >/dev/null
+GITHUB_PROFILE_INDEX="$(profile_menu_index github-test)"
+printf '1\n2\n%s\n1\nsession-github-token\ny\n' "$GITHUB_PROFILE_INDEX" |
   HOME="$INTERACTIVE_SESSION_HOME" \
     "$MCPCTL" interactive --store "$STORE" \
       >"$TEST_ROOT/interactive-session.out" 2>&1 ||
@@ -927,10 +925,10 @@ jq -e '
 # Exercise both an enable and a disable relative to the chosen base.
 INTERACTIVE_SAVE_HOME="${TEST_ROOT}/interactive-save-home"
 mkdir -p "$INTERACTIVE_SAVE_HOME"
-BROWSER_DEBUG_PROFILE_INDEX="$(profile_menu_index browser-debug)"
+DAILY_PROFILE_INDEX="$(profile_menu_index daily)"
 CHROME_TOGGLE_INDEX="$(server_toggle_index codex chrome-devtools)"
 printf '5\n2\n%s\n%s\n%s\n%s\n2\nmy-debug\ny\n' \
-  "$BROWSER_DEBUG_PROFILE_INDEX" \
+  "$DAILY_PROFILE_INDEX" \
   "$CHROME_TOGGLE_INDEX" \
   "$LLDB_TOGGLE_INDEX" \
   "$DONE_TOGGLE_INDEX" |
@@ -939,7 +937,7 @@ printf '5\n2\n%s\n%s\n%s\n%s\n2\nmy-debug\ny\n' \
       >"$TEST_ROOT/interactive-save.out" 2>&1 ||
   fail "interactive saved server selection failed"
 jq -e '
-  .extends == ["browser-debug"]
+  .extends == ["daily"]
   and .target_overrides.codex.enable == ["lldb"]
   and .target_overrides.codex.disable == ["chrome-devtools"]
 ' "$STORE/profiles/my-debug.json" >/dev/null ||
@@ -955,7 +953,10 @@ grep -qF '[mcp_servers.lldb]' \
 # service. Selecting API-key mode replaces an inherited keyless selection.
 INTERACTIVE_TAVILY_HOME="${TEST_ROOT}/interactive-tavily-home"
 mkdir -p "$INTERACTIVE_TAVILY_HOME"
-TAVILY_KEYLESS_PROFILE_INDEX="$(profile_menu_index search-tavily-keyless)"
+HOME="$TEST_HOME" "$MCPCTL" profile create tavily-test \
+  --extends off --enable tavily-keyless --description "Tavily test" \
+  --store "$STORE" >/dev/null
+TAVILY_KEYLESS_PROFILE_INDEX="$(profile_menu_index tavily-test)"
 TAVILY_API_TOGGLE_INDEX="$(server_toggle_index claude tavily-api)"
 CLAUDE_DONE_TOGGLE_INDEX="$(($(supported_server_count claude) + 1))"
 printf '5\n1\n%s\n%s\n%s\n1\ny\n' \
@@ -997,27 +998,28 @@ fi
 grep -q 'interactive input ended' "$TEST_ROOT/interactive-eof.out" ||
   fail "interactive EOF did not explain how to use explicit commands"
 
-claude_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show frontend \
-    --target claude --store "$STORE"
-)"
-printf '%s' "$claude_profile" | grep -q '  brave$' ||
-  fail "Claude frontend profile did not enable Brave"
-! printf '%s' "$claude_profile" | grep -q '  exa$' ||
-  fail "Claude frontend profile unexpectedly enabled Exa"
-
-codex_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show frontend \
+daily_profile="$(
+  HOME="$TEST_HOME" "$MCPCTL" profile show daily \
     --target codex --store "$STORE"
 )"
-printf '%s' "$codex_profile" | grep -q '  exa$' ||
-  fail "Codex frontend profile did not enable Exa"
-! printf '%s' "$codex_profile" | grep -q '  brave$' ||
-  fail "Codex frontend profile unexpectedly enabled Brave"
+for expected_server in \
+  context7 fetch chrome-devtools-cloak chrome-devtools; do
+  printf '%s' "$daily_profile" | grep -q "  ${expected_server}$" ||
+    fail "Daily profile omitted ${expected_server}"
+done
+
+daily_search_profile="$(
+  HOME="$TEST_HOME" "$MCPCTL" profile show daily-search \
+    --target codex --store "$STORE"
+)"
+for expected_server in brave exa; do
+  printf '%s' "$daily_search_profile" | grep -q "  ${expected_server}$" ||
+    fail "Daily search profile omitted ${expected_server}"
+done
 
 override_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show frontend \
-    --target codex --enable brave --disable exa --store "$STORE"
+  HOME="$TEST_HOME" "$MCPCTL" profile show daily-search \
+    --target codex --disable exa --store "$STORE"
 )"
 printf '%s' "$override_profile" | grep -q '  brave$' ||
   fail "CLI enable override was not applied"
@@ -1028,40 +1030,31 @@ reverse_native_profile="$(
   HOME="$TEST_HOME" "$MCPCTL" profile show reverse-native \
     --target codex --store "$STORE"
 )"
-printf '%s' "$reverse_native_profile" | grep -q '  radare2$' ||
-  fail "native reverse profile omitted Radare2"
-printf '%s' "$reverse_native_profile" | grep -q '  lldb$' ||
-  fail "native reverse profile omitted LLDB"
+for expected_server in ghidra idalib radare2 frida; do
+  printf '%s' "$reverse_native_profile" | grep -q "  ${expected_server}$" ||
+    fail "Native reverse profile omitted ${expected_server}"
+done
 
-reverse_android_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show reverse-android \
+reverse_mobile_profile="$(
+  HOME="$TEST_HOME" "$MCPCTL" profile show reverse-mobile \
     --target codex --store "$STORE"
 )"
-printf '%s' "$reverse_android_profile" | grep -q '  jadx$' ||
-  fail "Android reverse profile omitted JADX"
-printf '%s' "$reverse_android_profile" | grep -q '  apktool$' ||
-  fail "Android reverse profile omitted Apktool"
+for expected_server in jadx apktool frida; do
+  printf '%s' "$reverse_mobile_profile" | grep -q "  ${expected_server}$" ||
+    fail "Mobile reverse profile omitted ${expected_server}"
+done
 
 reverse_headless_profile="$(
   HOME="$TEST_HOME" "$MCPCTL" profile show reverse-headless \
     --target codex --store "$STORE"
 )"
 for expected_server in \
-  radare2 gdb lldb ghidra-headless frida playwright-headless; do
+  radare2 gdb lldb ghidra-headless playwright-headless; do
   printf '%s' "$reverse_headless_profile" | grep -q "  ${expected_server}$" ||
     fail "Headless reverse profile omitted ${expected_server}"
 done
 ! printf '%s' "$reverse_headless_profile" | grep -q '  ghidra$' ||
   fail "Headless reverse profile unexpectedly enabled the Ghidra GUI bridge"
-
-reverse_gui_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show reverse-gui \
-    --target codex --store "$STORE"
-)"
-for expected_server in ghidra cutter jadx burp; do
-  printf '%s' "$reverse_gui_profile" | grep -q "  ${expected_server}$" ||
-    fail "GUI reverse profile omitted ${expected_server}"
-done
 
 reverse_windows_profile="$(
   HOME="$TEST_HOME" "$MCPCTL" profile show reverse-windows \
@@ -1072,14 +1065,14 @@ for expected_server in x64dbg frida; do
     fail "Windows reverse profile omitted ${expected_server}"
 done
 
-web_reverse_full_profile="$(
-  HOME="$TEST_HOME" "$MCPCTL" profile show web-reverse-full \
+reverse_web_profile="$(
+  HOME="$TEST_HOME" "$MCPCTL" profile show reverse-web \
     --target codex --store "$STORE"
 )"
 for expected_server in \
-  burp chrome-devtools-cloak anything-analyzer js-reverse; do
-  printf '%s' "$web_reverse_full_profile" | grep -q "  ${expected_server}$" ||
-    fail "Full web reverse profile omitted ${expected_server}"
+  context7 fetch chrome-devtools chrome-devtools-cloak js-reverse; do
+  printf '%s' "$reverse_web_profile" | grep -q "  ${expected_server}$" ||
+    fail "Web reverse profile omitted ${expected_server}"
 done
 
 # Search provider modes render credentials only when their selected mode needs
@@ -1087,7 +1080,7 @@ done
 SEARCH_HOME="${TEST_ROOT}/search-home"
 mkdir -p "$SEARCH_HOME"
 env -u KEENABLE_API_KEY HOME="$SEARCH_HOME" \
-  "$MCPCTL" apply --target claude --profile search-keenable \
+  "$MCPCTL" apply --target claude --profile off --enable keenable \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers.keenable.url == "https://api.keenable.ai/mcp"
@@ -1096,7 +1089,7 @@ jq -e '
   fail "anonymous Keenable mode unexpectedly rendered a credential"
 
 HOME="$SEARCH_HOME" KEENABLE_API_KEY='test-keenable-key' \
-  "$MCPCTL" apply --target claude --profile search-keenable \
+  "$MCPCTL" apply --target claude --profile off --enable keenable \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers.keenable.headers["X-API-Key"] == "test-keenable-key"
@@ -1104,7 +1097,7 @@ jq -e '
   fail "Keenable API-key mode did not render X-API-Key"
 
 HOME="$SEARCH_HOME" \
-  "$MCPCTL" apply --target claude --profile search-tavily-keyless \
+  "$MCPCTL" apply --target claude --profile off --enable tavily-keyless \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers["tavily-keyless"].headers["X-Tavily-Access-Mode"] == "keyless"
@@ -1115,7 +1108,7 @@ jq -e '
 
 cp "$SEARCH_HOME/.claude.json" "$TEST_ROOT/tavily-keyless.before"
 if env -u TAVILY_API_KEY HOME="$SEARCH_HOME" \
-  "$MCPCTL" apply --target claude --profile search-tavily-api \
+  "$MCPCTL" apply --target claude --profile off --enable tavily-api \
     --store "$STORE" >"$TEST_ROOT/tavily-missing.out" 2>&1; then
   fail "Tavily API-key mode accepted a missing credential"
 fi
@@ -1123,7 +1116,7 @@ cmp -s "$TEST_ROOT/tavily-keyless.before" "$SEARCH_HOME/.claude.json" ||
   fail "missing Tavily API key changed the target configuration"
 
 HOME="$SEARCH_HOME" TAVILY_API_KEY='test-tavily-key' \
-  "$MCPCTL" apply --target claude --profile search-tavily-api \
+  "$MCPCTL" apply --target claude --profile off --enable tavily-api \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers["tavily-api"].headers.Authorization == "Bearer test-tavily-key"
@@ -1133,7 +1126,7 @@ jq -e '
   fail "Tavily API-key mode did not keep its credential in Authorization"
 
 HOME="$SEARCH_HOME" \
-  "$MCPCTL" apply --target claude --profile search-tavily-oauth \
+  "$MCPCTL" apply --target claude --profile off --enable tavily-oauth \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers["tavily-oauth"].url == "https://mcp.tavily.com/mcp/"
@@ -1145,7 +1138,7 @@ jq -e '
 CAPTURE_HOME="${TEST_ROOT}/capture-home"
 mkdir -p "$CAPTURE_HOME"
 if env -u ANYTHING_ANALYZER_MCP_TOKEN HOME="$CAPTURE_HOME" \
-  "$MCPCTL" apply --target claude --profile web-capture \
+  "$MCPCTL" apply --target claude --profile off --enable anything-analyzer \
     --store "$STORE" >"$TEST_ROOT/capture-missing.out" 2>&1; then
   fail "Anything Analyzer accepted a missing MCP token"
 fi
@@ -1154,7 +1147,7 @@ fi
 
 HOME="$CAPTURE_HOME" \
   ANYTHING_ANALYZER_MCP_TOKEN='test-anything-analyzer-token' \
-  "$MCPCTL" apply --target claude --profile web-capture \
+  "$MCPCTL" apply --target claude --profile off --enable anything-analyzer \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers["anything-analyzer"].url ==
@@ -1172,16 +1165,20 @@ printf '%s\n' \
   > "$TEST_HOME/.claude.json"
 
 plan_output="$(
-  HOME="$TEST_HOME" BRAVE_API_KEY='never-print-this-secret' \
-    "$MCPCTL" plan --target claude --profile frontend --store "$STORE"
+  HOME="$TEST_HOME" \
+    BRAVE_API_KEY='never-print-this-secret' \
+    EXA_API_KEY='never-print-this-exa-secret' \
+    "$MCPCTL" plan --target claude --profile daily-search --store "$STORE"
 )"
 ! printf '%s' "$plan_output" | grep -q 'never-print-this-secret' ||
   fail "plan printed a secret value"
+! printf '%s' "$plan_output" | grep -q 'never-print-this-exa-secret' ||
+  fail "plan printed an Exa secret value"
 printf '%s' "$plan_output" | grep -q 'env BRAVE_API_KEY (available)' ||
   fail "plan did not report the redacted secret source"
 
-HOME="$TEST_HOME" BRAVE_API_KEY='test-brave' \
-  "$MCPCTL" apply --target claude --profile frontend \
+HOME="$TEST_HOME" BRAVE_API_KEY='test-brave' EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target claude --profile daily-search \
     --store "$STORE" >/dev/null
 
 jq -e --arg package_adapter "$SCRIPT_DIR/adapters/mcp-package" '
@@ -1189,20 +1186,22 @@ jq -e --arg package_adapter "$SCRIPT_DIR/adapters/mcp-package" '
   and .mcpServers["user-owned"].command == "keep-me"
   and .mcpServers.brave.headers["X-Subscription-Token"] == "test-brave"
   and .mcpServers.brave._managed_by == "agent/mcpctl"
+  and .mcpServers.exa.headers.Authorization == "Bearer test-exa"
   and .mcpServers.context7.headers == null
+  and .mcpServers.fetch.command == "uvx"
   and .mcpServers["chrome-devtools"].command == $package_adapter
   and .mcpServers["chrome-devtools"].args ==
     ["npm", "chrome-devtools", "chrome-devtools-mcp@1.6.0",
      "chrome-devtools-mcp", "--"]
 ' "$TEST_HOME/.claude.json" >/dev/null ||
-  fail "Claude frontend config was not rendered correctly"
+  fail "Claude daily-search config was not rendered correctly"
 [ "$(mode_of "$TEST_HOME/.claude.json")" = "600" ] ||
   fail "Claude config mode is not 0600"
 
 current_output="$(
   HOME="$TEST_HOME" "$MCPCTL" current --target claude --store "$STORE"
 )"
-printf '%s' "$current_output" | grep -q '^Profile: frontend$' ||
+printf '%s' "$current_output" | grep -q '^Profile: daily-search$' ||
   fail "current did not report the applied profile"
 current_json="$(
   HOME="$TEST_HOME" "$MCPCTL" current --target claude --store "$STORE" --json
@@ -1210,21 +1209,21 @@ current_json="$(
 printf '%s' "$current_json" | jq -e '
   .target == "claude"
   and .selection_mode == "profile"
-  and .profile == "frontend"
+  and .profile == "daily-search"
   and .healthy == true
   and (.servers | length > 0)
 ' >/dev/null || fail "current --json omitted the active MCP selection"
 
 github_plan="$(
   HOME="$TEST_HOME" GITHUB_MCP_PAT='never-print-github-secret' \
-    "$MCPCTL" plan --target claude --profile coding --store "$STORE"
+    "$MCPCTL" plan --target claude --profile daily --enable github --store "$STORE"
 )"
 ! printf '%s' "$github_plan" | grep -q 'never-print-github-secret' ||
   fail "GitHub plan printed the PAT"
 printf '%s' "$github_plan" | grep -q 'env GITHUB_MCP_PAT (available)' ||
   fail "GitHub plan did not report its redacted PAT source"
 HOME="$TEST_HOME" GITHUB_MCP_PAT='test-github-pat' \
-  "$MCPCTL" apply --target claude --profile coding \
+  "$MCPCTL" apply --target claude --profile daily --enable github \
     --store "$STORE" >/dev/null
 jq -e '
   .mcpServers.github.type == "http"
@@ -1235,13 +1234,15 @@ jq -e '
   fail "GitHub MCP config was not rendered correctly"
 
 HOME="$TEST_HOME" \
-  "$MCPCTL" apply --target claude --profile reverse \
+  "$MCPCTL" apply --target claude --profile reverse-native \
     --store "$STORE" >/dev/null
 jq -e '
   .theme == "dark"
   and .mcpServers["user-owned"].command == "keep-me"
   and .mcpServers.radare2.command == "r2pm"
-  and .mcpServers.lldb.command == "lldb-mcp"
+  and .mcpServers.ghidra != null
+  and .mcpServers.idalib != null
+  and .mcpServers.frida != null
   and .mcpServers.context7 == null
   and .mcpServers.brave == null
   and .mcpServers["chrome-devtools"] == null
@@ -1249,8 +1250,9 @@ jq -e '
   fail "Claude profile switch did not reconcile owned entries"
 
 jq -e '
-  .targets.claude.profile == "reverse"
-  and .targets.claude.servers == ["radare2", "lldb"]
+  .targets.claude.profile == "reverse-native"
+  and ((.targets.claude.servers | sort) ==
+    (["ghidra", "idalib", "radare2", "frida"] | sort))
 ' "$TEST_HOME/.local/state/mcpctl/applied.json" >/dev/null ||
   fail "applied state was not updated"
 
@@ -1259,13 +1261,13 @@ jq -e '
 printf '%s\n' \
   '{"theme":"light","mcpServers":{"brave":{"url":"https://user.example/mcp"},"other":{"command":"keep"}}}' \
   > "$TEST_HOME/.claude.json"
-if HOME="$TEST_HOME" BRAVE_API_KEY=test-brave \
-  "$MCPCTL" apply --target claude --profile frontend \
+if HOME="$TEST_HOME" BRAVE_API_KEY=test-brave EXA_API_KEY=test-exa \
+  "$MCPCTL" apply --target claude --profile daily-search \
     --store "$STORE" >/dev/null 2>&1; then
   fail "unmanaged same-name Claude entry was replaced without --force"
 fi
-HOME="$TEST_HOME" BRAVE_API_KEY=test-brave \
-  "$MCPCTL" apply --target claude --profile frontend \
+HOME="$TEST_HOME" BRAVE_API_KEY=test-brave EXA_API_KEY=test-exa \
+  "$MCPCTL" apply --target claude --profile daily-search \
     --store "$STORE" --force >/dev/null
 jq -e '
   .theme == "light"
@@ -1293,8 +1295,8 @@ printf '%s\n' \
   'url = "https://user.example/mcp"' \
   > "$TEST_HOME/.codex/config.toml"
 
-HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
-  "$MCPCTL" apply --target codex --profile frontend \
+HOME="$TEST_HOME" BRAVE_API_KEY='test-brave' EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target codex --profile daily-search \
     --store "$STORE" >/dev/null
 grep -qF '# >>> agent/mcpctl >>>' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex managed marker missing"
@@ -1305,8 +1307,8 @@ grep -qF '[mcp_servers.exa]' "$TEST_HOME/.codex/config.toml" ||
 grep -qF '"Authorization" = "Bearer test-exa"' \
   "$TEST_HOME/.codex/config.toml" ||
   fail "Codex Exa secret was not rendered"
-! grep -qF '[mcp_servers.brave]' "$TEST_HOME/.codex/config.toml" ||
-  fail "Codex target override unexpectedly enabled Brave"
+grep -qF '[mcp_servers.brave]' "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex daily-search profile omitted Brave"
 awk '
   $0 == "[mcp_servers.plugin-default]" { in_server = 1; next }
   in_server && /^\[/ { exit(found ? 0 : 1) }
@@ -1358,13 +1360,13 @@ printf '%s\n' \
   '[mcp_servers.user-owned]' \
   'command = "keep"' \
   > "$TEST_HOME/.codex/config.toml"
-if HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
-  "$MCPCTL" apply --target codex --profile frontend \
+if HOME="$TEST_HOME" BRAVE_API_KEY='test-brave' EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target codex --profile daily-search \
     --store "$STORE" >/dev/null 2>&1; then
   fail "unmanaged same-name Codex entry was replaced without --force"
 fi
-HOME="$TEST_HOME" EXA_API_KEY='test-exa' \
-  "$MCPCTL" apply --target codex --profile frontend \
+HOME="$TEST_HOME" BRAVE_API_KEY='test-brave' EXA_API_KEY='test-exa' \
+  "$MCPCTL" apply --target codex --profile daily-search \
     --store "$STORE" --force >/dev/null
 [ "$(grep -cF '[mcp_servers.exa]' "$TEST_HOME/.codex/config.toml")" = 1 ] ||
   fail "Codex --force did not leave exactly one managed same-name table"
@@ -1374,14 +1376,14 @@ grep -qF '[mcp_servers.user-owned]' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex --force left the unmanaged same-name table"
 
 HOME="$TEST_HOME" \
-  "$MCPCTL" apply --target codex --profile reverse \
+  "$MCPCTL" apply --target codex --profile reverse-native \
     --store "$STORE" >/dev/null
 grep -qF '[mcp_servers.user-owned]' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex switch removed a user entry"
 grep -qF '[mcp_servers.radare2]' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex reverse profile omitted Radare2"
-grep -qF '[mcp_servers.lldb]' "$TEST_HOME/.codex/config.toml" ||
-  fail "Codex reverse profile omitted LLDB"
+grep -qF '[mcp_servers.idalib]' "$TEST_HOME/.codex/config.toml" ||
+  fail "Codex native reverse profile omitted IDALib"
 ! grep -qF '[mcp_servers.exa]' "$TEST_HOME/.codex/config.toml" ||
   fail "Codex switch left a stale managed Exa entry"
 [ "$(mode_of "$TEST_HOME/.codex/config.toml")" = "600" ] ||
@@ -1390,7 +1392,7 @@ grep -qF '[mcp_servers.lldb]' "$TEST_HOME/.codex/config.toml" ||
 # Missing required profile secrets fail before replacing the target.
 cp "$TEST_HOME/.codex/config.toml" "$TEST_ROOT/codex.before"
 if HOME="$TEST_HOME" \
-  "$MCPCTL" apply --target codex --profile research \
+  "$MCPCTL" apply --target codex --profile daily-search \
     --store "$STORE" >/dev/null 2>&1; then
   fail "profile with missing required secrets was applied"
 fi
@@ -1402,8 +1404,8 @@ mkdir -p "$TEST_HOME/.config/opencode"
 printf '%s\n' '{"theme":"system","mcp":{"user":{"type":"local","command":["keep"]}}}' \
   > "$TEST_HOME/.config/opencode/opencode.json"
 HOME="$TEST_HOME" BRAVE_API_KEY=test-brave EXA_API_KEY=test-exa \
-  "$MCPCTL" apply --target opencode --profile research \
-    --enable chrome-devtools --store "$STORE" >/dev/null
+  "$MCPCTL" apply --target opencode --profile daily-search \
+    --store "$STORE" >/dev/null
 jq -e --arg package_adapter "$SCRIPT_DIR/adapters/mcp-package" '
   .theme == "system"
   and .mcp.user.command == ["keep"]
@@ -1437,7 +1439,7 @@ printf '%s\n' '{"schema":1,"secrets":{"brave_api_key":"sops-brave","exa_api_key"
 EOF
 chmod +x "$FAKE_BIN/sops"
 HOME="$TEST_HOME" MCPCTL_SOPS_BIN="$FAKE_BIN/sops" \
-  "$MCPCTL" apply --target claude --profile frontend \
+  "$MCPCTL" apply --target claude --profile daily-search \
     --store "$STORE" --force >/dev/null
 jq -e '
   .mcpServers.brave.headers["X-Subscription-Token"] == "sops-brave"
@@ -1573,7 +1575,7 @@ cmp -s "$TEST_ROOT/claude.before" "$TEST_HOME/.claude.json" ||
 # Hand-written profiles fail closed when they enable two variants from the
 # same provider group; the guided picker prevents this state automatically.
 printf '%s\n' \
-  '{"schema":1,"name":"variant-conflict","extends":["base"],"enable":["tavily-keyless","tavily-api"],"disable":[],"target_overrides":{}}' \
+  '{"schema":1,"name":"variant-conflict","extends":["off"],"enable":["tavily-keyless","tavily-api"],"disable":[],"target_overrides":{}}' \
   > "$STORE/profiles/variant-conflict.json"
 if HOME="$TEST_HOME" TAVILY_API_KEY='conflict-test-key' \
   "$MCPCTL" profile show variant-conflict --target codex --store "$STORE" \

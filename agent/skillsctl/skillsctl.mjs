@@ -37,7 +37,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.2";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -348,7 +348,7 @@ async function mkdirStoreLayout(store) {
   if (process.platform !== "win32") await chmod(store, 0o700);
 }
 
-async function loadStore(store) {
+async function loadStore(store, { allowedSkillDrift = new Set() } = {}) {
   const catalogPath = join(store, "catalog.json");
   await assertRealDirectory(store, "skills store");
   await assertRegularFile(catalogPath, "skills catalog");
@@ -358,7 +358,7 @@ async function loadStore(store) {
   );
   validateCatalog(catalog);
   const packs = await loadPacks(store);
-  await validateStoreSkillDirectories(store, catalog);
+  await validateStoreSkillDirectories(store, catalog, allowedSkillDrift);
   return { store, catalog, packs };
 }
 
@@ -427,13 +427,13 @@ function validatePack(name, pack) {
   }
 }
 
-async function validateStoreSkillDirectories(store, catalog) {
+async function validateStoreSkillDirectories(store, catalog, allowedSkillDrift = new Set()) {
   for (const [name, metadata] of Object.entries(catalog.skills)) {
     const directory = skillPath(store, name);
     await assertRealDirectory(directory, `skill '${name}'`);
     await assertRegularFile(join(directory, "SKILL.md"), `skill '${name}' entrypoint`);
     const inspected = await inspectSkillDirectory(directory, name);
-    if (inspected.sha256 !== metadata.sha256) {
+    if (inspected.sha256 !== metadata.sha256 && !allowedSkillDrift.has(name)) {
       throw new SkillsError(
         `skill '${name}' changed outside skillsctl; re-add it to update the catalog checksum`
       );
@@ -598,11 +598,17 @@ async function runSkillCommand(positional, options) {
 }
 
 async function addSkill(source, options) {
-  const store = await loadStore(options.store);
   const sourcePath = resolve(source);
   const inferredName = options.name || basename(sourcePath);
   validateName(inferredName, "skill");
   const inspected = await inspectSkillDirectory(sourcePath, inferredName);
+  // A managed target is a link to the canonical Store, so an intentional edit
+  // through that link changes the stored directory before its checksum can be
+  // refreshed. Permit drift only for the explicitly re-added Skill; unrelated
+  // Store drift must continue to fail closed.
+  const store = await loadStore(options.store, {
+    allowedSkillDrift: new Set([inferredName])
+  });
   const existing = store.catalog.skills[inferredName];
   if (existing && existing.sha256 === inspected.sha256) {
     process.stdout.write(`Skill already matches: ${inferredName}\n`);

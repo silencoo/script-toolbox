@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "daily-search",
+  "description": "Daily development enhanced with Brave and Exa for models without web search",
+  "extends": [
+    "daily"
+  ],
+  "enable": [
+    "brave",
+    "exa"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

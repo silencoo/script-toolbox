@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Codex Quota Compass (Visual Edition)
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      1.9.0
+// @version      1.10.0
 // @description  Display Codex quota usage and detailed daily metrics cleanly.
 // @match        https://chatgpt.com/codex/cloud/settings/analytics*
 // @homepageURL  https://github.com/silencoo/script-toolbox/tree/main/userscripts/codex-quota-compass
@@ -21,6 +21,8 @@
         USD_PER_CREDIT: 40 / 1000,
         HISTORY_DAYS: 30,
     };
+
+    const VERSION = '1.10.0';
 
     GM_addStyle(`
         #codex-compass-root {
@@ -92,6 +94,11 @@
             border-color: #d1f2e1;
         }
 
+        .compass-card.unavailable {
+            background: #fafafa;
+            border-color: #e5e5e5;
+        }
+
         .card-label {
             font-size: 12px;
             color: #666;
@@ -110,6 +117,35 @@
             font-weight: normal;
         }
 
+        .card-value.muted {
+            color: #777;
+        }
+
+        .compass-notice {
+            margin: 0 0 18px;
+            padding: 10px 12px;
+            border: 1px solid #f0d9a8;
+            border-radius: 8px;
+            background: #fff9ec;
+            color: #725316;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .compass-notice strong {
+            color: #5d430f;
+        }
+
+        .compass-notice.info {
+            border-color: #cfe4dc;
+            background: #f1faf7;
+            color: #315d50;
+        }
+
+        .compass-notice.info strong {
+            color: #204c40;
+        }
+
         .compass-section-title {
             margin-bottom: 8px;
             color: #444;
@@ -120,6 +156,52 @@
         .compass-section-title.history {
             margin-top: 10px;
             color: #666;
+        }
+
+        .compass-formula {
+            margin: 4px 0 18px;
+            padding: 14px;
+            border: 1px solid #e7e7e7;
+            border-radius: 8px;
+            background: #fafafa;
+            color: #555;
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .compass-formula-title {
+            margin-bottom: 8px;
+            color: #333;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .compass-formula code {
+            display: block;
+            margin: 5px 0;
+            padding: 7px 9px;
+            overflow-wrap: anywhere;
+            border-radius: 5px;
+            background: #f0f0f0;
+            color: #333;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+        }
+
+        .compass-formula-result {
+            margin-top: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .compass-caveats {
+            margin: 9px 0 0;
+            padding-left: 18px;
+            color: #707070;
+        }
+
+        .compass-caveats li + li {
+            margin-top: 3px;
         }
 
         .table-container {
@@ -158,6 +240,14 @@
 
         .compass-table .numeric {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .compass-date-note {
+            display: block;
+            margin-top: 2px;
+            color: #9a6a0a;
+            font-size: 10px;
+            white-space: nowrap;
         }
 
         .compass-empty {
@@ -199,7 +289,10 @@
             cursor: pointer;
             outline: none;
             user-select: none;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: background 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
@@ -292,15 +385,20 @@
         };
     }
 
-    function renderTable(list, stats) {
+    function renderTable(list, stats, options = {}) {
+        const { todayDate = '' } = options;
         const rows = [...list]
             .sort((left, right) => String(right.date).localeCompare(String(left.date)))
             .map((row) => {
                 const credits = numberOrZero(row.totals?.credits);
                 const turns = numberOrZero(row.totals?.turns);
+                const isToday = String(row.date) === todayDate;
                 return `
                     <tr>
-                        <td>${escapeHtml(row.date)}</td>
+                        <td>
+                            ${escapeHtml(row.date)}
+                            ${isToday ? '<span class="compass-date-note">Today · may be delayed</span>' : ''}
+                        </td>
                         <td class="numeric">${credits.toFixed(3)}</td>
                         <td>$ ${(credits * CONFIG.USD_PER_CREDIT).toFixed(2)}</td>
                         <td>${turns}</td>
@@ -331,11 +429,111 @@
         `;
     }
 
+    function formatPercent(value) {
+        return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2);
+    }
+
+    function getLatestActivityDate(list) {
+        const dates = list
+            .filter((item) => (
+                numberOrZero(item.totals?.credits) > 0
+                || numberOrZero(item.totals?.turns) > 0
+            ))
+            .map((item) => String(item.date))
+            .sort();
+        return dates.at(-1) || '';
+    }
+
+    function evaluateEstimate(currentCycleList, usedPercent, todayDate) {
+        const currentStats = getStats(currentCycleList);
+        const ratio = usedPercent / 100;
+        const todayRows = currentCycleList.filter((item) => String(item.date) === todayDate);
+        const todayStats = getStats(todayRows);
+        const hasTodayActivity = todayStats.credits > 0 || todayStats.turns > 0;
+        const latestActivityDate = getLatestActivityDate(currentCycleList);
+
+        if (ratio <= 0) {
+            return {
+                kind: 'unavailable',
+                estimatedCredits: null,
+                latestActivityDate,
+                message: 'The usage endpoint reports 0%, so division cannot produce a meaningful quota estimate.',
+            };
+        }
+
+        if (currentStats.credits <= 0) {
+            return {
+                kind: 'delayed',
+                estimatedCredits: null,
+                latestActivityDate,
+                message: `The daily endpoint reports 0 credits for this cycle while the usage endpoint reports ${formatPercent(usedPercent)}%. The estimate is withheld instead of treating delayed data as zero usage.`,
+            };
+        }
+
+        if (todayRows.length === 0 || !hasTodayActivity) {
+            const todayState = todayRows.length === 0 ? 'missing' : 'still zero';
+            return {
+                kind: 'delayed',
+                estimatedCredits: null,
+                latestActivityDate,
+                message: `Today's daily row (${todayDate}) is ${todayState}. Because the percentage and credit totals are not aligned in time, the estimate is withheld.`,
+            };
+        }
+
+        return {
+            kind: 'provisional',
+            estimatedCredits: currentStats.credits / ratio,
+            latestActivityDate,
+            message: 'Today has recorded activity, but daily analytics may still lag behind the usage percentage. Treat the result as provisional.',
+        };
+    }
+
+    function renderEstimateNotice(estimate) {
+        const title = estimate.kind === 'provisional'
+            ? 'Provisional estimate'
+            : estimate.kind === 'delayed'
+                ? 'Daily data delayed or unverified'
+                : 'Estimate unavailable';
+        const className = estimate.kind === 'provisional' ? 'compass-notice info' : 'compass-notice';
+        const latestActivity = estimate.latestActivityDate
+            ? ` Latest recorded activity date: ${escapeHtml(estimate.latestActivityDate)}.`
+            : '';
+        return `
+            <div class="${className}" role="status">
+                <strong>${title}.</strong> ${escapeHtml(estimate.message)}${latestActivity}
+            </div>
+        `;
+    }
+
+    function renderFormula(currentStats, usedPercent, estimate) {
+        const percentText = formatPercent(usedPercent);
+        const rateText = CONFIG.USD_PER_CREDIT.toFixed(4);
+        const result = estimate.estimatedCredits === null
+            ? `<span>Not calculated: the required inputs are not synchronized.</span>`
+            : `<span>${currentStats.credits.toFixed(3)} ÷ (${percentText}% ÷ 100) = ${estimate.estimatedCredits.toFixed(1)} credits</span>`;
+
+        return `
+            <section class="compass-formula" aria-labelledby="compass-formula-title">
+                <div class="compass-formula-title" id="compass-formula-title">How the estimate is calculated</div>
+                <code>Reported cycle credits = Σ daily credits dated on/after the cycle start date</code>
+                <code>Provisional total quota = Reported cycle credits ÷ (Used percent ÷ 100)</code>
+                <code>Provisional value = Provisional total quota × $${rateText} per credit</code>
+                <div class="compass-formula-result">Current calculation: ${result}</div>
+                <ul class="compass-caveats">
+                    <li>Used percent comes from the usage endpoint; credits come from daily analytics. They can refresh at different times.</li>
+                    <li>Today's row is considered unsettled. If it is missing or zero, the script does not show a quota estimate.</li>
+                    <li>Daily data uses calendar dates, so a quota cycle that resets mid-day can make the first day's total imperfect.</li>
+                    <li>Dollar values use the configured rate and are estimates, not billing data.</li>
+                </ul>
+            </section>
+        `;
+    }
+
     function showPanel(data) {
         const root = document.getElementById('codex-compass-root');
         if (!root) return;
 
-        const { secondary, dailyList, cycleStartDate } = data;
+        const { secondary, dailyList, cycleStartDate, todayDate } = data;
         const currentCycleList = [];
         const historyList = [];
 
@@ -350,8 +548,14 @@
         const currentStats = getStats(currentCycleList);
         const historyStats = getStats(historyList);
         const usedPercent = numberOrZero(secondary?.used_percent);
-        const ratio = usedPercent / 100;
-        const estimatedCredits = ratio > 0 ? currentStats.credits / ratio : 0;
+        const estimate = evaluateEstimate(currentCycleList, usedPercent, todayDate);
+        const estimatedCredits = estimate.estimatedCredits;
+        const estimateValue = estimatedCredits === null
+            ? '—'
+            : `${estimatedCredits.toFixed(1)} <span class="card-unit">Credits</span>`;
+        const estimatedUsd = estimatedCredits === null
+            ? '—'
+            : `$ ${(estimatedCredits * CONFIG.USD_PER_CREDIT).toFixed(2)}`;
 
         let historyRangeTitle = 'History (Outside Current Cycle)';
         if (historyList.length > 0) {
@@ -364,30 +568,33 @@
 
         root.innerHTML = `
             <div class="compass-header">
-                <div class="compass-title" id="codex-compass-title">Codex Quota Analytics (v1.9.0)</div>
+                <div class="compass-title" id="codex-compass-title">Codex Quota Analytics (v${VERSION})</div>
                 <button class="compass-close" id="compass-close-btn" type="button" aria-label="Close">&times;</button>
             </div>
+            ${renderEstimateNotice(estimate)}
             <div class="compass-grid">
                 <div class="compass-card">
                     <div class="card-label">Used Percent</div>
-                    <div class="card-value">${usedPercent}%</div>
+                    <div class="card-value">${formatPercent(usedPercent)}%</div>
                 </div>
                 <div class="compass-card">
-                    <div class="card-label">Used This Cycle</div>
+                    <div class="card-label">Reported Credits</div>
                     <div class="card-value">${currentStats.credits.toFixed(1)} <span class="card-unit">Credits</span></div>
                 </div>
-                <div class="compass-card highlight">
-                    <div class="card-label">Est. Total Quota</div>
-                    <div class="card-value">${estimatedCredits.toFixed(1)} <span class="card-unit">Credits</span></div>
+                <div class="compass-card ${estimatedCredits === null ? 'unavailable' : 'highlight'}">
+                    <div class="card-label">Provisional Quota</div>
+                    <div class="card-value ${estimatedCredits === null ? 'muted' : ''}">${estimateValue}</div>
                 </div>
-                <div class="compass-card">
-                    <div class="card-label">Est. Cycle Value</div>
-                    <div class="card-value">$ ${(estimatedCredits * CONFIG.USD_PER_CREDIT).toFixed(2)}</div>
+                <div class="compass-card ${estimatedCredits === null ? 'unavailable' : ''}">
+                    <div class="card-label">Provisional Value</div>
+                    <div class="card-value ${estimatedCredits === null ? 'muted' : ''}">${estimatedUsd}</div>
                 </div>
             </div>
 
+            ${renderFormula(currentStats, usedPercent, estimate)}
+
             <div class="compass-section-title">Current Cycle (Since ${escapeHtml(cycleStartDate)})</div>
-            ${renderTable(currentCycleList, currentStats)}
+            ${renderTable(currentCycleList, currentStats, { todayDate })}
 
             ${historyList.length > 0 ? `
                 <div class="compass-section-title history">${historyRangeTitle}</div>
@@ -432,6 +639,7 @@
             const now = Date.now();
             const endDate = toDateString(new Date(now + 86400000));
             const startDate = toDateString(new Date(now - CONFIG.HISTORY_DAYS * 86400000));
+            const todayDate = toDateString(new Date(now));
             const cycleStartDate = secondary?.reset_at && secondary?.limit_window_seconds
                 ? toDateString(new Date((secondary.reset_at - secondary.limit_window_seconds) * 1000))
                 : startDate;
@@ -446,7 +654,7 @@
             );
             const dailyList = Array.isArray(dailyData?.data) ? dailyData.data : [];
 
-            showPanel({ secondary, dailyList, cycleStartDate });
+            showPanel({ secondary, dailyList, cycleStartDate, todayDate });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             alert(`Codex Quota Compass error: ${message}`);

@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "daily",
+  "description": "Daily development with documentation, fetch, CloakBrowser, and real Chrome access",
+  "extends": [],
+  "enable": [
+    "context7",
+    "fetch",
+    "chrome-devtools-cloak",
+    "chrome-devtools"
+  ],
+  "disable": [],
+  "target_overrides": {}
+}

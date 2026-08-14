@@ -1,12 +1,13 @@
 {
   "schema": 1,
   "name": "reverse-mobile",
-  "description": "Android static analysis and Frida dynamic instrumentation",
-  "extends": [
-    "reverse-android",
-    "reverse-frida"
+  "description": "Android analysis with JADX, Apktool, and Frida",
+  "extends": [],
+  "enable": [
+    "jadx",
+    "apktool",
+    "frida"
   ],
-  "enable": [],
   "disable": [],
   "target_overrides": {}
 }

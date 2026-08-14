@@ -119,6 +119,41 @@ failed target migration rolls back entries already moved. Content conflicts
 still require an explicit `--force --write`; unrelated and project-scoped
 entries remain untouched.
 
+### Updating a managed Skill
+
+Managed target entries are links to the canonical Store. Editing a Skill
+through `~/.agents/skills`, `~/.claude/skills`, or another managed target
+therefore changes the stored files immediately, but deliberately leaves the
+catalog checksum stale until the change is explicitly accepted.
+
+Review the diff, then preview and accept only that named Skill:
+
+```bash
+# Codex example; realpath resolves the managed link to the canonical directory.
+skillsctl skill add "$(realpath ~/.agents/skills/frontend-dev)" \
+  --name frontend-dev --force
+skillsctl skill add "$(realpath ~/.agents/skills/frontend-dev)" \
+  --name frontend-dev --force --yes
+skillsctl status
+```
+
+If the Skill is maintained in a separate source directory, re-add that source
+instead. `--force` replaces only the same-name canonical Skill, preserves the
+previous copy under `store/backups/`, and still fails if any unrelated Skill
+has unacknowledged drift.
+
+After the local Store is healthy, upload its encrypted snapshot:
+
+```bash
+skillsctl backup
+skillsctl versions
+```
+
+When the Skills Store is already attached, the unified Workspace follows that
+child Store's latest encrypted version automatically. Do not reattach it and
+do not use `agentctl workspace agent push`, which synchronizes Provider,
+Secret, failover, and pricing catalogs—not Skills.
+
 ## Safety and portability
 
 A skill must contain `SKILL.md` with YAML frontmatter and a description.

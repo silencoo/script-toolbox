@@ -5,10 +5,20 @@ A Tampermonkey or Violentmonkey userscript that adds an on-page quota dashboard 
 ## Features
 
 - Displays the current rate-limit percentage
-- Summarizes credits, estimated dollar value, and turns for the active quota cycle
-- Estimates the total cycle quota from the reported usage percentage
+- Summarizes reported credits, estimated dollar value, and turns for the active quota cycle
+- Shows the quota formula, live inputs, data sources, and accuracy caveats in the panel
+- Withholds the quota estimate when today's daily row is missing or zero instead of treating delayed data as zero usage
+- Labels quota and dollar results as provisional because the source endpoints can refresh at different times
 - Shows daily usage for the current cycle and up to 30 days of recent history
 - Provides a responsive panel that works on desktop and narrow screens
+
+The provisional quota formula is:
+
+```text
+reported cycle credits / (used percent / 100)
+```
+
+`used percent` comes from the Codex usage endpoint, while credits come from the daily analytics endpoint. Because those endpoints can update at different times, the script does not calculate a quota estimate when today's daily row is missing or still zero. Even when an estimate is shown, it remains provisional. Daily calendar buckets can also be imperfect at a mid-day quota-cycle boundary.
 
 The dollar estimate uses the script's configurable default of `$40 / 1,000 credits`. It is a convenience estimate, not billing data.
 

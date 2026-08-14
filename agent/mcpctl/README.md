@@ -103,30 +103,28 @@ mcpctl secrets edit
 the SOPS editor, and validates the decrypted schema without printing values.
 It requires an existing SOPS creation rule or recipient configuration.
 
-Preview and apply profiles:
+Preview and apply the compact daily profiles:
 
 ```bash
-BRAVE_API_KEY=... \
-  ./agent/mcpctl/mcpctl plan \
-    --target claude --profile frontend
-
-BRAVE_API_KEY=... \
-  ./agent/mcpctl/mcpctl \
-    --target claude --profile frontend
-
-EXA_API_KEY=... \
-  ./agent/mcpctl/mcpctl \
-    --target codex --profile frontend
+./agent/mcpctl/mcpctl plan \
+  --target claude --profile daily
 
 ./agent/mcpctl/mcpctl \
-  --target codex --profile reverse
+  --target claude --profile daily
+
+BRAVE_API_KEY=... EXA_API_KEY=... \
+  ./agent/mcpctl/mcpctl \
+    --target codex --profile daily-search
+
+./agent/mcpctl/mcpctl \
+  --target codex --profile reverse-native
 ```
 
 Supplying `--target` and `--profile` without a subcommand remains shorthand for
 `apply`. The explicit form is also available:
 
 ```bash
-mcpctl apply --target claude --profile frontend
+mcpctl apply --target claude --profile daily
 mcpctl current --target claude --json
 ```
 
@@ -135,28 +133,31 @@ managed server set, any explicitly suppressed Codex servers, config path, and
 drift health without resolving or printing Secret values. This is the stable
 orchestration interface used by `agentctl preset` and `agentctl doctor`.
 
-### Keenable and Tavily search
+### Search-enhanced daily development
 
-The starter Store includes four search profiles that keep authentication
-choices explicit:
+`daily` includes Context7, Fetch, standard Chrome DevTools, and CloakBrowser-
+backed Chrome DevTools. Use standard Chrome to control a real browser profile
+and CloakBrowser for the default isolated development browser.
+
+Models without a built-in web-search tool can use `daily-search`, which adds
+both Brave and Exa:
 
 ```bash
-# Keenable: anonymous when the key is absent, higher limits when it is present.
-mcpctl apply --target codex --profile search-keenable
-KEENABLE_API_KEY=... mcpctl apply --target codex --profile search-keenable
-
-# Tavily: choose exactly one mode.
-mcpctl apply --target codex --profile search-tavily-keyless
-TAVILY_API_KEY=... mcpctl apply --target codex --profile search-tavily-api
-mcpctl apply --target codex --profile search-tavily-oauth
+BRAVE_API_KEY=... EXA_API_KEY=... \
+  mcpctl apply --target codex --profile daily-search
 ```
 
-Keenable's anonymous mode and Tavily's keyless mode need no account Secret.
-The API-key profiles can read `KEENABLE_API_KEY` or `TAVILY_API_KEY` from the
-environment, or the named `keenable_api_key` / `tavily_api_key` entry from an
-encrypted Secret source. Tavily OAuth credentials remain owned by each MCP
-client and are intentionally excluded from Store backup; complete the client
-login again after restoring onto a new machine.
+The keys can come from `BRAVE_API_KEY` and `EXA_API_KEY` or the corresponding
+encrypted Secret entries. Keenable and Tavily remain available as catalog
+servers for one-off customization, but authentication variants do not each
+create another task profile:
+
+```bash
+mcpctl --target codex --profile daily --enable keenable
+mcpctl --target codex --profile daily --enable tavily-keyless
+TAVILY_API_KEY=... \
+  mcpctl --target codex --profile daily --enable tavily-api
+```
 
 The three Tavily definitions share a mutually exclusive variant group. The
 guided CLI and Worker UI automatically switch modes, while a hand-written
@@ -356,29 +357,17 @@ selection rather than client-specific configuration:
 ```json
 {
   "schema": 1,
-  "name": "frontend",
-  "description": "Frontend development and browser debugging",
+  "name": "daily-search",
+  "description": "Daily development plus Brave and Exa search",
   "extends": [
-    "base"
+    "daily"
   ],
   "enable": [
-    "chrome-devtools"
+    "brave",
+    "exa"
   ],
   "disable": [],
-  "target_overrides": {
-    "claude": {
-      "enable": [
-        "brave"
-      ],
-      "disable": []
-    },
-    "codex": {
-      "enable": [
-        "exa"
-      ],
-      "disable": []
-    }
-  }
+  "target_overrides": {}
 }
 ```
 
@@ -398,8 +387,8 @@ Useful inspection commands:
 
 ```bash
 mcpctl profile list
-mcpctl profile show frontend
-mcpctl profile show frontend --target codex
+mcpctl profile show daily
+mcpctl profile show daily-search --target codex
 mcpctl server list
 mcpctl server list --target codex --json
 mcpctl server doctor --all --json
@@ -429,7 +418,7 @@ existing Profile; its global rules and other target overrides are preserved.
 One-off changes do not modify the saved profile:
 
 ```bash
-mcpctl --target codex --profile frontend \
+mcpctl --target codex --profile daily \
   --enable github --disable chrome-devtools
 ```
 
@@ -440,8 +429,8 @@ selection is stored as an override for only that client:
 mcpctl profile create native-codex \
   --extends reverse-native \
   --target codex \
-  --enable ghidra \
-  --disable lldb \
+  --enable lldb \
+  --disable frida \
   --description "My Codex reverse workspace"
 ```
 
@@ -449,39 +438,23 @@ The guided customizer performs the same operation when “Save as a reusable
 target-specific profile” is selected. Existing profile files are never
 overwritten by `profile create`.
 
-The starter presets are deliberately narrow so an agent does not load several
-large, overlapping tool schemas at once:
+The starter Store exposes a small task-oriented set instead of one profile per
+server or authentication mode:
 
 | Profile | Enabled MCP servers |
 | --- | --- |
-| `base` | Context7 |
-| `coding` | Context7 and GitHub |
-| `browser-debug` | Context7 and standard Chrome DevTools |
-| `browser-research` | Chrome DevTools connected to CloakBrowser |
-| `browser-flow` | Playwright connected to CloakBrowser |
-| `browser-headless` | Isolated Playwright with no display server |
-| `reverse-native` / `reverse` | Radare2 and LLDB |
-| `reverse-ghidra` | Ghidra GUI bridge |
-| `reverse-ghidra-headless` | PyGhidra with no GUI or display server |
-| `reverse-android` | JADX and Apktool |
+| `daily` | Context7, Fetch, real Chrome DevTools, and CloakBrowser DevTools |
+| `daily-search` | `daily` plus both Brave and Exa |
+| `reverse-web` | `daily` plus persistent JS reverse debugging |
+| `reverse-native` | Ghidra, IDALib, Radare2, and Frida |
 | `reverse-mobile` | JADX, Apktool, and Frida |
-| `reverse-ida` | IDA Pro through idalib |
-| `reverse-cutter` | Cutter GUI backed by Rizin |
-| `reverse-js` | JS debugging in persistent headed Chrome |
-| `reverse-js-isolated` | JS debugging with disposable browser state |
-| `reverse-js-cloak` | JS debugging through CloakBrowser |
-| `reverse-headless` | Radare2, GDB, LLDB, PyGhidra, Frida, and headless Playwright |
-| `reverse-debian-headless` | `reverse-headless` plus licensed IDALib and Apktool |
-| `reverse-gui` | Ghidra, Cutter, JADX, and Burp for Xvfb/xpra hosts |
+| `reverse-headless` | PyGhidra, GDB, LLDB, Radare2, and headless Playwright |
 | `reverse-windows` | x64dbg and Frida inside a Windows VM or VPS |
-| `web-capture` | Authenticated local Anything Analyzer MCP |
-| `web-reverse` | Burp and CloakBrowser-backed Chrome DevTools |
-| `web-reverse-full` | Burp, Anything Analyzer, Cloak DevTools, and JS reverse debugging |
-| `search-keenable` | Context7 and Keenable, anonymous or optional API key |
-| `search-tavily-keyless` | Context7 and Tavily Search/Extract without a key |
-| `search-tavily-api` | Context7 and Tavily with an API key |
-| `search-tavily-oauth` | Context7 and Tavily with client-owned OAuth |
-| `frontend`, `research`, `off` | Existing development, search, and removal workflows |
+| `off` | No managed MCP servers |
+
+GitHub, Docker, Computer Use, OpenAI developer docs, Burp, Anything Analyzer,
+alternate JS runtimes, and alternate search providers stay in the catalog for
+explicit `--enable` use instead of multiplying the default profile list.
 
 ## Catalog
 
@@ -855,10 +828,10 @@ does not protect a compromised, already-unlocked workstation.
 Applying a new profile reconciles the target's actual managed entries:
 
 ```text
-frontend -> reverse
+daily-search -> reverse-native
 
-remove: brave, chrome-devtools
-add:    radare2, lldb
+remove: brave, exa, context7, fetch, chrome-devtools, chrome-devtools-cloak
+add:    ghidra, idalib, radare2, frida
 ```
 
 Unrelated entries and non-MCP configuration remain untouched. Local

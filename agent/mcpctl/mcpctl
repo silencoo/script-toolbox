@@ -856,7 +856,7 @@ run_interactive() {
       break
     fi
     if [ -z "$current_profile" ] &&
-       [ "${profile_names[$entry]}" = "frontend" ]; then
+       [ "${profile_names[$entry]}" = "daily" ]; then
       default_profile_index=$((entry + 1))
     fi
   done
@@ -1576,7 +1576,7 @@ if [ "$COMMAND" = "init" ]; then
   chmod 600 "$STORE_DIR/catalog.json" "$STORE_DIR/profiles/"*.json
   ok "initialized MCP store at $STORE_DIR"
   log "Next: edit catalog.json and profiles/, then run:"
-  log "  mcpctl plan --target claude --profile frontend --store $(json_quote "$STORE_DIR")"
+  log "  mcpctl plan --target claude --profile daily --store $(json_quote "$STORE_DIR")"
   exit 0
 fi
 

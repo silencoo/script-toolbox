@@ -47,7 +47,7 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.4.1");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.4.2");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
@@ -63,6 +63,38 @@ assert.deepEqual(JSON.parse(run(["list", "--store", store, "--json"])), [
   { name: "backend-dev", description: "Build reliable backend services across supported agents." },
   { name: "frontend-dev", description: "Build responsive frontend interfaces across supported agents." }
 ]);
+
+// Editing through a managed target link changes the canonical Store directly.
+// The named Skill can be reviewed and force re-added to accept its new checksum,
+// while normal Store reads continue to reject the unacknowledged drift.
+const storedFrontend = join(store, "skills", "frontend-dev");
+const storedFrontendMarkdown = join(storedFrontend, "SKILL.md");
+await writeFile(
+  storedFrontendMarkdown,
+  `${await readFile(storedFrontendMarkdown, "utf8")}\nUpdated intentionally.\n`
+);
+const driftedStatus = spawnSync(process.execPath, [
+  engine, "status", "--store", store
+], { encoding: "utf8" });
+assert.notEqual(driftedStatus.status, 0);
+assert.match(driftedStatus.stderr, /changed outside skillsctl/);
+const reAddPreview = spawnSync(process.execPath, [
+  engine, "skill", "add", storedFrontend, "--name", "frontend-dev",
+  "--store", store, "--force"
+], { encoding: "utf8" });
+assert.notEqual(reAddPreview.status, 0);
+assert.match(reAddPreview.stderr, /preview complete; re-run with --yes/);
+assert.match(run([
+  "skill", "add", storedFrontend, "--name", "frontend-dev",
+  "--store", store, "--force", "--yes"
+]), /Added skill 'frontend-dev'/);
+assert.match(run(["status", "--store", store]), /Skills:\s+2/);
+assert.match(await readFile(storedFrontendMarkdown, "utf8"), /Updated intentionally\./);
+// Keep the later unmanaged-import fixture identical to the accepted Store copy.
+await writeFile(
+  join(frontend, "SKILL.md"),
+  await readFile(storedFrontendMarkdown, "utf8")
+);
 
 run(["pack", "add", "frontend", "frontend-dev", "--store", store, "--yes"]);
 run(["pack", "add", "backend", "backend-dev", "--store", store, "--yes"]);

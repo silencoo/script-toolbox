@@ -1,5 +1,25 @@
 # Changelog — agent/
 
+## 2026-08-13 — compact MCP task profiles
+
+- Reduced the bundled MCP profile catalog from 32 overlapping presets and
+  fragments to eight task profiles: `daily`, `daily-search`, five focused
+  reverse-engineering profiles, and `off`. The daily browser suite now keeps
+  both CloakBrowser-backed DevTools and real Chrome DevTools, while Brave and
+  Exa are isolated in the optional search-enhanced daily profile.
+- Added the portable Fetch server to the starter catalog, made `daily` the
+  guided default, and updated profile, remote-restore, and end-to-end tests for
+  the consolidated layout. Specialized servers remain available through
+  one-off `--enable` customization.
+
+## 2026-08-13 — managed Skill update recovery
+
+- Fixed the documented Skills checksum-recovery loop: an intentionally edited
+  managed Skill can now be previewed and force re-added from its canonical
+  directory, while unrelated Store drift continues to fail closed. Documented
+  the explicit re-add → validate → encrypted backup flow for an attached
+  Workspace. Bumped `skillsctl` to 0.4.2.
+
 ## 2026-08-12 — incremental MCP target switches
 
 - Expanded the platform contract beyond macOS. Linux CI is now named

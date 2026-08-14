@@ -1,11 +1,13 @@
 {
   "schema": 1,
   "name": "reverse-native",
-  "description": "Native static analysis and dynamic debugging with Radare2 and LLDB",
+  "description": "Native binary analysis with Ghidra, IDALib, Radare2, and Frida",
   "extends": [],
   "enable": [
+    "ghidra",
+    "idalib",
     "radare2",
-    "lldb"
+    "frida"
   ],
   "disable": [],
   "target_overrides": {}

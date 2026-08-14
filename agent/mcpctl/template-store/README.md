@@ -14,19 +14,18 @@ The `mcpctl` configuration menu can create `.sops.yaml` from a public age
 recipient and launch `mcpctl secrets edit`. Never enter or store the matching
 private age identity in this directory.
 
-The included profiles cover coding, standard, headless, and CloakBrowser-backed
-browser work; native, Ghidra, Android, IDA, Frida, Cutter, JavaScript, Debian
-Headless, and Windows reverse engineering; Burp- and Anything
-Analyzer-assisted web analysis; search; and an `off` profile. Most profiles
-stay intentionally narrow so unrelated MCP schemas are not loaded into every
-agent session. The broader `reverse-headless`, `reverse-debian-headless`,
-`reverse-gui`, and `web-reverse-full` profiles are explicit lab bundles.
+The included profiles are deliberately compact. `daily` combines Context7,
+Fetch, standard Chrome DevTools for a real browser, and CloakBrowser-backed
+Chrome DevTools for the default isolated development browser. `daily-search`
+adds both Brave and Exa for models without native web search. Reverse work is
+grouped by task into web, native, mobile, headless, and Windows profiles, plus
+an `off` profile.
 
-The search presets include Keenable anonymous/optional-key access and three
-mutually exclusive Tavily modes: keyless, API key, and client-owned OAuth.
-Their API keys use Secret descriptors and request headers rather than URL
-parameters. OAuth tokens stay in the MCP client and are not part of this
-Store.
+Keenable and the three mutually exclusive Tavily authentication modes remain
+available as catalog servers for one-off customization. They do not each add
+another task profile. Their API keys use Secret descriptors and request
+headers rather than URL parameters. OAuth tokens stay in the MCP client and
+are not part of this Store.
 
 Local research entries describe human guidance in `setup` and machine-readable
 installation, platform, dependency, and service checks in `host`. Applying a

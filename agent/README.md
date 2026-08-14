@@ -250,8 +250,8 @@ pack. For personal profiles and encrypted restoration, initialize a separate
 ./mcpctl/mcpctl sync
 ./mcpctl/mcpctl import --target claude
 ./mcpctl/mcpctl import --target codex
-./mcpctl/mcpctl plan --target claude --profile frontend
-./mcpctl/mcpctl --target codex --profile reverse
+./mcpctl/mcpctl plan --target claude --profile daily
+./mcpctl/mcpctl --target codex --profile reverse-native
 ./mcpctl/mcpctl server doctor --all
 ./mcpctl/mcpctl server install gdb
 ./mcpctl/mcpctl server enable gdb --target codex
