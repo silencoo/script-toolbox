@@ -92,7 +92,7 @@ agentctl workspace status
 
 Windows PowerShell users can install the same standalone controller runtime
 with native `.cmd` shims (Git for Windows/MSYS2 Bash remains the execution
-backend):
+backend). The installer provisions its own checksum-verified `jq.exe`:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1

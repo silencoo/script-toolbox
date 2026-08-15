@@ -59,6 +59,10 @@ try {
         'PowerShell install omitted its ownership manifest'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-launcher.ps1') -PathType Leaf) `
         'PowerShell install omitted the shared launcher'
+    Assert-True (Test-Path -LiteralPath (Join-Path $Prefix 'jq.exe') -PathType Leaf) `
+        'PowerShell install omitted the managed jq dependency'
+    $jqVersion = (& (Join-Path $Prefix 'jq.exe') --version | Out-String).Trim()
+    Assert-True ($jqVersion -eq 'jq-1.8.2') "managed jq returned an unexpected version: $jqVersion"
     foreach ($name in @('agentctl', 'mcpctl', 'promptctl', 'skillsctl')) {
         Assert-True (Test-Path -LiteralPath (Join-Path $Prefix "$name.cmd") -PathType Leaf) `
             "PowerShell install omitted $name.cmd"
@@ -82,6 +86,8 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $Runtime)) 'PowerShell uninstall left the runtime'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $Prefix 'agentctl.cmd'))) `
         'PowerShell uninstall left an owned shim'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $Prefix 'jq.exe'))) `
+        'PowerShell uninstall left the managed jq dependency'
 
     New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
     $ownedConflict = Join-Path $Prefix 'mcpctl.cmd'
@@ -103,7 +109,7 @@ try {
     Assert-True ((Get-Content -LiteralPath $ownedConflict -Raw) -eq "@echo user-owned`r`n") `
         'PowerShell uninstall did not restore the user-owned shim'
 
-    Write-Host 'ok  : PowerShell preview, Windows shims, conflicts, and reversible uninstall'
+    Write-Host 'ok  : PowerShell preview, managed jq, Windows shims, conflicts, and reversible uninstall'
 } finally {
     if (Test-Path -LiteralPath $TestRoot) {
         Remove-Item -LiteralPath $TestRoot -Recurse -Force

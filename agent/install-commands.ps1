@@ -6,7 +6,8 @@ Installs the script-toolbox controller suite from PowerShell on Windows.
 .DESCRIPTION
 The controller runtime remains Bash-based. This installer locates Git for
 Windows/MSYS2 Bash, delegates the standalone runtime transaction to the shared
-Shell installer, and adds native .cmd shims for PowerShell and cmd.exe.
+Shell installer, installs a pinned jq binary, and adds native .cmd shims for
+PowerShell and cmd.exe.
 
 Runs are preview-only unless -Yes is supplied. Managed conflicts are preserved
 only with -Force, and -Uninstall restores those tracked backups.
@@ -47,6 +48,8 @@ foreach ($argument in @($CompatibilityArguments)) {
 $Commands = @('agentctl', 'mcpctl', 'promptctl', 'skillsctl')
 $ManifestName = '.script-toolbox-agent-powershell.json'
 $LauncherName = '.script-toolbox-agent-launcher.ps1'
+$JqName = 'jq.exe'
+$JqVersion = '1.8.2'
 $SourceRoot = [IO.Path]::GetFullPath($PSScriptRoot)
 $ShellInstaller = Join-Path $SourceRoot 'install-commands.sh'
 
@@ -127,13 +130,14 @@ function Quote-PowerShellLiteral([string]$Value) {
 
 function New-LauncherContent(
     [string]$Bash,
-    [hashtable]$Targets
+    [hashtable]$Targets,
+    [string]$CommandDirectory
 ) {
     $targetLines = foreach ($name in $Commands) {
         "    $(Quote-PowerShellLiteral $name) = $(Quote-PowerShellLiteral $Targets[$name])"
     }
     return @"
-# script-toolbox-agent PowerShell launcher v1
+# script-toolbox-agent PowerShell launcher v2
 param(
     [Parameter(Mandatory = `$true, Position = 0)]
     [ValidateSet('agentctl', 'mcpctl', 'promptctl', 'skillsctl')]
@@ -143,6 +147,7 @@ param(
 )
 `$ErrorActionPreference = 'Stop'
 `$bash = $(Quote-PowerShellLiteral $Bash)
+`$env:Path = $(Quote-PowerShellLiteral ($CommandDirectory + ';')) + `$env:Path
 `$targets = @{
 $($targetLines -join "`r`n")
 }
@@ -155,6 +160,65 @@ try {
     exit 1
 }
 "@
+}
+
+function Get-JqAsset {
+    $architecture = if (-not [string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITEW6432)) {
+        $env:PROCESSOR_ARCHITEW6432
+    } else {
+        $env:PROCESSOR_ARCHITECTURE
+    }
+    switch ($architecture.ToUpperInvariant()) {
+        'AMD64' {
+            $asset = 'jq-windows-amd64.exe'
+            $sha256 = 'a6fc67fedaf9128a3309a1e2ebb8b986aeccf70122ee46d2cb4849e423f0c627'
+        }
+        'ARM64' {
+            $asset = 'jq-windows-arm64.exe'
+            $sha256 = '083b5377392bc57cf27052b6d20a2d927770683bca844632901ff38b4b7b0ac7'
+        }
+        'X86' {
+            $asset = 'jq-windows-i386.exe'
+            $sha256 = 'a99cb668f95bdd788d9ee20529613b115e5d2a0d7f9127ee6976607e878558ba'
+        }
+        default {
+            throw "jq does not publish a supported Windows binary for architecture '$architecture'."
+        }
+    }
+    return [pscustomobject]@{
+        url = "https://github.com/jqlang/jq/releases/download/jq-$JqVersion/$asset"
+        sha256 = $sha256
+        architecture = $architecture
+    }
+}
+
+function Save-VerifiedDownload(
+    [string]$Uri,
+    [string]$ExpectedSha256,
+    [string]$Destination
+) {
+    $previousProgressPreference = $ProgressPreference
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        if ($PSVersionTable.PSVersion.Major -le 5) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        }
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
+        $actual = Get-FileSha256 $Destination
+        if (-not [string]::Equals($actual, $ExpectedSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Downloaded jq checksum mismatch: expected $ExpectedSha256, found $actual"
+        }
+    } finally {
+        $ProgressPreference = $previousProgressPreference
+        if ((Test-Path -LiteralPath $Destination -PathType Leaf) -and
+            -not [string]::Equals(
+                (Get-FileSha256 $Destination),
+                $ExpectedSha256,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            Remove-Item -LiteralPath $Destination -Force
+        }
+    }
 }
 
 function New-CmdShimContent([string]$Name) {
@@ -221,6 +285,19 @@ function Write-AtomicText(
     }
 }
 
+function Write-AtomicBinary([string]$Path, [string]$Source) {
+    $parent = Split-Path -Parent $Path
+    $temporary = Join-Path $parent ('.' + [IO.Path]::GetFileName($Path) + '.tmp.' + [Guid]::NewGuid().ToString('N'))
+    try {
+        Copy-Item -LiteralPath $Source -Destination $temporary
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    } finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+}
+
 function Split-UserPath([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
     return @($Value.Split(';') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -275,9 +352,20 @@ function Invoke-ShellInstaller(
     if ($Force -and -not $Removing) { $arguments += '--force' }
     if ($Removing) { $arguments += '--uninstall' }
     if ($Apply) { $arguments += '--yes' }
-    & $Bash @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "The shared Bash installer failed with exit code $LASTEXITCODE"
+    # The shared installer emits its own PATH warning. Temporarily exposing the
+    # Windows command directory keeps that nested warning from contradicting
+    # the single, actionable PowerShell warning printed after installation.
+    $originalPath = $env:Path
+    if (-not (Test-PathEntry @(Split-UserPath $env:Path) $Prefix)) {
+        $env:Path = "$Prefix;$env:Path"
+    }
+    try {
+        & $Bash @arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "The shared Bash installer failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        $env:Path = $originalPath
     }
 }
 
@@ -317,7 +405,7 @@ foreach ($name in $Commands) {
 $expectedFiles = New-Object System.Collections.Generic.List[object]
 $expectedFiles.Add([pscustomobject]@{
     path = Join-Path $Prefix $LauncherName
-    content = New-LauncherContent $BashPath $targets
+    content = New-LauncherContent $BashPath $targets $Prefix
     encoding = New-Object System.Text.UTF8Encoding($true)
 })
 foreach ($name in $Commands) {
@@ -327,7 +415,6 @@ foreach ($name in $Commands) {
         encoding = [Text.Encoding]::ASCII
     })
 }
-
 if ($Uninstall) {
     if ($null -eq $ExistingManifest) {
         Write-Info "No managed PowerShell installation found at $Prefix"
@@ -377,6 +464,13 @@ if ($Uninstall) {
     return
 }
 
+$jqAsset = Get-JqAsset
+$expectedBinaries = @([pscustomobject]@{
+    path = Join-Path $Prefix $JqName
+    url = $jqAsset.url
+    sha256 = $jqAsset.sha256
+})
+
 $plans = New-Object System.Collections.Generic.List[object]
 $conflicts = New-Object System.Collections.Generic.List[string]
 foreach ($file in $expectedFiles) {
@@ -402,12 +496,57 @@ foreach ($file in $expectedFiles) {
         path = $file.path
         content = $file.content
         encoding = $file.encoding
+        source = $null
+        expectedSha256 = $null
+        kind = 'text'
         action = $action
         backup = $backup
     })
     if ($action -eq 'backup') {
         Write-Info "  backup   $($file.path) -> $backup"
         Write-Info "  create   $($file.path)"
+    } else {
+        Write-Info ("  {0,-8} {1}" -f $action, $file.path)
+    }
+}
+foreach ($file in $expectedBinaries) {
+    $entry = Find-ManifestFile $ExistingManifest $file.path
+    $action = 'create'
+    $backup = if ($null -ne $entry) { [string]$entry.backup } else { '' }
+    if (Test-Path -LiteralPath $file.path) {
+        if (-not (Test-Path -LiteralPath $file.path -PathType Leaf)) {
+            $action = 'conflict'
+        } elseif ([string]::Equals(
+            (Get-FileSha256 $file.path),
+            $file.sha256,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            $action = 'keep'
+        } elseif (Test-PreviousManagedFile $entry $file.path) {
+            $action = 'refresh'
+        } elseif ($Force -and [string]::IsNullOrWhiteSpace($backup)) {
+            $action = 'backup'
+            $backup = "$($file.path).backup.$(Get-Date -Format yyyyMMddHHmmss).$PID"
+        } else {
+            $action = 'conflict'
+        }
+    }
+    if ($action -eq 'conflict') { $conflicts.Add($file.path) }
+    $plans.Add([pscustomobject]@{
+        path = $file.path
+        content = $null
+        encoding = $null
+        source = $file.url
+        expectedSha256 = $file.sha256
+        kind = 'binary'
+        action = $action
+        backup = $backup
+    })
+    if ($action -eq 'backup') {
+        Write-Info "  backup   $($file.path) -> $backup"
+        Write-Info "  download jq $JqVersion -> $($file.path)"
+    } elseif ($action -eq 'create' -or $action -eq 'refresh') {
+        Write-Info ("  {0,-8} jq {1} -> {2}" -f $action, $JqVersion, $file.path)
     } else {
         Write-Info ("  {0,-8} {1}" -f $action, $file.path)
     }
@@ -425,44 +564,66 @@ if (-not $Yes) {
     return
 }
 
-New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
-Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys -Apply
-
-foreach ($plan in $plans) {
-    if ($plan.action -eq 'keep') { continue }
-    if ($plan.action -eq 'backup') {
-        Move-Item -LiteralPath $plan.path -Destination $plan.backup
+$downloads = @{}
+try {
+    foreach ($plan in $plans) {
+        if ($plan.kind -ne 'binary' -or $plan.action -eq 'keep') { continue }
+        $temporary = Join-Path ([IO.Path]::GetTempPath()) ('script-toolbox-jq-' + [Guid]::NewGuid().ToString('N') + '.exe')
+        Write-Info "  fetch    jq $JqVersion ($($jqAsset.architecture))"
+        $downloads[$plan.path] = $temporary
+        Save-VerifiedDownload $plan.source $plan.expectedSha256 $temporary
     }
-    Write-AtomicText $plan.path $plan.content $plan.encoding
-}
 
-$pathAdded = $false
-if ($null -ne $ExistingManifest -and $ExistingManifest.path_added) {
-    $pathAdded = $true
-}
-if ($AddToPath -and (Add-UserPath $Prefix)) {
-    $pathAdded = $true
-}
+    New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
+    Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys -Apply
 
-$manifestFiles = foreach ($plan in $plans) {
-    [ordered]@{
-        path = $plan.path
-        sha256 = Get-FileSha256 $plan.path
-        backup = $plan.backup
+    foreach ($plan in $plans) {
+        if ($plan.action -eq 'keep') { continue }
+        if ($plan.action -eq 'backup') {
+            Move-Item -LiteralPath $plan.path -Destination $plan.backup
+        }
+        if ($plan.kind -eq 'binary') {
+            Write-AtomicBinary $plan.path $downloads[$plan.path]
+        } else {
+            Write-AtomicText $plan.path $plan.content $plan.encoding
+        }
+    }
+
+    $pathAdded = $false
+    if ($null -ne $ExistingManifest -and $ExistingManifest.path_added) {
+        $pathAdded = $true
+    }
+    if ($AddToPath -and (Add-UserPath $Prefix)) {
+        $pathAdded = $true
+    }
+
+    $manifestFiles = foreach ($plan in $plans) {
+        [ordered]@{
+            path = $plan.path
+            sha256 = Get-FileSha256 $plan.path
+            backup = $plan.backup
+        }
+    }
+    $manifest = [ordered]@{
+        schema = 1
+        kind = 'script-toolbox-agent-powershell'
+        installed_at = (Get-Date).ToUniversalTime().ToString('o')
+        prefix = $Prefix
+        runtime = $Runtime
+        bash = $BashPath
+        path_added = $pathAdded
+        jq_version = $JqVersion
+        files = @($manifestFiles)
+    }
+    $manifestJson = $manifest | ConvertTo-Json -Depth 6
+    Write-AtomicText $ManifestPath ($manifestJson + "`r`n") (New-Object System.Text.UTF8Encoding($true))
+} finally {
+    foreach ($temporary in $downloads.Values) {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
     }
 }
-$manifest = [ordered]@{
-    schema = 1
-    kind = 'script-toolbox-agent-powershell'
-    installed_at = (Get-Date).ToUniversalTime().ToString('o')
-    prefix = $Prefix
-    runtime = $Runtime
-    bash = $BashPath
-    path_added = $pathAdded
-    files = @($manifestFiles)
-}
-$manifestJson = $manifest | ConvertTo-Json -Depth 6
-Write-AtomicText $ManifestPath ($manifestJson + "`r`n") (New-Object System.Text.UTF8Encoding($true))
 
 Write-Ok "installed agentctl, mcpctl, promptctl, and skillsctl in $Prefix"
 Write-Ok "standalone runtime: $Runtime"
