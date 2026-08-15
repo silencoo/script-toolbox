@@ -90,9 +90,22 @@ agentctl status all
 agentctl workspace status
 ```
 
-The runtime is copied to `~/.local/share/script-toolbox/agent`; it excludes the
-rest of this repository and keeps working if the checkout is removed. Update
-the shared runtime through any controller:
+Windows PowerShell users can install the same standalone controller runtime
+with native `.cmd` shims (Git for Windows/MSYS2 Bash remains the execution
+backend):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1 `
+  -Yes -AddToPath
+agentctl status all
+```
+
+The Bash installer copies the runtime to
+`~/.local/share/script-toolbox/agent`; PowerShell defaults to
+`%LOCALAPPDATA%\script-toolbox\agent`. Both exclude the rest of this repository
+and keep working if the checkout is removed. Update the shared runtime through
+any controller:
 
 ```bash
 agentctl update --check

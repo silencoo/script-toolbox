@@ -78,9 +78,28 @@ standalone installer:
 ```
 
 It copies a minimal runtime—not the repository—to
-`~/.local/share/script-toolbox/agent`, then creates reversible command links.
+`~/.local/share/script-toolbox/agent`, then creates reversible commands.
 The checkout can be removed afterward. `--link` retains the old
 repository-backed development mode.
+
+On Windows, run the native PowerShell installer from the `agent` directory.
+It still uses Git for Windows/MSYS2 Bash for the controller runtime, but adds
+`agentctl.cmd`, `mcpctl.cmd`, `promptctl.cmd`, and `skillsctl.cmd` so the same
+commands work from PowerShell and `cmd.exe`:
+
+```powershell
+# Preview
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-commands.ps1
+
+# Install and add the command directory to the current user's PATH
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-commands.ps1 `
+  -Yes -AddToPath
+```
+
+The Windows defaults are `%LOCALAPPDATA%\script-toolbox\agent` for the runtime
+and `%LOCALAPPDATA%\script-toolbox\bin` for commands. Git Bash users can keep
+using `./install-commands.sh --yes`; on Windows it creates managed Bash launcher
+files rather than symlinks, avoiding MSYS symlink-copy behavior.
 
 All controllers expose the same atomic suite updater, so any one of these
 commands updates all four entrypoints without mixing runtime revisions:
@@ -223,20 +242,21 @@ associative arrays or Bash lowercase expansion. CI runs the complete
 | --- | --- | --- |
 | macOS | Native Terminal with system Bash 3.2+ | Complete `agent/test.sh`, TUI build, and installed-runtime tests on `macos-latest` |
 | Linux | Native Bash on an XDG-style home | Complete `agent/test.sh`, TUI build, controller integration, and Worker tests on `ubuntu-latest` |
-| Windows | Git for Windows/MSYS2 Bash with Node.js 22, Python, and jq | Portable Node controller suites, real Skills junction operations, Provider/Preset transactions, TUI launch, and an isolated Git Bash MCP apply on `windows-latest` |
+| Windows | PowerShell 5.1+ installer and command shims backed by Git for Windows/MSYS2 Bash, with Node.js 22, Python, and jq | PowerShell install/upgrade/conflict/uninstall transactions, Git Bash installed launchers, portable Node controllers, real Skills junctions, Provider/Preset transactions, TUI launch, and an isolated MCP apply on `windows-latest` |
 
 Windows controller scripts are launched through Bash rather than relying on
 Windows to execute a Unix shebang. `SCRIPT_TOOLBOX_BASH` can select a specific
 `bash.exe`; script paths and arguments remain separate argv values, including
 paths containing spaces or non-ASCII characters. Portable configuration uses
-`%APPDATA%` for catalogs and `%LOCALAPPDATA%` for device state. Pure
-PowerShell controller entrypoints and a native Windows standalone installer
-are not claimed yet.
+`%APPDATA%` for catalogs and `%LOCALAPPDATA%` for device state. The PowerShell
+installer is native and reversible, while the controllers themselves remain
+Bash programs; this is not a pure-PowerShell reimplementation of agentctl.
 
-The Windows integration test is
-[`tests/windows-git-bash-smoke.sh`](./tests/windows-git-bash-smoke.sh). It
-mutates only temporary HOME/AppData/client paths and never touches a runner's
-real agent configuration.
+The Windows integration tests are
+[`tests/windows-git-bash-smoke.sh`](./tests/windows-git-bash-smoke.sh) and
+[`tests/install-commands-powershell-test.ps1`](./tests/install-commands-powershell-test.ps1).
+They mutate only temporary HOME/AppData/client paths and never touch a runner's
+real agent configuration or user PATH.
 
 ## Task-oriented MCP profiles
 

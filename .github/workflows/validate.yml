@@ -140,6 +140,9 @@ jobs:
       - name: Test controller entrypoints through Git Bash on Windows
         shell: bash
         run: ./agent/tests/windows-git-bash-smoke.sh
+      - name: Test native PowerShell controller installer
+        shell: powershell
+        run: ./agent/tests/install-commands-powershell-test.ps1
       - name: Test Promptctl on Windows
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/tests
       - name: Test Promptctl advanced Codex deployer on Windows

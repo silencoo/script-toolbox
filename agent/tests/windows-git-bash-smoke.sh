@@ -91,4 +91,26 @@ bash "$AGENT_DIR/promptctl/promptctl" --help >/dev/null ||
 node "$AGENT_DIR/tui/dist/toolbox-tui.mjs" --help >/dev/null ||
   fail "portable TUI bundle did not launch on Windows"
 
+# Git for Windows may emulate `ln -s` by copying the source script. Such a
+# copy resolves BASH_SOURCE beside the command prefix and cannot find
+# ctl-lib.sh. The installer must use managed launcher files on Windows instead.
+COMMAND_PREFIX="${TEST_ROOT}/controller bin"
+COMMAND_RUNTIME="${TEST_ROOT}/controller runtime"
+bash "$AGENT_DIR/install-commands.sh" \
+  --prefix "$COMMAND_PREFIX" \
+  --runtime "$COMMAND_RUNTIME" \
+  --release-id windows-smoke \
+  --yes >/dev/null
+for name in agentctl mcpctl promptctl skillsctl; do
+  [ -f "$COMMAND_PREFIX/$name" ] && [ ! -L "$COMMAND_PREFIX/$name" ] ||
+    fail "Windows installer did not create a regular launcher for $name"
+  grep -q '^# script-toolbox-agent-command v1$' "$COMMAND_PREFIX/$name" ||
+    fail "Windows $name launcher is missing its ownership marker"
+done
+[ "$("$COMMAND_PREFIX/agentctl" --version)" = "agentctl 0.17.1" ] ||
+  fail "installed Windows agentctl launcher did not resolve its runtime"
+bash "$COMMAND_RUNTIME/install-commands.sh" \
+  --prefix "$COMMAND_PREFIX" --uninstall --yes >/dev/null
+[ ! -e "$COMMAND_RUNTIME" ] || fail "Windows launcher uninstall left its runtime"
+
 printf 'ok  : Windows Git Bash controllers, spaced paths, MCP apply, and TUI launch\n'

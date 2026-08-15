@@ -1,5 +1,20 @@
 # Changelog — agent/
 
+## 2026-08-15 — Windows controller installation
+
+- Added a preview-first Windows PowerShell 5.1+ standalone installer with
+  reversible `.cmd` shims for agentctl, mcpctl, promptctl, and skillsctl,
+  tracked conflict backups, optional user-PATH ownership, and exact uninstall.
+  Git for Windows/MSYS2 Bash remains the controller execution backend.
+- Fixed Git Bash standalone installs on hosts where MSYS emulated `ln -s` by
+  copying each controller. Windows now receives managed Bash launcher files,
+  so `BASH_SOURCE` resolves the copied runtime instead of incorrectly looking
+  for `ctl-lib.sh` beside `~/.local/bin`. Existing byte-identical installer
+  0.2 copies migrate without `--force` when their manifest still matches.
+- Added isolated Git Bash and PowerShell install/invoke/reinstall/conflict/
+  uninstall coverage on `windows-latest`, including paths with spaces and
+  non-ASCII characters. Bumped the shared Shell installer to 0.3.0.
+
 ## 2026-08-15 — Codex App Realtime passthrough compatibility
 
 - Made Codex attachment drift field-scoped instead of whole-file-scoped.

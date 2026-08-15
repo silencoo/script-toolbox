@@ -7,7 +7,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST_NAME=".script-toolbox-agent-commands"
 RUNTIME_MARKER_NAME=".script-toolbox-agent-runtime"
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # shellcheck source=ctl-lib.sh
 . "${SCRIPT_DIR}/ctl-lib.sh"
@@ -21,6 +21,23 @@ DRY_RUN=0
 UNINSTALL=0
 FORCE=0
 
+detect_command_style() {
+  case "${SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE:-auto}" in
+    auto) ;;
+    symlink|launcher)
+      printf '%s\n' "$SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE"
+      return 0
+      ;;
+    *) die "SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE must be auto, symlink, or launcher" ;;
+  esac
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*) printf '%s\n' launcher ;;
+    *) printf '%s\n' symlink ;;
+  esac
+}
+
+COMMAND_STYLE="$(detect_command_style)"
+
 usage() {
   cat <<'EOF'
 install-commands.sh — install the script-toolbox controller suite
@@ -30,8 +47,14 @@ Usage:
   ./agent/install-commands.sh --link [options]
   ./agent/install-commands.sh --uninstall [options]
 
+Windows PowerShell:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1 -Yes -AddToPath
+
 The default standalone mode copies only the required controller runtime to
-~/.local/share/script-toolbox/agent and creates four links in ~/.local/bin.
+~/.local/share/script-toolbox/agent and creates four commands in ~/.local/bin.
+On Git for Windows/MSYS2 it uses launcher files instead of unreliable emulated
+symlinks. install-commands.ps1 additionally creates PowerShell/cmd.exe shims.
 The source repository can then be moved or deleted. The default run previews
 the plan; pass --yes to apply it.
 
@@ -314,6 +337,44 @@ path_identity() {
   stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null || true
 }
 
+bash_launcher_content() {
+  local target="$1"
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' '# script-toolbox-agent-command v1'
+  printf 'exec bash %q "$@"\n' "$target"
+}
+
+launcher_matches() {
+  local launcher="$1" target="$2"
+  [ -f "$launcher" ] && [ ! -L "$launcher" ] || return 1
+  [ "$(cat "$launcher")" = "$(bash_launcher_content "$target")" ]
+}
+
+legacy_msys_copy_matches() {
+  local command_path="$1" target="$2"
+  [ -f "$command_path" ] && [ ! -L "$command_path" ] &&
+    [ -f "$target" ] && cmp -s "$command_path" "$target"
+}
+
+managed_command_matches() {
+  local command_path="$1" target="$2"
+  case "$COMMAND_STYLE" in
+    launcher) launcher_matches "$command_path" "$target" ;;
+    symlink) [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target" ] ;;
+  esac
+}
+
+create_managed_command() {
+  local command_path="$1" target="$2"
+  case "$COMMAND_STYLE" in
+    launcher)
+      bash_launcher_content "$target" > "$command_path"
+      chmod 700 "$command_path"
+      ;;
+    symlink) ln -s "$target" "$command_path" ;;
+  esac
+}
+
 stage_runtime() {
   local runtime_parent marker_temp
   resolve_release_id
@@ -327,6 +388,7 @@ stage_runtime() {
   copy_runtime_file platform-command.mjs
   copy_runtime_file platform-paths.mjs
   copy_runtime_file install-commands.sh
+  copy_runtime_file install-commands.ps1
   copy_runtime_file update-commands.sh
 
   copy_runtime_file agentctl/agentctl
@@ -528,7 +590,7 @@ begin_command_install_transaction() {
 
 remove_transaction_link() {
   local link="$1" target="$2"
-  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+  if managed_command_matches "$link" "$target"; then
     rm -f "$link"
     return 0
   fi
@@ -683,11 +745,11 @@ install_commands() {
     action="create"
     backup="$MANIFEST_BACKUP"
 
-    if [ -L "$link" ]; then
+    if managed_command_matches "$link" "$target"; then
+      action="keep"
+    elif [ -L "$link" ]; then
       current_target="$(readlink "$link")"
-      if [ "$current_target" = "$target" ]; then
-        action="keep"
-      elif [ -n "$MANIFEST_TARGET" ] && [ "$current_target" = "$MANIFEST_TARGET" ]; then
+      if [ -n "$MANIFEST_TARGET" ] && [ "$current_target" = "$MANIFEST_TARGET" ]; then
         action="refresh"
       elif [ "$FORCE" = 1 ] && [ -z "$MANIFEST_BACKUP" ]; then
         action="backup"
@@ -695,7 +757,19 @@ install_commands() {
         action="conflict"
       fi
     elif [ -e "$link" ]; then
-      if [ "$FORCE" = 1 ] && [ -z "$MANIFEST_BACKUP" ]; then action="backup"; else action="conflict"; fi
+      if [ -n "$MANIFEST_TARGET" ] &&
+         legacy_msys_copy_matches "$link" "$MANIFEST_TARGET"; then
+        # Git for Windows can emulate `ln -s` by copying the target when native
+        # symlinks are unavailable. Installer 0.2 created those copies, whose
+        # BASH_SOURCE then resolved beside ~/.local/bin instead of the runtime.
+        # A matching manifest and byte-identical target make this migration
+        # ownership-safe without requiring --force.
+        action="refresh"
+      elif [ "$FORCE" = 1 ] && [ -z "$MANIFEST_BACKUP" ]; then
+        action="backup"
+      else
+        action="conflict"
+      fi
     fi
 
     if [ "$action" = "backup" ]; then
@@ -758,7 +832,7 @@ install_commands() {
       temp_link="$(mktemp "${PREFIX}/.${name}.tmp.XXXXXX")"
       LINK_CURRENT_TEMP="$temp_link"
       rm -f "$temp_link"
-      ln -s "$target" "$temp_link"
+      create_managed_command "$temp_link" "$target"
       mv "$temp_link" "$link"
       LINK_CURRENT_TEMP=""
     fi
@@ -799,7 +873,7 @@ install_commands() {
 }
 
 uninstall_commands() {
-  local name="" target="" backup="" extra="" link current_target marker
+  local name="" target="" backup="" extra="" link marker
   local line_number=0 incomplete=0
 
   [ "$FORCE" != 1 ] || die "--force is only valid when installing commands"
@@ -813,7 +887,8 @@ uninstall_commands() {
     line_number=$((line_number + 1))
     [ "$line_number" -ne 1 ] || continue
     link="${PREFIX}/${name}"
-    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+    if managed_command_matches "$link" "$target" ||
+       legacy_msys_copy_matches "$link" "$target"; then
       log "  remove   $link"
       [ -z "$backup" ] || log "  restore  $backup -> $link"
     elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
@@ -851,7 +926,8 @@ uninstall_commands() {
     line_number=$((line_number + 1))
     [ "$line_number" -ne 1 ] || continue
     link="${PREFIX}/${name}"
-    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+    if managed_command_matches "$link" "$target" ||
+       legacy_msys_copy_matches "$link" "$target"; then
       rm -f "$link"
       if [ -n "$backup" ] && { [ -e "$backup" ] || [ -L "$backup" ]; }; then mv "$backup" "$link"; fi
     elif [ ! -e "$link" ] && [ ! -L "$link" ] && [ -n "$backup" ]; then

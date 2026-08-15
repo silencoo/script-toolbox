@@ -103,6 +103,8 @@ done
   fail "standalone runtime omitted the cross-platform command launcher"
 [ -f "$RUNTIME/platform-paths.mjs" ] ||
   fail "standalone runtime omitted the cross-platform path resolver"
+[ -f "$RUNTIME/install-commands.ps1" ] ||
+  fail "standalone runtime omitted the Windows PowerShell installer"
 [ "$(mode_of "$PREFIX/.script-toolbox-agent-commands")" = "600" ] ||
   fail "command manifest is not mode 600"
 [ "$(mode_of "$RUNTIME/.script-toolbox-agent-runtime")" = "600" ] ||
@@ -259,5 +261,50 @@ chmod 600 "$LEGACY_PREFIX/.script-toolbox-agent-commands"
 [ "$(readlink "$LEGACY_PREFIX/agentctl")" = "$LEGACY_RUNTIME/agentctl/agentctl" ] ||
   fail "v1 repository-link installation did not migrate to standalone"
 "$LEGACY_RUNTIME/install-commands.sh" --prefix "$LEGACY_PREFIX" --uninstall --yes >/dev/null
+
+# Git for Windows can copy a symlink target instead of creating a real link.
+# Windows installs therefore use small Bash launchers, which preserve the
+# runtime-relative BASH_SOURCE contract without requiring Developer Mode.
+LAUNCHER_PREFIX="${TEST_ROOT}/launcher bin"
+LAUNCHER_RUNTIME="${TEST_ROOT}/launcher runtime"
+SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
+  "$INSTALLER" --prefix "$LAUNCHER_PREFIX" --runtime "$LAUNCHER_RUNTIME" \
+    --release-id launcher-v1 --yes >/dev/null 2>&1
+for name in agentctl mcpctl promptctl skillsctl; do
+  [ -f "$LAUNCHER_PREFIX/$name" ] && [ ! -L "$LAUNCHER_PREFIX/$name" ] ||
+    fail "launcher install did not create a regular $name command"
+  grep -q '^# script-toolbox-agent-command v1$' "$LAUNCHER_PREFIX/$name" ||
+    fail "launcher install omitted the ownership marker for $name"
+done
+[ "$("$LAUNCHER_PREFIX/agentctl" --version)" = "agentctl 0.17.1" ] ||
+  fail "agentctl did not work through a managed Bash launcher"
+SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
+  "$LAUNCHER_RUNTIME/install-commands.sh" --prefix "$LAUNCHER_PREFIX" \
+    --uninstall --yes >/dev/null
+
+# Installer 0.2's MSYS symlink emulation produced byte-identical regular
+# copies. A matching v2 manifest lets 0.3 migrate those broken commands to
+# launchers without --force.
+MSYS_PREFIX="${TEST_ROOT}/legacy msys bin"
+MSYS_RUNTIME="${TEST_ROOT}/legacy msys runtime"
+SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=symlink \
+  "$INSTALLER" --prefix "$MSYS_PREFIX" --runtime "$MSYS_RUNTIME" \
+    --release-id legacy-msys --yes >/dev/null 2>&1
+for name in agentctl mcpctl promptctl skillsctl; do
+  target="$(readlink "$MSYS_PREFIX/$name")"
+  rm -f "$MSYS_PREFIX/$name"
+  cp "$target" "$MSYS_PREFIX/$name"
+  chmod +x "$MSYS_PREFIX/$name"
+done
+SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
+  "$INSTALLER" --prefix "$MSYS_PREFIX" --runtime "$MSYS_RUNTIME" \
+    --release-id migrated-msys --yes >"$TEST_ROOT/msys-migration.out" 2>&1
+grep -q "refresh  $MSYS_PREFIX/agentctl" "$TEST_ROOT/msys-migration.out" ||
+  fail "legacy MSYS command copy was not migrated without --force"
+[ "$("$MSYS_PREFIX/agentctl" --version)" = "agentctl 0.17.1" ] ||
+  fail "migrated MSYS launcher did not resolve the standalone runtime"
+SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
+  "$MSYS_RUNTIME/install-commands.sh" --prefix "$MSYS_PREFIX" \
+    --uninstall --yes >/dev/null
 
 printf '%s\n' "ok  : standalone install, shared updates, conflicts, and recovery"

@@ -740,7 +740,7 @@ remains device-local.
 
 ## Standalone PATH commands
 
-Preview and then install the minimal standalone runtime and command links:
+Preview and then install the minimal standalone runtime and commands:
 
 ```bash
 ./agent/install-commands.sh --prefix "$HOME/.local/bin"
@@ -751,6 +751,24 @@ agentctl workspace status
 mcpctl current --target codex
 promptctl status all
 ```
+
+From Windows PowerShell, preview and install the same Bash-backed runtime with
+native `.cmd` shims:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands.ps1 `
+  -Yes -AddToPath
+
+agentctl status all
+```
+
+The PowerShell installer requires Git for Windows or MSYS2 Bash. Its defaults
+are `%LOCALAPPDATA%\script-toolbox\agent` and
+`%LOCALAPPDATA%\script-toolbox\bin`; use `-BashPath`, `-Runtime`, or `-Prefix`
+to override them. The controllers remain Bash programs, while the installer,
+PowerShell/`cmd.exe` shims, conflict preservation, PATH ownership, and
+uninstall flow are Windows-native.
 
 The runtime lives at `~/.local/share/script-toolbox/agent` by default. It
 contains only controller entrypoints, shared runtime modules, provider setup
@@ -781,6 +799,14 @@ matching managed links/runtime and restores tracked conflicts:
 ```bash
 ./agent/install-commands.sh --prefix "$HOME/.local/bin" --uninstall
 ./agent/install-commands.sh --prefix "$HOME/.local/bin" --uninstall --yes
+```
+
+The PowerShell equivalents use `-Force` and `-Uninstall -Yes`. A user PATH
+entry is removed only when that installer originally added it:
+
+```powershell
+.\agent\install-commands.ps1 -Force -Yes -AddToPath
+.\agent\install-commands.ps1 -Uninstall -Yes
 ```
 
 ## Ownership boundary
