@@ -345,13 +345,41 @@ function Invoke-ShellInstaller(
     [switch]$Apply,
     [switch]$Removing
 ) {
-    $arguments = @($Installer, '--standalone', '--prefix', $PrefixMsys, '--runtime', $RuntimeMsys)
-    if (-not [string]::IsNullOrWhiteSpace($ReleaseId)) {
-        $arguments += @('--release-id', $ReleaseId)
+    # Windows PowerShell 5.1 flattens some array-splatted native arguments in
+    # surprising ways when paths contain spaces or non-ASCII characters. Pass
+    # dynamic values through the child environment and construct argv in Bash,
+    # where every value remains a single, quoted argument.
+    $environmentNames = @(
+        'SCRIPT_TOOLBOX_PS_INSTALLER',
+        'SCRIPT_TOOLBOX_PS_PREFIX',
+        'SCRIPT_TOOLBOX_PS_RUNTIME',
+        'SCRIPT_TOOLBOX_PS_RELEASE',
+        'SCRIPT_TOOLBOX_PS_FORCE',
+        'SCRIPT_TOOLBOX_PS_REMOVE',
+        'SCRIPT_TOOLBOX_PS_APPLY'
+    )
+    $previousEnvironment = @{}
+    foreach ($name in $environmentNames) {
+        $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     }
-    if ($Force -and -not $Removing) { $arguments += '--force' }
-    if ($Removing) { $arguments += '--uninstall' }
-    if ($Apply) { $arguments += '--yes' }
+    $env:SCRIPT_TOOLBOX_PS_INSTALLER = $Installer
+    $env:SCRIPT_TOOLBOX_PS_PREFIX = $PrefixMsys
+    $env:SCRIPT_TOOLBOX_PS_RUNTIME = $RuntimeMsys
+    $env:SCRIPT_TOOLBOX_PS_RELEASE = $ReleaseId
+    $env:SCRIPT_TOOLBOX_PS_FORCE = if ($Force -and -not $Removing) { '1' } else { '0' }
+    $env:SCRIPT_TOOLBOX_PS_REMOVE = if ($Removing) { '1' } else { '0' }
+    $env:SCRIPT_TOOLBOX_PS_APPLY = if ($Apply) { '1' } else { '0' }
+    $bashCommand = @'
+set -e
+set -- "$SCRIPT_TOOLBOX_PS_INSTALLER" --standalone \
+  --prefix "$SCRIPT_TOOLBOX_PS_PREFIX" \
+  --runtime "$SCRIPT_TOOLBOX_PS_RUNTIME"
+[ -z "$SCRIPT_TOOLBOX_PS_RELEASE" ] || set -- "$@" --release-id "$SCRIPT_TOOLBOX_PS_RELEASE"
+[ "$SCRIPT_TOOLBOX_PS_FORCE" != 1 ] || set -- "$@" --force
+[ "$SCRIPT_TOOLBOX_PS_REMOVE" != 1 ] || set -- "$@" --uninstall
+[ "$SCRIPT_TOOLBOX_PS_APPLY" != 1 ] || set -- "$@" --yes
+exec bash "$@"
+'@
     # The shared installer emits its own PATH warning. Temporarily exposing the
     # Windows command directory keeps that nested warning from contradicting
     # the single, actionable PowerShell warning printed after installation.
@@ -360,12 +388,15 @@ function Invoke-ShellInstaller(
         $env:Path = "$Prefix;$env:Path"
     }
     try {
-        & $Bash @arguments
+        & $Bash --noprofile --norc -c $bashCommand
         if ($LASTEXITCODE -ne 0) {
             throw "The shared Bash installer failed with exit code $LASTEXITCODE"
         }
     } finally {
         $env:Path = $originalPath
+        foreach ($name in $environmentNames) {
+            [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+        }
     }
 }
 
@@ -443,12 +474,14 @@ if ($Uninstall) {
         Write-Info "  PATH     remove $Prefix from the user PATH"
     }
     if (-not $Yes) {
-        Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys -Removing
+        Invoke-ShellInstaller -Bash $BashPath -Installer $InstallerMsys `
+            -PrefixMsys $PrefixMsys -RuntimeMsys $RuntimeMsys -Removing
         Write-Info '[preview] no files or PATH settings were changed; re-run with -Uninstall -Yes'
         return
     }
 
-    Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys -Apply -Removing
+    Invoke-ShellInstaller -Bash $BashPath -Installer $InstallerMsys `
+        -PrefixMsys $PrefixMsys -RuntimeMsys $RuntimeMsys -Apply -Removing
     foreach ($entry in $ExistingManifest.files) {
         if (Test-Path -LiteralPath $entry.path -PathType Leaf) {
             Remove-Item -LiteralPath $entry.path -Force
@@ -559,7 +592,8 @@ if ($AddToPath -and -not (Test-PathEntry @(Split-UserPath ([Environment]::GetEnv
 }
 
 if (-not $Yes) {
-    Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys
+    Invoke-ShellInstaller -Bash $BashPath -Installer $InstallerMsys `
+        -PrefixMsys $PrefixMsys -RuntimeMsys $RuntimeMsys
     Write-Info '[preview] no files or PATH settings were changed; re-run with -Yes to apply'
     return
 }
@@ -575,7 +609,8 @@ try {
     }
 
     New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
-    Invoke-ShellInstaller $BashPath $InstallerMsys $PrefixMsys $RuntimeMsys -Apply
+    Invoke-ShellInstaller -Bash $BashPath -Installer $InstallerMsys `
+        -PrefixMsys $PrefixMsys -RuntimeMsys $RuntimeMsys -Apply
 
     foreach ($plan in $plans) {
         if ($plan.action -eq 'keep') { continue }
