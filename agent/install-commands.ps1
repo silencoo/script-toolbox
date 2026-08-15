@@ -112,8 +112,27 @@ function Find-GitBash([string]$Requested) {
     throw 'Git for Windows or MSYS2 Bash with cygpath was not found. Install Git for Windows or pass -BashPath.'
 }
 
-function Convert-ToMsysPath([string]$Path, [string]$Bash) {
-    $output = & $Bash -lc 'cygpath -u -- "$1"' bash $Path 2>&1
+function Find-Cygpath([string]$Bash) {
+    $bashDirectory = Split-Path -Parent $Bash
+    foreach ($candidate in @(
+        (Join-Path $bashDirectory 'cygpath.exe'),
+        (Join-Path $bashDirectory '..\usr\bin\cygpath.exe')
+    )) {
+        try {
+            $full = [IO.Path]::GetFullPath($candidate)
+        } catch {
+            continue
+        }
+        if (Test-Path -LiteralPath $full -PathType Leaf) { return $full }
+    }
+    throw "cygpath.exe could not be found beside the selected Bash: $Bash"
+}
+
+function Convert-ToMsysPath([string]$Path, [string]$Cygpath) {
+    # Invoke cygpath.exe directly. Passing a quoted `$1` through `bash -lc`
+    # loses the embedded quotes under Windows PowerShell 5.1, causing paths
+    # containing spaces to be split and only their final component to survive.
+    $output = & $Cygpath -u -- $Path 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "cygpath could not convert '$Path': $($output -join ' ')"
     }
@@ -345,41 +364,13 @@ function Invoke-ShellInstaller(
     [switch]$Apply,
     [switch]$Removing
 ) {
-    # Windows PowerShell 5.1 flattens some array-splatted native arguments in
-    # surprising ways when paths contain spaces or non-ASCII characters. Pass
-    # dynamic values through the child environment and construct argv in Bash,
-    # where every value remains a single, quoted argument.
-    $environmentNames = @(
-        'SCRIPT_TOOLBOX_PS_INSTALLER',
-        'SCRIPT_TOOLBOX_PS_PREFIX',
-        'SCRIPT_TOOLBOX_PS_RUNTIME',
-        'SCRIPT_TOOLBOX_PS_RELEASE',
-        'SCRIPT_TOOLBOX_PS_FORCE',
-        'SCRIPT_TOOLBOX_PS_REMOVE',
-        'SCRIPT_TOOLBOX_PS_APPLY'
-    )
-    $previousEnvironment = @{}
-    foreach ($name in $environmentNames) {
-        $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    $arguments = @($Installer, '--standalone', '--prefix', $PrefixMsys, '--runtime', $RuntimeMsys)
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseId)) {
+        $arguments += @('--release-id', $ReleaseId)
     }
-    $env:SCRIPT_TOOLBOX_PS_INSTALLER = $Installer
-    $env:SCRIPT_TOOLBOX_PS_PREFIX = $PrefixMsys
-    $env:SCRIPT_TOOLBOX_PS_RUNTIME = $RuntimeMsys
-    $env:SCRIPT_TOOLBOX_PS_RELEASE = $ReleaseId
-    $env:SCRIPT_TOOLBOX_PS_FORCE = if ($Force -and -not $Removing) { '1' } else { '0' }
-    $env:SCRIPT_TOOLBOX_PS_REMOVE = if ($Removing) { '1' } else { '0' }
-    $env:SCRIPT_TOOLBOX_PS_APPLY = if ($Apply) { '1' } else { '0' }
-    $bashCommand = @'
-set -e
-set -- "$SCRIPT_TOOLBOX_PS_INSTALLER" --standalone \
-  --prefix "$SCRIPT_TOOLBOX_PS_PREFIX" \
-  --runtime "$SCRIPT_TOOLBOX_PS_RUNTIME"
-[ -z "$SCRIPT_TOOLBOX_PS_RELEASE" ] || set -- "$@" --release-id "$SCRIPT_TOOLBOX_PS_RELEASE"
-[ "$SCRIPT_TOOLBOX_PS_FORCE" != 1 ] || set -- "$@" --force
-[ "$SCRIPT_TOOLBOX_PS_REMOVE" != 1 ] || set -- "$@" --uninstall
-[ "$SCRIPT_TOOLBOX_PS_APPLY" != 1 ] || set -- "$@" --yes
-exec bash "$@"
-'@
+    if ($Force -and -not $Removing) { $arguments += '--force' }
+    if ($Removing) { $arguments += '--uninstall' }
+    if ($Apply) { $arguments += '--yes' }
     # The shared installer emits its own PATH warning. Temporarily exposing the
     # Windows command directory keeps that nested warning from contradicting
     # the single, actionable PowerShell warning printed after installation.
@@ -388,15 +379,12 @@ exec bash "$@"
         $env:Path = "$Prefix;$env:Path"
     }
     try {
-        & $Bash --noprofile --norc -c $bashCommand
+        & $Bash @arguments
         if ($LASTEXITCODE -ne 0) {
             throw "The shared Bash installer failed with exit code $LASTEXITCODE"
         }
     } finally {
         $env:Path = $originalPath
-        foreach ($name in $environmentNames) {
-            [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
-        }
     }
 }
 
@@ -423,9 +411,10 @@ if ($Prefix.StartsWith($Runtime.TrimEnd('\') + '\', [StringComparison]::OrdinalI
 }
 
 $BashPath = Find-GitBash $BashPath
-$PrefixMsys = Convert-ToMsysPath $Prefix $BashPath
-$RuntimeMsys = Convert-ToMsysPath $Runtime $BashPath
-$InstallerMsys = Convert-ToMsysPath $ShellInstaller $BashPath
+$CygpathPath = Find-Cygpath $BashPath
+$PrefixMsys = Convert-ToMsysPath $Prefix $CygpathPath
+$RuntimeMsys = Convert-ToMsysPath $Runtime $CygpathPath
+$InstallerMsys = Convert-ToMsysPath $ShellInstaller $CygpathPath
 $ManifestPath = Join-Path $Prefix $ManifestName
 $ExistingManifest = Read-Manifest $ManifestPath
 
