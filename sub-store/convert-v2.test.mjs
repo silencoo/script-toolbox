@@ -93,14 +93,37 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
     "Proxies",
     "Auto",
     "Japan",
-    "Singapore",
     "Taiwan",
+    "Singapore",
     "Fallback",
     "Direct",
   ]);
   assert.equal(groups.get("Gemini").proxies[0], "United States");
   assert.ok(!groups.get("Gemini").proxies.includes("Hong Kong"));
   assert.ok(!groups.get("Gemini").proxies.includes("[grok] Residential AI"));
+  assert.deepEqual(Array.from(groups.get("Proxies").proxies.slice(0, 6)), [
+    "Auto",
+    "Japan",
+    "United States",
+    "Taiwan",
+    "Singapore",
+    "Hong Kong",
+  ]);
+
+  const generatedCountryOrder = profile["proxy-groups"]
+    .map((group) => group.name)
+    .filter((name) =>
+      ["Japan", "United States", "Taiwan", "Singapore", "Hong Kong"].includes(
+        name,
+      ),
+    );
+  assert.deepEqual(Array.from(generatedCountryOrder), [
+    "Japan",
+    "United States",
+    "Taiwan",
+    "Singapore",
+    "Hong Kong",
+  ]);
 
   for (const name of [
     "Japan",

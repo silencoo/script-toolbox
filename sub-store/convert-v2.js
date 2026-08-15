@@ -674,33 +674,41 @@ function buildRules({ quicEnabled: e, countries: o }) {
   return (e || t.unshift("AND,((DST-PORT,443),(NETWORK,UDP)),REJECT"), t);
 }
 
-// 精简版国家列表：只保留 HK, TW, US, SG, JP
+// 精简版国家列表。香港节点的服务解锁能力较弱，因此在通用国家组中垫底。
+const COUNTRY_PRIORITY = [
+  "Japan",
+  "United States",
+  "Taiwan",
+  "Singapore",
+  "Hong Kong",
+];
+
 const countriesMeta = {
-  "Hong Kong": {
-    pattern: "(?i)(香港|HK|Hong Kong|HongKong|hongkong|🇭🇰)",
-    icon: zIcon("flag/108/HongKong.png"),
-  },
   Japan: {
     pattern: "(?i)(日本|JP|Japan|东京|大阪|埼玉|🇯🇵)",
     icon: zIcon("flag/108/Japan.png"),
-  },
-  Taiwan: {
-    pattern: "(?i)(台湾|TW|Taiwan|新北|彰化|🇹🇼)",
-    icon: zIcon("flag/108/Taiwan.png"),
   },
   "United States": {
     pattern: "(?i)(美国|US|United States|USA|🇺🇸|圣何塞|洛杉矶|阿什本)",
     icon: zIcon("flag/108/UnitedStatesofAmerica.png"),
   },
+  Taiwan: {
+    pattern: "(?i)(台湾|TW|Taiwan|新北|彰化|🇹🇼)",
+    icon: zIcon("flag/108/Taiwan.png"),
+  },
   Singapore: {
     pattern: "(?i)(新加坡|SG|Singapore|狮城|🇸🇬)",
     icon: zIcon("flag/108/Singapore.png"),
+  },
+  "Hong Kong": {
+    pattern: "(?i)(香港|HK|Hong Kong|HongKong|hongkong|🇭🇰)",
+    icon: zIcon("flag/108/HongKong.png"),
   },
 };
 
 function parseCountries(realProxyNames) {
   const r = Object.create(null);
-  const countryOrder = Object.keys(countriesMeta);
+  const countryOrder = COUNTRY_PRIORITY;
   const n = {};
   for (const e of countryOrder) n[e] = getCountryRegex(e);
 
@@ -712,7 +720,9 @@ function parseCountries(realProxyNames) {
       }
     }
   }
-  return Object.entries(r).map(([e, t]) => ({ country: e, count: t }));
+  return countryOrder
+    .filter((country) => r[country])
+    .map((country) => ({ country: country, count: r[country] }));
 }
 
 function getCountryRegex(country) {
@@ -800,11 +810,9 @@ function buildProxyGroups({
 
   const pools = Object.assign({ ai: [], residential: [] }, nodePools);
   const autoRefs = standardProxyNames.length > 0 ? [PROXY_GROUPS.AUTO] : [];
-  const geminiCountryRefs = [
-    "Japan",
-    "Singapore",
-    "Taiwan",
-  ].filter((country) => t.includes(country));
+  const geminiCountryRefs = ["Japan", "Taiwan", "Singapore"].filter(
+    (country) => t.includes(country),
+  );
   const geminiProxies = uniqueList([
     ...(t.includes("United States") ? ["United States"] : []),
     PROXY_GROUPS.MANUAL,
