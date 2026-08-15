@@ -21,20 +21,20 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "FAIL: $Message" }
 }
 
-function Invoke-Installer([string[]]$Arguments) {
-    & $Installer @Arguments
+function Invoke-Installer([hashtable]$NamedArguments, [string[]]$ExtraArguments = @()) {
+    & $Installer @NamedArguments @ExtraArguments
     if ($LASTEXITCODE -notin @(0, $null)) {
         throw "FAIL: installer exited with $LASTEXITCODE"
     }
 }
 
 try {
-    $common = @(
-        '-Prefix', $Prefix,
-        '-Runtime', $Runtime,
-        '-BashPath', $Bash,
-        '-ReleaseId', 'powershell-test-v1'
-    )
+    $common = @{
+        Prefix = $Prefix
+        Runtime = $Runtime
+        BashPath = $Bash
+        ReleaseId = 'powershell-test-v1'
+    }
 
     $preview = & $Installer @common 2>&1 | Out-String
     Assert-True ($preview -match '\[preview\]') 'install preview did not describe preview mode'
@@ -52,7 +52,7 @@ try {
 
     # GNU-style boolean flags are accepted for users moving from the Shell
     # installer, while canonical PowerShell examples continue to use -Yes.
-    Invoke-Installer ($common + '--yes')
+    Invoke-Installer $common @('--yes')
     Assert-True (Test-Path -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -PathType Leaf) `
         'PowerShell install omitted the standalone runtime marker'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-powershell.json') -PathType Leaf) `
@@ -74,15 +74,22 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
     Assert-True ($version -eq 'agentctl 0.17.1') "agentctl.cmd returned an unexpected version: $version"
 
-    $reinstall = & $Installer @common -Yes 2>&1 | Out-String
+    $reinstallArguments = $common.Clone()
+    $reinstallArguments.Yes = $true
+    $reinstall = & $Installer @reinstallArguments 2>&1 | Out-String
     Assert-True ($reinstall -match 'keep\s+.*agentctl\.cmd') 'PowerShell reinstall was not shim-idempotent'
 
-    $uninstallPreview = & $Installer @common -Uninstall 2>&1 | Out-String
+    $uninstallPreviewArguments = $common.Clone()
+    $uninstallPreviewArguments.Uninstall = $true
+    $uninstallPreview = & $Installer @uninstallPreviewArguments 2>&1 | Out-String
     Assert-True ($uninstallPreview -match '\[preview\]') 'uninstall preview did not describe preview mode'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix 'agentctl.cmd')) 'uninstall preview removed a shim'
     Assert-True (Test-Path -LiteralPath $Runtime) 'uninstall preview removed the runtime'
 
-    Invoke-Installer ($common + @('-Uninstall', '-Yes'))
+    $uninstallArguments = $common.Clone()
+    $uninstallArguments.Uninstall = $true
+    $uninstallArguments.Yes = $true
+    Invoke-Installer $uninstallArguments
     Assert-True (-not (Test-Path -LiteralPath $Runtime)) 'PowerShell uninstall left the runtime'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $Prefix 'agentctl.cmd'))) `
         'PowerShell uninstall left an owned shim'
@@ -94,7 +101,9 @@ try {
     [IO.File]::WriteAllText($ownedConflict, "@echo user-owned`r`n", [Text.Encoding]::ASCII)
     $refused = $false
     try {
-        & $Installer @common -Yes *> $null
+        $conflictArguments = $common.Clone()
+        $conflictArguments.Yes = $true
+        & $Installer @conflictArguments *> $null
     } catch {
         $refused = $true
     }
@@ -102,10 +111,13 @@ try {
     Assert-True ((Get-Content -LiteralPath $ownedConflict -Raw) -eq "@echo user-owned`r`n") `
         'refused PowerShell shim conflict was modified'
 
-    Invoke-Installer ($common + @('-Force', '-Yes'))
+    $forceArguments = $common.Clone()
+    $forceArguments.Force = $true
+    $forceArguments.Yes = $true
+    Invoke-Installer $forceArguments
     Assert-True ((Get-Content -LiteralPath $ownedConflict -Raw) -ne "@echo user-owned`r`n") `
         '-Force did not install over the tracked PowerShell shim backup'
-    Invoke-Installer ($common + @('-Uninstall', '-Yes'))
+    Invoke-Installer $uninstallArguments
     Assert-True ((Get-Content -LiteralPath $ownedConflict -Raw) -eq "@echo user-owned`r`n") `
         'PowerShell uninstall did not restore the user-owned shim'
 
