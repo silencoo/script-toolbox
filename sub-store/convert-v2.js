@@ -803,10 +803,10 @@ function buildProxyGroups({
   const geminiCountryRefs = [
     "Japan",
     "Singapore",
-    "United States",
     "Taiwan",
   ].filter((country) => t.includes(country));
   const geminiProxies = uniqueList([
+    ...(t.includes("United States") ? ["United States"] : []),
     PROXY_GROUPS.MANUAL,
     ...autoRefs,
     ...geminiCountryRefs,
@@ -862,8 +862,8 @@ function buildProxyGroups({
   const aiNodeCandidates = uniqueList([...pools.ai, ...pools.residential]);
   const aiDefaultProxies = uniqueList([
     ...aiNodeCandidates,
-    PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.MANUAL,
+    PROXY_GROUPS.FALLBACK,
     PROXY_GROUPS.DIRECT,
   ]);
 

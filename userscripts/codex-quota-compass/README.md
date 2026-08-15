@@ -10,6 +10,7 @@ A Tampermonkey or Violentmonkey userscript that adds an on-page quota dashboard 
 - Withholds the quota estimate when today's daily row is missing or zero instead of treating delayed data as zero usage
 - Labels quota and dollar results as provisional because the source endpoints can refresh at different times
 - Shows daily usage for the current cycle and up to 30 days of recent history
+- Places a compact quota analytics control in the Codex page header, with a floating fallback if the header markup changes
 - Provides a responsive panel that works on desktop and narrow screens
 
 The provisional quota formula is:
@@ -28,7 +29,7 @@ The dollar estimate uses the script's configurable default of `$40 / 1,000 credi
 2. Open the [raw userscript](https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/codex-quota-compass/codex-quota-compass.user.js).
 3. Confirm the installation in your userscript manager.
 4. Sign in to ChatGPT and visit the [Codex analytics settings page](https://chatgpt.com/codex/cloud/settings/analytics).
-5. Select **Run Analytics** in the lower-right corner.
+5. Select **Quota Analytics** in the Codex page header.
 
 ## How it works
 

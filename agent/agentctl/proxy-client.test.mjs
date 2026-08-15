@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import {
   chmod,
@@ -15,14 +16,21 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { gzipSync } from "node:zlib";
+import {
+  constants as zlibConstants,
+  createDeflateRaw,
+  deflateRawSync,
+  gzipSync
+} from "node:zlib";
 
 import {
+  allowedPassthroughWebSocketRoute,
   allowedRoute,
   circuitPersister,
   jsonlLogger,
   joinUpstream,
   pruneLogs,
+  projectPassthroughUrl,
   rotateLog,
   upstreamHeaders,
   validateConfig,
@@ -123,6 +131,59 @@ function rawHttp(url, { method = "GET", headers = {}, body = null } = {}) {
   });
 }
 
+function rawWebSocketRoundTrip(url, { headers = {}, frame, responseBytes }) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) rejectRequest(error);
+      else resolveRequest(value);
+    };
+    const request = httpRequest(url, {
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": Buffer.from("agentctl-test-key").toString("base64"),
+        ...headers
+      }
+    });
+    const timer = setTimeout(() => {
+      request.destroy();
+      finish(new Error("WebSocket round trip timed out"));
+    }, 3000);
+    request.on("response", (response) => {
+      response.resume();
+      finish(new Error(`expected WebSocket upgrade, received ${response.statusCode}`));
+    });
+    request.on("upgrade", (response, socket, head) => {
+      const chunks = [];
+      let bytes = 0;
+      const accept = (chunk) => {
+        if (!chunk?.length || settled) return;
+        chunks.push(Buffer.from(chunk));
+        bytes += chunk.length;
+        if (bytes >= responseBytes) {
+          const body = Buffer.concat(chunks, bytes);
+          socket.end();
+          finish(null, { response, body });
+        }
+      };
+      socket.on("data", accept);
+      socket.on("error", (error) => finish(error));
+      socket.on("end", () => {
+        if (bytes < responseBytes) finish(new Error("WebSocket closed before response frame"));
+      });
+      accept(head);
+      socket.write(frame);
+    });
+    request.on("error", (error) => finish(error));
+    request.end();
+  });
+}
+
 async function waitFor(check, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -133,14 +194,24 @@ async function waitFor(check, timeoutMs = 3000) {
   throw new Error("condition did not become true");
 }
 
-function websocketFrame(value, { masked = false } = {}) {
-  const payload = Buffer.from(JSON.stringify(value));
-  assert.ok(payload.length < 126);
+function websocketDataFrame(payload, {
+  masked = false,
+  fin = true,
+  opcode = 0x1,
+  rsv1 = false
+} = {}) {
+  if (!Buffer.isBuffer(payload)) payload = Buffer.from(payload);
+  assert.ok(payload.length <= 0xffff);
   const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
-  const frame = Buffer.alloc(2 + (masked ? 4 : 0) + payload.length);
-  frame[0] = 0x81;
-  frame[1] = payload.length | (masked ? 0x80 : 0);
+  const extendedBytes = payload.length < 126 ? 0 : 2;
+  const frame = Buffer.alloc(2 + extendedBytes + (masked ? 4 : 0) + payload.length);
+  frame[0] = (fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | opcode;
+  frame[1] = (payload.length < 126 ? payload.length : 126) | (masked ? 0x80 : 0);
   let offset = 2;
+  if (extendedBytes) {
+    frame.writeUInt16BE(payload.length, offset);
+    offset += extendedBytes;
+  }
   if (masked) {
     mask.copy(frame, offset);
     offset += 4;
@@ -149,6 +220,53 @@ function websocketFrame(value, { masked = false } = {}) {
     frame[offset + index] = masked ? payload[index] ^ mask[index % 4] : payload[index];
   }
   return frame;
+}
+
+function websocketFrame(value, options = {}) {
+  return websocketDataFrame(Buffer.from(JSON.stringify(value)), options);
+}
+
+function perMessageDeflatePayload(value) {
+  const compressed = deflateRawSync(Buffer.from(JSON.stringify(value)), {
+    flush: zlibConstants.Z_SYNC_FLUSH,
+    finishFlush: zlibConstants.Z_SYNC_FLUSH
+  });
+  assert.deepEqual(compressed.subarray(-4), Buffer.from([0x00, 0x00, 0xff, 0xff]));
+  return Buffer.from(compressed.subarray(0, -4));
+}
+
+async function perMessageDeflatePayloads(values) {
+  const deflater = createDeflateRaw();
+  let chunks = [];
+  deflater.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+  const payloads = [];
+  try {
+    for (const value of values) {
+      await new Promise((resolveFlush, rejectFlush) => {
+        const reject = (error) => rejectFlush(error);
+        deflater.once("error", reject);
+        deflater.write(Buffer.from(JSON.stringify(value)));
+        deflater.flush(zlibConstants.Z_SYNC_FLUSH, () => {
+          deflater.off("error", reject);
+          const compressed = Buffer.concat(chunks);
+          chunks = [];
+          try {
+            assert.deepEqual(
+              compressed.subarray(-4),
+              Buffer.from([0x00, 0x00, 0xff, 0xff])
+            );
+            payloads.push(Buffer.from(compressed.subarray(0, -4)));
+            resolveFlush();
+          } catch (error) {
+            rejectFlush(error);
+          }
+        });
+      });
+    }
+  } finally {
+    deflater.destroy();
+  }
+  return payloads;
 }
 
 test("WebSocket observer reads split masked requests and unmasked usage without retaining frames", () => {
@@ -179,6 +297,60 @@ test("WebSocket observer reads split masked requests and unmasked usage without 
   }]);
 });
 
+test("WebSocket observer side-decompresses fragmented permessage-deflate with context takeover", async () => {
+  const values = [{
+    type: "response.create",
+    response: { model: "gpt-ws-compressed", input: "repeated-context-".repeat(20) }
+  }, {
+    type: "response.completed",
+    response: {
+      model: "gpt-ws-compressed",
+      output: "repeated-context-".repeat(20),
+      usage: { input_tokens: 41, output_tokens: 7 }
+    }
+  }];
+  const compressed = await perMessageDeflatePayloads(values);
+  const payloads = [];
+  const observe = websocketObserver(8192, (payload) => payloads.push(payload), {
+    perMessageDeflate: { no_context_takeover: false, window_bits: 15 }
+  });
+  const split = Math.floor(compressed[0].length / 2);
+  const first = websocketDataFrame(compressed[0].subarray(0, split), {
+    fin: false,
+    masked: true,
+    opcode: 0x1,
+    rsv1: true
+  });
+  const continuation = websocketDataFrame(compressed[0].subarray(split), {
+    masked: true,
+    opcode: 0x0
+  });
+  observe(first.subarray(0, 5));
+  observe(first.subarray(5));
+  observe(continuation);
+  observe(websocketDataFrame(compressed[1], { opcode: 0x1, rsv1: true }));
+  await observe.close();
+  assert.deepEqual(payloads, values);
+  assert.deepEqual(observe.summary(), { status: "complete", reasons: [] });
+});
+
+test("WebSocket observer reports degradation without interrupting frame handling", async () => {
+  const payloads = [];
+  const observe = websocketObserver(4096, (payload) => payloads.push(payload), {
+    perMessageDeflate: { no_context_takeover: false, window_bits: 15 }
+  });
+  observe(websocketDataFrame(Buffer.from([0xff, 0xff, 0xff, 0xff]), {
+    opcode: 0x1,
+    rsv1: true
+  }));
+  await observe.close();
+  assert.deepEqual(payloads, []);
+  assert.deepEqual(observe.summary(), {
+    status: "degraded",
+    reasons: ["inflate_error"]
+  });
+});
+
 test("proxy route and URL projection is protocol-bounded", () => {
   assert.equal(allowedRoute("anthropic_messages", "POST", "/v1/messages"), true);
   assert.equal(allowedRoute("openai_responses", "POST", "/v1/responses"), true);
@@ -200,6 +372,32 @@ test("proxy route and URL projection is protocol-bounded", () => {
     true
   );
   assert.equal(allowedRoute("openai_responses", "POST", "/v1/../admin"), false);
+  const passthrough = { mode: "openai_subscription_passthrough" };
+  assert.equal(allowedRoute("openai_responses", "POST", "/realtime/calls", passthrough), true);
+  assert.equal(allowedRoute("openai_responses", "POST", "/alpha/search", passthrough), true);
+  assert.equal(allowedRoute("openai_responses", "POST", "/live", passthrough), false);
+  assert.equal(allowedPassthroughWebSocketRoute("/responses"), true);
+  assert.equal(allowedPassthroughWebSocketRoute("/realtime"), true);
+  assert.equal(allowedPassthroughWebSocketRoute("/live/rtc_voice-1"), true);
+  assert.equal(allowedPassthroughWebSocketRoute("/live/not-a-call"), false);
+
+  const projectedResponse = projectPassthroughUrl(new URL(
+    "http://127.0.0.1:17321/backend-api/codex/realtime/responses?stream=true"
+  ));
+  assert.equal(projectedResponse.pathname, "/responses");
+  assert.equal(projectedResponse.search, "?stream=true");
+  const projectedCall = projectPassthroughUrl(new URL(
+    "http://127.0.0.1:17321/backend-api/codex/realtime/realtime/calls?intent=quicksilver"
+  ));
+  assert.equal(projectedCall.pathname, "/realtime/calls");
+  const projectedWebSocket = projectPassthroughUrl(new URL(
+    "ws://127.0.0.1:17321/backend-api/codex/realtime"
+  ));
+  assert.equal(projectedWebSocket.pathname, "/realtime");
+  const projectedLive = projectPassthroughUrl(new URL(
+    "ws://127.0.0.1:17321/backend-api/codex/live/rtc_voice-1"
+  ));
+  assert.equal(projectedLive.pathname, "/live/rtc_voice-1");
 
   const responses = joinUpstream(
     "https://api.example.com/v1?api-version=2026-01-01",
@@ -959,9 +1157,35 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
   }
 });
 
-test("OpenAI subscription passthrough is byte-preserving and attach/detach restores Codex exactly", async () => {
+test("OpenAI subscription passthrough is byte-preserving and detach preserves Codex App edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-proxy-passthrough-"));
   const observed = [];
+  const observedWebSockets = [];
+  const websocketRequestPayload = {
+    type: "response.create",
+    response: {
+      model: "gpt-ws-compressed",
+      service_tier: "fast",
+      input: "PASSTHROUGH-WEBSOCKET-BODY-MARKER"
+    }
+  };
+  const websocketResponsePayload = {
+    type: "response.completed",
+    response: {
+      id: "resp_ws_passthrough",
+      model: "gpt-5.6-sol",
+      service_tier: "default",
+      usage: { input_tokens: 29, output_tokens: 8 }
+    }
+  };
+  const websocketRequestFrame = websocketDataFrame(
+    perMessageDeflatePayload(websocketRequestPayload),
+    { masked: true, rsv1: true }
+  );
+  const websocketResponseFrame = websocketDataFrame(
+    perMessageDeflatePayload(websocketResponsePayload),
+    { rsv1: true }
+  );
   const upstreamResponseBody = Buffer.from(
     'data: {"type":"response.completed","response":{' +
     '"id":"resp_passthrough","model":"gpt-5.6-sol","service_tier":"default",' +
@@ -977,6 +1201,19 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
         headers: request.headers,
         body: Buffer.concat(chunks)
       });
+      if (request.url.startsWith("/backend-api/codex/realtime/calls")) {
+        response.writeHead(200, {
+          "content-type": "application/sdp",
+          location: "/v1/realtime/calls/rtc_passthrough_test"
+        });
+        response.end("v=0\r\n");
+        return;
+      }
+      if (request.url === "/backend-api/codex/alpha/search") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"output":"search result","results":[]}');
+        return;
+      }
       response.writeHead(200, {
         "content-type": "text/event-stream",
         "content-encoding": "gzip",
@@ -986,6 +1223,41 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
       response.write(compressedUpstreamResponse.subarray(0, split));
       setImmediate(() => response.end(compressedUpstreamResponse.subarray(split)));
     });
+  });
+  upstream.on("upgrade", (request, socket, head) => {
+    const record = {
+      path: request.url,
+      headers: request.headers,
+      chunks: [],
+      bytes: 0,
+      body: null
+    };
+    observedWebSockets.push(record);
+    const accept = createHash("sha1")
+      .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "Sec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover; server_no_context_takeover",
+      "",
+      ""
+    ].join("\r\n"));
+    const readFrame = (chunk) => {
+      if (!chunk?.length || record.body) return;
+      record.chunks.push(Buffer.from(chunk));
+      record.bytes += chunk.length;
+      if (record.bytes >= websocketRequestFrame.length) {
+        record.body = Buffer.concat(record.chunks, record.bytes);
+        socket.write(websocketResponseFrame);
+        setTimeout(() => socket.end(), 20);
+      }
+    };
+    socket.on("data", readFrame);
+    socket.on("error", () => {});
+    readFrame(head);
   });
   const upstreamPort = await listen(upstream);
   const proxyPort = await freePort();
@@ -1019,7 +1291,10 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
       "plan", "passthrough", "--target", "codex", ...commonProxy, "--json"
     ]).stdout);
     assert.equal(plan.mode, "openai_subscription_passthrough");
-    assert.equal(plan.local_base_url, `http://127.0.0.1:${proxyPort}`);
+    assert.equal(
+      plan.local_base_url,
+      `http://127.0.0.1:${proxyPort}/backend-api/codex/realtime`
+    );
     assert.equal(plan.auth.mode, "openai_passthrough");
     assert.equal(plan.models.requested_default, "unchanged");
     assert.equal(plan.retry.max_attempts, 1);
@@ -1041,14 +1316,15 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
     const requestBody = Buffer.from(
       '{"model":"gpt-requested-exactly","service_tier":"fast","input":"PASSTHROUGH-BODY-MARKER","stream":true}'
     );
-    const response = await rawHttp(`http://127.0.0.1:${proxyPort}/responses`, {
+    const response = await rawHttp(`${plan.local_base_url}/responses`, {
       method: "POST",
       headers: {
         authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
         "chatgpt-account-id": "official-account-id",
         "user-agent": "codex-cli/integration-test",
         "accept-encoding": "gzip",
-        "content-type": "application/json"
+        "content-type": "application/json",
+        connection: "close"
       },
       body: requestBody
     });
@@ -1065,6 +1341,90 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
     assert.equal(observed[0].headers["accept-encoding"], "gzip");
     assert.deepEqual(observed[0].body, requestBody);
 
+    const realtimeBody = Buffer.from(JSON.stringify({
+      sdp: "v=offer\r\n",
+      session: { type: "realtime", model: "gpt-realtime" }
+    }));
+    const realtime = await rawHttp(
+      `${plan.local_base_url}/realtime/calls?intent=quicksilver&architecture=avas`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+          "content-type": "application/json",
+          connection: "close"
+        },
+        body: realtimeBody
+      }
+    );
+    assert.equal(realtime.status, 200);
+    assert.equal(realtime.headers.location, "/v1/realtime/calls/rtc_passthrough_test");
+    assert.deepEqual(realtime.body, Buffer.from("v=0\r\n"));
+
+    const searchBody = Buffer.from(
+      '{"id":"search-test","model":"gpt-search","commands":{"search_query":[{"q":"test"}]}}'
+    );
+    const search = await rawHttp(`${plan.local_base_url}/alpha/search`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+        "content-type": "application/json",
+        connection: "close"
+      },
+      body: searchBody
+    });
+    assert.equal(search.status, 200);
+    assert.deepEqual(search.body, Buffer.from('{"output":"search result","results":[]}'));
+    assert.equal(observed.length, 3);
+    assert.equal(
+      observed[1].path,
+      "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
+    );
+    assert.deepEqual(observed[1].body, realtimeBody);
+    assert.equal(observed[2].path, "/backend-api/codex/alpha/search");
+    assert.deepEqual(observed[2].body, searchBody);
+
+    const websocket = await rawWebSocketRoundTrip(
+      `${plan.local_base_url}/responses?session=compressed-observation`,
+      {
+        headers: {
+          authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+          "chatgpt-account-id": "official-account-id",
+          "sec-websocket-extensions": "permessage-deflate; client_max_window_bits"
+        },
+        frame: websocketRequestFrame,
+        responseBytes: websocketResponseFrame.length
+      }
+    );
+    assert.equal(websocket.response.statusCode, 101);
+    assert.equal(
+      websocket.response.headers["sec-websocket-extensions"],
+      "permessage-deflate; client_no_context_takeover; server_no_context_takeover"
+    );
+    assert.deepEqual(websocket.body, websocketResponseFrame);
+    assert.equal(observedWebSockets.length, 1);
+    assert.equal(
+      observedWebSockets[0].path,
+      "/backend-api/codex/responses?session=compressed-observation"
+    );
+    assert.equal(
+      observedWebSockets[0].headers["sec-websocket-extensions"],
+      "permessage-deflate; client_max_window_bits"
+    );
+    assert.equal(
+      observedWebSockets[0].headers.authorization,
+      "Bearer OFFICIAL-CHATGPT-OAUTH"
+    );
+    assert.deepEqual(observedWebSockets[0].body, websocketRequestFrame);
+    await waitFor(async () => {
+      try {
+        return (await readFile(join(root, "proxy", "usage.jsonl"), "utf8"))
+          .includes('"requested_model":"gpt-ws-compressed"');
+      } catch {
+        return false;
+      }
+    });
+
     const attachPreview = JSON.parse(run(PROXY_CLIENT, [
       "attach", ...commonProxy, "--json"
     ]).stdout);
@@ -1079,7 +1439,8 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
     assert.match(attachedText, /# >>> agentctl proxy attach >>>/);
     assert.match(attachedText, /model_provider = "openai"/);
     assert.match(attachedText, new RegExp(
-      `openai_base_url = "http:\\/\\/127\\.0\\.0\\.1:${proxyPort}"`
+      `openai_base_url = "http:\\/\\/127\\.0\\.0\\.1:${proxyPort}` +
+      `\\/backend-api\\/codex\\/realtime"`
     ));
     assert.equal(attachedText.includes('model_provider = "previous-provider"'), false);
     assert.equal(attachedText.includes('openai_base_url = "https://previous.invalid"'), false);
@@ -1095,30 +1456,49 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
       "status", ...commonProxy, "--json"
     ]).stdout);
     assert.equal(status.attachment.status, "attached");
+    assert.equal(status.attachment.config_modified, false);
+    assert.equal(status.attachment.managed_fields_intact, true);
+
+    const appTrustEdit = [
+      '',
+      '[projects."/tmp/codex-app-opened-project"]',
+      'trust_level = "trusted"',
+      ''
+    ].join("\n");
+    await writeFile(codexConfig, `${attachedText}${appTrustEdit}`);
+    const statusAfterAppEdit = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(statusAfterAppEdit.attachment.status, "attached");
+    assert.equal(statusAfterAppEdit.attachment.config_modified, true);
+    assert.equal(statusAfterAppEdit.attachment.managed_fields_intact, true);
+
+    const idempotentAttach = JSON.parse(run(PROXY_CLIENT, [
+      "attach", ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    assert.equal(idempotentAttach.changed, false);
+    assert.equal(idempotentAttach.status, "attached");
 
     const refusedStop = run(PROXY_CLIENT, [
       "stop", ...commonProxy, "--yes", "--json"
     ], { status: 1 });
     assert.match(refusedStop.stderr, /detach Codex before stopping/);
 
-    await writeFile(codexConfig, `${attachedText}# concurrent user edit\n`);
-    const refusedDetach = run(PROXY_CLIENT, [
-      "detach", ...commonProxy, "--yes", "--json"
-    ], { status: 1 });
-    assert.match(refusedDetach.stderr, /refusing to discard user edits/);
-    assert.equal((await readFile(codexConfig, "utf8")).includes("concurrent user edit"), true);
-    await writeFile(codexConfig, attachedText);
-
     const detachPreview = JSON.parse(run(PROXY_CLIENT, [
       "detach", ...commonProxy, "--json"
     ]).stdout);
     assert.equal(detachPreview.preview, true);
+    assert.equal(detachPreview.exact_restore, false);
+    assert.equal(detachPreview.preserved_external_changes, true);
     assert.notDeepEqual(await readFile(codexConfig), original);
     const detached = JSON.parse(run(PROXY_CLIENT, [
       "detach", ...commonProxy, "--yes", "--json"
     ]).stdout);
     assert.equal(detached.status, "detached");
-    assert.deepEqual(await readFile(codexConfig), original);
+    assert.equal(detached.exact_restore, false);
+    assert.equal(detached.preserved_external_changes, true);
+    const originalWithAppEdit = Buffer.from(`${original.toString("utf8")}${appTrustEdit}`);
+    assert.deepEqual(await readFile(codexConfig), originalWithAppEdit);
     if (process.platform !== "win32") {
       assert.equal((await lstat(codexConfig)).mode & 0o777, 0o640);
     }
@@ -1131,12 +1511,37 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
       { code: "ENOENT" }
     );
 
+    run(PROXY_CLIENT, ["attach", ...commonProxy, "--yes", "--json"]);
+    const reattachedText = await readFile(codexConfig, "utf8");
+    await writeFile(
+      codexConfig,
+      reattachedText.replace('model_provider = "openai"', 'model_provider = "tampered"')
+    );
+    const statusAfterManagedEdit = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(statusAfterManagedEdit.attachment.status, "modified");
+    assert.equal(statusAfterManagedEdit.attachment.config_modified, true);
+    assert.equal(statusAfterManagedEdit.attachment.managed_fields_intact, false);
+    const refusedDetach = run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--yes", "--json"
+    ], { status: 1 });
+    assert.match(refusedDetach.stderr, /proxy-managed settings changed/);
+    await writeFile(codexConfig, reattachedText);
+    const exactDetach = JSON.parse(run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    assert.equal(exactDetach.exact_restore, true);
+    assert.equal(exactDetach.preserved_external_changes, false);
+    assert.deepEqual(await readFile(codexConfig), originalWithAppEdit);
+
     run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"]);
     proxyPid = 0;
     const metadata = await readFile(join(root, "proxy", "requests.jsonl"), "utf8");
     const usage = await readFile(join(root, "proxy", "usage.jsonl"), "utf8");
     for (const hidden of [
-      "OFFICIAL-CHATGPT-OAUTH", "official-account-id", "PASSTHROUGH-BODY-MARKER"
+      "OFFICIAL-CHATGPT-OAUTH", "official-account-id", "PASSTHROUGH-BODY-MARKER",
+      "PASSTHROUGH-WEBSOCKET-BODY-MARKER"
     ]) {
       assert.equal(metadata.includes(hidden), false);
       assert.equal(usage.includes(hidden), false);
@@ -1146,10 +1551,26 @@ test("OpenAI subscription passthrough is byte-preserving and attach/detach resto
     assert.equal(usage.includes('"response_service_tier":"default"'), true);
     assert.equal(usage.includes('"pricing_service_tier":"standard"'), true);
     assert.equal(usage.includes('"input_tokens":17'), true);
-    const priced = usage.split("\n").filter(Boolean).map((line) => JSON.parse(line))[0];
+    assert.equal(usage.includes('"requested_model":"gpt-ws-compressed"'), true);
+    assert.equal(usage.includes('"input_tokens":29'), true);
+    const usageRows = usage.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const priced = usageRows.find((row) => row.requested_model === "gpt-requested-exactly");
     assert.equal(priced.pricing_service_tier_source, "response");
     assert.equal(priced.cost.rate_id, "openai-gpt-5-6-sol-standard-short");
     assert.equal(priced.cost.total, "0.000235");
+    const websocketUsage = usageRows.find((row) => row.requested_model === "gpt-ws-compressed");
+    assert.equal(websocketUsage.response_model, "gpt-5.6-sol");
+    assert.equal(websocketUsage.usage.input_tokens, 29);
+    assert.equal(websocketUsage.usage.output_tokens, 8);
+    const metadataRows = metadata.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(metadataRows.some((row) =>
+      row.event === "proxy_websocket_closed" &&
+      row.websocket_compression === "permessage-deflate" &&
+      row.websocket_observation === "complete" &&
+      row.websocket_observation_issues.length === 0 &&
+      row.incomplete_turns === 0 &&
+      row.completed_turns === 1
+    ), true);
   } finally {
     if (proxyPid) {
       try { process.kill(proxyPid, "SIGTERM"); } catch {}

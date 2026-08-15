@@ -89,15 +89,16 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   assert.ok(groups.has("Gemini"));
   assert.ok(groups.get("AI").proxies.includes("[grok] Residential AI"));
   assert.deepEqual(Array.from(groups.get("Gemini").proxies), [
+    "United States",
     "Proxies",
     "Auto",
     "Japan",
     "Singapore",
-    "United States",
     "Taiwan",
     "Fallback",
     "Direct",
   ]);
+  assert.equal(groups.get("Gemini").proxies[0], "United States");
   assert.ok(!groups.get("Gemini").proxies.includes("Hong Kong"));
   assert.ok(!groups.get("Gemini").proxies.includes("[grok] Residential AI"));
 
@@ -153,6 +154,16 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   assert.ok(profile.rules.includes("GEOSITE,CATEGORY-AI-!CN,AI"));
   assert.equal(profile["rule-providers"].PrivateTracker.behavior, "classical");
   assert.ok(profile.rules.includes("RULE-SET,PrivateTracker,Direct"));
+});
+
+test("defaults AI traffic to Proxies when no dedicated AI node exists", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  const ai = profile["proxy-groups"].find((group) => group.name === "AI");
+
+  assert.deepEqual(Array.from(ai.proxies), ["Proxies", "Fallback", "Direct"]);
 });
 
 test("allows periodic URL tests to be tuned or disabled", async () => {

@@ -53,6 +53,7 @@ const STATE_KIND = "agentctl-proxy-state";
 const PASSTHROUGH_MODE = "openai_subscription_passthrough";
 const PROVIDER_MODE = "provider";
 const OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
+const OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH = "/backend-api/codex/realtime";
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_PRICING_BYTES = 5 * 1024 * 1024;
 const LOG_MAINTENANCE_MS = 60_000;
@@ -492,7 +493,9 @@ function allowedRoute(protocol, method, pathname, {
   if (mode === PASSTHROUGH_MODE) {
     if (method === "GET" && ["/models", "/v1/models"].includes(pathname)) return true;
     return method === "POST" && [
-      "/responses", "/responses/compact", "/v1/responses", "/v1/responses/compact"
+      "/responses", "/responses/compact", "/v1/responses", "/v1/responses/compact",
+      "/realtime/calls", "/v1/realtime/calls",
+      "/alpha/search", "/v1/alpha/search"
     ].includes(pathname);
   }
   if (method === "GET" && pathname === "/v1/models") return true;
@@ -511,6 +514,38 @@ function allowedRoute(protocol, method, pathname, {
   return (method === "POST" &&
       /^\/v1(?:beta)?\/models\/[^/]+:(?:generateContent|streamGenerateContent)$/.test(pathname)) ||
     (method === "GET" && pathname === "/v1beta/models");
+}
+
+function projectPassthroughUrl(localUrl) {
+  const projected = new URL(localUrl);
+  const pathname = projected.pathname;
+  if (pathname === OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH) {
+    projected.pathname = "/realtime";
+    return projected;
+  }
+  if (pathname.startsWith(`${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}/`)) {
+    projected.pathname = pathname.slice(OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH.length);
+    return projected;
+  }
+  const livePath = OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH.replace(/\/realtime$/, "/live");
+  if (pathname === livePath || pathname.startsWith(`${livePath}/`)) {
+    projected.pathname = pathname.slice(livePath.length - "/live".length);
+  }
+  return projected;
+}
+
+function passthroughLocalBaseUrl(config) {
+  const host = config.listen.host === "::1" ? `[${config.listen.host}]` : config.listen.host;
+  return `http://${host}:${config.listen.port}${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}`;
+}
+
+function allowedPassthroughWebSocketRoute(pathname) {
+  if ([
+    "/responses", "/v1/responses",
+    "/realtime", "/v1/realtime",
+    "/live", "/v1/live"
+  ].includes(pathname)) return true;
+  return /^\/(?:v1\/)?live\/(?:rtc_[A-Za-z0-9_-]{1,128}|[A-Fa-f0-9]{8}-(?:[A-Fa-f0-9]{4}-){3}[A-Fa-f0-9]{12})$/.test(pathname);
 }
 
 function joinUpstream(endpoint, localUrl, { stripVersionPrefix = false } = {}) {
@@ -631,8 +666,7 @@ function websocketHeaders(request) {
   const headers = {};
   for (const [name, value] of Object.entries(request.headers)) {
     const lower = name.toLowerCase();
-    if (lower === "host" || lower === "x-agentctl-proxy-token" ||
-        lower === "sec-websocket-extensions" || value === undefined) continue;
+    if (lower === "host" || lower === "x-agentctl-proxy-token" || value === undefined) continue;
     headers[lower] = value;
   }
   headers.connection = "Upgrade";
@@ -640,48 +674,268 @@ function websocketHeaders(request) {
   return headers;
 }
 
-function websocketObserver(maxMessageBytes, onJson) {
+function perMessageDeflateNegotiation(headers) {
+  const raw = headers?.["sec-websocket-extensions"];
+  if (raw === undefined) return null;
+  const value = Array.isArray(raw) ? raw.join(",") : String(raw);
+  for (const extension of value.split(",")) {
+    const parts = extension.split(";").map((part) => part.trim()).filter(Boolean);
+    if (parts.shift()?.toLowerCase() !== "permessage-deflate") continue;
+    const parameters = new Map();
+    for (const part of parts) {
+      const separator = part.indexOf("=");
+      const name = (separator === -1 ? part : part.slice(0, separator)).trim().toLowerCase();
+      let parameter = separator === -1 ? "" : part.slice(separator + 1).trim();
+      if (parameter.startsWith('"') && parameter.endsWith('"') && parameter.length >= 2) {
+        parameter = parameter.slice(1, -1);
+      }
+      parameters.set(name, parameter);
+    }
+    const windowBits = (name) => {
+      const parsed = Number(parameters.get(name));
+      return Number.isInteger(parsed) && parsed >= 8 && parsed <= 15 ? parsed : 15;
+    };
+    return {
+      client: {
+        no_context_takeover: parameters.has("client_no_context_takeover"),
+        window_bits: windowBits("client_max_window_bits")
+      },
+      server: {
+        no_context_takeover: parameters.has("server_no_context_takeover"),
+        window_bits: windowBits("server_max_window_bits")
+      }
+    };
+  }
+  return null;
+}
+
+function websocketDeflateDecoder(maxMessageBytes, onJson, options, onIssue) {
+  const trailer = Buffer.from([0x00, 0x00, 0xff, 0xff]);
+  let inflater = null;
+  let active = null;
+  let queue = Promise.resolve();
+  let queuedBytes = 0;
+  let accepting = true;
+  let disabled = false;
+
+  const clearActive = (parse) => {
+    const state = active;
+    active = null;
+    if (!state) return;
+    if (parse && state.text && !state.overflow) {
+      const message = Buffer.concat(state.chunks, state.bytes);
+      try {
+        const payload = JSON.parse(message.toString("utf8"));
+        try {
+          onJson(payload);
+        } catch {
+          onIssue("observer_callback_error");
+        }
+      } catch {
+        onIssue("invalid_json");
+      }
+      message.fill(0);
+    }
+    for (const chunk of state.chunks) chunk.fill(0);
+    state.payload.fill(0);
+    state.resolve();
+  };
+  const disable = (reason = "inflate_error") => {
+    if (disabled) return;
+    disabled = true;
+    onIssue(reason);
+    inflater?.destroy();
+    inflater = null;
+    clearActive(false);
+  };
+  const ensureInflater = () => {
+    if (inflater) return true;
+    try {
+      inflater = zlib.createInflateRaw({ windowBits: options.window_bits });
+      inflater.on("data", (chunk) => {
+        if (!active || active.overflow) return;
+        active.bytes += chunk.length;
+        if (active.bytes > maxMessageBytes) {
+          active.overflow = true;
+          onIssue("message_too_large");
+          for (const buffered of active.chunks) buffered.fill(0);
+          active.chunks = [];
+          return;
+        }
+        active.chunks.push(Buffer.from(chunk));
+      });
+      inflater.on("error", () => disable("inflate_error"));
+      return true;
+    } catch {
+      disable("inflate_error");
+      return false;
+    }
+  };
+  const decode = (payload, text) => {
+    if (disabled || !ensureInflater()) {
+      payload.fill(0);
+      return Promise.resolve();
+    }
+    return new Promise((resolveDecode) => {
+      active = {
+        payload,
+        text,
+        chunks: [],
+        bytes: 0,
+        overflow: false,
+        resolve: resolveDecode
+      };
+      try {
+        inflater.write(payload);
+        inflater.write(trailer);
+        inflater.flush(zlib.constants.Z_SYNC_FLUSH, () => {
+          if (disabled || active?.resolve !== resolveDecode) return;
+          if (options.no_context_takeover) {
+            try {
+              inflater.reset();
+            } catch {
+              disable("inflate_error");
+              return;
+            }
+          }
+          clearActive(true);
+        });
+      } catch {
+        disable("inflate_error");
+      }
+    });
+  };
+
+  return {
+    accept(payload, text) {
+      if (!accepting || disabled) {
+        payload.fill(0);
+        return;
+      }
+      if (queuedBytes + payload.length > maxMessageBytes) {
+        payload.fill(0);
+        disable("queue_limit");
+        return;
+      }
+      queuedBytes += payload.length;
+      queue = queue
+        .then(() => decode(payload, text))
+        .finally(() => {
+          queuedBytes -= payload.length;
+        });
+    },
+    disable,
+    async close() {
+      accepting = false;
+      await queue;
+      inflater?.destroy();
+      inflater = null;
+    }
+  };
+}
+
+function websocketObserver(maxMessageBytes, onJson, {
+  perMessageDeflate = null
+} = {}) {
   let pending = Buffer.alloc(0);
   let skip = 0;
   let fragments = [];
   let fragmentBytes = 0;
+  let fragmentOpcode = null;
+  let fragmentCompressed = false;
+  let closed = false;
+  const issues = new Set();
+  const reportIssue = (reason) => issues.add(reason);
+  const deflate = perMessageDeflate
+    ? websocketDeflateDecoder(maxMessageBytes, onJson, perMessageDeflate, reportIssue)
+    : null;
 
   const resetFragments = () => {
     for (const fragment of fragments) fragment.fill(0);
     fragments = [];
     fragmentBytes = 0;
+    fragmentOpcode = null;
+    fragmentCompressed = false;
   };
   const acceptText = (payload) => {
     try {
-      onJson(JSON.parse(payload.toString("utf8")));
-    } catch {}
+      const value = JSON.parse(payload.toString("utf8"));
+      try {
+        onJson(value);
+      } catch {
+        reportIssue("observer_callback_error");
+      }
+    } catch {
+      reportIssue("invalid_json");
+    }
+    payload.fill(0);
   };
-  const acceptFrame = (fin, opcode, payload) => {
-    if (opcode === 0x1) {
+  const acceptMessage = (opcode, compressed, payload) => {
+    if (compressed) {
+      if (deflate) deflate.accept(payload, opcode === 0x1);
+      else payload.fill(0);
+    } else if (opcode === 0x1) {
+      acceptText(payload);
+    } else {
+      payload.fill(0);
+    }
+  };
+  const loseMessage = (reason) => {
+    reportIssue(reason);
+    if (fragmentCompressed) deflate?.disable(reason);
+    resetFragments();
+  };
+  const acceptFrame = (fin, rsv1, rsvInvalid, opcode, payload) => {
+    if (opcode >= 0x8) {
+      if (rsv1 || rsvInvalid || !fin) reportIssue("invalid_frame_sequence");
+      payload.fill(0);
+      return;
+    }
+    if (rsvInvalid || (rsv1 && !deflate)) {
+      const reason = rsv1 && !deflate ? "unexpected_compression" : "invalid_frame_sequence";
+      reportIssue(reason);
+      if (rsv1 || fragmentCompressed) deflate?.disable(reason);
       resetFragments();
-      if (fin) acceptText(payload);
+      payload.fill(0);
+      return;
+    }
+    if (opcode === 0x1 || opcode === 0x2) {
+      if (fragments.length) loseMessage("invalid_frame_sequence");
+      resetFragments();
+      if (fin) acceptMessage(opcode, rsv1, payload);
       else {
         fragments = [payload];
         fragmentBytes = payload.length;
+        fragmentOpcode = opcode;
+        fragmentCompressed = rsv1;
       }
       return;
     }
-    if (opcode !== 0x0 || !fragments.length) return;
-    if (fragmentBytes + payload.length > maxMessageBytes) {
+    if (opcode !== 0x0 || !fragments.length || rsv1) {
+      reportIssue("invalid_frame_sequence");
+      if (rsv1 || fragmentCompressed) deflate?.disable("invalid_frame_sequence");
       resetFragments();
+      payload.fill(0);
+      return;
+    }
+    if (fragmentBytes + payload.length > maxMessageBytes) {
+      loseMessage("message_too_large");
+      payload.fill(0);
       return;
     }
     fragments.push(payload);
     fragmentBytes += payload.length;
     if (fin) {
       const message = Buffer.concat(fragments, fragmentBytes);
+      const opcodeForMessage = fragmentOpcode;
+      const compressed = fragmentCompressed;
       resetFragments();
-      acceptText(message);
-      message.fill(0);
+      acceptMessage(opcodeForMessage, compressed, message);
     }
   };
 
-  return (chunk) => {
+  const observe = (chunk) => {
+    if (closed) return;
     if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
     let incoming = chunk;
     if (skip) {
@@ -695,6 +949,8 @@ function websocketObserver(maxMessageBytes, onJson) {
       const first = pending[0];
       const second = pending[1];
       const fin = Boolean(first & 0x80);
+      const rsv1 = Boolean(first & 0x40);
+      const rsvInvalid = Boolean(first & 0x30);
       const opcode = first & 0x0f;
       const masked = Boolean(second & 0x80);
       let length = second & 0x7f;
@@ -707,6 +963,8 @@ function websocketObserver(maxMessageBytes, onJson) {
         if (pending.length < 10) return;
         const extended = pending.readBigUInt64BE(2);
         if (extended > BigInt(Number.MAX_SAFE_INTEGER)) {
+          reportIssue("message_too_large");
+          if (rsv1 || fragmentCompressed) deflate?.disable("message_too_large");
           resetFragments();
           pending.fill(0);
           pending = Buffer.alloc(0);
@@ -723,6 +981,8 @@ function websocketObserver(maxMessageBytes, onJson) {
         const consumed = Math.min(length, pending.length);
         pending = pending.subarray(consumed);
         skip = length - consumed;
+        reportIssue("message_too_large");
+        if (rsv1 || fragmentCompressed) deflate?.disable("message_too_large");
         resetFragments();
         continue;
       }
@@ -735,10 +995,25 @@ function websocketObserver(maxMessageBytes, onJson) {
         }
       }
       pending = pending.subarray(headerBytes + length);
-      acceptFrame(fin, opcode, frame);
-      if (opcode !== 0x1 && opcode !== 0x0) frame.fill(0);
+      acceptFrame(fin, rsv1, rsvInvalid, opcode, frame);
     }
   };
+  observe.close = async () => {
+    if (closed) return;
+    closed = true;
+    if (pending.length || skip || fragments.length) {
+      reportIssue("connection_closed_mid_message");
+    }
+    pending.fill(0);
+    pending = Buffer.alloc(0);
+    resetFragments();
+    await deflate?.close();
+  };
+  observe.summary = () => ({
+    status: issues.size ? "degraded" : "complete",
+    reasons: [...issues].sort()
+  });
+  return observe;
 }
 
 function responseHeaders(headers) {
@@ -899,11 +1174,15 @@ function sendJson(response, status, body) {
 function validateState(value, instanceId = "") {
   exactKeys(value, [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
+    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction",
+    "local_base_url"
   ], "proxy state");
   if (value.schema !== 1 || value.kind !== STATE_KIND ||
       (instanceId && value.instance_id !== instanceId) ||
       !Number.isInteger(value.pid) || value.pid < 1 ||
+      (value.local_base_url !== undefined &&
+       (value.mode !== PASSTHROUGH_MODE || typeof value.local_base_url !== "string" ||
+        !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+\/backend-api\/codex\/realtime$/.test(value.local_base_url))) ||
       (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
       (value.backend_profiles !== undefined &&
        (!Array.isArray(value.backend_profiles) ||
@@ -1304,7 +1583,9 @@ function proxyWebSocket(request, socket, head, context) {
     writeRawHttp(socket, 401, "Unauthorized", '{"error":"proxy_authentication_required"}\n');
     return;
   }
-  if (!(["/responses", "/v1/responses"].includes(localUrl.pathname))) {
+  const requestPath = localUrl.pathname;
+  localUrl = projectPassthroughUrl(localUrl);
+  if (!allowedPassthroughWebSocketRoute(localUrl.pathname)) {
     writeRawHttp(socket, 404, "Not Found", '{"error":"route_not_available_for_proxy_protocol"}\n');
     return;
   }
@@ -1319,8 +1600,11 @@ function proxyWebSocket(request, socket, head, context) {
   let bytesOut = 0;
   let completedTurns = 0;
   let closed = false;
+  let websocketCompression = "identity";
+  let observeClient = null;
+  let observeServer = null;
 
-  const observeClient = websocketObserver(config.limits.request_bytes, (payload) => {
+  const observeClientPayload = (payload) => {
     const requestPayload = plainObject(payload?.response) ? payload.response : payload;
     if (!plainObject(requestPayload)) return;
     const requestedModel = typeof requestPayload.model === "string" &&
@@ -1344,8 +1628,8 @@ function proxyWebSocket(request, socket, head, context) {
         mapped: false
       }
     });
-  });
-  const observeServer = websocketObserver(config.limits.usage_capture_bytes, (payload) => {
+  };
+  const observeServerPayload = (payload) => {
     const extracted = extractUsage(config.protocol, payload);
     if (!extracted?.usage) return;
     const turn = turns.shift() || {
@@ -1376,7 +1660,7 @@ function proxyWebSocket(request, socket, head, context) {
       target: config.target,
       protocol: config.protocol,
       method: "WS",
-      route: localUrl.pathname,
+      route: requestPath,
       status: 200,
       outcome: "websocket_response_completed",
       duration_ms: Date.now() - turn.started,
@@ -1390,24 +1674,49 @@ function proxyWebSocket(request, socket, head, context) {
         duration_ms: Date.now() - turn.started
       }]
     });
-  });
+  };
   const finishConnection = (outcome) => {
     if (closed) return;
     closed = true;
-    log({
-      schema: 1,
-      timestamp: new Date().toISOString(),
-      event: "proxy_websocket_closed",
-      mode: config.mode,
-      profile: config.profile,
-      target: config.target,
-      protocol: config.protocol,
-      route: localUrl.pathname,
-      outcome,
-      duration_ms: Date.now() - connectionStarted,
-      bytes_in: bytesIn,
-      bytes_out: bytesOut,
-      completed_turns: completedTurns
+    Promise.allSettled([
+      observeClient?.close?.(),
+      observeServer?.close?.()
+    ]).then(() => {
+      const clientObservation = observeClient?.summary?.() || null;
+      const serverObservation = observeServer?.summary?.() || null;
+      const observationIssues = [
+        ...(clientObservation?.reasons || []).map((reason) => ({
+          direction: "client",
+          reason
+        })),
+        ...(serverObservation?.reasons || []).map((reason) => ({
+          direction: "server",
+          reason
+        }))
+      ];
+      log({
+        schema: 1,
+        timestamp: new Date().toISOString(),
+        event: "proxy_websocket_closed",
+        mode: config.mode,
+        profile: config.profile,
+        target: config.target,
+        protocol: config.protocol,
+        route: requestPath,
+        outcome,
+        duration_ms: Date.now() - connectionStarted,
+        bytes_in: bytesIn,
+        bytes_out: bytesOut,
+        completed_turns: completedTurns,
+        incomplete_turns: turns.length,
+        websocket_compression: websocketCompression,
+        websocket_observation: !clientObservation || !serverObservation
+          ? "not_started"
+          : observationIssues.length
+            ? "degraded"
+            : "complete",
+        websocket_observation_issues: observationIssues
+      });
     });
   };
 
@@ -1426,6 +1735,14 @@ function proxyWebSocket(request, socket, head, context) {
 
   upstream.on("upgrade", (response, upstreamSocket, upstreamHead) => {
     clearTimeout(firstByteTimer);
+    const negotiatedCompression = perMessageDeflateNegotiation(response.headers);
+    if (negotiatedCompression) websocketCompression = "permessage-deflate";
+    observeClient = websocketObserver(config.limits.request_bytes, observeClientPayload, {
+      perMessageDeflate: negotiatedCompression?.client || null
+    });
+    observeServer = websocketObserver(config.limits.usage_capture_bytes, observeServerPayload, {
+      perMessageDeflate: negotiatedCompression?.server || null
+    });
     rawUpgradeResponse(socket, response);
     if (head.length) {
       observeClient(head);
@@ -1754,6 +2071,9 @@ async function proxyRequest(request, response, context) {
       target: config.target,
       protocol: config.protocol,
       mode: config.mode,
+      local_base_url: config.mode === PASSTHROUGH_MODE
+        ? passthroughLocalBaseUrl(config)
+        : null,
       compaction: config.compaction,
       pricing_catalog_version: pricing?.version || null,
       pricing_model_source: config.pricing.model_source,
@@ -1766,6 +2086,9 @@ async function proxyRequest(request, response, context) {
     return;
   }
 
+  const requestPath = localUrl.pathname;
+  if (config.mode === PASSTHROUGH_MODE) localUrl = projectPassthroughUrl(localUrl);
+
   const finishMetadata = (status, outcome, bytesIn = 0, bytesOut = 0) => {
     log({
       schema: 1,
@@ -1777,7 +2100,7 @@ async function proxyRequest(request, response, context) {
       target: config.target,
       protocol: config.protocol,
       method: request.method || "",
-      route: localUrl.pathname,
+      route: requestPath,
       status,
       outcome,
       duration_ms: Date.now() - started,
@@ -2085,6 +2408,9 @@ async function run(configPath) {
     mode: config.mode,
     target: config.target,
     protocol: config.protocol,
+    ...(config.mode === PASSTHROUGH_MODE
+      ? { local_base_url: passthroughLocalBaseUrl(config) }
+      : {}),
     compaction: config.compaction,
     route: config.route,
     backend_profiles: config.backends.map((backend) => backend.profile),
@@ -2130,11 +2456,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 }
 
 export {
+  allowedPassthroughWebSocketRoute,
   allowedRoute,
   circuitPersister,
   jsonlLogger,
   joinUpstream,
   pruneLogs,
+  projectPassthroughUrl,
   rotateLog,
   upstreamHeaders,
   validateConfig,

@@ -61,6 +61,7 @@ const PROVIDER_MODE = "provider";
 const PASSTHROUGH_MODE = "openai_subscription_passthrough";
 const PASSTHROUGH_PROFILE = "passthrough";
 const DEFAULT_OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
+const OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH = "/backend-api/codex/realtime";
 const ATTACH_START = "# >>> agentctl proxy attach >>>";
 const ATTACH_END = "# <<< agentctl proxy attach <<<";
 const MAX_USAGE_LOG_FILES = 20;
@@ -356,6 +357,117 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function decodeCodexConfig(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ProxyClientError("Codex config must be valid UTF-8 TOML");
+  }
+}
+
+function codexConfigNewline(text) {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+function codexManagedBlock(localBaseUrl, newline) {
+  return [
+    ATTACH_START,
+    "# Pure observation: Codex keeps official ChatGPT authentication; only the base URL changes.",
+    'model_provider = "openai"',
+    `openai_base_url = ${JSON.stringify(localBaseUrl)}`,
+    ATTACH_END
+  ].join(newline);
+}
+
+function topLevelManagedAssignments(text) {
+  const assignments = [];
+  let inTable = false;
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (/^\s*\[/.test(line)) inTable = true;
+    if (!inTable && /^\s*(?:model_provider|openai_base_url)\s*=/.test(line)) {
+      assignments.push({ index, line });
+    }
+  }
+  return assignments;
+}
+
+function inspectCodexManagedBlock(bytes, localBaseUrl) {
+  const text = decodeCodexConfig(bytes);
+  const newline = codexConfigNewline(text);
+  const managed = codexManagedBlock(localBaseUrl, newline);
+  const prefix = `${managed}${newline}`;
+  if (!text.startsWith(prefix)) {
+    return { intact: false, reason: "managed_block_changed" };
+  }
+  const retained = text.slice(prefix.length);
+  if (retained.includes(ATTACH_START) || retained.includes(ATTACH_END) ||
+      topLevelManagedAssignments(retained).length) {
+    return { intact: false, reason: "managed_settings_duplicated" };
+  }
+  return { intact: true, newline, retained };
+}
+
+function restoreOriginalManagedAssignments(originalText, retainedText, newline) {
+  const originalLines = originalText.split(/\r?\n/);
+  const managed = topLevelManagedAssignments(originalText);
+  if (!managed.length) return retainedText;
+
+  const managedIndexes = new Set(managed.map(({ index }) => index));
+  const firstManaged = managed[0].index;
+  const lastManaged = managed.at(-1).index;
+  const retainedLines = retainedText.split(/\r?\n/);
+  let insertion = -1;
+
+  // Prefer the next unchanged line from the original top-level document. This
+  // keeps comments immediately preceding the managed assignments in place.
+  for (let index = lastManaged + 1; index < originalLines.length; index += 1) {
+    const line = originalLines[index];
+    if (managedIndexes.has(index) || !line.trim()) continue;
+    insertion = retainedLines.indexOf(line);
+    if (insertion !== -1) break;
+  }
+  if (insertion === -1) {
+    for (let index = firstManaged - 1; index >= 0; index -= 1) {
+      const line = originalLines[index];
+      if (managedIndexes.has(index) || !line.trim()) continue;
+      const found = retainedLines.lastIndexOf(line);
+      if (found !== -1) {
+        insertion = found + 1;
+        break;
+      }
+    }
+  }
+  if (insertion === -1) insertion = 0;
+  retainedLines.splice(insertion, 0, ...managed.map(({ line }) => line));
+  return retainedLines.join(newline);
+}
+
+function mergeCodexDetach(originalBytes, attachedBytes, currentBytes, localBaseUrl) {
+  const managed = inspectCodexManagedBlock(currentBytes, localBaseUrl);
+  if (!managed.intact) {
+    throw new ProxyClientError(
+      "Codex proxy-managed settings changed after attach; refusing to detach"
+    );
+  }
+
+  // Codex App normally appends project trust records. Preserve that common
+  // case byte-for-byte while restoring the entire original prefix exactly.
+  if (currentBytes.length >= attachedBytes.length &&
+      currentBytes.subarray(0, attachedBytes.length).equals(attachedBytes)) {
+    return Buffer.concat([
+      originalBytes,
+      currentBytes.subarray(attachedBytes.length)
+    ]);
+  }
+
+  const originalText = decodeCodexConfig(originalBytes);
+  return Buffer.from(restoreOriginalManagedAssignments(
+    originalText,
+    managed.retained,
+    managed.newline
+  ), "utf8");
+}
+
 async function readConfigSnapshot(path, { allowMissing = false } = {}) {
   const details = await pathState(path);
   if (!details) {
@@ -372,30 +484,19 @@ async function readConfigSnapshot(path, { allowMissing = false } = {}) {
 }
 
 function renderCodexAttachment(original, localBaseUrl) {
-  let text;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(original);
-  } catch {
-    throw new ProxyClientError("Codex config must be valid UTF-8 TOML");
-  }
+  const text = decodeCodexConfig(original);
   if (text.includes(ATTACH_START) || text.includes(ATTACH_END)) {
     throw new ProxyClientError(
       "Codex config already contains an agentctl attachment marker; detach or repair it first"
     );
   }
-  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const newline = codexConfigNewline(text);
   let inTable = false;
   const retained = text.split(/\r?\n/).filter((line) => {
     if (/^\s*\[/.test(line)) inTable = true;
     return inTable || !/^\s*(?:model_provider|openai_base_url)\s*=/.test(line);
   }).join(newline).replace(/^\s+/, "");
-  const managed = [
-    ATTACH_START,
-    "# Pure observation: Codex keeps official ChatGPT authentication; only the base URL changes.",
-    'model_provider = "openai"',
-    `openai_base_url = ${JSON.stringify(localBaseUrl)}`,
-    ATTACH_END
-  ].join(newline);
+  const managed = codexManagedBlock(localBaseUrl, newline);
   return Buffer.from(`${managed}${newline}${retained}`, "utf8");
 }
 
@@ -412,7 +513,7 @@ function validateAttachment(value) {
       typeof value.proxy_instance_id !== "string" ||
       !/^[a-f0-9-]{36}$/.test(value.proxy_instance_id) ||
       typeof value.local_base_url !== "string" ||
-      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+$/.test(value.local_base_url) ||
+      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+(?:\/backend-api\/codex\/realtime)?$/.test(value.local_base_url) ||
       typeof value.config_file !== "string" || !isAbsolute(value.config_file) ||
       typeof value.backup_file !== "string" || !isAbsolute(value.backup_file) ||
       typeof value.config_existed !== "boolean" ||
@@ -447,10 +548,16 @@ async function inspectAttachment(options) {
   if (!attachment) return { status: "detached", attached: false };
   let currentHash = null;
   let status = "modified";
+  let configModified = null;
+  let managedFieldsIntact = false;
   try {
     const snapshot = await readConfigSnapshot(attachment.config_file);
     currentHash = sha256(snapshot.bytes);
-    if (currentHash === attachment.attached_sha256) status = "attached";
+    configModified = currentHash !== attachment.attached_sha256;
+    managedFieldsIntact = currentHash === attachment.attached_sha256 ||
+      inspectCodexManagedBlock(snapshot.bytes, attachment.local_base_url).intact;
+    if (managedFieldsIntact) status = "attached";
+    snapshot.bytes.fill(0);
   } catch {}
   return {
     status,
@@ -459,6 +566,8 @@ async function inspectAttachment(options) {
     backup_file: attachment.backup_file,
     local_base_url: attachment.local_base_url,
     attached_at: attachment.created_at,
+    config_modified: configModified,
+    managed_fields_intact: managedFieldsIntact,
     current_sha256: currentHash,
     expected_sha256: attachment.attached_sha256
   };
@@ -477,7 +586,8 @@ function validateCapability(value) {
 function validateState(value) {
   const keys = [
     "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction"
+    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction",
+    "local_base_url"
   ];
   if (!value || value.schema !== 1 || value.kind !== STATE_KIND ||
       typeof value.instance_id !== "string" || !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
@@ -486,6 +596,9 @@ function validateState(value) {
       !["127.0.0.1", "::1"].includes(value.host) ||
       !Number.isInteger(value.port) || value.port < 1024 || value.port > 65535 ||
       ![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode) ||
+      (value.local_base_url !== undefined && value.local_base_url !== null &&
+       (typeof value.local_base_url !== "string" ||
+        !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+(?:\/backend-api\/codex\/realtime)?$/.test(value.local_base_url))) ||
       typeof value.config !== "string" || !isAbsolute(value.config) || value.config.length > 4096 ||
       (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
       (value.backend_profiles !== undefined &&
@@ -497,6 +610,14 @@ function validateState(value) {
   validateProfileName(value.profile);
   for (const profile of value.backend_profiles || []) validateProfileName(profile);
   validateTarget(value.target);
+  if (value.local_base_url !== undefined && value.local_base_url !== null) {
+    const address = value.host === "::1" ? `[${value.host}]` : value.host;
+    const root = `http://${address}:${value.port}`;
+    if (value.mode !== PASSTHROUGH_MODE ||
+        ![root, `${root}${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}`].includes(value.local_base_url)) {
+      throw new ProxyClientError("proxy runtime state local base URL is invalid");
+    }
+  }
   if (!["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(value.protocol)) {
     throw new ProxyClientError("proxy runtime state protocol is invalid");
   }
@@ -609,6 +730,11 @@ async function inspectStatus(options) {
   const health = alive
     ? await healthCheck(state, capability)
     : { healthy: false, reason: "process_not_running" };
+  const mode = health.body?.mode ?? state.mode;
+  const localBase = health.body?.local_base_url ?? state.local_base_url ??
+    (mode === PASSTHROUGH_MODE
+      ? listenerRootUrl(state.host, state.port)
+      : localBaseUrl(state.host, state.port, state.protocol, mode));
   return {
     schema: 1,
     status: health.healthy ? "running" : "stale",
@@ -628,7 +754,7 @@ async function inspectStatus(options) {
     host: state.host,
     port: state.port,
     profile: state.profile,
-    mode: health.body?.mode ?? state.mode,
+    mode,
     target: state.target,
     protocol: state.protocol,
     route: health.body?.route ?? state.route ?? null,
@@ -638,12 +764,7 @@ async function inspectStatus(options) {
     pricing_catalog_version: health.body?.pricing_catalog_version ?? null,
     pricing_model_source: health.body?.pricing_model_source ?? null,
     compaction: health.body?.compaction ?? state.compaction ?? null,
-    local_base_url: localBaseUrl(
-      state.host,
-      state.port,
-      state.protocol,
-      health.body?.mode ?? state.mode
-    )
+    local_base_url: localBase
   };
 }
 
@@ -1050,10 +1171,14 @@ async function proxyUsage(options) {
   return result;
 }
 
-function localBaseUrl(host, port, protocol, mode = PROVIDER_MODE) {
+function listenerRootUrl(host, port) {
   const address = host === "::1" ? `[${host}]` : host;
-  const root = `http://${address}:${port}`;
-  if (mode === PASSTHROUGH_MODE) return root;
+  return `http://${address}:${port}`;
+}
+
+function localBaseUrl(host, port, protocol, mode = PROVIDER_MODE) {
+  const root = listenerRootUrl(host, port);
+  if (mode === PASSTHROUGH_MODE) return `${root}${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}`;
   if (["openai_responses", "openai_chat"].includes(protocol)) return `${root}/v1`;
   if (protocol === "google_generative") return `${root}/v1beta`;
   return root;
@@ -1664,12 +1789,6 @@ async function attach(options) {
 async function detach(options) {
   const attachment = await loadAttachment(options);
   const current = await readConfigSnapshot(attachment.config_file);
-  if (sha256(current.bytes) !== attachment.attached_sha256) {
-    current.bytes.fill(0);
-    throw new ProxyClientError(
-      "Codex config changed after attach; refusing to discard user edits"
-    );
-  }
   let backup = null;
   if (attachment.config_existed) {
     backup = await readConfigSnapshot(attachment.backup_file);
@@ -1680,6 +1799,32 @@ async function detach(options) {
       throw new ProxyClientError("attachment backup failed integrity or permission checks");
     }
   }
+  const originalBytes = backup?.bytes || Buffer.alloc(0);
+  const attachedBytes = renderCodexAttachment(originalBytes, attachment.local_base_url);
+  if (sha256(attachedBytes) !== attachment.attached_sha256) {
+    current.bytes.fill(0);
+    backup?.bytes.fill(0);
+    attachedBytes.fill(0);
+    throw new ProxyClientError("attachment backup does not reproduce the attached config");
+  }
+  const currentHash = sha256(current.bytes);
+  const exactRestore = currentHash === attachment.attached_sha256;
+  let detachedBytes;
+  try {
+    detachedBytes = exactRestore
+      ? Buffer.from(originalBytes)
+      : mergeCodexDetach(
+          originalBytes,
+          attachedBytes,
+          current.bytes,
+          attachment.local_base_url
+        );
+  } catch (error) {
+    current.bytes.fill(0);
+    backup?.bytes.fill(0);
+    attachedBytes.fill(0);
+    throw error;
+  }
   const output = {
     ok: true,
     preview: !options.yes,
@@ -1688,27 +1833,32 @@ async function detach(options) {
     status: options.yes ? "detached" : "attached",
     config_file: attachment.config_file,
     backup_file: attachment.backup_file,
-    exact_restore: true
+    exact_restore: exactRestore,
+    preserved_external_changes: !exactRestore
   };
   if (!options.yes) {
     emitAttachment(output, options);
     current.bytes.fill(0);
     backup?.bytes.fill(0);
+    attachedBytes.fill(0);
+    detachedBytes.fill(0);
     return output;
   }
   const verifyCurrent = await readConfigSnapshot(attachment.config_file);
-  if (sha256(verifyCurrent.bytes) !== attachment.attached_sha256) {
+  if (sha256(verifyCurrent.bytes) !== currentHash) {
     current.bytes.fill(0);
     backup?.bytes.fill(0);
+    attachedBytes.fill(0);
+    detachedBytes.fill(0);
     verifyCurrent.bytes.fill(0);
     throw new ProxyClientError("Codex config changed while preparing detach; retry");
   }
   try {
-    if (attachment.config_existed) {
+    if (detachedBytes.length || attachment.config_existed) {
       await writeBytesAtomic(
         attachment.config_file,
-        backup.bytes,
-        attachment.original_mode
+        detachedBytes,
+        exactRestore ? attachment.original_mode : current.mode
       );
     } else {
       await unlink(attachment.config_file);
@@ -1718,6 +1868,8 @@ async function detach(options) {
   } finally {
     current.bytes.fill(0);
     backup?.bytes.fill(0);
+    attachedBytes.fill(0);
+    detachedBytes.fill(0);
     verifyCurrent.bytes.fill(0);
   }
   emitAttachment(output, options);

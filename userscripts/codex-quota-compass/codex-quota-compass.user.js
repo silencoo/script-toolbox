@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Codex Quota Compass (Visual Edition)
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      1.10.0
+// @version      1.10.1
 // @description  Display Codex quota usage and detailed daily metrics cleanly.
 // @match        https://chatgpt.com/codex/cloud/settings/analytics*
 // @homepageURL  https://github.com/silencoo/script-toolbox/tree/main/userscripts/codex-quota-compass
@@ -22,7 +22,13 @@
         HISTORY_DAYS: 30,
     };
 
-    const VERSION = '1.10.0';
+    const VERSION = '1.10.1';
+    const ANALYTICS_BUTTON_ICON = `
+        <svg class="compass-btn-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3.75 16.25h12.5M5.5 13V9.75M10 13V5.75M14.5 13V8"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+    `;
 
     GM_addStyle(`
         #codex-compass-root {
@@ -40,7 +46,6 @@
             z-index: 10001;
             padding: 24px;
             display: none;
-            flex-direction: column;
             border: 1px solid #e5e5e5;
             color: #333;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -207,6 +212,7 @@
         .table-container {
             max-height: 200px;
             overflow: auto;
+            flex-shrink: 0;
             border: 1px solid #eee;
             border-radius: 6px;
             margin-bottom: 15px;
@@ -268,43 +274,63 @@
         }
 
         #codex-compass-btn {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            z-index: 10000;
+            position: static;
+            z-index: auto;
+            flex: 0 0 auto;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
-            height: 40px;
-            background: linear-gradient(180deg, #10a37f 0%, #0d8c6d 100%);
-            color: #fff;
-            font-size: 13px;
+            gap: 6px;
+            height: 32px;
+            margin-inline-end: 8px;
+            padding: 0 12px;
+            background: var(--text-primary, #171717);
+            color: var(--main-surface-primary, #fff);
+            font-size: 12px;
             font-weight: 600;
             letter-spacing: 0.2px;
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 20px;
-            box-shadow: 0 4px 12px rgba(16, 163, 127, 0.25), 0 1px 3px rgba(0, 0, 0, 0.08);
+            border: 1px solid transparent;
+            border-radius: 8px;
+            box-shadow: none;
             cursor: pointer;
             outline: none;
             user-select: none;
-            transition: background 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-                box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+            transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
                 transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-                opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+                outline-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
         #codex-compass-btn:hover {
-            background: linear-gradient(180deg, #12b38b 0%, #0e9a78 100%);
-            box-shadow: 0 6px 16px rgba(16, 163, 127, 0.35), 0 2px 4px rgba(0, 0, 0, 0.1);
-            transform: translateY(-1px);
+            opacity: 0.82;
         }
 
         #codex-compass-btn:active {
-            transform: translateY(0) scale(0.98);
-            box-shadow: 0 2px 6px rgba(16, 163, 127, 0.2);
+            transform: scale(0.98);
+        }
+
+        #codex-compass-btn:focus-visible {
+            outline: 2px solid var(--text-primary, #171717);
+            outline-offset: 2px;
+        }
+
+        .compass-btn-icon {
+            width: 16px;
+            height: 16px;
+            flex: 0 0 auto;
+        }
+
+        #codex-compass-btn.compass-floating-fallback {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 10000;
+            height: 40px;
+            margin-inline-end: 0;
+            padding: 0 20px;
+            border-radius: 20px;
+            font-size: 13px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
         }
 
         #codex-compass-btn.loading {
@@ -337,7 +363,7 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
-            #codex-compass-btn {
+            #codex-compass-btn.compass-floating-fallback {
                 right: 16px;
                 bottom: 16px;
             }
@@ -602,7 +628,7 @@
             ` : ''}
         `;
 
-        root.style.display = 'flex';
+        root.style.display = 'block';
         root.setAttribute('aria-hidden', 'false');
         document.getElementById('compass-close-btn')?.addEventListener('click', hidePanel);
     }
@@ -619,6 +645,10 @@
         return bootstrapData.match(/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)?.[0] || '';
     }
 
+    function showIdleButton(button) {
+        button.innerHTML = `${ANALYTICS_BUTTON_ICON}<span>Quota Analytics</span>`;
+    }
+
     async function run() {
         const button = document.getElementById('codex-compass-btn');
         const token = getAccessToken();
@@ -630,7 +660,7 @@
 
         button?.classList.add('loading');
         if (button) {
-            button.innerHTML = '<span class="compass-btn-spinner"></span> Analyzing...';
+            button.innerHTML = '<span class="compass-btn-spinner" aria-hidden="true"></span><span>Analyzing...</span>';
         }
 
         try {
@@ -660,27 +690,83 @@
             alert(`Codex Quota Compass error: ${message}`);
         } finally {
             button?.classList.remove('loading');
-            if (button) button.textContent = 'Run Analytics';
+            if (button) showIdleButton(button);
+        }
+    }
+
+    function getHeaderButtonMount() {
+        const profileButton = document.querySelector('button[data-testid="profile-button"]');
+        const header = profileButton?.closest('.sticky');
+        const actionGroup = profileButton?.parentElement;
+
+        if (!profileButton || !header || !actionGroup || !header.contains(actionGroup)) {
+            return null;
+        }
+
+        return { actionGroup, profileButton };
+    }
+
+    function mountButton() {
+        let button = document.getElementById('codex-compass-btn');
+        if (!button) {
+            button = document.createElement('button');
+            button.id = 'codex-compass-btn';
+            button.type = 'button';
+            button.setAttribute('aria-label', 'Run Codex quota analytics');
+            showIdleButton(button);
+            button.addEventListener('click', run);
+        }
+
+        const headerMount = getHeaderButtonMount();
+        if (headerMount) {
+            button.classList.remove('compass-floating-fallback');
+            if (
+                button.parentElement !== headerMount.actionGroup
+                || button.nextElementSibling !== headerMount.profileButton
+            ) {
+                headerMount.actionGroup.insertBefore(button, headerMount.profileButton);
+            }
+            return;
+        }
+
+        if (!button.isConnected) {
+            button.classList.add('compass-floating-fallback');
+            document.body.appendChild(button);
         }
     }
 
     function init() {
-        if (document.getElementById('codex-compass-btn')) return;
+        mountButton();
 
-        const button = document.createElement('button');
-        button.id = 'codex-compass-btn';
-        button.type = 'button';
-        button.textContent = 'Run Analytics';
-        button.addEventListener('click', run);
-        document.body.appendChild(button);
+        let root = document.getElementById('codex-compass-root');
+        if (!root) {
+            root = document.createElement('div');
+            root.id = 'codex-compass-root';
+            root.setAttribute('role', 'dialog');
+            root.setAttribute('aria-modal', 'true');
+            root.setAttribute('aria-labelledby', 'codex-compass-title');
+            root.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(root);
+        }
 
-        const root = document.createElement('div');
-        root.id = 'codex-compass-root';
-        root.setAttribute('role', 'dialog');
-        root.setAttribute('aria-modal', 'true');
-        root.setAttribute('aria-labelledby', 'codex-compass-title');
-        root.setAttribute('aria-hidden', 'true');
-        document.body.appendChild(root);
+        let mountFrame = 0;
+        const buttonObserver = new MutationObserver(() => {
+            const button = document.getElementById('codex-compass-btn');
+            const headerMount = getHeaderButtonMount();
+            const isMountedInHeader = Boolean(
+                button
+                && headerMount
+                && button.parentElement === headerMount.actionGroup
+                && button.nextElementSibling === headerMount.profileButton
+            );
+            if (isMountedInHeader || mountFrame) return;
+
+            mountFrame = requestAnimationFrame(() => {
+                mountFrame = 0;
+                mountButton();
+            });
+        });
+        buttonObserver.observe(document.body, { childList: true, subtree: true });
 
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') hidePanel();

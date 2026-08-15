@@ -385,11 +385,21 @@ OpenAI bearer, `ChatGPT-Account-ID`, request model, body, and response without
 substituting a Provider Secret or alias. It disables failover and replay. The
 HTTP path preserves Codex's `Accept-Encoding` and relays compressed upstream
 response bytes unchanged while a streaming decompressor feeds only the bounded
-in-memory usage collector. WebSocket extension compression remains disabled so
-the frame observer can inspect completion usage. Metadata and usage logs still
-contain no headers, credentials, or request/response bodies. Token counts come
-from the upstream response. Any catalog-derived dollar value is an API-price
-estimate, not a ChatGPT subscription charge or authoritative quota balance.
+in-memory usage collector. The WebSocket path forwards Codex's
+`permessage-deflate` offer and the upstream negotiation, then relays compressed
+frames unchanged. A bounded side observer inflates only its own frame-payload
+copies, including fragmented messages and context takeover, to inspect
+completion usage. A side-observer limit or decompression failure disables
+inspection without changing or interrupting the proxied stream. Metadata and
+usage logs still contain no headers, credentials, or request/response bodies.
+Each WebSocket close record reports observation as `complete`, `degraded`, or
+`not_started`, lists only fixed content-free failure reasons, and includes the
+number of response turns that closed before usage was captured. This makes
+partial accounting explicit without logging the missed content or decoder
+errors verbatim.
+Token counts come from the upstream response. Any catalog-derived dollar value
+is an API-price estimate, not a ChatGPT subscription charge or authoritative
+quota balance.
 
 For OpenAI traffic, the proxy records both requested and returned
 `service_tier`. Returned `priority` is normalized to Fast and returned
@@ -421,10 +431,23 @@ and an attached observer cannot be stopped.
 `$CODEX_HOME/config.toml` bytes and mode, then inserts a marked top-level
 `model_provider = "openai"` plus the loopback `openai_base_url`. This keeps the
 built-in OpenAI/ChatGPT authentication path; both HTTP and WebSocket Responses
-pass through the observable local first hop and then the official upstream. `detach --yes` restores
-the snapshot byte-for-byte. It refuses if the attached config or owner-only
-backup changed, rather than discarding edits. `stop` likewise refuses until
-Codex is detached.
+pass through the observable local first hop and then the official upstream.
+`detach --yes` restores the snapshot byte-for-byte when nothing else changed.
+Normal Codex App additions outside the marked block, including per-project
+trust records, remain attached and are preserved during detach. Detach refuses
+only when the proxy-managed block or owner-only backup changed, rather than
+discarding or overwriting ambiguous edits. `stop` likewise refuses until Codex
+is detached.
+
+The subscription attachment URL includes the synthetic local suffix
+`/backend-api/codex/realtime`. Codex uses the `/backend-api` marker to retain
+the ChatGPT backend request shape for App voice call creation; without it, the
+same account session emits the public-API multipart `POST /live`, which cannot
+be byte-forwarded to the ChatGPT backend. The proxy strips the local marker and
+allowlists the resulting `POST /realtime/calls`, `POST /alpha/search`, Responses,
+and Realtime WebSocket routes before forwarding. This keeps Codex App voice and
+standalone web search working without introducing protocol conversion or a
+general-purpose forward proxy.
 
 It binds only to loopback and accepts only the selected native protocol's
 allowlisted routes. The local base URL is reported after start: OpenAI

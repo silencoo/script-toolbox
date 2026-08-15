@@ -25,14 +25,33 @@ agentctl proxy stop --yes
 
 Passthrough uses the built-in Codex `openai` provider with a loopback
 `openai_base_url`; HTTP and WebSocket Responses are both relayed, and the default second hop is still the official
-`https://chatgpt.com/backend-api/codex` endpoint. The bearer token,
+`https://chatgpt.com/backend-api/codex` endpoint. The attached local URL ends in
+`/backend-api/codex/realtime` deliberately: the backend marker keeps Codex App
+Realtime call creation on the ChatGPT JSON request shape instead of the public
+API's multipart `/live` shape, while the trailing route keeps both Realtime
+WebSocket variants addressable. The proxy removes that synthetic local prefix
+before applying its route allowlist and projecting the request to the official
+upstream. The bearer token,
 `ChatGPT-Account-ID`, model, request bytes, and response bytes are not replaced
 or rewritten. Provider Secrets, aliases, failover, circuits, and replay are
 disabled. HTTP `Accept-Encoding` is forwarded unchanged and compressed response
 bytes are relayed unchanged; a streaming decompressor feeds only a bounded
-in-memory usage observer. WebSocket extension compression is not negotiated so
-the bounded frame observer can read completion usage. Frames and content are
-never written to logs.
+in-memory usage observer. WebSocket `permessage-deflate` offers and negotiations
+are forwarded, and the compressed frames themselves are relayed unchanged. A
+bounded side observer inflates only copied payloads, with fragmentation and
+context-takeover support, to read completion usage; inspection failure never
+rewrites or interrupts the wire stream. Frames and content are never written to
+logs. Connection-close metadata marks observation `complete`, `degraded`, or
+`not_started`, reports fixed reason enums for any degraded direction, and counts
+turns that closed before usage was captured.
+
+Subscription passthrough also relays the Codex App support routes needed by
+voice and standalone search: `POST /realtime/calls`, `POST /alpha/search`, and
+the `/realtime` or `/live` WebSocket variants. These routes are available only
+in the authenticated, single-upstream subscription mode; provider-mode route
+policy is unchanged. `/live` HTTP is intentionally not forwarded because that
+public-API multipart request is not byte-compatible with the ChatGPT backend
+Realtime call route.
 
 Observed token counts and the effective OpenAI `service_tier` are taken from
 the official response. `priority` means Fast and `auto`/`default` mean Standard. The
@@ -131,8 +150,11 @@ command. No automatic `SIGKILL` fallback is used.
 Codex attachment is never automatic. Attach writes an owner-only exact backup
 and a hash-bound state file before changing only the marked top-level
 `model_provider` and `openai_base_url` settings. Detach restores the prior bytes
-and file mode exactly. A changed config or backup causes a safe refusal, and a
-proxy with an active attachment cannot be stopped.
+and file mode exactly when the file is otherwise unchanged. If Codex App adds
+unrelated settings such as project trust records while attached, detach removes
+only the intact marked block, restores the prior managed values, and preserves
+those App edits. A changed managed block or backup still causes a safe refusal,
+and a proxy with an active attachment cannot be stopped.
 
 ## Timeout and size controls
 

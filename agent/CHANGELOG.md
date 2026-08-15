@@ -1,5 +1,29 @@
 # Changelog — agent/
 
+## 2026-08-15 — Codex App Realtime passthrough compatibility
+
+- Made Codex attachment drift field-scoped instead of whole-file-scoped.
+  Codex App may append project trust records while the proxy is attached;
+  status now keeps the attachment healthy and detach preserves those unrelated
+  edits while restoring only the marked `model_provider` and
+  `openai_base_url`. Managed-block or backup tampering still fails closed.
+- Fixed subscription observation in Codex App for voice and standalone web
+  search. Attachments now retain the ChatGPT backend semantic marker in their
+  loopback base URL, so Realtime call creation uses byte-compatible
+  `POST /realtime/calls` JSON instead of public-API multipart `POST /live`.
+  Added narrowly allowlisted projections for Realtime call/search HTTP routes
+  and Realtime/Live WebSockets while keeping provider mode unchanged.
+- Kept old attachment/runtime state readable for safe detach and status
+  inspection. New daemon state reports its exact local base URL so a controller
+  upgraded while an older daemon is still running does not advertise unsupported
+  routes.
+- Preserved Codex's WebSocket `permessage-deflate` negotiation and compressed
+  frame bytes end-to-end. Usage observation now decompresses bounded payload
+  copies off-path, including fragmented messages and context takeover, and
+  degrades observation only if decoding fails. Close metadata explicitly marks
+  incomplete observation with fixed, content-free reason enums and unfinished
+  turn counts.
+
 ## 2026-08-14 — observable Codex subscription passthrough
 
 - Added a loopback-only `passthrough` proxy mode for official
