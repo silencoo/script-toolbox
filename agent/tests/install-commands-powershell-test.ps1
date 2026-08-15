@@ -41,7 +41,18 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $Prefix)) 'install preview created the command prefix'
     Assert-True (-not (Test-Path -LiteralPath $Runtime)) 'install preview created the runtime'
 
-    Invoke-Installer ($common + '-Yes')
+    $typoRefused = $false
+    try {
+        & $Installer @common '--ues' *> $null
+    } catch {
+        $typoRefused = $true
+    }
+    Assert-True $typoRefused 'unknown GNU-style option was not rejected'
+    Assert-True (-not (Test-Path -LiteralPath $Prefix)) 'unknown option became an install prefix'
+
+    # GNU-style boolean flags are accepted for users moving from the Shell
+    # installer, while canonical PowerShell examples continue to use -Yes.
+    Invoke-Installer ($common + '--yes')
     Assert-True (Test-Path -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -PathType Leaf) `
         'PowerShell install omitted the standalone runtime marker'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-powershell.json') -PathType Leaf) `

@@ -96,6 +96,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-commands.ps1 `
   -Yes -AddToPath
 ```
 
+PowerShell's `-Yes` form is canonical; `--yes`, `--force`, `--uninstall`, and
+`--add-to-path` are also accepted for Shell users. Other positional or GNU-style
+arguments are rejected rather than being interpreted as an install path.
+
 The Windows defaults are `%LOCALAPPDATA%\script-toolbox\agent` for the runtime
 and `%LOCALAPPDATA%\script-toolbox\bin` for commands. Git Bash users can keep
 using `./install-commands.sh --yes`; on Windows it creates managed Bash launcher

@@ -11,7 +11,7 @@ Shell installer, and adds native .cmd shims for PowerShell and cmd.exe.
 Runs are preview-only unless -Yes is supplied. Managed conflicts are preserved
 only with -Force, and -Uninstall restores those tracked backups.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Prefix,
     [string]$Runtime,
@@ -20,11 +20,29 @@ param(
     [switch]$AddToPath,
     [switch]$Force,
     [switch]$Uninstall,
-    [switch]$Yes
+    [switch]$Yes,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$CompatibilityArguments
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# PowerShell convention uses one dash (`-Yes`), but accepting the common GNU
+# spellings keeps a user moving from install-commands.sh from accidentally
+# binding `--yes` as the positional Prefix path. Unknown compatibility
+# arguments fail closed instead of becoming directories.
+foreach ($argument in @($CompatibilityArguments)) {
+    switch ($argument) {
+        '--yes' { $Yes = $true }
+        '--force' { $Force = $true }
+        '--uninstall' { $Uninstall = $true }
+        '--add-to-path' { $AddToPath = $true }
+        default {
+            throw "Unknown argument '$argument'. PowerShell options use -Yes, -Force, -Uninstall, and -AddToPath."
+        }
+    }
+}
 
 $Commands = @('agentctl', 'mcpctl', 'promptctl', 'skillsctl')
 $ManifestName = '.script-toolbox-agent-powershell.json'
