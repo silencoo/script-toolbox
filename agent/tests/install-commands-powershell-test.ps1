@@ -74,10 +74,13 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
     Assert-True ($version -eq 'agentctl 0.17.1') "agentctl.cmd returned an unexpected version: $version"
 
+    $agentctlShim = Join-Path $Prefix 'agentctl.cmd'
+    $shimHashBefore = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash
     $reinstallArguments = $common.Clone()
     $reinstallArguments.Yes = $true
-    $reinstall = & $Installer @reinstallArguments 2>&1 | Out-String
-    Assert-True ($reinstall -match 'keep\s+.*agentctl\.cmd') 'PowerShell reinstall was not shim-idempotent'
+    Invoke-Installer $reinstallArguments
+    $shimHashAfter = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash
+    Assert-True ($shimHashAfter -eq $shimHashBefore) 'PowerShell reinstall was not shim-idempotent'
 
     $uninstallPreviewArguments = $common.Clone()
     $uninstallPreviewArguments.Uninstall = $true
