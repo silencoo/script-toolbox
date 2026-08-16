@@ -1,5 +1,25 @@
 # Changelog — agent/
 
+## 2026-08-16 — clearer Skill switching and compact Provider views
+
+- Added a `Current → Selected` comparison to the TUI Workspace Skill Pack
+  detail pane, including the resolved inheritance chain and exact added,
+  removed, and retained Skills for the highlighted client.
+- Fixed Workspace Pack apply when the same resolved Pack already exists in the
+  local canonical Skills Store. The TUI now applies that matching local Pack
+  instead of crossing Skills Store ownership and reporting unowned link
+  conflicts. The confirmation now pins the exact highlighted Pack and target,
+  then verifies the resulting local Pack, health, and resolved Skill count
+  before reporting success. Verified state is reflected immediately, and an
+  unloaded dashboard says `loading` rather than incorrectly showing zero.
+- Split the formerly unbounded Providers page into Summary, Config, Runtime,
+  and Usage views cycled with `v`. The default Summary contracts its profile
+  window on short terminals, while duplicated diagnostics and footer rows were
+  removed so the action/status area remains visible.
+- Failed actions surface the controller's first diagnostic line directly in
+  the status bar. Bumped `agentctl` to 0.17.3; the `skillsctl` backend remains
+  0.4.2 because its CLI behavior did not change.
+
 ## 2026-08-15 — Windows controller installation
 
 - Added a preview-first Windows PowerShell 5.1+ standalone installer with

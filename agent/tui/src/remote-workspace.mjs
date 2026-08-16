@@ -648,7 +648,15 @@ export function createRemoteWorkspace({
       return Object.entries(snapshot.packs).sort(([a], [b]) => a.localeCompare(b))
         .map(([name, pack]) => {
           const selected = skillSelection(snapshot, name, target);
-          return { name, description: String(pack.description || ""), count: selected.skills.length, unit: "skills", source: "cloud" };
+          return {
+            name,
+            description: String(pack.description || ""),
+            count: selected.skills.length,
+            unit: "skills",
+            source: "cloud",
+            packs: selected.packs,
+            items: selected.skills
+          };
         });
     }
     if (type === "snippets") {

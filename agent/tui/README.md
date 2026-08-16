@@ -45,6 +45,11 @@ unmaterialized built-in template, `L` is local-only, `W` is Workspace-only,
 `L+W` is a local profile with a matching backup, and `L≠W` identifies safe
 configuration metadata that needs reconciliation. Local configuration takes
 precedence, while a Workspace-only profile remains directly applicable.
+The default Summary is height-bounded instead of rendering every diagnostic at
+once. Press `v` to cycle Summary, Config, Runtime, and Usage; Config keeps the
+selected profile visible without repeating the full list, while observer and
+usage diagnostics stay in their own views. On short terminals the Summary list
+window contracts further so action and status rows remain visible.
 Providers incompatible with the selected client are hidden by default; `i`
 temporarily reveals them for inspection. Built-ins render immediately even
 when the local Store does not exist. The view resolves each selection for
@@ -105,7 +110,11 @@ Workspace profile.
 The Skills view uses the same local-only recovery contract for named packs.
 When `Drift` is reported, `f` confirms reapplying the active pack to restore
 missing managed links. Unrelated local skills are preserved and Workspace is
-not required.
+not required. The Workspace Pack detail pane compares the current local Pack
+with the selected Pack, shows its resolved inheritance chain, and lists the
+Skills that will be added, removed, or retained. When a Workspace Pack resolves
+to the same Skills as an existing local canonical Pack, apply reuses that local
+Pack so its managed links do not cross Store ownership boundaries.
 
 The Prompts view likewise shows both clients' local Promptctl bindings before
 the Workspace catalog: active profile, managed state, binding path,
@@ -161,6 +170,7 @@ the remote snapshot itself cannot be opened.
 | `p` / `a` | Inspect a read-only plan or apply the selected item |
 | Providers: `u` / `d` | Keep the selected Local copy in Workspace / keep its Workspace copy locally |
 | Providers: `i` | Show or hide profiles incompatible with the selected client |
+| Providers: `v` | Cycle the bounded Summary / Config / Runtime / Usage views |
 | Providers (Codex): `S` / `A` | Start or stop the subscription observer / attach or detach Codex |
 | MCP: `l` / `w` | Focus target-specific Local server switches / Workspace profiles |
 | MCP: `/` | Search by server name, category, or description; Enter keeps and Esc clears the query |

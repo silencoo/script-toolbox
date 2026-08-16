@@ -1006,6 +1006,53 @@ export function createController({
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
     }
+    if (type === "skills") {
+      const remotePlan = await remoteWorkspace.componentPlan(type, name, target);
+      const localPack = await runControllerJson(
+        tools.skills,
+        ["pack", "show", name, "--target", target],
+        `Local Skill Pack ${name}`
+      );
+      const localItems = Array.isArray(localPack.data?.resolved)
+        ? [...localPack.data.resolved].sort()
+        : null;
+      const remoteItems = Array.isArray(remotePlan.items)
+        ? [...remotePlan.items].sort()
+        : [];
+      if (localItems && JSON.stringify(localItems) === JSON.stringify(remoteItems)) {
+        const result = await runController(tools.skills, [
+          "apply", "--target", target, "--pack", name, "--yes"
+        ]);
+        if (result.code !== 0) {
+          return {
+            ok: false,
+            data: { type, name, target, matchedLocalPack: true },
+            detail: sanitizeOutput(result.stderr || result.stdout) ||
+              `Action failed with code ${result.code}`
+          };
+        }
+        let state;
+        try {
+          state = await localSkillsState(target);
+        } catch (error) {
+          return {
+            ok: false,
+            data: { type, name, target, matchedLocalPack: true },
+            detail: `${name} finished applying, but the resulting local Skills state could not be verified: ${sanitizeOutput(error?.message || error)}`
+          };
+        }
+        const actualItems = Array.isArray(state.skills) ? [...state.skills].sort() : [];
+        const verified = state.selection_mode === "pack" && state.pack === name &&
+          state.healthy === true && JSON.stringify(actualItems) === JSON.stringify(remoteItems);
+        return {
+          ok: verified,
+          data: { type, name, target, matchedLocalPack: true, state },
+          detail: verified
+            ? `${name} matched the local canonical Pack and is verified active with ${actualItems.length} Skills; start a new ${target} session`
+            : `${name} finished applying, but verification returned ${state.pack || state.selection_mode || "an unknown selection"} with ${actualItems.length} Skills instead of the selected ${remoteItems.length}.`
+        };
+      }
+    }
     const selection = await remoteWorkspace.materializeComponent(type, name, target);
     if (type === "snippets") {
       await remoteWorkspace.writeSnippet(selection);

@@ -72,7 +72,7 @@ try {
 
     $version = (& (Join-Path $Prefix 'agentctl.cmd') --version | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
-    Assert-True ($version -eq 'agentctl 0.17.1') "agentctl.cmd returned an unexpected version: $version"
+    Assert-True ($version -eq 'agentctl 0.17.3') "agentctl.cmd returned an unexpected version: $version"
 
     $agentctlShim = Join-Path $Prefix 'agentctl.cmd'
     $shimHashBefore = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash

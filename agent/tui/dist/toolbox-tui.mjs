@@ -24823,7 +24823,15 @@ function createRemoteWorkspace({
     if (type === "skills") {
       return Object.entries(snapshot.packs).sort(([a], [b]) => a.localeCompare(b)).map(([name, pack]) => {
         const selected = skillSelection(snapshot, name, target);
-        return { name, description: String(pack.description || ""), count: selected.skills.length, unit: "skills", source: "cloud" };
+        return {
+          name,
+          description: String(pack.description || ""),
+          count: selected.skills.length,
+          unit: "skills",
+          source: "cloud",
+          packs: selected.packs,
+          items: selected.skills
+        };
       });
     }
     if (type === "snippets") {
@@ -26119,6 +26127,50 @@ No remote catalog was written locally.`;
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
     }
+    if (type === "skills") {
+      const remotePlan = await remoteWorkspace.componentPlan(type, name, target);
+      const localPack = await runControllerJson(
+        tools.skills,
+        ["pack", "show", name, "--target", target],
+        `Local Skill Pack ${name}`
+      );
+      const localItems = Array.isArray(localPack.data?.resolved) ? [...localPack.data.resolved].sort() : null;
+      const remoteItems = Array.isArray(remotePlan.items) ? [...remotePlan.items].sort() : [];
+      if (localItems && JSON.stringify(localItems) === JSON.stringify(remoteItems)) {
+        const result = await runController(tools.skills, [
+          "apply",
+          "--target",
+          target,
+          "--pack",
+          name,
+          "--yes"
+        ]);
+        if (result.code !== 0) {
+          return {
+            ok: false,
+            data: { type, name, target, matchedLocalPack: true },
+            detail: sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+          };
+        }
+        let state;
+        try {
+          state = await localSkillsState(target);
+        } catch (error) {
+          return {
+            ok: false,
+            data: { type, name, target, matchedLocalPack: true },
+            detail: `${name} finished applying, but the resulting local Skills state could not be verified: ${sanitizeOutput(error?.message || error)}`
+          };
+        }
+        const actualItems = Array.isArray(state.skills) ? [...state.skills].sort() : [];
+        const verified = state.selection_mode === "pack" && state.pack === name && state.healthy === true && JSON.stringify(actualItems) === JSON.stringify(remoteItems);
+        return {
+          ok: verified,
+          data: { type, name, target, matchedLocalPack: true, state },
+          detail: verified ? `${name} matched the local canonical Pack and is verified active with ${actualItems.length} Skills; start a new ${target} session` : `${name} finished applying, but verification returned ${state.pack || state.selection_mode || "an unknown selection"} with ${actualItems.length} Skills instead of the selected ${remoteItems.length}.`
+        };
+      }
+    }
     const selection = await remoteWorkspace.materializeComponent(type, name, target);
     if (type === "snippets") {
       await remoteWorkspace.writeSnippet(selection);
@@ -26316,6 +26368,7 @@ var SECTIONS = Object.freeze([
 ]);
 var TARGETS = Object.freeze(["codex", "claude"]);
 var PROVIDER_TARGETS2 = Object.freeze(["claude", "codex", "opencode", "pi"]);
+var PROVIDER_PANELS = Object.freeze(["summary", "config", "runtime", "usage"]);
 var SKILL_TARGETS = Object.freeze(["codex", "claude", "opencode", "pi"]);
 function targetLabel(target) {
   if (target === "claude") return "Claude Code";
@@ -26338,6 +26391,10 @@ function cycleTarget(target, delta = 1, targets = TARGETS) {
   const values = Array.isArray(targets) && targets.length ? targets : TARGETS;
   const index = Math.max(0, values.indexOf(target));
   return values[(index + delta + values.length) % values.length];
+}
+function cycleProviderPanel(current, delta = 1) {
+  const index = Math.max(0, PROVIDER_PANELS.indexOf(current));
+  return PROVIDER_PANELS[(index + delta + PROVIDER_PANELS.length) % PROVIDER_PANELS.length];
 }
 function targetReport(snapshot, target) {
   return snapshot?.doctor?.targets?.find((report) => report.target === target) || null;
@@ -26607,6 +26664,15 @@ function skillTargetState(states, target) {
     drift: Array.isArray(data.drift) ? [...data.drift] : [],
     healthy: data.healthy === true,
     data
+  };
+}
+function selectionDiff(currentItems, selectedItems) {
+  const current = new Set(Array.isArray(currentItems) ? currentItems : []);
+  const selected = new Set(Array.isArray(selectedItems) ? selectedItems : []);
+  return {
+    added: [...selected].filter((name) => !current.has(name)).sort(),
+    removed: [...current].filter((name) => !selected.has(name)).sort(),
+    unchanged: [...selected].filter((name) => current.has(name)).sort()
   };
 }
 function skillEntries(catalogItems, states, target) {
@@ -27087,7 +27153,7 @@ Keys:
   u                                 Roll back a preset
   Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
   Accounts: a/Enter switch \xB7 x delete saved account
-  Providers: p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
+  Providers: v views \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
   Providers (Codex): S observer start/stop \xB7 A attach/detach
   MCP: l/w panes \xB7 / search \xB7 e/x filters \xB7 m batch \xB7 Space toggle
   Skills: l/w panes \xB7 / search \xB7 e enabled \xB7 m batch \xB7 Space toggle
@@ -27322,11 +27388,30 @@ function ProxyUsageSummary({ value }) {
     }
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "API-equivalent catalog estimate; not a ChatGPT subscription invoice."));
 }
-function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
+function ProviderPanelTabs({ value }) {
+  const labels = {
+    summary: "SUMMARY",
+    config: "CONFIG",
+    runtime: "RUNTIME",
+    usage: "USAGE"
+  };
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, PROVIDER_PANELS.map((panel) => /* @__PURE__ */ import_react34.default.createElement(
+    Text,
+    {
+      key: panel,
+      color: value === panel ? "black" : "cyan",
+      backgroundColor: value === panel ? "cyan" : void 0,
+      bold: value === panel
+    },
+    ` ${labels[panel]} `
+  )));
+}
+function ProvidersView({ snapshot, surface, selected, target, showIncompatible, panelMode }) {
+  const shortTerminal = Boolean(process.stdout.rows && process.stdout.rows < 34);
   const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
   const entries = showIncompatible ? allEntries : providerEntries(surface.local, surface.cloud);
   const safeIndex = clampSelection(selected, entries.length);
-  const visible = selectionWindow(entries, safeIndex, 10);
+  const visible = selectionWindow(entries, safeIndex, shortTerminal ? 5 : 8);
   const current = entries[safeIndex] || null;
   const dashboard = surface.dashboard || {};
   const localStatus = dashboard.status || {};
@@ -27343,14 +27428,39 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
   const backedUpCount = allEntries.filter((entry) => entry.syncStatus === "backed-up").length;
   const conflictCount = allEntries.filter((entry) => entry.syncStatus === "conflict").length;
   const stateKind = !current?.enabled ? "muted" : current?.ready ? "good" : current?.nativeAuthPresent ? "local" : current?.compatible ? "warn" : "bad";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), runtime && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginBottom: 1 }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) })), officialSubscription && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, proxyState.attached ? "Official ChatGPT subscription observed \xB7 Codex \u2192 loopback observer \u2192 OpenAI; official auth and upstream preserved." : `Official ChatGPT subscription active \xB7 ${runtime?.inference?.model || "OpenAI model"} uses the current ChatGPT login, not a Provider API Secret.`), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " visible \xB7 ", allEntries.length, " total \xB7 ", backedUpCount, " backed up", conflictCount > 0 ? ` \xB7 ${conflictCount} conflict` : ""), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[providerStorageKind(item)], bold: true }, providerStorageMark(item).padEnd(3)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.applied && item.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "\u25C7"), item.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "native auth"), (!item.enabled || !item.compatible) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "incompatible"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)"), hiddenCount > 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden \xB7 i show`)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[providerStorageKind(current)] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(ProviderSourceBadge, { entry: current })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"), kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(
+  const profilesVisible = panelMode === "summary";
+  const configVisible = panelMode === "config";
+  const runtimeVisible = panelMode === "runtime";
+  const usageVisible = panelMode === "usage";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, !shortTerminal && /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginBottom: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Render target"), PROVIDER_TARGETS2.map((entry) => /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { key: entry, target: entry, selected: entry === target })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "t cycle")), /* @__PURE__ */ import_react34.default.createElement(ProviderPanelTabs, { value: panelMode }), profilesVisible && runtime && !shortTerminal && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) })), profilesVisible && officialSubscription && !shortTerminal && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, proxyState.attached ? "Official ChatGPT subscription observed \xB7 Codex \u2192 observer \u2192 OpenAI." : `Official ChatGPT subscription active \xB7 ${runtime?.inference?.model || "OpenAI model"}.`), profilesVisible && /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 98 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 34 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total, " \xB7 ", allEntries.length, " total \xB7 ", backedUpCount, " backed up", conflictCount > 0 ? ` \xB7 ${conflictCount} conflict` : ""), visible.items.map(({ item, index }) => /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: item.key, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "white" : "gray", bold: index === safeIndex }, index === safeIndex ? "\u203A" : " "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[providerStorageKind(item)], bold: true }, providerStorageMark(item).padEnd(3)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, item.name), item.applied && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green" }, "\u25CF"), !item.applied && item.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "\u25C7"), item.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "native auth"), (!item.enabled || !item.compatible) && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "incompatible"))), entries.length === 0 && !surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "(no Provider profiles)"), hiddenCount > 0 && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden \xB7 i show`)), !shortTerminal && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: current ? COLORS[providerStorageKind(current)] : "gray", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected"), current && /* @__PURE__ */ import_react34.default.createElement(ProviderSourceBadge, { entry: current })), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, current?.name || "none"), current ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "State", value: current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked"), kind: stateKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Backup state", value: providerSyncDetail(current), kind: providerStorageKind(current) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
-      label: "Backup state",
-      value: providerSyncDetail(current),
-      kind: providerStorageKind(current)
+      label: "Applied",
+      value: current.applied ? "current under agentctl" : current.nativeSelected ? "current in OpenCode \xB7 external" : "not current under agentctl",
+      kind: current.applied ? "good" : current.nativeSelected ? "local" : "muted"
     }
-  ), current.sources.includes("builtin") && current.syncStatus !== "builtin-only" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Catalog origin", value: "agentctl built-in template", kind: "builtin" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Protocol", value: current.protocol || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(
+  ), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" })) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Initialize locally or back up a Provider bundle to Workspace."))), profilesVisible && shortTerminal && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Selected",
+      value: current ? `${current.name} \xB7 ${current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")} \xB7 ${current.requestedModel || "unknown"}` : "none",
+      kind: current ? stateKind : "muted"
+    }
+  ), !profilesVisible && /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Selected profile",
+      value: current ? `${providerStorageMark(current)} ${current.name}` : "none",
+      kind: current ? providerStorageKind(current) : "muted"
+    }
+  ), configVisible && current && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, !shortTerminal && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Target", value: `${targetLabel(target)} \xB7 ${current.platform || dashboard.platform || "unknown"}`, kind: target }), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "State",
+      value: `${current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")}${shortTerminal ? ` \xB7 ${current.platform || dashboard.platform || "unknown"}` : ""}`,
+      kind: stateKind
+    }
+  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Protocol", value: current.protocol || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: current.endpoint || "unknown" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model", value: `${current.requestedModel || "unknown"} \u2192 ${current.outboundModel || "unknown"}` }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Compaction",
@@ -27364,58 +27474,23 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       value: current.contextLabel || "Client default",
       kind: current.contextWindowTokens !== null || current.autoCompactTokens !== null ? "good" : "muted"
     }
-  ), current.modelsAvailable.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model choices", value: current.modelsAvailable.join(", ") }), /* @__PURE__ */ import_react34.default.createElement(
+  ), !shortTerminal && current.modelsAvailable.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Model choices", value: current.modelsAvailable.join(", ") }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Provider Secret",
       value: current.authMode === "none" ? "not required" : `${current.secretReference || "missing reference"} \xB7 ${current.secretPresent ? "present" : "missing"}`,
       kind: current.authMode === "none" || current.secretPresent ? "good" : "warn"
     }
-  ), current.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Native client auth",
-      value: `OpenCode \xB7 ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""} \xB7 available outside agentctl`,
-      kind: "local"
-    }
-  ), current.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Native selection",
-      value: current.nativeSelectedModel || "selected by OpenCode",
-      kind: "local"
-    }
-  ), current.officialIdentityPolicy === "preserve" && /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Official Identity",
-      value: "preserve current ChatGPT login \xB7 auth.json untouched",
-      kind: "good"
-    }
-  ), /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Applied",
-      value: current.applied ? "current under agentctl" : current.nativeSelected ? "current in OpenCode \xB7 external" : "not current under agentctl",
-      kind: current.applied ? "good" : current.nativeSelected ? "local" : "muted"
-    }
-  ), current.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: current.description }), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" }), !current.secretPresent && current.secretReference && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan" }, "agentctl provider use ", current.name, " --target ", target, " --secret-file ./key --yes"), current.nativeAuthPresent && !current.secretPresent && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Native auth is usable by OpenCode, but is not yet managed or backed up by agentctl.")) : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Initialize locally or back up a Provider bundle to Workspace."))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Local catalog",
-      value: localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) \xB7 ${localStatus.secret_count || 0} Secret value(s)` : "not initialized",
-      kind: localStatus.store_exists ? "local" : "muted"
-    }
-  ), /* @__PURE__ */ import_react34.default.createElement(
-    Row,
-    {
-      label: "Workspace backup",
-      value: remote.synced ? `${remote.profiles || 0} profile(s) \xB7 ${remote.secrets || 0} hidden Secret value(s)` : "not backed up",
-      kind: remote.synced ? "cloud" : "muted"
-    }
-  ), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Failover", value: `${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Pricing", value: `${pricing.version || "none"} \xB7 ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Codex observer", value: proxyState.observerLabel, kind: proxyState.observerKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Attachment", value: proxyState.attachmentLabel, kind: proxyState.attachmentKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Request path", value: proxyState.routeLabel, kind: proxyState.routeKind }), /* @__PURE__ */ import_react34.default.createElement(ProxyUsageSummary, { value: proxyUsage })), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local"), target === "codex" ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "S"), " start/stop observer \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "A"), " attach/detach Codex \xB7 only attached requests are recorded") : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Switch the Provider render target to Codex to control its subscription observer."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "B template \xB7 L local \xB7 W Workspace-only \xB7 L+W backed up \xB7 L\u2260W conflict"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "One row per Provider. Secret values remain hidden."));
+  ), current.nativeAuthPresent && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Native client auth", value: `OpenCode \xB7 ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""}`, kind: "local" }), current.nativeSelected && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Native selection", value: current.nativeSelectedModel || "selected by OpenCode", kind: "local" }), current.officialIdentityPolicy === "preserve" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Official Identity", value: "preserve ChatGPT login \xB7 auth.json untouched", kind: "good" }), current.issue && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Blocked by", value: current.issue, kind: "bad" })), runtimeVisible && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, runtime && target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: runtime }) }), runtime && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: runtime }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Local catalog", value: localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) \xB7 ${localStatus.secret_count || 0} Secret value(s)` : "not initialized", kind: localStatus.store_exists ? "local" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace backup", value: remote.synced ? `${remote.profiles || 0} profile(s) \xB7 ${remote.secrets || 0} hidden Secret value(s)` : "not backed up", kind: remote.synced ? "cloud" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Failover", value: `${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Pricing", value: `${pricing.version || "none"} \xB7 ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Codex observer", value: proxyState.observerLabel, kind: proxyState.observerKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Attachment", value: proxyState.attachmentLabel, kind: proxyState.attachmentKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Request path", value: proxyState.routeLabel, kind: proxyState.routeKind })), usageVisible && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Codex observer", value: proxyState.observerLabel, kind: proxyState.observerKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Attachment", value: proxyState.attachmentLabel, kind: proxyState.attachmentKind }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Request path", value: proxyState.routeLabel, kind: proxyState.routeKind }), /* @__PURE__ */ import_react34.default.createElement(ProxyUsageSummary, { value: proxyUsage })), surface.loading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u25CC Loading remaining local or encrypted Workspace Provider data\u2026"), !snapshot.workspace && snapshot.workspaceLoading && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, shortTerminal ? "Workspace connecting; local profiles remain usable." : "Workspace Providers are connecting in the background; local profiles remain usable."), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.localError }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: surface.cloudError }), (dashboard.errors || []).map((error) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: error, value: error })), shortTerminal ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " plan/apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " filter \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "v"), " view \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), "/", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " sync") : /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 profile \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, "i"), " incompatible \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "v"), " next view"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "u"), " keep Local \u2192 Workspace \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " keep Workspace \u2192 Local", target === "codex" && /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, " \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "S"), " observer \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, "A"), " attach"))));
 }
-function CloudCatalog({ catalog, selected, target, component }) {
+function CloudCatalog({
+  catalog,
+  selected,
+  target,
+  component,
+  currentSelection = "",
+  currentItems = []
+}) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
   if (catalog.error) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error });
   if (!catalog.items.length) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No cloud selections in this Store.");
@@ -27423,7 +27498,15 @@ function CloudCatalog({ catalog, selected, target, component }) {
   const item = catalog.items[safeIndex];
   const visible = selectionWindow(catalog.items, safeIndex);
   const catalogLabel = component === "mcp" ? "MCP profiles" : component === "skills" ? "Skill packs" : "Prompt profiles";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Profiles ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
+  const diff2 = component === "skills" ? selectionDiff(currentItems, item.items) : null;
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, component === "skills" ? "Packs" : "Profiles", " ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected ", component === "skills" ? "pack" : "profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }), diff2 && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "Current \u2192 Selected"), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Pack",
+      value: `${currentSelection || "none"} \u2192 ${item.name}`,
+      kind: currentSelection === item.name ? "good" : "selected"
+    }
+  ), item.packs?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Inheritance", value: item.packs.join(" \u2192 "), kind: "muted" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Add", items: diff2.added, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Remove", items: diff2.removed, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Keep", items: diff2.unchanged, kind: "muted" })))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
 }
 function LocalMcpCatalog({
   target,
@@ -27600,7 +27683,7 @@ function SkillsView({
   const repairable = active.drift.length > 0 && active.selectionMode !== "manual" && active.selection !== "none";
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Each client receives its own local Skill links; the canonical Store remains shared."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, SKILL_TARGETS.map((client) => {
     const state = skillTargetState(dashboard.states, client);
-    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: client, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: client, selected: client === target }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.healthy ? "green" : state.data.target ? "red" : "gray" }, state.selection, " \xB7 ", state.skills.length));
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: client, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: client, selected: client === target }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.healthy ? "green" : state.data.target ? "red" : "gray" }, state.data.target ? `${state.selection} \xB7 ${state.skills.length}` : dashboard.loading ? "loading\u2026" : "unavailable"));
   })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "local" ? "black" : "green", backgroundColor: focus === "local" ? "green" : void 0, bold: true }, " l LOCAL SWITCHES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "workspace" ? "black" : "blue", backgroundColor: focus === "workspace" ? "blue" : void 0, bold: true }, " w WORKSPACE PACKS ")), active.selectionMode === "manual" && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom added", items: customAdded, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom disabled", items: customDisabled, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s"), " save new \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "S"), " update base for this target \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "u"), " encrypted Store backup after saving")), Object.entries(dashboard.errors || {}).map(([client, error]) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: `${client}-skills-error`, value: `${targetLabel(client)}: ${error}` })), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local pack ", active.selection, " for ", targetLabel(target), " \xB7 restores managed links only"), active.drift.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current Skills selection uses manual state; save it as a Pack before automatic repair."), focus === "local" ? /* @__PURE__ */ import_react34.default.createElement(
     LocalSkillsCatalog,
     {
@@ -27614,7 +27697,17 @@ function SkillsView({
       enabledOnly,
       searching
     }
-  ) : snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(CloudCatalog, { catalog, selected, target, component: "skills" }) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
+  ) : snapshot.workspace ? /* @__PURE__ */ import_react34.default.createElement(
+    CloudCatalog,
+    {
+      catalog,
+      selected,
+      target,
+      component: "skills",
+      currentSelection: active.selection,
+      currentItems: active.skills
+    }
+  ) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }
 function PromptView({ snapshot, target, catalog, selected }) {
   const states = Object.fromEntries(TARGETS.map((entry) => [
@@ -27682,13 +27775,14 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i show/hide incompatible"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible \xB7 v next view"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
   const [section, setSection] = (0, import_react34.useState)(initialSection);
   const [target, setTarget] = (0, import_react34.useState)("codex");
   const [providerTarget, setProviderTarget] = (0, import_react34.useState)("codex");
+  const [providerPanel, setProviderPanel] = (0, import_react34.useState)("summary");
   const [skillsTarget, setSkillsTarget] = (0, import_react34.useState)("codex");
   const [snapshot, setSnapshot] = (0, import_react34.useState)(null);
   const [loading, setLoading] = (0, import_react34.useState)(true);
@@ -27724,7 +27818,7 @@ function App2({ initialSection, controller, onLaunch }) {
     catalog: [],
     states: {},
     errors: {},
-    loading: false,
+    loading: true,
     error: "",
     key: ""
   });
@@ -28205,8 +28299,10 @@ function App2({ initialSection, controller, onLaunch }) {
     ].includes(action);
     const localRepairAction = action === "mcp-repair" || action === "skills-repair";
     const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
-    const actionTarget = providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target;
-    const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    const liveTarget = providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target;
+    const actionTarget = payload.target || liveTarget;
+    const liveSelection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = typeof payload.selection === "string" ? payload.selection : liveSelection;
     const runningLabel = actionLabel(action, selection, actionTarget);
     setMessage(action === "mcp-disable" ? `${runningLabel} \xB7 removing only the changed target entry\u2026` : action === "mcp-enable" || action === "mcp-batch" ? `${runningLabel} \xB7 updating changed target entries atomically\u2026` : action === "skills-disable" || action === "skills-enable" || action === "skills-batch" ? `${runningLabel} \xB7 updating managed links atomically\u2026` : `${runningLabel}\u2026`);
     setLastDetail("");
@@ -28214,13 +28310,14 @@ function App2({ initialSection, controller, onLaunch }) {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        selection,
         source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
         target: actionTarget,
         changes: payload.changes || [],
         replace: action === "mcp-profile-update"
       });
-      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
+      const firstDetailLine = String(result.detail || "").split("\n")[0];
+      setMessage(result.ok ? action === "skills-apply" && firstDetailLine ? `Done: ${firstDetailLine}` : `Done: ${actionLabel(action, selection, actionTarget)}` : `Failed: ${firstDetailLine || actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
       if (localMcpAction) {
         if (result.data?.state) patchLocalMcpState(result.data.state);
@@ -28234,6 +28331,9 @@ function App2({ initialSection, controller, onLaunch }) {
           setSkillsStaged(/* @__PURE__ */ new Map());
           setSkillsBatchMode(false);
         }
+      } else if (action === "skills-apply" && result.data?.matchedLocalPack && result.data?.state) {
+        patchLocalSkillsState(result.data.state);
+        await refresh(true);
       } else {
         await refresh(true);
       }
@@ -28567,6 +28667,12 @@ function App2({ initialSection, controller, onLaunch }) {
       setMessage(showIncompatibleProviders ? "Incompatible Providers hidden." : "Showing incompatible Providers for inspection.");
       return;
     }
+    if (section === "providers" && (input === "v" || input === "V")) {
+      const next = cycleProviderPanel(providerPanel);
+      setProviderPanel(next);
+      setMessage(`Provider ${next} view selected.`);
+      return;
+    }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
     if (section === "agents" && delta !== 0) {
@@ -28798,6 +28904,8 @@ function App2({ initialSection, controller, onLaunch }) {
       const selection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? selectedMcpServer?.name || "" : localSkillsAction ? selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
+        selection,
+        target: providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target,
         label: actionLabel(
           action,
           selection,
@@ -28820,7 +28928,8 @@ function App2({ initialSection, controller, onLaunch }) {
         surface: providerSurface,
         selected: componentSelected.providers,
         target: providerTarget,
-        showIncompatible: showIncompatibleProviders
+        showIncompatible: showIncompatibleProviders,
+        panelMode: providerPanel
       }
     );
     if (section === "mcp") content = /* @__PURE__ */ import_react34.default.createElement(

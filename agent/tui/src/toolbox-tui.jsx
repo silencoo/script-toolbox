@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createController } from "./controller.mjs";
 import {
   SECTIONS,
+  PROVIDER_PANELS,
   PROVIDER_TARGETS,
   SKILL_TARGETS,
   TARGETS,
@@ -14,6 +15,7 @@ import {
   clampSelection,
   componentSummary,
   componentTargetState,
+  cycleProviderPanel,
   cycleTarget,
   filterMcpServerEntries,
   filterSkillEntries,
@@ -29,6 +31,7 @@ import {
   safePromptPreviewText,
   sectionDelta,
   selectionDelta,
+  selectionDiff,
   selectionWindow,
   skillEntries,
   skillTargetState,
@@ -89,7 +92,7 @@ Keys:
   u                                 Roll back a preset
   Agents: c / p / Enter unified Providers · x uninstall owned config
   Accounts: a/Enter switch · x delete saved account
-  Providers: p plan · a apply · u upload · d download/merge · i incompatible
+  Providers: v views · p plan · a apply · u upload · d download/merge · i incompatible
   Providers (Codex): S observer start/stop · A attach/detach
   MCP: l/w panes · / search · e/x filters · m batch · Space toggle
   Skills: l/w panes · / search · e enabled · m batch · Space toggle
@@ -494,13 +497,37 @@ function ProxyUsageSummary({ value }) {
   );
 }
 
-function ProvidersView({ snapshot, surface, selected, target, showIncompatible }) {
+function ProviderPanelTabs({ value }) {
+  const labels = {
+    summary: "SUMMARY",
+    config: "CONFIG",
+    runtime: "RUNTIME",
+    usage: "USAGE"
+  };
+  return (
+    <Box gap={1} flexWrap="wrap">
+      {PROVIDER_PANELS.map((panel) => (
+        <Text
+          key={panel}
+          color={value === panel ? "black" : "cyan"}
+          backgroundColor={value === panel ? "cyan" : undefined}
+          bold={value === panel}
+        >
+          {` ${labels[panel]} `}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function ProvidersView({ snapshot, surface, selected, target, showIncompatible, panelMode }) {
+  const shortTerminal = Boolean(process.stdout.rows && process.stdout.rows < 34);
   const allEntries = providerEntries(surface.local, surface.cloud, { includeIncompatible: true });
   const entries = showIncompatible
     ? allEntries
     : providerEntries(surface.local, surface.cloud);
   const safeIndex = clampSelection(selected, entries.length);
-  const visible = selectionWindow(entries, safeIndex, 10);
+  const visible = selectionWindow(entries, safeIndex, shortTerminal ? 5 : 8);
   const current = entries[safeIndex] || null;
   const dashboard = surface.dashboard || {};
   const localStatus = dashboard.status || {};
@@ -527,189 +554,202 @@ function ProvidersView({ snapshot, surface, selected, target, showIncompatible }
       ? "good"
       : current?.nativeAuthPresent ? "local"
         : current?.compatible ? "warn" : "bad";
+  const profilesVisible = panelMode === "summary";
+  const configVisible = panelMode === "config";
+  const runtimeVisible = panelMode === "runtime";
+  const usageVisible = panelMode === "usage";
   return (
     <Box flexDirection="column">
-      <Box gap={1} marginBottom={1}>
-        <Text color="gray">Render target</Text>
-        {PROVIDER_TARGETS.map((entry) => (
-          <TargetBadge key={entry} target={entry} selected={entry === target} />
-        ))}
-        <Text color="gray">t cycle</Text>
-      </Box>
-      {runtime && (
-        <Box flexDirection="column" marginBottom={1}>
+      {!shortTerminal && (
+        <Box gap={1} marginBottom={1}>
+          <Text color="gray">Render target</Text>
+          {PROVIDER_TARGETS.map((entry) => (
+            <TargetBadge key={entry} target={entry} selected={entry === target} />
+          ))}
+          <Text color="gray">t cycle</Text>
+        </Box>
+      )}
+      <ProviderPanelTabs value={panelMode} />
+      {profilesVisible && runtime && !shortTerminal && (
+        <Box flexDirection="column" marginTop={1}>
           {target === "codex" && (
             <SummaryRow name="Identity" summary={componentSummary("identity", { ok: true, data: runtime })} />
           )}
           <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: runtime })} />
         </Box>
       )}
-      {officialSubscription && (
+      {profilesVisible && officialSubscription && !shortTerminal && (
         <Text color="green" bold>
           {proxyState.attached
-            ? "Official ChatGPT subscription observed · Codex → loopback observer → OpenAI; official auth and upstream preserved."
-            : `Official ChatGPT subscription active · ${runtime?.inference?.model || "OpenAI model"} uses the current ChatGPT login, not a Provider API Secret.`}
+            ? "Official ChatGPT subscription observed · Codex → observer → OpenAI."
+            : `Official ChatGPT subscription active · ${runtime?.inference?.model || "OpenAI model"}.`}
         </Text>
       )}
-      <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 98 ? "column" : "row"}>
-        <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={34}>
-          <Text color="gray">
-            Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} visible · {allEntries.length} total · {backedUpCount} backed up{conflictCount > 0 ? ` · ${conflictCount} conflict` : ""}
-          </Text>
-          {visible.items.map(({ item, index }) => (
-            <Box key={item.key} gap={1}>
-              <Text color={index === safeIndex ? "white" : "gray"} bold={index === safeIndex}>
-                {index === safeIndex ? "›" : " "}
-              </Text>
-              <Text color={COLORS[providerStorageKind(item)]} bold>{providerStorageMark(item).padEnd(3)}</Text>
-              <Text color={index === safeIndex ? "magenta" : "white"} bold={index === safeIndex}>
-                {item.name}
-              </Text>
-              {item.applied && <Text color="green">●</Text>}
-              {!item.applied && item.nativeSelected && <Text color="cyan">◇</Text>}
-              {item.nativeAuthPresent && <Text color="cyan">native auth</Text>}
-              {(!item.enabled || !item.compatible) && <Text color="gray">incompatible</Text>}
-            </Box>
-          ))}
-          {entries.length === 0 && !surface.loading && <Text color="gray">(no Provider profiles)</Text>}
-          {hiddenCount > 0 && (
+      {profilesVisible && (
+        <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 98 ? "column" : "row"}>
+          <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={34}>
             <Text color="gray">
-              {showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden · i show`}
+              Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total} · {allEntries.length} total · {backedUpCount} backed up{conflictCount > 0 ? ` · ${conflictCount} conflict` : ""}
             </Text>
-          )}
-        </Box>
-        <Box borderStyle="single" borderColor={current ? COLORS[providerStorageKind(current)] : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
-          <Box gap={1}>
-            <Text color="gray">Selected</Text>
-            {current && <ProviderSourceBadge entry={current} />}
+            {visible.items.map(({ item, index }) => (
+              <Box key={item.key} gap={1}>
+                <Text color={index === safeIndex ? "white" : "gray"} bold={index === safeIndex}>
+                  {index === safeIndex ? "›" : " "}
+                </Text>
+                <Text color={COLORS[providerStorageKind(item)]} bold>{providerStorageMark(item).padEnd(3)}</Text>
+                <Text color={index === safeIndex ? "magenta" : "white"} bold={index === safeIndex}>
+                  {item.name}
+                </Text>
+                {item.applied && <Text color="green">●</Text>}
+                {!item.applied && item.nativeSelected && <Text color="cyan">◇</Text>}
+                {item.nativeAuthPresent && <Text color="cyan">native auth</Text>}
+                {(!item.enabled || !item.compatible) && <Text color="gray">incompatible</Text>}
+              </Box>
+            ))}
+            {entries.length === 0 && !surface.loading && <Text color="gray">(no Provider profiles)</Text>}
+            {hiddenCount > 0 && (
+              <Text color="gray">
+                {showIncompatible ? "i hide incompatible" : `${hiddenCount} incompatible hidden · i show`}
+              </Text>
+            )}
           </Box>
-          <Text bold color="magenta">{current?.name || "none"}</Text>
-          {current ? (
-            <>
-              <Row label="Target" value={`${targetLabel(target)} · ${current.platform || dashboard.platform || "unknown"}`} kind={target} />
-              <Row label="State" value={current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")} kind={stateKind} />
-              <Row
-                label="Backup state"
-                value={providerSyncDetail(current)}
-                kind={providerStorageKind(current)}
-              />
-              {current.sources.includes("builtin") && current.syncStatus !== "builtin-only" && (
-                <Row label="Catalog origin" value="agentctl built-in template" kind="builtin" />
-              )}
-              <Row label="Protocol" value={current.protocol || "unknown"} />
-              <Row label="Endpoint" value={current.endpoint || "unknown"} />
-              <Row label="Model" value={`${current.requestedModel || "unknown"} → ${current.outboundModel || "unknown"}`} />
-              <Row
-                label="Compaction"
-                value={current.compactionLabel || "Local · upstream unverified"}
-                kind={current.compactionMode === "remote_native" || current.compactionMode === "messages_native"
-                  ? "good"
-                  : current.compactionPolicy === "local" ? "local" : "muted"}
-              />
-              <Row
-                label="Context"
-                value={current.contextLabel || "Client default"}
-                kind={current.contextWindowTokens !== null || current.autoCompactTokens !== null
-                  ? "good"
-                  : "muted"}
-              />
-              {current.modelsAvailable.length > 0 && (
-                <Row label="Model choices" value={current.modelsAvailable.join(", ")} />
-              )}
-              <Row
-                label="Provider Secret"
-                value={current.authMode === "none"
-                  ? "not required"
-                  : `${current.secretReference || "missing reference"} · ${current.secretPresent ? "present" : "missing"}`}
-                kind={current.authMode === "none" || current.secretPresent ? "good" : "warn"}
-              />
-              {current.nativeAuthPresent && (
+          {!shortTerminal && <Box borderStyle="single" borderColor={current ? COLORS[providerStorageKind(current)] : "gray"} paddingX={1} flexDirection="column" flexGrow={1}>
+            <Box gap={1}>
+              <Text color="gray">Selected</Text>
+              {current && <ProviderSourceBadge entry={current} />}
+            </Box>
+            <Text bold color="magenta">{current?.name || "none"}</Text>
+            {current ? (
+              <>
+                <Row label="State" value={current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")} kind={stateKind} />
+                <Row label="Backup state" value={providerSyncDetail(current)} kind={providerStorageKind(current)} />
+                <Row label="Model" value={`${current.requestedModel || "unknown"} → ${current.outboundModel || "unknown"}`} />
+                <Row label="Endpoint" value={current.endpoint || "unknown"} />
                 <Row
-                  label="Native client auth"
-                  value={`OpenCode · ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""} · available outside agentctl`}
-                  kind="local"
+                  label="Applied"
+                  value={current.applied
+                    ? "current under agentctl"
+                    : current.nativeSelected ? "current in OpenCode · external" : "not current under agentctl"}
+                  kind={current.applied ? "good" : current.nativeSelected ? "local" : "muted"}
                 />
-              )}
-              {current.nativeSelected && (
-                <Row
-                  label="Native selection"
-                  value={current.nativeSelectedModel || "selected by OpenCode"}
-                  kind="local"
-                />
-              )}
-              {current.officialIdentityPolicy === "preserve" && (
-                <Row
-                  label="Official Identity"
-                  value="preserve current ChatGPT login · auth.json untouched"
-                  kind="good"
-                />
-              )}
-              <Row
-                label="Applied"
-                value={current.applied
-                  ? "current under agentctl"
-                  : current.nativeSelected ? "current in OpenCode · external" : "not current under agentctl"}
-                kind={current.applied ? "good" : current.nativeSelected ? "local" : "muted"}
-              />
-              {current.description && <Row label="About" value={current.description} />}
-              {current.issue && <Row label="Blocked by" value={current.issue} kind="bad" />}
-              {!current.secretPresent && current.secretReference && (
-                <Text color="cyan">agentctl provider use {current.name} --target {target} --secret-file ./key --yes</Text>
-              )}
-              {current.nativeAuthPresent && !current.secretPresent && (
-                <Text color="gray">Native auth is usable by OpenCode, but is not yet managed or backed up by agentctl.</Text>
-              )}
-            </>
-          ) : (
-            <Text color="gray">Initialize locally or back up a Provider bundle to Workspace.</Text>
-          )}
+                {current.issue && <Row label="Blocked by" value={current.issue} kind="bad" />}
+              </>
+            ) : (
+              <Text color="gray">Initialize locally or back up a Provider bundle to Workspace.</Text>
+            )}
+          </Box>}
         </Box>
-      </Box>
-      <Box flexDirection="column" marginTop={1}>
+      )}
+      {profilesVisible && shortTerminal && (
         <Row
-          label="Local catalog"
-          value={localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) · ${localStatus.secret_count || 0} Secret value(s)` : "not initialized"}
-          kind={localStatus.store_exists ? "local" : "muted"}
+          label="Selected"
+          value={current
+            ? `${current.name} · ${current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")} · ${current.requestedModel || "unknown"}`
+            : "none"}
+          kind={current ? stateKind : "muted"}
         />
+      )}
+      {!profilesVisible && (
         <Row
-          label="Workspace backup"
-          value={remote.synced ? `${remote.profiles || 0} profile(s) · ${remote.secrets || 0} hidden Secret value(s)` : "not backed up"}
-          kind={remote.synced ? "cloud" : "muted"}
+          label="Selected profile"
+          value={current ? `${providerStorageMark(current)} ${current.name}` : "none"}
+          kind={current ? providerStorageKind(current) : "muted"}
         />
-        <Row label="Failover" value={`${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)`} />
-        <Row label="Pricing" value={`${pricing.version || "none"} · ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)`} />
-        <Row label="Codex observer" value={proxyState.observerLabel} kind={proxyState.observerKind} />
-        <Row label="Attachment" value={proxyState.attachmentLabel} kind={proxyState.attachmentKind} />
-        <Row label="Request path" value={proxyState.routeLabel} kind={proxyState.routeKind} />
-        <ProxyUsageSummary value={proxyUsage} />
-      </Box>
+      )}
+      {configVisible && current && (
+        <Box flexDirection="column" marginTop={1}>
+          {!shortTerminal && <Row label="Target" value={`${targetLabel(target)} · ${current.platform || dashboard.platform || "unknown"}`} kind={target} />}
+          <Row
+            label="State"
+            value={`${current.status || (!current.enabled ? "disabled" : current.ready ? "ready" : "blocked")}${shortTerminal ? ` · ${current.platform || dashboard.platform || "unknown"}` : ""}`}
+            kind={stateKind}
+          />
+          <Row label="Protocol" value={current.protocol || "unknown"} />
+          <Row label="Endpoint" value={current.endpoint || "unknown"} />
+          <Row label="Model" value={`${current.requestedModel || "unknown"} → ${current.outboundModel || "unknown"}`} />
+          <Row
+            label="Compaction"
+            value={current.compactionLabel || "Local · upstream unverified"}
+            kind={current.compactionMode === "remote_native" || current.compactionMode === "messages_native"
+              ? "good"
+              : current.compactionPolicy === "local" ? "local" : "muted"}
+          />
+          <Row
+            label="Context"
+            value={current.contextLabel || "Client default"}
+            kind={current.contextWindowTokens !== null || current.autoCompactTokens !== null ? "good" : "muted"}
+          />
+          {!shortTerminal && current.modelsAvailable.length > 0 && <Row label="Model choices" value={current.modelsAvailable.join(", ")} />}
+          <Row
+            label="Provider Secret"
+            value={current.authMode === "none"
+              ? "not required"
+              : `${current.secretReference || "missing reference"} · ${current.secretPresent ? "present" : "missing"}`}
+            kind={current.authMode === "none" || current.secretPresent ? "good" : "warn"}
+          />
+          {current.nativeAuthPresent && <Row label="Native client auth" value={`OpenCode · ${current.nativeAuthProvider || "provider"}${current.nativeAuthType ? ` (${current.nativeAuthType})` : ""}`} kind="local" />}
+          {current.nativeSelected && <Row label="Native selection" value={current.nativeSelectedModel || "selected by OpenCode"} kind="local" />}
+          {current.officialIdentityPolicy === "preserve" && <Row label="Official Identity" value="preserve ChatGPT login · auth.json untouched" kind="good" />}
+          {current.issue && <Row label="Blocked by" value={current.issue} kind="bad" />}
+        </Box>
+      )}
+      {runtimeVisible && (
+        <Box flexDirection="column" marginTop={1}>
+          {runtime && target === "codex" && <SummaryRow name="Identity" summary={componentSummary("identity", { ok: true, data: runtime })} />}
+          {runtime && <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: runtime })} />}
+          <Row label="Local catalog" value={localStatus.store_exists ? `${localStatus.profile_count || 0} profile(s) · ${localStatus.secret_count || 0} Secret value(s)` : "not initialized"} kind={localStatus.store_exists ? "local" : "muted"} />
+          <Row label="Workspace backup" value={remote.synced ? `${remote.profiles || 0} profile(s) · ${remote.secrets || 0} hidden Secret value(s)` : "not backed up"} kind={remote.synced ? "cloud" : "muted"} />
+          <Row label="Failover" value={`${failover.routes || 0} local / ${remote.failover_routes || 0} cloud route(s)`} />
+          <Row label="Pricing" value={`${pricing.version || "none"} · ${pricing.rates || 0} local / ${remote.pricing_rates || 0} cloud rate(s)`} />
+          <Row label="Codex observer" value={proxyState.observerLabel} kind={proxyState.observerKind} />
+          <Row label="Attachment" value={proxyState.attachmentLabel} kind={proxyState.attachmentKind} />
+          <Row label="Request path" value={proxyState.routeLabel} kind={proxyState.routeKind} />
+        </Box>
+      )}
+      {usageVisible && (
+        <Box flexDirection="column" marginTop={1}>
+          <Row label="Codex observer" value={proxyState.observerLabel} kind={proxyState.observerKind} />
+          <Row label="Attachment" value={proxyState.attachmentLabel} kind={proxyState.attachmentKind} />
+          <Row label="Request path" value={proxyState.routeLabel} kind={proxyState.routeKind} />
+          <ProxyUsageSummary value={proxyUsage} />
+        </Box>
+      )}
       {surface.loading && <Text color="gray">◌ Loading remaining local or encrypted Workspace Provider data…</Text>}
       {!snapshot.workspace && snapshot.workspaceLoading && (
-        <Text color="yellow">Workspace Providers are connecting in the background; local profiles remain usable.</Text>
+        <Text color="yellow">{shortTerminal
+          ? "Workspace connecting; local profiles remain usable."
+          : "Workspace Providers are connecting in the background; local profiles remain usable."}</Text>
       )}
       <ErrorText value={surface.localError} />
       <ErrorText value={surface.cloudError} />
       {(dashboard.errors || []).map((error) => <ErrorText key={error} value={error} />)}
-      <Text color="gray">
-        ↑/↓ select · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="yellow" bold>i</Text> incompatible
-      </Text>
-      <Text color="gray">
-        <Text color="green" bold>u</Text> keep Local → Workspace · <Text color="blue" bold>d</Text> keep Workspace → Local
-      </Text>
-      {target === "codex" ? (
+      {shortTerminal ? (
         <Text color="gray">
-          <Text color="cyan" bold>S</Text> start/stop observer · <Text color="green" bold>A</Text> attach/detach Codex · only attached requests are recorded
+          ↑/↓ select · <Text color="cyan" bold>p</Text>/<Text color="magenta" bold>a</Text> plan/apply · <Text color="yellow" bold>i</Text> filter · <Text color="cyan" bold>v</Text> view · <Text color="green" bold>u</Text>/<Text color="blue" bold>d</Text> sync
         </Text>
-      ) : (
-        <Text color="gray">Switch the Provider render target to Codex to control its subscription observer.</Text>
-      )}
-      <Text color="gray">B template · L local · W Workspace-only · L+W backed up · L≠W conflict</Text>
-      <Text color="gray">One row per Provider. Secret values remain hidden.</Text>
+      ) : (<>
+        <Text color="gray">
+          ↑/↓ profile · <Text color="cyan" bold>p</Text> plan · <Text color="magenta" bold>a</Text> apply · <Text color="yellow" bold>i</Text> incompatible · <Text color="cyan" bold>v</Text> next view
+        </Text>
+        <Text color="gray">
+          <Text color="green" bold>u</Text> keep Local → Workspace · <Text color="blue" bold>d</Text> keep Workspace → Local
+          {target === "codex" && <>
+            {" · "}<Text color="cyan" bold>S</Text> observer · <Text color="green" bold>A</Text> attach
+          </>}
+        </Text>
+      </>)}
     </Box>
   );
 }
 
-function CloudCatalog({ catalog, selected, target, component }) {
+function CloudCatalog({
+  catalog,
+  selected,
+  target,
+  component,
+  currentSelection = "",
+  currentItems = []
+}) {
   if (catalog.loading) return <Text color="gray">Decrypting this catalog in memory…</Text>;
   if (catalog.error) return <ErrorText value={catalog.error} />;
   if (!catalog.items.length) return <Text color="gray">No cloud selections in this Store.</Text>;
@@ -719,6 +759,7 @@ function CloudCatalog({ catalog, selected, target, component }) {
   const catalogLabel = component === "mcp"
     ? "MCP profiles"
     : component === "skills" ? "Skill packs" : "Prompt profiles";
+  const diff = component === "skills" ? selectionDiff(currentItems, item.items) : null;
   return (
     <Box flexDirection="column" marginTop={1}>
       <Box gap={1}>
@@ -729,7 +770,7 @@ function CloudCatalog({ catalog, selected, target, component }) {
       <Box gap={2} flexDirection={process.stdout.columns && process.stdout.columns < 88 ? "column" : "row"}>
         <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" minWidth={30}>
           <Text color="gray">
-            Profiles {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total}
+            {component === "skills" ? "Packs" : "Profiles"} {visible.total > 0 ? visible.start + 1 : 0}–{visible.end} of {visible.total}
           </Text>
           {visible.items.map(({ item: entry, index }) => (
             <Text key={entry.name} color={index === safeIndex ? "magenta" : "white"} bold={index === safeIndex}>
@@ -738,11 +779,25 @@ function CloudCatalog({ catalog, selected, target, component }) {
           ))}
         </Box>
         <Box borderStyle="single" borderColor="cyan" paddingX={1} flexDirection="column" flexGrow={1}>
-          <Text color="gray">Selected profile</Text>
+          <Text color="gray">Selected {component === "skills" ? "pack" : "profile"}</Text>
           <Text bold color="magenta">{item.name}</Text>
           <Row label="Includes" value={`${item.count} ${item.unit}`} />
           {item.clients?.length > 0 && <Row label="Available to" value={item.clients.map(targetLabel).join(", ")} />}
           {item.description && <Row label="About" value={item.description} />}
+          {diff && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color="cyan" bold>Current → Selected</Text>
+              <Row
+                label="Pack"
+                value={`${currentSelection || "none"} → ${item.name}`}
+                kind={currentSelection === item.name ? "good" : "selected"}
+              />
+              {item.packs?.length > 0 && <Row label="Inheritance" value={item.packs.join(" → ")} kind="muted" />}
+              <ItemGroup label="Add" items={diff.added} kind="good" />
+              <ItemGroup label="Remove" items={diff.removed} kind="bad" />
+              <ItemGroup label="Keep" items={diff.unchanged} kind="muted" />
+            </Box>
+          )}
         </Box>
       </Box>
       <Text color="gray">
@@ -1087,7 +1142,9 @@ function SkillsView({
             <Box key={client} gap={1}>
               <TargetBadge target={client} selected={client === target} />
               <Text color={state.healthy ? "green" : state.data.target ? "red" : "gray"}>
-                {state.selection} · {state.skills.length}
+                {state.data.target
+                  ? `${state.selection} · ${state.skills.length}`
+                  : dashboard.loading ? "loading…" : "unavailable"}
               </Text>
             </Box>
           );
@@ -1132,7 +1189,14 @@ function SkillsView({
             searching={searching}
           />
         : snapshot.workspace
-          ? <CloudCatalog catalog={catalog} selected={selected} target={target} component="skills" />
+          ? <CloudCatalog
+              catalog={catalog}
+              selected={selected}
+              target={target}
+              component="skills"
+              currentSelection={active.selection}
+              currentItems={active.skills}
+            />
           : <WorkspaceCatalogFallback snapshot={snapshot} />}
     </Box>
   );
@@ -1391,7 +1455,7 @@ function Help() {
         Agents: <Text color="cyan" bold>c/p/Enter</Text> open unified Providers · <Text color="red" bold>x</Text> uninstall
       </Text>
       <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
-      <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i show/hide incompatible</Text>
+      <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i incompatible · v next view</Text>
       <Text>Providers (Codex): S start/stop subscription observer · A attach/detach · y confirms every lifecycle change</Text>
       <Text>MCP: l local · w Workspace · / search · e enabled · x problems · g group</Text>
       <Text>MCP: Space toggle · m batch · a apply staged · c clear · s save · S update · u backup</Text>
@@ -1412,6 +1476,7 @@ function App({ initialSection, controller, onLaunch }) {
   const [section, setSection] = useState(initialSection);
   const [target, setTarget] = useState("codex");
   const [providerTarget, setProviderTarget] = useState("codex");
+  const [providerPanel, setProviderPanel] = useState("summary");
   const [skillsTarget, setSkillsTarget] = useState("codex");
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1440,7 +1505,7 @@ function App({ initialSection, controller, onLaunch }) {
   const [skillsStaged, setSkillsStaged] = useState(new Map());
   const [skillsPackPrompt, setSkillsPackPrompt] = useState(null);
   const [localSkillsDashboard, setLocalSkillsDashboard] = useState({
-    catalog: [], states: {}, errors: {}, loading: false, error: "", key: ""
+    catalog: [], states: {}, errors: {}, loading: true, error: "", key: ""
   });
   const [catalogs, setCatalogs] = useState({
     mcp: { items: [], loading: false, error: "", key: "" },
@@ -1970,10 +2035,11 @@ function App({ initialSection, controller, onLaunch }) {
     ].includes(action);
     const localRepairAction = action === "mcp-repair" || action === "skills-repair";
     const localRepairSelection = action === "mcp-repair" ? selectedMcpProfile : selectedSkillsPack;
-    const actionTarget = providerAction
+    const liveTarget = providerAction
       ? providerTarget
       : action.startsWith("skills-") ? skillsTarget : target;
-    const selection = action.startsWith("agent-")
+    const actionTarget = payload.target || liveTarget;
+    const liveSelection = action.startsWith("agent-")
       ? selectedAgentId
       : accountAction ? selectedAccountName
       : providerAction ? selectedProviderName
@@ -1982,6 +2048,7 @@ function App({ initialSection, controller, onLaunch }) {
       : localRepairAction ? localRepairSelection
       : action === "snippet-copy" ? selectedLocalSnippet
         : action.includes("-") ? selectedRemote : selectedPreset;
+    const selection = typeof payload.selection === "string" ? payload.selection : liveSelection;
     const runningLabel = actionLabel(action, selection, actionTarget);
     setMessage(action === "mcp-disable"
       ? `${runningLabel} · removing only the changed target entry…`
@@ -1995,17 +2062,7 @@ function App({ initialSection, controller, onLaunch }) {
       const result = await controller.action(action, {
         agent: selectedAgentId,
         preset: selectedPreset,
-        selection: accountAction
-          ? selectedAccountName
-          : providerAction
-          ? selectedProviderName
-          : localMcpAction
-          ? payload.selection || selectedMcpServer?.name || ""
-          : localSkillsAction
-          ? payload.selection || selectedSkill?.name || ""
-          : localRepairAction
-          ? localRepairSelection
-          : action === "snippet-copy" ? selectedLocalSnippet : selectedRemote,
+        selection,
         source: providerAction
           ? selectedProviderSource
           : snapshot?.presetSource || "local",
@@ -2013,7 +2070,12 @@ function App({ initialSection, controller, onLaunch }) {
         changes: payload.changes || [],
         replace: action === "mcp-profile-update"
       });
-      setMessage(`${result.ok ? "Done" : "Failed"}: ${actionLabel(action, selection, actionTarget)}`);
+      const firstDetailLine = String(result.detail || "").split("\n")[0];
+      setMessage(result.ok
+        ? action === "skills-apply" && firstDetailLine
+          ? `Done: ${firstDetailLine}`
+          : `Done: ${actionLabel(action, selection, actionTarget)}`
+        : `Failed: ${firstDetailLine || actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
       if (localMcpAction) {
         if (result.data?.state) patchLocalMcpState(result.data.state);
@@ -2027,6 +2089,9 @@ function App({ initialSection, controller, onLaunch }) {
           setSkillsStaged(new Map());
           setSkillsBatchMode(false);
         }
+      } else if (action === "skills-apply" && result.data?.matchedLocalPack && result.data?.state) {
+        patchLocalSkillsState(result.data.state);
+        await refresh(true);
       } else {
         await refresh(true);
       }
@@ -2374,6 +2439,12 @@ function App({ initialSection, controller, onLaunch }) {
         : "Showing incompatible Providers for inspection.");
       return;
     }
+    if (section === "providers" && (input === "v" || input === "V")) {
+      const next = cycleProviderPanel(providerPanel);
+      setProviderPanel(next);
+      setMessage(`Provider ${next} view selected.`);
+      return;
+    }
     if (input === "r") return void refresh();
     const delta = selectionDelta(input, key);
     if (section === "agents" && delta !== 0) {
@@ -2615,6 +2686,8 @@ function App({ initialSection, controller, onLaunch }) {
           : action.includes("-") ? selectedRemote : selectedPreset;
       setConfirm({
         action,
+        selection,
+        target: providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target,
         label: actionLabel(
           action,
           selection,
@@ -2638,6 +2711,7 @@ function App({ initialSection, controller, onLaunch }) {
         selected={componentSelected.providers}
         target={providerTarget}
         showIncompatible={showIncompatibleProviders}
+        panelMode={providerPanel}
       />
     );
     if (section === "mcp") content = (

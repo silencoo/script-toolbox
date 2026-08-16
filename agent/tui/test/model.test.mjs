@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROVIDER_TARGETS,
+  PROVIDER_PANELS,
   SKILL_TARGETS,
   accountEntries,
   actionForKey,
@@ -11,6 +12,7 @@ import {
   componentSummary,
   componentTargetState,
   cycleTarget,
+  cycleProviderPanel,
   filterMcpServerEntries,
   filterSkillEntries,
   mcpServerEntries,
@@ -24,6 +26,7 @@ import {
   safePromptPreviewText,
   sectionDelta,
   selectionDelta,
+  selectionDiff,
   selectionWindow,
   skillEntries,
   skillTargetState,
@@ -93,6 +96,9 @@ test("target and preset selection are deterministic", () => {
   assert.equal(targetLabel("pi"), "Pi");
   assert.equal(cycleTarget("codex", 1, PROVIDER_TARGETS), "opencode");
   assert.equal(cycleTarget("claude", -1, PROVIDER_TARGETS), "pi");
+  assert.deepEqual(PROVIDER_PANELS, ["summary", "config", "runtime", "usage"]);
+  assert.equal(cycleProviderPanel("summary"), "config");
+  assert.equal(cycleProviderPanel("usage"), "summary");
   assert.equal(clampSelection(4, 2), 1);
   assert.equal(clampSelection(-1, 2), 0);
   assert.equal(clampSelection(3, 0), 0);
@@ -220,6 +226,21 @@ test("Skill entries expose four-client local state and keep enabled items first"
     filterSkillEntries(entries, { enabledOnly: true }).map(({ name }) => name),
     ["shared", "codex-only"]
   );
+});
+
+test("Skill Pack comparison separates added, removed, and unchanged Skills", () => {
+  assert.deepEqual(
+    selectionDiff(
+      ["design-app-icons", "frontend-dev", "legacy"],
+      ["creative-frontend", "design-app-icons", "frontend-dev", "gsap-motion"]
+    ),
+    {
+      added: ["creative-frontend", "gsap-motion"],
+      removed: ["legacy"],
+      unchanged: ["design-app-icons", "frontend-dev"]
+    }
+  );
+  assert.deepEqual(selectionDiff(null, null), { added: [], removed: [], unchanged: [] });
 });
 
 test("catalog windows keep the selected item visible without rendering the full store", () => {

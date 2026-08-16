@@ -629,6 +629,123 @@ test("remote actions plan without writes and apply through the selected runtime"
   assert.deepEqual(calls.at(-1).args.slice(1), ["preset", "apply", "web", "--target", "codex", "--yes", "--json"]);
 });
 
+test("Workspace Skill apply reuses an identical local Pack without crossing store ownership", async () => {
+  const calls = [];
+  const runner = async (executable, args, options = {}) => {
+    calls.push({ executable, args, env: options.env || {} });
+    if (args.join(" ") === "pack show frontend --target codex") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          pack: { name: "frontend" },
+          target: "codex",
+          resolved: ["creative-frontend", "frontend-dev"]
+        }),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") === "apply --target codex --pack frontend --yes") {
+      return { code: 0, stdout: "Applied codex skill links\n", stderr: "" };
+    }
+    if (args.join(" ") === "current --target codex --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "frontend",
+          base_skills: ["creative-frontend", "frontend-dev"],
+          skills: ["creative-frontend", "frontend-dev"],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${args.join(" ")}` };
+  };
+  const remoteWorkspace = {
+    componentPlan: async () => ({
+      type: "skills",
+      name: "frontend",
+      target: "codex",
+      items: ["frontend-dev", "creative-frontend"],
+      unit: "skills"
+    }),
+    materializeComponent: async () => {
+      throw new Error("an identical Workspace Pack must not use the isolated runtime Store");
+    }
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex"
+  });
+  assert.equal(applied.ok, true);
+  assert.equal(applied.data.matchedLocalPack, true);
+  assert.equal(applied.data.state.pack, "frontend");
+  assert.match(applied.detail, /verified active with 2 Skills/);
+  assert.deepEqual(calls.map(({ args }) => args), [
+    ["pack", "show", "frontend", "--target", "codex"],
+    ["apply", "--target", "codex", "--pack", "frontend", "--yes"],
+    ["current", "--target", "codex", "--json"]
+  ]);
+  assert.deepEqual(calls.at(-1).env, {});
+});
+
+test("Workspace Skill apply does not report success when the verified local Pack differs", async () => {
+  const runner = async (_executable, args) => {
+    if (args.join(" ") === "pack show frontend --target codex") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({ resolved: ["creative-frontend", "frontend-dev"] }),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") === "apply --target codex --pack frontend --yes") {
+      return { code: 0, stdout: "Applied codex skill links\n", stderr: "" };
+    }
+    if (args.join(" ") === "current --target codex --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "daily-dev",
+          skills: [],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${args.join(" ")}` };
+  };
+  const controller = createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {
+      componentPlan: async () => ({
+        type: "skills",
+        name: "frontend",
+        target: "codex",
+        items: ["frontend-dev", "creative-frontend"],
+        unit: "skills"
+      }),
+      materializeComponent: async () => {
+        throw new Error("matching local Pack should not materialize the Workspace runtime");
+      }
+    }
+  });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex"
+  });
+  assert.equal(applied.ok, false);
+  assert.equal(applied.data.state.pack, "daily-dev");
+  assert.match(applied.detail, /verification returned daily-dev with 0 Skills/);
+});
+
 test("snapshot preserves public Workspace connection metadata when remote data is incompatible", async () => {
   const runner = async (_executable, args) => {
     if (args.includes("doctor")) return { code: 0, stdout: '{"targets":[]}', stderr: "" };

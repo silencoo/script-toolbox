@@ -13,6 +13,7 @@ export const SECTIONS = Object.freeze([
 
 export const TARGETS = Object.freeze(["codex", "claude"]);
 export const PROVIDER_TARGETS = Object.freeze(["claude", "codex", "opencode", "pi"]);
+export const PROVIDER_PANELS = Object.freeze(["summary", "config", "runtime", "usage"]);
 export const SKILL_TARGETS = Object.freeze(["codex", "claude", "opencode", "pi"]);
 
 export function targetLabel(target) {
@@ -40,6 +41,11 @@ export function cycleTarget(target, delta = 1, targets = TARGETS) {
   const values = Array.isArray(targets) && targets.length ? targets : TARGETS;
   const index = Math.max(0, values.indexOf(target));
   return values[(index + delta + values.length) % values.length];
+}
+
+export function cycleProviderPanel(current, delta = 1) {
+  const index = Math.max(0, PROVIDER_PANELS.indexOf(current));
+  return PROVIDER_PANELS[(index + delta + PROVIDER_PANELS.length) % PROVIDER_PANELS.length];
 }
 
 export function targetReport(snapshot, target) {
@@ -374,6 +380,16 @@ export function skillTargetState(states, target) {
     drift: Array.isArray(data.drift) ? [...data.drift] : [],
     healthy: data.healthy === true,
     data
+  };
+}
+
+export function selectionDiff(currentItems, selectedItems) {
+  const current = new Set(Array.isArray(currentItems) ? currentItems : []);
+  const selected = new Set(Array.isArray(selectedItems) ? selectedItems : []);
+  return {
+    added: [...selected].filter((name) => !current.has(name)).sort(),
+    removed: [...current].filter((name) => !selected.has(name)).sort(),
+    unchanged: [...selected].filter((name) => current.has(name)).sort()
   };
 }
 

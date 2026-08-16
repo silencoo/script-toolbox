@@ -243,6 +243,16 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
     { name: "frontend", count: 2 }
   ]);
   assert.equal(JSON.stringify(catalog).includes(secretValue), false);
+  const skillCatalog = await remote.catalog("skills", "codex");
+  assert.deepEqual(skillCatalog.find(({ name }) => name === "frontend"), {
+    name: "frontend",
+    description: "Frontend",
+    count: 1,
+    unit: "skills",
+    source: "cloud",
+    packs: ["base", "frontend"],
+    items: ["cloud-skill"]
+  });
   assert.deepEqual(await remote.catalog("prompts", "claude"), []);
   const snippets = await remote.catalog("snippets");
   assert.deepEqual(snippets.map(({ name }) => name), ["review-code"]);
