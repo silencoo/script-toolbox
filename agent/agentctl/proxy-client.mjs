@@ -379,6 +379,14 @@ function codexManagedBlock(localBaseUrl, newline) {
   ].join(newline);
 }
 
+function disabledCodexManagedBlock(localBaseUrl, newline, separator = "") {
+  const assignment = `openai_base_url = ${JSON.stringify(localBaseUrl)}`;
+  return codexManagedBlock(localBaseUrl, newline).replace(
+    assignment,
+    `#${separator}${assignment}`
+  );
+}
+
 function topLevelManagedAssignments(text) {
   const assignments = [];
   let inTable = false;
@@ -394,17 +402,28 @@ function topLevelManagedAssignments(text) {
 function inspectCodexManagedBlock(bytes, localBaseUrl) {
   const text = decodeCodexConfig(bytes);
   const newline = codexConfigNewline(text);
-  const managed = codexManagedBlock(localBaseUrl, newline);
-  const prefix = `${managed}${newline}`;
-  if (!text.startsWith(prefix)) {
+  const candidates = [
+    { block: codexManagedBlock(localBaseUrl, newline), intact: true, disabled: false },
+    { block: disabledCodexManagedBlock(localBaseUrl, newline), intact: false, disabled: true },
+    { block: disabledCodexManagedBlock(localBaseUrl, newline, " "), intact: false, disabled: true }
+  ];
+  const candidate = candidates.find(({ block }) => text.startsWith(`${block}${newline}`));
+  if (!candidate) {
     return { intact: false, reason: "managed_block_changed" };
   }
+  const prefix = `${candidate.block}${newline}`;
   const retained = text.slice(prefix.length);
   if (retained.includes(ATTACH_START) || retained.includes(ATTACH_END) ||
       topLevelManagedAssignments(retained).length) {
     return { intact: false, reason: "managed_settings_duplicated" };
   }
-  return { intact: true, newline, retained };
+  return {
+    intact: candidate.intact,
+    disabled: candidate.disabled,
+    recoverable: true,
+    newline,
+    retained
+  };
 }
 
 function restoreOriginalManagedAssignments(originalText, retainedText, newline) {
@@ -444,7 +463,7 @@ function restoreOriginalManagedAssignments(originalText, retainedText, newline) 
 
 function mergeCodexDetach(originalBytes, attachedBytes, currentBytes, localBaseUrl) {
   const managed = inspectCodexManagedBlock(currentBytes, localBaseUrl);
-  if (!managed.intact) {
+  if (!managed.intact && !managed.disabled) {
     throw new ProxyClientError(
       "Codex proxy-managed settings changed after attach; refusing to detach"
     );
@@ -550,13 +569,16 @@ async function inspectAttachment(options) {
   let status = "modified";
   let configModified = null;
   let managedFieldsIntact = false;
+  let managedFieldsRecoverable = false;
   try {
     const snapshot = await readConfigSnapshot(attachment.config_file);
     currentHash = sha256(snapshot.bytes);
     configModified = currentHash !== attachment.attached_sha256;
-    managedFieldsIntact = currentHash === attachment.attached_sha256 ||
-      inspectCodexManagedBlock(snapshot.bytes, attachment.local_base_url).intact;
+    const managed = inspectCodexManagedBlock(snapshot.bytes, attachment.local_base_url);
+    managedFieldsIntact = currentHash === attachment.attached_sha256 || managed.intact;
+    managedFieldsRecoverable = managedFieldsIntact || managed.recoverable === true;
     if (managedFieldsIntact) status = "attached";
+    else if (managed.disabled) status = "disabled";
     snapshot.bytes.fill(0);
   } catch {}
   return {
@@ -568,6 +590,7 @@ async function inspectAttachment(options) {
     attached_at: attachment.created_at,
     config_modified: configModified,
     managed_fields_intact: managedFieldsIntact,
+    managed_fields_recoverable: managedFieldsRecoverable,
     current_sha256: currentHash,
     expected_sha256: attachment.attached_sha256
   };
@@ -1063,7 +1086,11 @@ function usageSummary(records, source) {
     const transition = `${requestedTier}->${responseTier}`;
     transitions.set(transition, (transitions.get(transition) || 0) + 1);
     if (requestedTier === "fast") fastRequested += 1;
-    if (tier === "fast") fastEffective += 1;
+    // Only the upstream response can confirm that Fast was effective. Pricing
+    // may fall back to the requested tier when response metadata is missing,
+    // which is useful for estimation but must not turn an unobserved response
+    // into a confirmed Fast response.
+    if (responseTier === "fast") fastEffective += 1;
     if (requestedTier === "fast" && tier === "standard" &&
         responseTier === "standard") fastDowngraded += 1;
     addUsageBucket(total, record);

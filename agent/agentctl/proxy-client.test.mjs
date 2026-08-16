@@ -184,6 +184,32 @@ function rawWebSocketRoundTrip(url, { headers = {}, frame, responseBytes }) {
   });
 }
 
+function rejectedWebSocketAndReset(url, { headers = {} } = {}) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    let settled = false;
+    const request = httpRequest(url, {
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": Buffer.from("agentctl-reset-test-key").toString("base64"),
+        ...headers
+      }
+    });
+    request.on("response", (response) => {
+      settled = true;
+      const status = response.statusCode;
+      response.destroy();
+      response.socket?.destroy();
+      resolveRequest(status);
+    });
+    request.on("error", (error) => {
+      if (!settled) rejectRequest(error);
+    });
+    request.end();
+  });
+}
+
 async function waitFor(check, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -630,29 +656,41 @@ test("agentctl proxy usage safely lists and exactly summarizes retained tier met
         },
         cost: null,
         pricing_unavailable: "rate_not_found"
+      })),
+      JSON.stringify(record({
+        timestamp: "2026-08-14T00:03:00.000Z",
+        request_id: "request-4",
+        requested_service_tier: "priority",
+        response_service_tier: null,
+        pricing_service_tier: "fast",
+        pricing_service_tier_source: "request_fallback",
+        usage: null,
+        cost: null,
+        pricing_unavailable: "usage_missing"
       }))
     ].join("\n") + "\n", { mode: 0o600 });
 
     const listed = run(PROXY_CLIENT, [
-      "usage", "--last", "2", ...common, "--json"
+      "usage", "--last", "3", ...common, "--json"
     ]);
     assert.equal(listed.stdout.includes("MUST-NOT-BE-EMITTED"), false);
     const listValue = JSON.parse(listed.stdout);
-    assert.equal(listValue.total_records, 3);
-    assert.equal(listValue.returned_records, 2);
+    assert.equal(listValue.total_records, 4);
+    assert.equal(listValue.returned_records, 3);
     assert.deepEqual(
       listValue.records.map((item) => item.request_id),
-      ["request-2", "request-3"]
+      ["request-2", "request-3", "request-4"]
     );
     assert.equal(listValue.records[0].pricing_service_tier, "fast");
     assert.equal(listValue.records[1].pricing_unavailable, "rate_not_found");
+    assert.equal(listValue.records[2].pricing_service_tier_source, "request_fallback");
 
     const summary = JSON.parse(run(PROXY_CLIENT, [
       "usage", "--summary", ...common, "--json"
     ]).stdout);
-    assert.equal(summary.requests, 3);
+    assert.equal(summary.requests, 4);
     assert.equal(summary.priced_requests, 2);
-    assert.equal(summary.unpriced_requests, 1);
+    assert.equal(summary.unpriced_requests, 2);
     assert.deepEqual(summary.tokens, {
       input: 35,
       output: 3,
@@ -661,26 +699,27 @@ test("agentctl proxy usage safely lists and exactly summarizes retained tier met
     });
     assert.deepEqual(summary.costs, { USD: "0.3" });
     assert.equal(summary.by_service_tier.standard.requests, 2);
-    assert.equal(summary.by_service_tier.fast.requests, 1);
+    assert.equal(summary.by_service_tier.fast.requests, 2);
     assert.deepEqual(summary.service_tiers, {
-      fast_requested: 2,
+      fast_requested: 3,
       fast_effective: 1,
       fast_downgraded: 1,
       transitions: {
         "fast->fast": 1,
         "fast->standard": 1,
+        "fast->unspecified": 1,
         "unspecified->standard": 1
       }
     });
-    assert.equal(summary.by_model["gpt-5.6-sol"].requests, 2);
+    assert.equal(summary.by_model["gpt-5.6-sol"].requests, 3);
     assert.equal(summary.by_model["gpt-5.6-luna"].requests, 1);
 
     const textSummary = run(PROXY_CLIENT, [
       "usage", "--summary", "--last", "2", ...common
     ]).stdout;
-    assert.match(textSummary, /2 request\(s\) · 1 priced · 1 unpriced/);
-    assert.match(textSummary, /0\.2 USD/);
-    assert.match(textSummary, /2 requested · 1 effective · 1 downgraded/);
+    assert.match(textSummary, /2 request\(s\) · 0 priced · 2 unpriced/);
+    assert.match(textSummary, /Cost:\s+unavailable/);
+    assert.match(textSummary, /2 requested · 0 effective · 1 downgraded/);
 
     if (process.platform !== "win32") {
       await chmod(usagePath, 0o644);
@@ -1225,6 +1264,20 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     });
   });
   upstream.on("upgrade", (request, socket, head) => {
+    socket.on("error", () => {});
+    if (request.url.includes("reject_reset=1")) {
+      const body = Buffer.alloc(2 * 1024 * 1024, 0x78);
+      socket.write([
+        "HTTP/1.1 401 Unauthorized",
+        "Content-Type: application/json",
+        `Content-Length: ${body.length}`,
+        "Connection: close",
+        "",
+        ""
+      ].join("\r\n"));
+      socket.end(body);
+      return;
+    }
     const record = {
       path: request.url,
       headers: request.headers,
@@ -1256,7 +1309,6 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
       }
     };
     socket.on("data", readFrame);
-    socket.on("error", () => {});
     readFrame(head);
   });
   const upstreamPort = await listen(upstream);
@@ -1383,6 +1435,14 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     assert.deepEqual(observed[1].body, realtimeBody);
     assert.equal(observed[2].path, "/backend-api/codex/alpha/search");
     assert.deepEqual(observed[2].body, searchBody);
+
+    const rejectedStatus = await rejectedWebSocketAndReset(
+      `${plan.local_base_url}/responses?reject_reset=1`,
+      { headers: { authorization: "Bearer OFFICIAL-CHATGPT-OAUTH" } }
+    );
+    assert.equal(rejectedStatus, 401);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    assert.doesNotThrow(() => process.kill(proxyPid, 0));
 
     const websocket = await rawWebSocketRoundTrip(
       `${plan.local_base_url}/responses?session=compressed-observation`,
@@ -1512,7 +1572,29 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     );
 
     run(PROXY_CLIENT, ["attach", ...commonProxy, "--yes", "--json"]);
-    const reattachedText = await readFile(codexConfig, "utf8");
+    let reattachedText = await readFile(codexConfig, "utf8");
+    await writeFile(
+      codexConfig,
+      reattachedText.replace(
+        `openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex/realtime"`,
+        `#openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex/realtime"`
+      )
+    );
+    const statusAfterEmergencyDisable = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(statusAfterEmergencyDisable.attachment.status, "disabled");
+    assert.equal(statusAfterEmergencyDisable.attachment.managed_fields_intact, false);
+    assert.equal(statusAfterEmergencyDisable.attachment.managed_fields_recoverable, true);
+    const recoveredDetach = JSON.parse(run(PROXY_CLIENT, [
+      "detach", ...commonProxy, "--yes", "--json"
+    ]).stdout);
+    assert.equal(recoveredDetach.exact_restore, false);
+    assert.equal(recoveredDetach.preserved_external_changes, true);
+    assert.deepEqual(await readFile(codexConfig), originalWithAppEdit);
+
+    run(PROXY_CLIENT, ["attach", ...commonProxy, "--yes", "--json"]);
+    reattachedText = await readFile(codexConfig, "utf8");
     await writeFile(
       codexConfig,
       reattachedText.replace('model_provider = "openai"', 'model_provider = "tampered"')

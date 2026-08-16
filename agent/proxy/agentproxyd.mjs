@@ -1572,6 +1572,10 @@ function usageRecord({
 function proxyWebSocket(request, socket, head, context) {
   const { config, backendSecrets, pricing, log, usageLog } = context;
   const connectionStarted = Date.now();
+  // Upgrade sockets are handled outside Node's normal HTTP response lifecycle.
+  // Always consume transport errors, including a client reset while an
+  // upstream rejects the upgrade with an ordinary HTTP response.
+  socket.on("error", () => {});
   let localUrl;
   try {
     localUrl = new URL(request.url, `http://${config.listen.host}:${config.listen.port}`);
@@ -1784,9 +1788,17 @@ function proxyWebSocket(request, socket, head, context) {
     }
     socket.write(`${responseHead}Connection: close\r\n\r\n`);
     response.on("data", (chunk) => socket.write(chunk));
+    response.on("error", () => {
+      socket.destroy();
+      finishConnection("upstream_response_error");
+    });
     response.on("end", () => {
       socket.end();
       finishConnection(`upstream_http_${response.statusCode || 502}`);
+    });
+    socket.on("close", () => {
+      response.destroy();
+      finishConnection("client_closed");
     });
   });
   upstream.on("error", () => {

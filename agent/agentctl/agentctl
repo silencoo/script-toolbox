@@ -41,7 +41,7 @@ Usage:
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl statusline <install|status|uninstall> [options]
   agentctl provider <command> [options]
-  agentctl account <status|list|save|use|delete> ...
+  agentctl account <status|list|login|save|use|delete> ...
   agentctl failover <command> [options]
   agentctl pricing <command> [options]
   agentctl proxy <plan|start|status|usage|attach|detach|stop|token> ...
@@ -58,8 +58,8 @@ Commands:
               Code status-line preset. Existing external settings are preserved.
   provider    List built-ins and local/Workspace profiles in one catalog; use a
               selection to install/configure one client and store local Secrets.
-  account     Save and switch owner-only Codex ChatGPT official-login
-              snapshots independently from inference Provider profiles.
+  account     Safely log in through an isolated Codex home, then save and
+              switch owner-only ChatGPT official-login snapshots.
   failover    Manage portable ordered provider routes and guarded retry/
               circuit-breaker policy. Runtime counters remain device-local.
   pricing     Manage an independent versioned fixed-decimal price catalog and

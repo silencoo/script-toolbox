@@ -96,8 +96,13 @@ agentctl account list --json
 agentctl account save primary
 agentctl account save primary --yes
 
-# After using Codex's normal login flow for another ChatGPT account:
-agentctl account save secondary --yes
+# Preview, then run Codex login in an empty owner-only temporary CODEX_HOME.
+# The verified credential is saved and activated without revoking primary.
+agentctl account login secondary
+agentctl account login secondary --yes
+
+# Use the device-code flow instead of opening a local browser.
+agentctl account login secondary --device-auth --yes
 
 # Preview, then atomically switch auth.json. Provider/Model stay unchanged.
 agentctl account use primary
@@ -112,6 +117,14 @@ agentctl refreshes the saved copy of the outgoing account so token rotations are
 not lost. It refuses to overwrite an unsafe or unrecognized live `auth.json`,
 or an official login that has not first been saved. Start a new Codex session
 after switching; already-running processes may retain their in-memory session.
+Use `agentctl account login` when adding or reauthenticating an account. It
+forces file credential storage inside an empty temporary `CODEX_HOME`, validates
+the result, writes the saved and live files atomically with rollback, and then
+removes the temporary home without calling logout. A normal `codex login` in
+the active home performs a server-side OAuth revocation first; copying the old
+`auth.json` cannot make that revoked refresh token valid again. The currently
+active official login must already have a saved label so agentctl can preserve
+it before switching.
 The Account Store is device-local by design and is separate from Provider
 backup/restore.
 
