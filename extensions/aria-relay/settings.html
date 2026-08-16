@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Aria Relay 设置</title>
+  </head>
+  <body class="settings-body">
+    <header class="settings-topbar">
+      <a class="settings-brand" href="manager.html" aria-label="返回 Aria Relay 下载管理器">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M16 5v13m0 0 5-5m-5 5-5-5M7 20v5h18v-5" /></svg>
+        </span>
+        <span><strong>Aria Relay</strong><small>Settings & privacy</small></span>
+      </a>
+      <a class="button button-secondary" href="manager.html">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        返回管理器
+      </a>
+    </header>
+
+    <main class="settings-main">
+      <section class="settings-intro" aria-labelledby="settings-title">
+        <p class="eyebrow">Connection & preferences</p>
+        <h1 id="settings-title">连接与偏好</h1>
+        <p>只为你填写的 RPC 主机申请权限。设置保留在本机，密钥不会同步，也不会出现在日志中。</p>
+      </section>
+
+      <div id="save-status" class="save-status" role="status" aria-live="polite" hidden></div>
+
+      <form id="settings-form" novalidate>
+        <section class="settings-section" aria-labelledby="connection-heading">
+          <div class="section-heading-row">
+            <div>
+              <p class="section-kicker">aria2 JSON-RPC</p>
+              <h2 id="connection-heading">连接</h2>
+            </div>
+            <span id="connection-state" class="state-label" data-state="idle">未测试</span>
+          </div>
+
+          <div class="settings-fields">
+            <label class="settings-field settings-span-full">
+              <span>RPC 地址</span>
+              <input id="rpc-endpoint" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="http://127.0.0.1:6800/jsonrpc" aria-describedby="origin-permission endpoint-warning settings-error" />
+              <small id="origin-permission" class="settings-help"></small>
+            </label>
+
+            <div id="endpoint-warning" class="inline-warning settings-span-full" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19ZM12 9v4M12 17h.01" /></svg>
+              <p>远程主机正在使用明文 HTTP。RPC 密钥和任务数据可能被网络中的其他设备看到，建议使用 HTTPS 或 SSH 隧道。</p>
+            </div>
+
+            <label class="settings-field settings-span-full">
+              <span>RPC 密钥</span>
+              <span class="secret-field">
+                <input id="rpc-secret" type="password" autocomplete="new-password" spellcheck="false" placeholder="留空则保持当前密钥" aria-describedby="secret-help settings-error" />
+                <button id="toggle-secret" type="button" aria-label="显示密钥">显示</button>
+              </span>
+              <small id="secret-help" class="settings-help">当前：<strong id="secret-status">未保存</strong>。aria2 未设置 rpc-secret 时可以留空。</small>
+            </label>
+
+            <label class="switch-row settings-span-full">
+              <span><strong>在本机持久保存密钥</strong><small>关闭时仅存入 chrome.storage.session，浏览器重启后自动清除。</small></span>
+              <input id="remember-secret" type="checkbox" />
+              <span class="switch-control" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <p id="settings-error" class="form-error settings-error" role="alert" hidden></p>
+          <div class="settings-actions">
+            <button id="save-only" class="button button-secondary" type="button">仅保存</button>
+            <button id="test-and-save" class="button button-primary" type="submit">授权、测试并保存</button>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="defaults-heading">
+          <div class="section-heading-row">
+            <div>
+              <p class="section-kicker">Queue defaults</p>
+              <h2 id="defaults-heading">任务默认值</h2>
+            </div>
+          </div>
+
+          <div class="settings-fields settings-two-columns">
+            <label class="settings-field settings-span-full">
+              <span>默认下载目录</span>
+              <input id="default-directory" type="text" autocomplete="off" spellcheck="false" placeholder="例如 /Users/you/Downloads；留空使用 aria2 配置" />
+              <small class="settings-help">这是 aria2 服务器上的路径，扩展不会读取该目录。</small>
+            </label>
+            <label class="settings-field">
+              <span>刷新频率</span>
+              <select id="refresh-interval">
+                <option value="1000">每 1 秒</option>
+                <option value="2000">每 2 秒</option>
+                <option value="5000">每 5 秒</option>
+                <option value="10000">每 10 秒</option>
+                <option value="30000">每 30 秒</option>
+              </select>
+            </label>
+            <label class="settings-field">
+              <span>历史任务上限</span>
+              <input id="max-results" type="number" min="20" max="1000" step="10" />
+            </label>
+            <label class="settings-field">
+              <span>界面主题</span>
+              <select id="theme-preference">
+                <option value="system">跟随系统</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="preference-list">
+            <label class="switch-row">
+              <span><strong>新任务默认暂停</strong><small>仍可在添加任务时临时更改。</small></span>
+              <input id="default-paused" type="checkbox" />
+              <span class="switch-control" aria-hidden="true"></span>
+            </label>
+            <label class="switch-row">
+              <span><strong>显示系统通知</strong><small>仅通知右键发送结果；开启时会单独申请通知权限。</small></span>
+              <input id="notifications-enabled" type="checkbox" />
+              <span class="switch-control" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <div class="settings-actions">
+            <button id="save-preferences" class="button button-primary" type="button">保存任务偏好</button>
+          </div>
+        </section>
+      </form>
+
+      <section class="settings-section security-section" aria-labelledby="security-heading">
+        <div class="section-heading-row">
+          <div>
+            <p class="section-kicker">Permission profile</p>
+            <h2 id="security-heading">安全边界</h2>
+          </div>
+          <span class="privacy-label">Minimal access</span>
+        </div>
+
+        <ul class="security-list">
+          <li>
+            <span class="security-icon is-safe" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg></span>
+            <div><strong>没有内容脚本</strong><p>扩展不会注入网页，也不能读取页面正文、表单或键盘输入。</p></div>
+          </li>
+          <li>
+            <span class="security-icon is-safe" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg></span>
+            <div><strong>没有 Cookie、浏览历史或下载管理权限</strong><p>右键菜单只接收 Chrome 主动提供的链接；实际下载完全由 aria2 完成。</p></div>
+          </li>
+          <li>
+            <span class="security-icon is-safe" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg></span>
+            <div><strong>按 RPC 主机授权</strong><p>清单只声明可选范围，Chrome 只会授予当前设置中显示的具体主机。</p></div>
+          </li>
+          <li>
+            <span class="security-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18" /></svg></span>
+            <div><strong>开源且无第三方运行时代码</strong><p>没有远程脚本、分析 SDK、广告或外部字体；构建产物可从源码复现。</p></div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="settings-section danger-section" aria-labelledby="reset-heading">
+        <div>
+          <h2 id="reset-heading">断开并清理</h2>
+          <p>移除 RPC 主机授权、密钥和扩展设置。不会影响 aria2 服务或任何下载文件。</p>
+        </div>
+        <button id="reset-connection" class="button button-danger-outline" type="button">清除本机配置</button>
+      </section>
+    </main>
+
+    <dialog id="reset-dialog" class="dialog confirm-dialog" aria-labelledby="reset-dialog-title">
+      <form method="dialog">
+        <div class="confirm-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></svg></div>
+        <h2 id="reset-dialog-title">清除 Aria Relay 配置？</h2>
+        <p>将移除 RPC 地址、密钥、主机授权和偏好设置。aria2 服务与任务不受影响。</p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog>取消</button>
+          <button id="confirm-reset" class="button button-danger" type="submit">确认清除</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/settings.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Aria Relay</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#task-list">跳到下载任务</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="任务筛选">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path d="M16 5v13m0 0 5-5m-5 5-5-5" />
+              <path d="M7 20v5h18v-5" />
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <strong>Aria Relay</strong>
+            <span>Local download console</span>
+          </div>
+        </div>
+
+        <nav class="filter-nav" aria-label="下载任务状态">
+          <button class="nav-item is-active" type="button" data-filter="all" aria-current="page">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5" /></svg>
+            <span>全部任务</span><span id="count-all" class="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-filter="active">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14" /></svg>
+            <span>下载中</span><span id="count-active" class="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-filter="waiting">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12M6 21h12M8 3v4l4 5-4 5v4M16 3v4l-4 5 4 5v4" /></svg>
+            <span>等待 / 暂停</span><span id="count-waiting" class="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-filter="complete">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+            <span>已完成</span><span id="count-complete" class="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-filter="error">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19ZM12 9v4M12 17h.01" /></svg>
+            <span>错误 / 已移除</span><span id="count-error" class="nav-count">0</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <p><span class="privacy-dot" aria-hidden="true"></span> 无遥测 · 无网页读取权限</p>
+          <button id="open-settings-sidebar" class="sidebar-action" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm8 3 2-1-2-3-2 .2-1.2-1.4.5-2-3-1-1.2 1.6-1.8.2-2.2-3H9l-.8 2.2-1.8-.2L5 8.2 3 8l-1 3 2 1v2l-2 1 1 3 2-.2 1.4 1.4-.2 1.8 3 1 .8-2h2l1 2 3-1-.2-1.8 1.4-1.4 2 .2 1-3-2-1Z" /></svg>
+            连接与偏好
+          </button>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div class="mobile-brand"><span>Aria Relay</span></div>
+          <button id="connection-button" class="connection-chip" type="button">
+            <span id="connection-indicator" class="connection-indicator" aria-hidden="true"></span>
+            <span id="connection-label">正在连接…</span>
+          </button>
+          <div class="topbar-actions">
+            <button id="theme-toggle" class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8 8 0 0 1 8.8 4 8 8 0 1 0 20 15.2Z" /></svg>
+            </button>
+            <button id="open-tab" class="icon-button hide-narrow" type="button" aria-label="在新标签页打开" title="在新标签页打开">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M19 13v7H4V5h7" /></svg>
+            </button>
+            <button id="open-settings" class="icon-button" type="button" aria-label="打开设置" title="打开设置">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm8 3 2-1-2-3-2 .2-1.2-1.4.5-2-3-1-1.2 1.6-1.8.2-2.2-3H9l-.8 2.2-1.8-.2L5 8.2 3 8l-1 3 2 1v2l-2 1 1 3 2-.2 1.4 1.4-.2 1.8 3 1 .8-2h2l1 2 3-1-.2-1.8 1.4-1.4 2 .2 1-3-2-1Z" /></svg>
+            </button>
+            <button id="add-task" class="button button-primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              新建任务
+            </button>
+          </div>
+        </header>
+
+        <main class="main-content">
+          <section class="overview" aria-labelledby="page-title">
+            <div>
+              <p class="eyebrow">Download queue</p>
+              <h1 id="page-title">全部任务</h1>
+              <p id="page-summary" class="page-summary">正在读取 aria2 队列…</p>
+            </div>
+            <dl class="metrics" aria-label="实时传输状态">
+              <div><dt>下载</dt><dd id="download-speed">0 B/s</dd></div>
+              <div><dt>上传</dt><dd id="upload-speed">0 B/s</dd></div>
+              <div><dt>运行</dt><dd id="active-count">0</dd></div>
+            </dl>
+          </section>
+
+          <section id="onboarding" class="onboarding" hidden aria-labelledby="onboarding-title">
+            <div class="onboarding-mark" aria-hidden="true">
+              <svg viewBox="0 0 32 32"><path d="M16 5v13m0 0 5-5m-5 5-5-5M7 20v5h18v-5" /></svg>
+            </div>
+            <div>
+              <p class="eyebrow">Private by design</p>
+              <h2 id="onboarding-title">连接你的 aria2</h2>
+              <p>仅申请 RPC 主机权限；不读取网页、Cookie 或浏览历史。密钥默认只保存在浏览器内存中。</p>
+            </div>
+            <button id="configure-now" class="button button-primary" type="button">配置连接</button>
+          </section>
+
+          <section id="error-banner" class="error-banner" role="alert" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19ZM12 9v4M12 17h.01" /></svg>
+            <div><strong>暂时无法读取任务</strong><p id="error-message"></p></div>
+            <button id="retry-connection" class="button button-secondary" type="button">重试</button>
+          </section>
+
+          <section id="queue-section" class="queue-section" aria-labelledby="queue-title">
+            <h2 id="queue-title" class="sr-only">下载任务列表</h2>
+            <div class="queue-toolbar">
+              <label class="search-field" for="task-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.4-4.4M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" /></svg>
+                <input id="task-search" type="search" autocomplete="off" placeholder="搜索名称、URL 或 GID" />
+              </label>
+              <div class="queue-actions">
+                <button id="pause-all" class="button button-quiet" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14" /></svg>全部暂停
+                </button>
+                <button id="resume-all" class="button button-quiet" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z" /></svg>全部继续
+                </button>
+                <button id="refresh-now" class="icon-button" type="button" aria-label="立即刷新" title="立即刷新">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 8A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 11.9-2" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div id="task-list" class="task-list" aria-live="polite" aria-busy="true"></div>
+
+            <div id="empty-state" class="empty-state" hidden>
+              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 7h20v18H6zM11 12h10M11 17h7" /></svg>
+              <h3 id="empty-title">还没有下载任务</h3>
+              <p id="empty-description">添加链接、Magnet 或 BT 文件后，任务会显示在这里。</p>
+              <button id="empty-add" class="button button-secondary" type="button">添加第一个任务</button>
+            </div>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <dialog id="add-dialog" class="dialog add-dialog" aria-labelledby="add-dialog-title">
+      <form id="add-form" method="dialog">
+        <div class="dialog-header">
+          <div><p class="eyebrow">New download</p><h2 id="add-dialog-title">新建下载任务</h2></div>
+          <button class="icon-button dialog-close" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+
+        <fieldset class="source-tabs">
+          <legend class="sr-only">任务来源</legend>
+          <label><input type="radio" name="add-source" value="url" checked /><span>链接 / Magnet</span></label>
+          <label><input type="radio" name="add-source" value="file" /><span>BT / Metalink 文件</span></label>
+        </fieldset>
+
+        <div id="url-source-fields" class="form-section">
+          <label class="field-label" for="download-uris">下载地址</label>
+          <textarea id="download-uris" rows="5" spellcheck="false" placeholder="https://example.com/file.zip&#10;magnet:?xt=urn:btih:…" aria-describedby="uri-help add-error"></textarea>
+          <p id="uri-help" class="field-help">每行一个地址，最多 200 个；多个地址会创建独立任务。</p>
+        </div>
+
+        <div id="file-source-fields" class="form-section" hidden>
+          <label id="file-dropzone" class="file-dropzone" for="metafile-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9m0 0L7 14m5-5 5 5M5 3h14" /></svg>
+            <strong id="file-name">选择 BT 或 Metalink 文件</strong>
+            <span>支持 .torrent、.metalink、.meta4，最大 48 MiB</span>
+            <input id="metafile-input" type="file" accept=".torrent,.metalink,.meta4,application/x-bittorrent,application/metalink+xml" />
+          </label>
+        </div>
+
+        <div class="form-grid">
+          <label class="field-group">
+            <span class="field-label">下载目录</span>
+            <input id="task-directory" type="text" autocomplete="off" spellcheck="false" placeholder="使用 aria2 默认目录" />
+          </label>
+          <label id="output-name-group" class="field-group">
+            <span class="field-label">输出文件名</span>
+            <input id="output-name" type="text" autocomplete="off" spellcheck="false" placeholder="由服务器决定" />
+          </label>
+        </div>
+
+        <details id="advanced-options" class="advanced-options">
+          <summary>高级请求选项</summary>
+          <div class="advanced-body">
+            <label class="field-group">
+              <span class="field-label">Referer</span>
+              <input id="task-referer" type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/page" />
+            </label>
+            <label class="field-group">
+              <span class="field-label">自定义请求头</span>
+              <textarea id="task-headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer …&#10;User-Agent: …"></textarea>
+              <small class="field-help">每行一个 Name: Value；不会读取浏览器 Cookie。</small>
+            </label>
+          </div>
+        </details>
+
+        <label class="check-row">
+          <input id="add-paused" type="checkbox" />
+          <span class="check-control" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m3 8 3 3 7-7" /></svg></span>
+          <span><strong>先加入队列，不立即开始</strong><small>任务将以暂停状态创建</small></span>
+        </label>
+
+        <p id="add-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button class="button button-secondary dialog-cancel" type="button">取消</button>
+          <button id="submit-task" class="button button-primary" type="submit">添加任务</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="detail-dialog" class="dialog detail-dialog" aria-labelledby="detail-title">
+      <div class="dialog-header">
+        <div><p class="eyebrow">Task detail</p><h2 id="detail-title">任务详情</h2></div>
+        <button class="icon-button dialog-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div id="detail-content" class="detail-content" aria-live="polite"></div>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="dialog confirm-dialog" aria-labelledby="confirm-title">
+      <form method="dialog">
+        <div class="confirm-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></svg></div>
+        <h2 id="confirm-title">移除任务？</h2>
+        <p id="confirm-description">这会从 aria2 队列中移除任务，但不会删除已经下载的文件。</p>
+        <div class="dialog-actions">
+          <button class="button button-secondary dialog-cancel" type="button">取消</button>
+          <button id="confirm-action" class="button button-danger" type="submit">确认移除</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/manager.ts"></script>
+  </body>
+</html>
