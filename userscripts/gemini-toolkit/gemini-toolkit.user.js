@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.0
+// @version      0.7.1
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -39,6 +39,11 @@
     '[data-test-id="bard-mode-menu-button"]';
   const MODE_MENU_SELECTOR = 'gem-menu[role="menu"]';
   const MODE_ITEM_SELECTOR = 'gem-menu-item[role="menuitem"]';
+  const PROMPT_INPUT_SELECTORS = Object.freeze([
+    '[data-test-id="textarea-wrapper"] [contenteditable="true"][role="textbox"]',
+    'rich-textarea [contenteditable="true"][role="textbox"]',
+    'textarea[aria-label]',
+  ]);
   const MODE_APPLY_TIMEOUT = 2_500;
   const SETTINGS = Object.freeze({
     model: "gemini-toolkit-default-model",
@@ -400,6 +405,13 @@
     );
   }
 
+  function modeFocusRestorePlan(currentFocusKind, canRestorePrevious) {
+    if (currentFocusKind !== "neutral" && currentFocusKind !== "mode") {
+      return "none";
+    }
+    return canRestorePrevious ? "previous" : "prompt";
+  }
+
   if (
     typeof document === "undefined" &&
     typeof module === "object" &&
@@ -419,6 +431,7 @@
       isRetryableHttpStatus,
       isRetryableImageExportError,
       modelLabelMatches,
+      modeFocusRestorePlan,
       modeLabelHasExtended,
       normalizeModeLabel,
       normalizeGeneratedImageUrl,
@@ -775,6 +788,88 @@
     return document.querySelector(MODE_BUTTON_SELECTOR);
   }
 
+  function getDeepActiveElement() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  }
+
+  function isModeFocus(element) {
+    return (
+      element instanceof pageWindow.Element &&
+      (element.matches(MODE_BUTTON_SELECTOR) ||
+        Boolean(element.closest(MODE_MENU_SELECTOR)))
+    );
+  }
+
+  function getModeFocusKind(element) {
+    if (
+      !element ||
+      element === document.body ||
+      element === document.documentElement
+    ) {
+      return "neutral";
+    }
+    return isModeFocus(element) ? "mode" : "other";
+  }
+
+  function isAvailableFocusTarget(element) {
+    return Boolean(
+      element instanceof pageWindow.HTMLElement &&
+        element.isConnected &&
+        typeof element.focus === "function" &&
+        !element.matches(":disabled") &&
+        element.getAttribute("aria-disabled") !== "true" &&
+        element.getAttribute("aria-hidden") !== "true" &&
+        !element.closest("[inert]") &&
+        element.getClientRects().length > 0,
+    );
+  }
+
+  function getPromptInput() {
+    for (const selector of PROMPT_INPUT_SELECTORS) {
+      const input = [...document.querySelectorAll(selector)].find(
+        isAvailableFocusTarget,
+      );
+      if (input) {
+        return input;
+      }
+    }
+    return null;
+  }
+
+  function restoreFocusAfterModeDefaults(previousFocus) {
+    if (getModeMenu()) {
+      return;
+    }
+
+    const currentFocus = getDeepActiveElement();
+    const canRestorePrevious =
+      getModeFocusKind(previousFocus) === "other" &&
+      isAvailableFocusTarget(previousFocus);
+    const plan = modeFocusRestorePlan(
+      getModeFocusKind(currentFocus),
+      canRestorePrevious,
+    );
+    const target =
+      plan === "previous"
+        ? previousFocus
+        : plan === "prompt"
+          ? getPromptInput()
+          : null;
+    if (!target || target === currentFocus) {
+      return;
+    }
+
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+  }
+
   function getModeItemLabel(item) {
     return normalizeModeLabel(
       item.querySelector(".label")?.textContent || item.textContent,
@@ -896,6 +991,7 @@
     }
 
     applyingModeDefaults = true;
+    const focusBeforeApply = getDeepActiveElement();
     setModeStatus("Applying defaults…");
 
     try {
@@ -968,6 +1064,8 @@
       setModeStatus(error?.message || "Could not apply model defaults.", true);
     } finally {
       applyingModeDefaults = false;
+      await sleep(0);
+      restoreFocusAfterModeDefaults(focusBeforeApply);
     }
   }
 

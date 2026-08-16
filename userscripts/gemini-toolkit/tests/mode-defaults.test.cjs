@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   modelLabelMatches,
+  modeFocusRestorePlan,
   modeLabelHasExtended,
   normalizeModeLabel,
 } = require("../gemini-toolkit.user.js");
@@ -26,4 +27,11 @@ test("does not confuse Flash with Flash-Lite", () => {
 test("detects Extended thinking from the mode button label", () => {
   assert.equal(modeLabelHasExtended("Pro Extended"), true);
   assert.equal(modeLabelHasExtended("3.1 Pro"), false);
+});
+
+test("restores focus after automatic mode changes without overriding the user", () => {
+  assert.equal(modeFocusRestorePlan("mode", true), "previous");
+  assert.equal(modeFocusRestorePlan("mode", false), "prompt");
+  assert.equal(modeFocusRestorePlan("neutral", false), "prompt");
+  assert.equal(modeFocusRestorePlan("other", true), "none");
 });
