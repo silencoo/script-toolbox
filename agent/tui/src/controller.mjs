@@ -469,35 +469,11 @@ export function createController({
         fresh: false
       }));
     const remote = await remoteResult;
-    let doctorResult = { data: structuredClone(local.doctor), error: local.doctorError };
-    if (remote.data && typeof remoteWorkspace.runtimeAvailability === "function") {
-      try {
-        const availability = await remoteWorkspace.runtimeAvailability();
-        const env = await remoteWorkspace.runtimeEnvironment();
-        if (availability.presets) {
-          const runtimeDoctor = await runJson(orchestrator, ["doctor", "all", "--json"],
-            "Workspace runtime doctor", env, { signal });
-          if (runtimeDoctor.data) doctorResult = runtimeDoctor;
-        } else if (doctorResult.data?.targets && (availability.mcp || availability.skills)) {
-          await Promise.all(doctorResult.data.targets.map(async (report) => {
-            if (availability.mcp) {
-              const result = await runControllerJson(tools.mcp,
-                ["current", "--target", report.target, "--json"],
-                "Workspace MCP current", env, { signal });
-              report.mcp = { ok: result.ok, data: result.data, error: result.error };
-            }
-            if (availability.skills) {
-              const result = await runControllerJson(tools.skills,
-                ["current", "--target", report.target, "--json"],
-                "Workspace Skills current", env, { signal });
-              report.skills = { ok: result.ok, data: result.data, error: result.error };
-            }
-          }));
-        }
-      } catch {
-        // Local diagnostics remain useful if no selective runtime exists yet.
-      }
-    }
+    // Overview and all local-health surfaces must keep reporting the device's
+    // active configuration after Workspace hydration. A materialized Workspace
+    // runtime is only a staging area for catalog plan/apply actions; its empty
+    // or target-scoped current state must never replace the local doctor result.
+    const doctorResult = { data: structuredClone(local.doctor), error: local.doctorError };
     const activeAccount = local.accounts?.active?.saved_as;
     const hydratedCodex = doctorResult.data?.targets?.find((report) => report.target === "codex");
     if (hydratedCodex?.provider?.data?.identity && activeAccount) {

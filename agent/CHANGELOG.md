@@ -16,8 +16,12 @@
   and Usage views cycled with `v`. The default Summary contracts its profile
   window on short terminals, while duplicated diagnostics and footer rows were
   removed so the action/status area remains visible.
+- Fixed Workspace hydration replacing Overview's active local MCP/Skills
+  diagnostics with the isolated Workspace staging runtime. Overview now keeps
+  reporting the device-local selection after the encrypted Workspace index
+  connects, while Workspace catalogs remain available in their dedicated panes.
 - Failed actions surface the controller's first diagnostic line directly in
-  the status bar. Bumped `agentctl` to 0.17.3; the `skillsctl` backend remains
+  the status bar. Bumped `agentctl` to 0.17.4; the `skillsctl` backend remains
   0.4.2 because its CLI behavior did not change.
 
 ## 2026-08-15 — Windows controller installation

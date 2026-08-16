@@ -547,6 +547,63 @@ test("local snapshot publishes account and agent state before Workspace hydratio
   assert.equal(hydrated.accounts.active.saved_as, "primary");
 });
 
+test("Workspace hydration preserves active local Skills instead of runtime staging state", async () => {
+  let runtimeInspected = false;
+  const controller = createController({
+    agentRoot: "/agent",
+    runner: async () => {
+      throw new Error("Workspace hydration must not run staged runtime diagnostics");
+    },
+    remoteWorkspace: {
+      index: async () => ({
+        mode: "workspace",
+        store_id: "a".repeat(32),
+        latest: { version: "v2" },
+        presets: {}
+      }),
+      runtimeAvailability: async () => {
+        runtimeInspected = true;
+        return { skills: true, presets: true };
+      }
+    }
+  });
+  const local = {
+    phase: "local",
+    doctor: {
+      healthy: true,
+      targets: [{
+        target: "codex",
+        provider: { ok: true, data: {} },
+        skills: {
+          ok: true,
+          data: {
+            target: "codex",
+            selection_mode: "pack",
+            pack: "frontend",
+            skills: ["creative-frontend", "design-app-icons", "frontend-dev", "gsap-motion"],
+            healthy: true
+          }
+        }
+      }]
+    },
+    doctorError: "",
+    accounts: { active: {} },
+    presets: {},
+    presetSource: "local",
+    workspaceConnection: {
+      endpoint: "https://workspace.example.test",
+      store_id: "a".repeat(32),
+      configured: true
+    }
+  };
+  const hydrated = await controller.hydrateSnapshot(local);
+  const skills = hydrated.doctor.targets[0].skills.data;
+  assert.equal(runtimeInspected, false);
+  assert.equal(hydrated.phase, "workspace");
+  assert.equal(skills.pack, "frontend");
+  assert.equal(skills.skills.length, 4);
+});
+
 test("remote actions plan without writes and apply through the selected runtime", async () => {
   const calls = [];
   const writes = [];
