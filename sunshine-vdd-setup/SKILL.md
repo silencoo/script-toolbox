@@ -5,7 +5,7 @@ description: Plan, configure, migrate, troubleshoot, and verify Windows Sunshine
 
 # Sunshine VDD Setup
 
-Build a reversible two-state Windows display setup: the chosen physical display(s) while idle and the chosen MTT VDD display(s) while Moonlight is streaming.
+Build a reversible, fail-open Windows display setup: the chosen physical display(s) while idle, with the MTT VDD activated and made primary while Moonlight is streaming without detaching the physical recovery display by default.
 
 ## Non-negotiable rules
 
@@ -16,7 +16,8 @@ Build a reversible two-state Windows display setup: the chosen physical display(
 - Back up every file before editing it. Persist a restorable CCD topology snapshot before every driver reload or topology change; an inventory-only JSON file is not a recovery backup.
 - Require a confirmed local or alternate recovery path before restarting a display driver, disabling a display device, or changing the only active display.
 - Refuse a driver reload or topology change when Sunshine reports an active stream. Treat an unknown stream state as unsafe unless the user independently confirms disconnection and explicitly approves the override.
-- Never use DDC/CI hard power-off for the normal workflow. Change the Windows display topology and let the monitor enter no-signal standby.
+- Treat `ensure_only_display` as an explicit high-risk topology, not the default. It can strand Windows on the VDD after sleep, an unclean Sunshine exit, or display-driver re-enumeration. Applying it requires `-AcceptExclusiveTopologyRisk`, `-ConfirmAutomaticSleepDisabled`, and `-RecoveryPathConfirmed`.
+- Never use DDC/CI hard power-off for the normal workflow. In the fail-open topology leave the recovery panel attached and use its physical power control if darkness is required; only an explicitly accepted exclusive topology may rely on no-signal standby.
 - Keep `HardwareCursor=true` unless a targeted test proves otherwise. On MTT VDD, disabling it can make the cursor absent from captured frames.
 - Do not disable unrelated virtual-display drivers without explaining the detected conflict and obtaining permission.
 - Announce any action or pause caused by this skill.
@@ -67,13 +68,15 @@ Use [references/script-usage.md](references/script-usage.md) for exact preview a
 
 If MTT VDD is missing or an upgrade was explicitly requested, read [references/installation.md](references/installation.md) before downloading or installing anything.
 
-Preferred two-state design:
+Preferred fail-open design:
 
 - Idle: one selected physical display attached to the desktop; MTT VDD installed but detached.
-- Streaming: Sunshine activates the selected VDD and uses `ensure_only_display` to detach other displays.
+- Streaming: Sunshine activates the selected VDD and uses `ensure_primary`; the physical recovery display remains attached.
 - Disconnect: `dd_config_revert_on_disconnect=enabled` restores the saved physical-only idle topology.
 
-Do not add persistent helper processes or scheduled tasks when Sunshine's display-device automation and one saved idle topology are sufficient.
+This design trades physical-monitor no-signal standby for recoverability. The user may turn the panel off physically, but must not use DDC/CI hard-off automation.
+
+Use `ensure_only_display` only when VDD-only streaming is a strict requirement and the user accepts that clean-disconnect reversion is not a crash/sleep watchdog. Before enabling it, prove the on-demand `Recover-PhysicalDisplayAccess.ps1` path, keep a physical keyboard or independent remote channel available, and prevent automatic system sleep during unattended streams. Do not add a persistent helper or scheduled task by default; the recovery worker is temporary, waits for a positively detected inactive stream, runs once, and exits.
 
 The bundled topology and test scripts also support multiple selected physical displays and explicit physical/VDD counts. Make the preview and acceptance parameters exactly match the approved idle and streaming states.
 
@@ -86,7 +89,7 @@ Use the bundled scripts instead of rewriting display API or config-editing code.
 3. Back up and update VDD XML with `Set-VddSettings.ps1`.
 4. If VDD XML changed, prove the stream inactive, confirm recovery access, then reload the exact live MTT VDD PnP instance (commonly `ROOT\MTTVDD\0000`) with `Restart-VddDevice.ps1`. The script saves a restorable topology snapshot first.
 5. Re-inventory displays and derive Sunshine's current stable output device GUID.
-6. Back up and update Sunshine with `Set-SunshineDisplayConfig.ps1`.
+6. Back up and update Sunshine with `Set-SunshineDisplayConfig.ps1`. Prefer `ensure_primary`; applying `ensure_only_display` requires all three exclusive-topology safety confirmations.
 7. Restart Sunshine only after warning that active Moonlight sessions will disconnect.
 8. With no active stream and every intended physical display active, save the physical-only idle topology using `Set-PhysicalOnlyTopology.ps1`. It saves a recovery snapshot and automatically attempts rollback if verification fails.
 
@@ -99,10 +102,10 @@ Run `Test-SunshineVddCycle.ps1` and have the user perform one normal connection 
 Acceptance criteria:
 
 - Idle: the attached physical/VDD/other-virtual counts and identities exactly match the approved idle state.
-- Connect: the attached physical/VDD/other-virtual counts and identities exactly match the approved streaming state; for `ensure_only_display`, only the selected VDD is attached.
+- Connect: the attached physical/VDD/other-virtual counts and identities exactly match the approved streaming state; the fail-open default keeps the selected physical recovery display(s) attached. Only an explicitly approved `ensure_only_display` plan expects the selected VDD alone.
 - Stream: VDD and Sunshine capture use the planned resolution and refresh rate.
 - Disconnect: the physical-only idle topology returns and VDD detaches again.
-- Cursor: the pointer remains visible in the stream and cannot escape into an idle hidden desktop.
+- Cursor: the pointer remains visible in the stream. With the fail-open topology, verify the chosen client mouse mode keeps pointer behavior acceptable across the still-attached physical desktop.
 - No unexpected 800x600 fallback display remains attached while idle.
 
 Do not call the setup complete until this connection/disconnection cycle passes. If the user is unavailable, state that configuration is complete but regression verification is pending.
@@ -115,6 +118,7 @@ Do not call the setup complete until this connection/disconnection cycle passes.
 - `scripts/Restart-VddDevice.ps1`: guarded restart of one exact MTT VDD PnP instance.
 - `scripts/Set-PhysicalOnlyTopology.ps1`: persist the selected active physical display paths, detach other desktop paths without disabling drivers, and roll back a failed verification.
 - `scripts/Restore-DisplayTopology.ps1`: validate and restore a restorable topology snapshot; save the current topology before applying the restore.
+- `scripts/Recover-PhysicalDisplayAccess.ps1`: schedule a one-shot `/extend` recovery, wait until Sunshine is positively inactive, then reattach available displays without elevation.
 - `scripts/Test-SunshineVddCycle.ps1`: read-only idle/stream/revert monitor.
 
 ## Troubleshooting

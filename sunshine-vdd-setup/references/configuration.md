@@ -4,9 +4,9 @@
 
 | Desired behavior | Sunshine setting |
 | --- | --- |
-| VDD only while streaming | `dd_configuration_option = ensure_only_display` |
+| Fail-open streaming: activate VDD, make it primary, retain physical recovery display | `dd_configuration_option = ensure_primary` |
 | Activate VDD but keep other displays | `dd_configuration_option = ensure_active` |
-| Make VDD primary while retaining others | `dd_configuration_option = ensure_primary` |
+| Exclusive VDD-only streaming (high risk) | `dd_configuration_option = ensure_only_display` plus explicit risk acceptance |
 | Fixed stream resolution | `dd_resolution_option = manual` and `dd_manual_resolution = WIDTHxHEIGHT` |
 | Client-requested resolution | `dd_resolution_option = auto` |
 | Fixed display refresh | `dd_refresh_rate_option = manual` and `dd_manual_refresh_rate = RATE` |
@@ -16,6 +16,12 @@
 | Restore idle topology | `dd_config_revert_on_disconnect = enabled` |
 
 Use `disabled` for a display-device option only when the user explicitly wants Sunshine not to manage that part.
+
+## Fail-open versus exclusive topology
+
+`ensure_primary` is the default because a physical display remains available if Sunshine sleeps, exits uncleanly, or loses its in-memory revert state. It activates the selected VDD and makes it primary while retaining other attached displays. The tradeoff is that the physical monitor remains part of the Windows desktop during streaming.
+
+`ensure_only_display` deliberately detaches every other display. `dd_config_revert_on_disconnect=enabled` improves the normal-disconnect path, but it is not an independent watchdog and cannot guarantee recovery across sleep, process failure, or display-driver re-enumeration. The configuration script therefore requires `-AcceptExclusiveTopologyRisk`, `-ConfirmAutomaticSleepDisabled`, and `-RecoveryPathConfirmed` when applying this mode. Do not approve it for unattended/overnight use while automatic sleep is enabled.
 
 ## Stable and dynamic identifiers
 
@@ -85,6 +91,8 @@ Persisting a physical-only idle topology must:
 6. Leave MTT VDD installed and started but detached from the desktop.
 
 This avoids a hidden 800x600 fallback desktop and does not require a background helper.
+
+The physical-only topology is an **idle baseline**. It does not make exclusive VDD-only streaming fail-safe. For emergency recovery, `Recover-PhysicalDisplayAccess.ps1` schedules `DisplaySwitch.exe /extend`, polls the lightweight Sunshine stream state, waits for Sunshine's configured revert delay to settle, and applies the topology change only after a second positively detected `Inactive` state.
 
 ## Backups
 

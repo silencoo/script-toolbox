@@ -56,7 +56,48 @@ native_pen_touch = enabled
     Assert-True ($sunshineResult.RenderedConfig -notmatch '(?m)^dd_manual_(resolution|refresh_rate)\s*=') 'Auto modes must remove stale manual keys.'
     Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_hdr_option = auto\r?$') 'HDR policy must be rendered.'
     Assert-True ($sunshineResult.RenderedConfig -match '(?m)^dd_wa_hdr_toggle_delay = 500\r?$') 'HDR workaround delay must be rendered when explicitly requested.'
+    Assert-True ($sunshineResult.SafetyWarnings.Count -ge 2) 'Exclusive topology preview must report sleep/crash recovery warnings.'
     Assert-True ((Get-Content -LiteralPath $sunshinePath -Raw) -match 'output_name = \{old-guid\}') 'A Sunshine dry run must not mutate the source file.'
+
+    Assert-Throws -MessagePattern 'AcceptExclusiveTopologyRisk' -Action {
+        & (Join-Path $root 'scripts/Set-SunshineDisplayConfig.ps1') `
+            -ConfigPath $sunshinePath `
+            -OutputName '{new-guid}' `
+            -Topology ensure_only_display `
+            -ResolutionMode auto `
+            -RefreshRateMode auto `
+            -Apply | Out-Null
+    }
+    Assert-Throws -MessagePattern 'ConfirmAutomaticSleepDisabled' -Action {
+        & (Join-Path $root 'scripts/Set-SunshineDisplayConfig.ps1') `
+            -ConfigPath $sunshinePath `
+            -OutputName '{new-guid}' `
+            -Topology ensure_only_display `
+            -ResolutionMode auto `
+            -RefreshRateMode auto `
+            -AcceptExclusiveTopologyRisk `
+            -Apply | Out-Null
+    }
+    Assert-Throws -MessagePattern 'RecoveryPathConfirmed' -Action {
+        & (Join-Path $root 'scripts/Set-SunshineDisplayConfig.ps1') `
+            -ConfigPath $sunshinePath `
+            -OutputName '{new-guid}' `
+            -Topology ensure_only_display `
+            -ResolutionMode auto `
+            -RefreshRateMode auto `
+            -AcceptExclusiveTopologyRisk `
+            -ConfirmAutomaticSleepDisabled `
+            -Apply | Out-Null
+    }
+    Assert-True ((Get-Content -LiteralPath $sunshinePath -Raw) -match 'output_name = \{old-guid\}') 'A refused exclusive-topology apply must not mutate the source file.'
+
+    $safeSunshineResult = & (Join-Path $root 'scripts/Set-SunshineDisplayConfig.ps1') `
+        -ConfigPath $sunshinePath `
+        -OutputName '{new-guid}' `
+        -ResolutionMode auto `
+        -RefreshRateMode auto
+    Assert-True ($safeSunshineResult.RenderedConfig -match '(?m)^dd_configuration_option = ensure_primary\r?$') 'The default Sunshine topology must retain physical displays and make the VDD primary.'
+    Assert-True ($safeSunshineResult.SafetyWarnings.Count -eq 0) 'The fail-open default topology must not emit exclusive-topology warnings.'
 
     $vddPath = Join-Path $temp 'vdd_settings.xml'
     @'
@@ -116,7 +157,7 @@ native_pen_touch = enabled
     $tokens = $null
     $parseErrors = $null
     $inventoryAst = [Management.Automation.Language.Parser]::ParseFile($inventoryPath, [ref]$tokens, [ref]$parseErrors)
-    foreach ($functionName in 'Read-SharedTextFile', 'Get-SunshineStreamingState') {
+    foreach ($functionName in 'Read-SharedTextFile', 'Get-SunshineStreamingState', 'Get-SunshineTopologySafety') {
         $definition = $inventoryAst.FindAll({
             param($node)
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
@@ -139,6 +180,26 @@ native_pen_touch = enabled
     Assert-True ($streamState.Status -eq 'Inactive' -and $streamState.EstimatedActiveClients -eq 0) 'A balanced disconnect must return to inactive.'
     $streamState = Get-SunshineStreamingState -Path $logPath -Processes @()
     Assert-True ($streamState.Status -eq 'Inactive' -and $streamState.Detection -eq 'SunshineProcessNotRunning') 'No Sunshine process must be reported inactive.'
+
+    $exclusiveSafety = Get-SunshineTopologySafety -Config ([pscustomobject]@{
+        dd_configuration_option = 'ensure_only_display'
+        dd_config_revert_on_disconnect = 'enabled'
+    })
+    Assert-True ($exclusiveSafety.Exclusive -and $exclusiveSafety.RiskLevel -eq 'High') 'Exclusive topology inventory must be classified as high risk even when normal disconnect reversion is enabled.'
+    $safeTopology = Get-SunshineTopologySafety -Config ([pscustomobject]@{ dd_configuration_option = 'ensure_primary' })
+    Assert-True (-not $safeTopology.Exclusive -and $safeTopology.RecommendedTopology -eq 'ensure_primary') 'Fail-open topology inventory must be classified as non-exclusive.'
+
+    $recoveryPath = Join-Path $root 'scripts/Recover-PhysicalDisplayAccess.ps1'
+    $recoveryTokens = $null
+    $recoveryParseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile($recoveryPath, [ref]$recoveryTokens, [ref]$recoveryParseErrors)
+    Assert-True (@($recoveryParseErrors).Count -eq 0) 'The physical-display recovery script must parse successfully.'
+    $recoveryText = Get-Content -LiteralPath $recoveryPath -Raw
+    Assert-True ($recoveryText -match "Status -eq 'Inactive'") 'The recovery worker must require a positively inactive stream before changing topology.'
+    Assert-True ($recoveryText -match "ArgumentList '/extend'") 'The recovery worker must use Extend rather than Duplicate/Clone.'
+
+    $restoreText = Get-Content -LiteralPath (Join-Path $root 'scripts/Restore-DisplayTopology.ps1') -Raw
+    Assert-True ($restoreText -match "Status -eq 'Active'") 'Native topology restore must refuse an active Sunshine stream.'
 
     'All config and native-layout fixture tests passed.'
 }

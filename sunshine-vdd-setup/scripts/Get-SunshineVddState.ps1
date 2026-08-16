@@ -3,6 +3,7 @@ param(
     [string]$SunshineRoot = "$env:ProgramFiles\Sunshine",
     [string]$SunshineConfigPath,
     [string]$VddConfigPath = 'C:\VirtualDisplayDriver\vdd_settings.xml',
+    [switch]$StreamingOnly,
     [switch]$AsObject
 )
 
@@ -36,6 +37,34 @@ function Find-SunshineConfig {
     $found = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if ($found) { return $found }
     return $candidates[0]
+}
+
+function Get-SunshineTopologySafety {
+    param($Config)
+
+    $topology = if ($Config -and $Config.PSObject.Properties.Name -contains 'dd_configuration_option') {
+        [string]$Config.dd_configuration_option
+    }
+    else { 'disabled' }
+    $revertOnDisconnect = ($Config -and $Config.PSObject.Properties.Name -contains 'dd_config_revert_on_disconnect' -and [string]$Config.dd_config_revert_on_disconnect -eq 'enabled')
+    $exclusive = $topology -eq 'ensure_only_display'
+    $warnings = [Collections.Generic.List[string]]::new()
+    if ($exclusive) {
+        $warnings.Add('Exclusive topology is configured: every physical display is detached while Sunshine prepares the selected output.')
+        $warnings.Add('Sleep, an unclean Sunshine exit, or display-driver re-enumeration can strand the host on the virtual display.')
+        if (-not $revertOnDisconnect) {
+            $warnings.Add('Revert on disconnect is not enabled, so there is no configured normal-disconnect restore path.')
+        }
+    }
+
+    [pscustomobject][ordered]@{
+        Topology                 = $topology
+        Exclusive               = $exclusive
+        RevertOnDisconnect      = $revertOnDisconnect
+        RiskLevel               = if ($exclusive) { 'High' } else { 'Normal' }
+        RecommendedTopology     = 'ensure_primary'
+        Warnings                = @($warnings)
+    }
 }
 
 function Get-VddXmlSummary {
@@ -276,6 +305,12 @@ $sunshineLogPath = if ($configuredLogPath) {
 else {
     Join-Path (Split-Path -Parent $resolvedSunshineConfig) 'sunshine.log'
 }
+$sunshineProcesses = @(Get-Process -Name 'sunshine' -ErrorAction SilentlyContinue | Select-Object Id, ProcessName)
+if ($StreamingOnly) {
+    $streamingState = Get-SunshineStreamingState -Path $sunshineLogPath -Processes $sunshineProcesses
+    if ($AsObject) { $streamingState } else { $streamingState | ConvertTo-Json -Depth 6 }
+    return
+}
 $sunshineExeCandidates = @(
     (Join-Path $SunshineRoot 'sunshine.exe'),
     (Join-Path $SunshineRoot 'tools\sunshine.exe')
@@ -297,7 +332,6 @@ if (-not $service) {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$sunshineProcesses = @(Get-Process -Name 'sunshine' -ErrorAction SilentlyContinue | Select-Object Id, ProcessName)
 $pnp = Invoke-CapturedCommand -FilePath 'pnputil.exe' -ArgumentList @('/enum-devices', '/class', 'Display', '/drivers')
 $pnpStructured = @(Get-PnpDisplayDeviceInventory)
 $dxgi = if ($dxgiExe) {
@@ -318,13 +352,14 @@ $state = [pscustomobject][ordered]@{
         SessionName       = $env:SESSIONNAME
     }
     Sunshine = [pscustomobject][ordered]@{
-        Root          = $SunshineRoot
-        Executable    = $sunshineExe
-        Version       = if ($sunshineExe) { (Get-Item -LiteralPath $sunshineExe).VersionInfo.FileVersion } else { $null }
-        ConfigPath    = $resolvedSunshineConfig
-        ConfigExists  = $sunshineConfigExists
-        Config        = $sunshineConfig
-        LogPath       = $sunshineLogPath
+        Root                    = $SunshineRoot
+        Executable              = $sunshineExe
+        Version                 = if ($sunshineExe) { (Get-Item -LiteralPath $sunshineExe).VersionInfo.FileVersion } else { $null }
+        ConfigPath              = $resolvedSunshineConfig
+        ConfigExists            = $sunshineConfigExists
+        Config                  = $sunshineConfig
+        TopologySafety          = Get-SunshineTopologySafety -Config $sunshineConfig
+        LogPath                 = $sunshineLogPath
         DisplayInventoryFromLog = @(Get-LatestSunshineDisplayInventory -Path $sunshineLogPath)
         Streaming     = Get-SunshineStreamingState -Path $sunshineLogPath -Processes $sunshineProcesses
         ServiceName   = if ($service) { $service.Name } else { $null }

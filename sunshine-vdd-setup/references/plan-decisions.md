@@ -30,11 +30,19 @@ Collect both states independently:
   - physical plus VDD;
   - headless/VDD only.
 - Streaming topology:
-  - VDD only;
-  - VDD plus physical display;
+  - VDD plus physical recovery display, with VDD primary (**fail-open default**);
+  - VDD only (**exclusive/high risk**);
   - preserve the current topology.
 
 If more than one physical monitor exists, ask which monitor(s) must remain active while idle. Use friendly monitor identity plus live device data; do not rely only on `DISPLAYn`.
+
+For `ensure_only_display`, explicitly record all of the following before approval:
+
+- why the physical display must be detached rather than left attached;
+- whether automatic system sleep will be disabled during unattended streams;
+- the tested local/independent recovery path;
+- that clean-disconnect reversion does not cover sleep, Sunshine crashes, or display-driver re-enumeration;
+- approval to use `-AcceptExclusiveTopologyRisk`, `-ConfirmAutomaticSleepDisabled`, and `-RecoveryPathConfirmed`.
 
 ## Round 3: display features and recovery
 
@@ -43,6 +51,7 @@ Ask:
 - SDR or HDR; 8-bit, SDR 10-bit, or VDD HDR+; whether a custom `user_edid.bin`, spoof prevention, or CEA override is required. Do not enable conflicting VDD `SDR10bit` and `HDRPlus` options.
 - Mouse/keyboard only, or native pen/touch passthrough.
 - Whether the user has a physical monitor, alternate remote-control path, or safe-mode access for recovery.
+- Whether the host may sleep automatically or be left streaming unattended/overnight.
 - Whether unrelated virtual-display products may be stopped or disabled if they conflict.
 
 Then collect the two GPU choices independently:
@@ -72,6 +81,8 @@ HDR/SDR and color depth:
 Custom EDID options:
 Input requirements:
 Recovery path:
+Automatic sleep while streaming:
+Exclusive-topology risk accepted: no/yes
 Unknown-stream-state override approved: no/yes
 Expected connection interruption:
 ```

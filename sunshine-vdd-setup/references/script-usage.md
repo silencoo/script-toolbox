@@ -14,6 +14,12 @@ Use `-AsObject` when another PowerShell script needs the structured result.
 
 Before any disruptive command, inspect `Sunshine.Streaming.Status`, `Sunshine.Streaming.LastRelevantEvents`, and `MttVddPnpDevices`. `Inactive` is a positive check; `Unknown` requires independent confirmation plus the command's explicit unknown-state override.
 
+For a lightweight stream-state-only check, including recovery polling:
+
+```powershell
+.\scripts\Get-SunshineVddState.ps1 -StreamingOnly
+```
+
 ## VDD XML
 
 Strict fixed mode:
@@ -34,19 +40,21 @@ For an approved custom EDID, first place the reviewed file at `user_edid.bin` be
 
 ## Sunshine
 
-Fixed VDD-only streaming:
+Fixed fail-open streaming (recommended):
 
 ```powershell
-.\scripts\Set-SunshineDisplayConfig.ps1 -OutputName '{LIVE-SUNSHINE-DISPLAY-GUID}' -Topology ensure_only_display -ResolutionMode manual -ManualResolution 'WIDTHxHEIGHT' -RefreshRateMode manual -ManualRefreshRate RATE -HdrMode disabled -RevertOnDisconnect $true
+.\scripts\Set-SunshineDisplayConfig.ps1 -OutputName '{LIVE-SUNSHINE-DISPLAY-GUID}' -Topology ensure_primary -ResolutionMode manual -ManualResolution 'WIDTHxHEIGHT' -RefreshRateMode manual -ManualRefreshRate RATE -HdrMode disabled -RevertOnDisconnect $true
 ```
 
 Client-driven resolution and refresh:
 
 ```powershell
-.\scripts\Set-SunshineDisplayConfig.ps1 -OutputName '{LIVE-SUNSHINE-DISPLAY-GUID}' -Topology ensure_only_display -ResolutionMode auto -RefreshRateMode auto -HdrMode auto -RevertOnDisconnect $true
+.\scripts\Set-SunshineDisplayConfig.ps1 -OutputName '{LIVE-SUNSHINE-DISPLAY-GUID}' -Topology ensure_primary -ResolutionMode auto -RefreshRateMode auto -HdrMode auto -RevertOnDisconnect $true
 ```
 
 Omitting `-AdapterName` preserves Sunshine's current automatic or pinned encoder choice. Supply `-AdapterName 'EXACT LIVE SUNSHINE ENCODER ADAPTER'` only when the plan independently approved it. The script preserves unrelated lines and removes stale manual resolution or refresh keys when the corresponding mode is `auto` or `disabled`. `-HdrToggleDelay 500` is an opt-in workaround for a reproduced HDR-color issue, not a default.
+
+Exclusive VDD-only streaming is not fail-safe. Preview the same command with `-Topology ensure_only_display` and review `SafetyWarnings`. Apply it only after disabling automatic sleep during unattended streaming and proving the recovery path below; the apply command must include `-AcceptExclusiveTopologyRisk -ConfirmAutomaticSleepDisabled -RecoveryPathConfirmed`.
 
 ## Reload VDD
 
@@ -93,10 +101,26 @@ Preview the reported snapshot:
 Apply only with recovery access from an elevated session:
 
 ```powershell
-.\scripts\Restore-DisplayTopology.ps1 -SnapshotPath 'C:\VirtualDisplayDriver\display-topology-before-PURPOSE-TIMESTAMP.json' -RecoveryConfirmed -Apply
+.\scripts\Restore-DisplayTopology.ps1 -SnapshotPath 'C:\VirtualDisplayDriver\display-topology-before-PURPOSE-TIMESTAMP.json' -ConfirmNoActiveStream -RecoveryConfirmed -Apply
 ```
 
-The restore script first saves the current topology, so the recovery action is itself reversible.
+The restore script refuses a positively detected active stream and requires explicit inactive confirmation. An unknown state additionally requires `-AllowUnknownStreamState` after independent verification. It first saves the current topology, so the recovery action is itself reversible.
+
+## Recover physical display access after an abnormal sleep or disconnect
+
+While Moonlight is still available, preview the one-shot recovery worker:
+
+```powershell
+.\scripts\Recover-PhysicalDisplayAccess.ps1
+```
+
+Schedule it, then immediately disconnect every Moonlight client normally:
+
+```powershell
+.\scripts\Recover-PhysicalDisplayAccess.ps1 -ConfirmNormalDisconnect -Apply
+```
+
+The temporary worker waits for the initial delay, polls `Get-SunshineVddState.ps1 -StreamingOnly`, waits out Sunshine's configured revert delay, confirms `Inactive` a second time, and only then runs `DisplaySwitch.exe /extend`. It times out without changing topology if the state remains `Active` or `Unknown`. The command does not require elevation and reports a log path under `%LOCALAPPDATA%\SunshineVddSetup`.
 
 ## Closed-loop test
 
@@ -109,7 +133,7 @@ Check the idle state without waiting:
 Run the interactive connect/disconnect test:
 
 ```powershell
-.\scripts\Test-SunshineVddCycle.ps1 -ExpectedIdlePhysicalDisplays '\\.\DISPLAYN' -ExpectedStreamPhysicalCount 0 -ExpectedStreamMttVddCount 1 -ExpectedVirtualResolution 'WIDTHxHEIGHT' -ExpectedVirtualRefreshRate RATE
+.\scripts\Test-SunshineVddCycle.ps1 -ExpectedIdlePhysicalDisplays '\\.\DISPLAYN' -ExpectedStreamPhysicalDisplays '\\.\DISPLAYN' -ExpectedStreamMttVddCount 1 -ExpectedVirtualResolution 'WIDTHxHEIGHT' -ExpectedVirtualRefreshRate RATE
 ```
 
-For a different approved topology, set the idle/stream physical names or counts and the idle/stream MTT/other-virtual counts explicitly. The test compares the exact attached categories rather than assuming a single-monitor VDD-only design. Fractional refresh rates use `-RefreshRateTolerance` because the GDI inventory may expose a rounded integer.
+For an explicitly accepted exclusive topology, use `-ExpectedStreamPhysicalCount 0`. For any other approved topology, set the idle/stream physical names or counts and the idle/stream MTT/other-virtual counts explicitly. The test compares the exact attached categories. Fractional refresh rates use `-RefreshRateTolerance` because the GDI inventory may expose a rounded integer.

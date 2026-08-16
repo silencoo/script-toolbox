@@ -14,7 +14,7 @@ param(
     [string[]]$ExpectedStreamPhysicalDisplays,
 
     [ValidateRange(0, 16)]
-    [int]$ExpectedStreamPhysicalCount = 0,
+    [int]$ExpectedStreamPhysicalCount = 1,
 
     [ValidateRange(0, 16)]
     [int]$ExpectedStreamMttVddCount = 1,

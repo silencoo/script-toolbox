@@ -10,7 +10,7 @@ param(
     [string]$OutputName,
 
     [ValidateSet('disabled', 'verify_only', 'ensure_active', 'ensure_primary', 'ensure_only_display')]
-    [string]$Topology = 'ensure_only_display',
+    [string]$Topology = 'ensure_primary',
 
     [ValidateSet('disabled', 'auto', 'manual')]
     [string]$ResolutionMode = 'manual',
@@ -23,6 +23,12 @@ param(
     [Nullable[double]]$ManualRefreshRate,
 
     [bool]$RevertOnDisconnect = $true,
+
+    [switch]$AcceptExclusiveTopologyRisk,
+
+    [switch]$ConfirmAutomaticSleepDisabled,
+
+    [switch]$RecoveryPathConfirmed,
 
     [ValidateSet('preserve', 'disabled', 'auto')]
     [string]$HdrMode = 'preserve',
@@ -58,6 +64,27 @@ if ($ResolutionMode -eq 'manual') {
 if ($RefreshRateMode -eq 'manual') {
     if ($null -eq $ManualRefreshRate -or $ManualRefreshRate -lt 1 -or $ManualRefreshRate -gt 1000) {
         throw 'ManualRefreshRate must be between 1 and 1000 when RefreshRateMode is manual.'
+    }
+}
+
+$safetyWarnings = [Collections.Generic.List[string]]::new()
+if ($Topology -eq 'ensure_only_display') {
+    $safetyWarnings.Add('ensure_only_display detaches every physical display. Sleep, an unclean Sunshine exit, or display-driver re-enumeration can leave the host reachable only through the VDD.')
+    $safetyWarnings.Add('Use ensure_primary for the fail-open topology: the VDD is primary while physical displays remain attached.')
+    if (-not $RevertOnDisconnect) {
+        $safetyWarnings.Add('RevertOnDisconnect is disabled, so Sunshine is not configured to restore the pre-stream topology after the final client disconnects.')
+    }
+    if ($Apply -and -not $AcceptExclusiveTopologyRisk) {
+        throw 'Refusing to apply ensure_only_display without -AcceptExclusiveTopologyRisk. Prefer ensure_primary; if exclusive VDD-only streaming is mandatory, confirm post-disconnect recovery and prevent automatic sleep before accepting the risk.'
+    }
+    if ($Apply -and -not $ConfirmAutomaticSleepDisabled) {
+        throw 'Refusing to apply ensure_only_display without -ConfirmAutomaticSleepDisabled. Disable automatic system sleep for unattended streams first.'
+    }
+    if ($Apply -and -not $RecoveryPathConfirmed) {
+        throw 'Refusing to apply ensure_only_display without -RecoveryPathConfirmed. Prove the one-shot recovery worker, a physical-keyboard Win+P path, or an independent remote-control path first.'
+    }
+    if ($Apply -and -not $RevertOnDisconnect) {
+        throw 'Refusing to apply ensure_only_display with RevertOnDisconnect disabled.'
     }
 }
 
@@ -145,5 +172,11 @@ if ($Apply) {
     BackupPath     = $backupPath
     Changed        = $changes.Count -gt 0
     Changes        = @($changes)
+    SafetyWarnings = @($safetyWarnings)
+    SafetyConfirmations = [pscustomobject][ordered]@{
+        ExclusiveRiskAccepted          = $AcceptExclusiveTopologyRisk.IsPresent
+        AutomaticSleepDisabled         = $ConfirmAutomaticSleepDisabled.IsPresent
+        RecoveryPathConfirmed          = $RecoveryPathConfirmed.IsPresent
+    }
     RenderedConfig = if ($Apply) { $null } else { $rendered }
 }

@@ -5,6 +5,10 @@ param(
 
     [string]$BackupDirectory = 'C:\VirtualDisplayDriver',
 
+    [switch]$ConfirmNoActiveStream,
+
+    [switch]$AllowUnknownStreamState,
+
     [switch]$RecoveryConfirmed,
 
     [switch]$Apply
@@ -20,6 +24,8 @@ function Test-Administrator {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+$inventoryScript = Join-Path $PSScriptRoot 'Get-SunshineVddState.ps1'
+$streamingState = & $inventoryScript -StreamingOnly -AsObject
 $preview = Restore-VddDisplayTopology -SnapshotPath $SnapshotPath
 if (-not $Apply) {
     [pscustomobject][ordered]@{
@@ -28,11 +34,22 @@ if (-not $Apply) {
         ValidationCode    = $preview.ValidationCode
         ValidationPassed  = $preview.ValidationCode -eq 0
         DisplaysToRestore = @($preview.DisplayNames)
+        StreamingState    = $streamingState
+        StreamConfirmedOff = $ConfirmNoActiveStream.IsPresent
         RecoveryConfirmed = $RecoveryConfirmed.IsPresent
     }
     return
 }
 
+if (-not $ConfirmNoActiveStream) {
+    throw 'Disconnect every Moonlight client, confirm no stream is active, then rerun with -ConfirmNoActiveStream.'
+}
+if ($streamingState.Status -eq 'Active') {
+    throw 'Sunshine log evidence shows an active Moonlight stream. Use Recover-PhysicalDisplayAccess.ps1 to schedule recovery after disconnect instead of restoring a topology during capture.'
+}
+if ($streamingState.Status -eq 'Unknown' -and -not $AllowUnknownStreamState) {
+    throw 'Sunshine stream state could not be proven inactive. Inspect the current log, then use -AllowUnknownStreamState only after independently confirming every client is disconnected.'
+}
 if (-not $RecoveryConfirmed) {
     throw 'Confirm local or alternate recovery access, then rerun with -RecoveryConfirmed.'
 }
