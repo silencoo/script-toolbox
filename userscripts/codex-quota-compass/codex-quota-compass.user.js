@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Codex Quota Compass (Visual Edition)
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      1.10.1
+// @version      1.10.2
 // @description  Display Codex quota usage and detailed daily metrics cleanly.
 // @match        https://chatgpt.com/codex/cloud/settings/analytics*
 // @homepageURL  https://github.com/silencoo/script-toolbox/tree/main/userscripts/codex-quota-compass
@@ -22,7 +22,7 @@
         HISTORY_DAYS: 30,
     };
 
-    const VERSION = '1.10.1';
+    const VERSION = '1.10.2';
     const ANALYTICS_BUTTON_ICON = `
         <svg class="compass-btn-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <path d="M3.75 16.25h12.5M5.5 13V9.75M10 13V5.75M14.5 13V8"
@@ -642,7 +642,15 @@
 
     function getAccessToken() {
         const bootstrapData = document.getElementById('client-bootstrap')?.textContent || '';
-        return bootstrapData.match(/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)?.[0] || '';
+        if (!bootstrapData) return '';
+
+        try {
+            const bootstrap = JSON.parse(bootstrapData);
+            const accessToken = bootstrap?.session?.accessToken;
+            return typeof accessToken === 'string' ? accessToken : '';
+        } catch {
+            return '';
+        }
     }
 
     function showIdleButton(button) {

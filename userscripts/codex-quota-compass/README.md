@@ -33,7 +33,7 @@ The dollar estimate uses the script's configurable default of `$40 / 1,000 credi
 
 ## How it works
 
-The script reads the access token already embedded in ChatGPT's page bootstrap data, then sends same-origin requests to ChatGPT's Codex usage and daily analytics endpoints. The token and returned usage data stay in the current page and are not sent to any third-party service.
+The script parses ChatGPT's page bootstrap data and reads the session access-token field, then sends same-origin requests to ChatGPT's Codex usage and daily analytics endpoints. The token and returned usage data stay in the current page and are not sent to any third-party service.
 
 The script depends on internal ChatGPT endpoints and page data. It may need updating if ChatGPT changes them.
 
