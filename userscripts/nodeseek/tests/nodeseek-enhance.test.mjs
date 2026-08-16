@@ -160,6 +160,22 @@ test('夜间模式使用可读的已访问链接颜色，且不沿用日间深�
     );
 });
 
+test('Layui 样式加载在站点样式之前，避免全局文字颜色覆盖深色主题', () => {
+    assert.match(source, /addStyle\(id, tag, css, options = \{\}\)/);
+    assert.match(
+        source,
+        /new URL\(link\.href, location\.href\)\.origin === location\.origin/
+    );
+    assert.match(
+        source,
+        /'layui-style',[\s\S]*?layui\.min\.css',[\s\S]*?\{ beforeSiteStyles: true \}/
+    );
+    assert.match(
+        source,
+        /'layuicss-theme-dark',[\s\S]*?layui-theme-dark\.css',[\s\S]*?\{ beforeSiteStyles: true \}/
+    );
+});
+
 test('脚本不再声明未使用的高权限 API，且作用域外无残留设置处理器', () => {
     assert.doesNotMatch(source, /^\/\/ @grant\s+GM_xmlhttpRequest$/m);
     assert.doesNotMatch(source, /^\/\/ @grant\s+GM_deleteValue$/m);

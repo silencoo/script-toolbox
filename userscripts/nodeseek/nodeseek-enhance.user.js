@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek Enhance
 // @namespace    http://www.nodeseek.com/
-// @version      1.4.7
+// @version      1.4.8
 // @description  【NodeSeek增强脚本】全面增强 NodeSeek/DeepFlood 论坛体验。核心功能：自动签到（支持随机/固定鸡腿）、无缝翻页（帖子列表和评论自动加载）、快捷回复（浮动编辑器）、代码高亮（支持亮色/暗色主题）、图片滑动查看。内容管理：屏蔽用户/帖子/分类（支持关键词和正则）、帖子排序（按回复数/查看数/已访问置底）、隐藏元素（页脚/分类标签/帖子信息/推荐轮播/用户统计面板）。界面优化：紧凑模式（1-4列多栏布局，自定义间距/字体/头像大小）、自定义背景图（支持URL/本地上传）、Header/Frame透明度（支持模糊和饱和度）、字体排版自定义（标题/Tag/元数据/内容）、已访问链接标记（可隐藏/置底）、默认头像替换（自动识别系统头像）。增强功能：用户卡片扩展（显示@我/私信/回复通知）、等级标签显示（楼主等级和统计信息）、浏览历史记录（下拉菜单快速访问）、键盘快捷键（左右箭头翻页、Ctrl+Enter提交）、强制新标签页打开帖子、自动跳转外部链接、平滑滚动、即时页面预加载。设置管理：可视化设置面板（集成到导航栏）、设置导入导出、一键恢复默认样式。支持深色模式自动适配。
 // @author       silencoo
 // @match        *://www.nodeseek.com/*
@@ -1185,7 +1185,7 @@ const applyTypographyStyle = (type, config) => {
         },
         getValue: (name, defaultValue) => GM_getValue(name, defaultValue),
         setValue: (name, value) => GM_setValue(name, value),
-        addStyle(id, tag, css) {
+        addStyle(id, tag, css, options = {}) {
             tag = tag || 'style';
             let doc = document, styleDom = doc.head.querySelector(`#${id}`);
             if (styleDom) return;
@@ -1193,6 +1193,19 @@ const applyTypographyStyle = (type, config) => {
             style.rel = 'stylesheet';
             style.id = id;
             tag === 'style' ? style.textContent = css : style.href = css;
+            if (options.beforeSiteStyles === true) {
+                const siteStylesheet = Array.from(doc.head.querySelectorAll('link[rel="stylesheet"]')).find(link => {
+                    try {
+                        return new URL(link.href, location.href).origin === location.origin;
+                    } catch (_) {
+                        return false;
+                    }
+                });
+                if (siteStylesheet) {
+                    doc.head.insertBefore(style, siteStylesheet);
+                    return;
+                }
+            }
             doc.head.appendChild(style);
         },
         removeStyle(id,tag){
@@ -5627,7 +5640,14 @@ const applyTypographyStyle = (type, config) => {
 `;
                 if (document.head) {
                     util.addStyle('nsplus-style', 'style', style);
-                    util.addStyle('layui-style', 'link', 'https://s4.zstatic.net/ajax/libs/layui/2.9.9/css/layui.min.css');
+                    // Layui 包含 body/a 等全局基础规则。把它放在论坛样式之前，避免覆盖
+                    // NodeSeek/DeepFlood 的深色主题文字与链接颜色。
+                    util.addStyle(
+                        'layui-style',
+                        'link',
+                        'https://s4.zstatic.net/ajax/libs/layui/2.9.9/css/layui.min.css',
+                        { beforeSiteStyles: true }
+                    );
                     if (FeatureFlags.isEnabled('code_highlight')) {
                         util.addStyle('highlight-style', 'link', GM_getResourceURL("highlightStyle"));
                     }
@@ -5661,7 +5681,12 @@ const applyTypographyStyle = (type, config) => {
                 const updateTheme = () => {
                     const dark = targetNode.classList.contains('dark-layout');
                     if (dark) {
-                        util.addStyle('layuicss-theme-dark','link','https://s.cfn.pp.ua/layui/theme-dark/2.9.7/css/layui-theme-dark.css');
+                        util.addStyle(
+                            'layuicss-theme-dark',
+                            'link',
+                            'https://s.cfn.pp.ua/layui/theme-dark/2.9.7/css/layui-theme-dark.css',
+                            { beforeSiteStyles: true }
+                        );
                     } else {
                         util.removeStyle('layuicss-theme-dark');
                     }
