@@ -10,6 +10,7 @@ const {
   forEachSequential,
   fullSizeImageUrlFromRpc,
   fullSizeImageUrlsFromRpcText,
+  geminiAssetIdentity,
   generatedImageFilenameForRecord,
   imageRecordAvailability,
   isPageBlobImageUrl,
@@ -21,6 +22,7 @@ const {
   rememberGeneratedImageRecord,
   retryOperation,
   rewriteGoogleusercontentGgToRdGg,
+  takeNativeWatermarkIntent,
 } = require("../gemini-toolkit.user.js");
 
 test("normalizes Gemini preview transforms to an asset URL", () => {
@@ -44,6 +46,58 @@ test("recognizes Gemini's blob-backed image URLs", () => {
     false,
   );
   assert.equal(isPageBlobImageUrl("blob:https://example.com/image"), false);
+});
+
+test("matches a native full-size response to its preview asset", () => {
+  const preview =
+    "https://lh3.googleusercontent.com/rd-gg/asset-token=s1024-rj?alr=yes";
+  const original =
+    "https://lh3.googleusercontent.com/rd-gg/asset-token=s0-d-i-rw?alr=yes";
+  assert.equal(geminiAssetIdentity(preview), "asset-token");
+  assert.equal(geminiAssetIdentity(original), "asset-token");
+
+  const intents = [
+    { assetIdentity: "other-asset", createdAt: 10_000 },
+    { assetIdentity: "asset-token", createdAt: 10_001 },
+  ];
+  assert.deepEqual(
+    takeNativeWatermarkIntent(intents, original, 10_100),
+    { assetIdentity: "asset-token", createdAt: 10_001 },
+  );
+  assert.deepEqual(intents, [
+    { assetIdentity: "other-asset", createdAt: 10_000 },
+  ]);
+});
+
+test("expires stale native watermark intents without touching previews", () => {
+  const intents = [
+    { assetIdentity: "stale", createdAt: 1 },
+    { assetIdentity: "waiting", createdAt: 70_000 },
+  ];
+  assert.equal(
+    takeNativeWatermarkIntent(
+      intents,
+      "https://lh3.googleusercontent.com/rd-gg/unrelated=s1024-rj",
+      70_100,
+    ),
+    null,
+  );
+  assert.deepEqual(intents, [
+    { assetIdentity: "waiting", createdAt: 70_000 },
+  ]);
+});
+
+test("accepts an explicit native original when the preview identity was hidden", () => {
+  const intents = [{ assetIdentity: "", createdAt: 20_000 }];
+  assert.deepEqual(
+    takeNativeWatermarkIntent(
+      intents,
+      "https://lh3.googleusercontent.com/gg-premium-dl/original=s0-d-i-rw?alr=yes",
+      20_100,
+    ),
+    { assetIdentity: "", createdAt: 20_000 },
+  );
+  assert.deepEqual(intents, []);
 });
 
 test("builds only Gemini's native probe for a verified download route", () => {

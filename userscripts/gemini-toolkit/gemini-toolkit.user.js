@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.3
+// @version      0.7.4
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -34,6 +34,7 @@
   const IMAGE_EXPORT_RETRY_DELAY = 900;
   const IMAGE_CAPTURE_DELAY = 80;
   const FULL_SIZE_REDIRECT_HOPS = 10;
+  const NATIVE_WATERMARK_INTENT_TTL = 60_000;
   const CORNER_CROP_EDGE = 384;
   const MODE_BUTTON_SELECTOR =
     '[data-test-id="bard-mode-menu-button"]';
@@ -127,6 +128,54 @@
     } catch {
       return false;
     }
+  }
+
+  function geminiAssetIdentity(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (
+        parsed.hostname !== "googleusercontent.com" &&
+        !parsed.hostname.endsWith(".googleusercontent.com")
+      ) {
+        return "";
+      }
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (!/^(?:gg(?:-|$)|rd-)/u.test(segments[0] || "")) return "";
+      return segments.slice(1).join("/").replace(/=[^/=]+$/u, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function takeNativeWatermarkIntent(
+    intents,
+    responseUrl,
+    now = Date.now(),
+  ) {
+    if (!Array.isArray(intents) || intents.length === 0) return null;
+    for (let index = intents.length - 1; index >= 0; index -= 1) {
+      if (
+        now - Number(intents[index]?.createdAt || 0) >
+        NATIVE_WATERMARK_INTENT_TTL
+      ) {
+        intents.splice(index, 1);
+      }
+    }
+    if (intents.length === 0) return null;
+
+    const responseIdentity = geminiAssetIdentity(responseUrl);
+    let matchIndex = responseIdentity
+      ? intents.findIndex(
+          (intent) => intent.assetIdentity === responseIdentity,
+        )
+      : -1;
+    if (
+      matchIndex < 0 &&
+      classifyGeminiAssetUrl(responseUrl)?.original === true
+    ) {
+      matchIndex = 0;
+    }
+    return matchIndex >= 0 ? intents.splice(matchIndex, 1)[0] : null;
   }
 
   function normalizeOriginalImageUrl(value) {
@@ -421,6 +470,7 @@
       forEachSequential,
       fullSizeImageUrlFromRpc,
       fullSizeImageUrlsFromRpcText,
+      geminiAssetIdentity,
       generatedImageFilenameForRecord,
       imageRecordAvailability,
       isRetryableHttpStatus,
@@ -436,6 +486,7 @@
       rememberGeneratedImageRecord,
       retryOperation,
       rewriteGoogleusercontentGgToRdGg,
+      takeNativeWatermarkIntent,
     };
     return;
   }
@@ -444,6 +495,45 @@
     typeof unsafeWindow === "undefined" ? window : unsafeWindow;
   const generatedImageSourceByBlob = new WeakMap();
   const generatedImageSourceByObjectUrl = new Map();
+  const pendingNativeWatermarkDownloads = [];
+  let nativeDownloadResponseHookInstalled = false;
+
+  async function maybeRemoveNativeDownloadWatermark(responseUrl, blob) {
+    const type = String(blob?.type || "").toLocaleLowerCase();
+    if (
+      type &&
+      !type.startsWith("image/") &&
+      type !== "application/octet-stream"
+    ) {
+      return blob;
+    }
+    const intent = takeNativeWatermarkIntent(
+      pendingNativeWatermarkDownloads,
+      responseUrl,
+    );
+    if (!intent) return blob;
+
+    setImageToast("Removing the watermark from Gemini's full-size image…");
+    try {
+      const processed = await removeWatermarkFromImageBlob(blob);
+      setImageToast(
+        processed.removed
+          ? "Full-size image downloaded with the watermark removed."
+          : "Full-size image downloaded; no supported watermark was detected.",
+      );
+      return processed.blob;
+    } catch (error) {
+      console.warn(
+        "[Gemini Toolkit] Native full-size watermark removal failed",
+        error,
+      );
+      setImageToast(
+        "The full-size image was downloaded, but watermark removal failed.",
+        true,
+      );
+      return blob;
+    }
+  }
 
   function installGeneratedImageSourceCapture() {
     // Gemini now fetches generated assets and exposes only blob: URLs in the
@@ -454,11 +544,23 @@
       try {
         responsePrototype.blob = async function (...args) {
           const blob = await Reflect.apply(originalResponseBlob, this, args);
-          if (classifyGeminiAssetUrl(this?.url)) {
-            generatedImageSourceByBlob.set(blob, this.url);
+          const responseUrl = String(this?.url || "");
+          if (classifyGeminiAssetUrl(responseUrl)) {
+            generatedImageSourceByBlob.set(blob, responseUrl);
           }
-          return blob;
+          const downloadBlob = await maybeRemoveNativeDownloadWatermark(
+            responseUrl,
+            blob,
+          );
+          if (
+            downloadBlob !== blob &&
+            classifyGeminiAssetUrl(responseUrl)
+          ) {
+            generatedImageSourceByBlob.set(downloadBlob, responseUrl);
+          }
+          return downloadBlob;
         };
+        nativeDownloadResponseHookInstalled = true;
       } catch (error) {
         console.warn(
           "[Gemini Toolkit] Could not observe image response blobs",
@@ -1488,7 +1590,32 @@
     pageWindow.clearTimeout(imageCaptureTimer);
     imageCaptureTimer = 0;
     capturedGeneratedImages.clear();
+    pendingNativeWatermarkDownloads.length = 0;
     capturedImageConversationKey = currentImageCaptureConversationKey();
+  }
+
+  function queueNativeWatermarkDownload(button) {
+    if (!nativeDownloadResponseHookInstalled) {
+      setImageToast(
+        "Gemini's full-size response could not be processed; downloading the original unchanged.",
+        true,
+      );
+      return;
+    }
+    const record = imageRecordFromButton(button, 1);
+    pendingNativeWatermarkDownloads.push({
+      assetIdentity: geminiAssetIdentity(record?.sourceUrl),
+      createdAt: Date.now(),
+    });
+    if (pendingNativeWatermarkDownloads.length > 8) {
+      pendingNativeWatermarkDownloads.splice(
+        0,
+        pendingNativeWatermarkDownloads.length - 8,
+      );
+    }
+    setImageToast(
+      "Waiting for Gemini's full-size image before removing the watermark…",
+    );
   }
 
   function captureCurrentGeneratedImages() {
@@ -2329,14 +2456,15 @@
     const removeWatermark = addElement(removeWatermarkLabel, "input", {
       id: "remove-watermark",
       attributes: {
-        "aria-label": "Remove watermark during toolkit image export",
+        "aria-label":
+          "Remove watermark from full-size Gemini downloads and toolkit exports",
       },
       properties: {
         type: "checkbox",
         checked: state.removeWatermark,
       },
     });
-    removeWatermarkLabel.append("Remove watermark during export");
+    removeWatermarkLabel.append("Remove image watermark");
     const defaultStatus = addElement(defaults, "span", {
       id: "default-status",
       className: "default-status",
@@ -3467,6 +3595,12 @@
         return;
       }
       const target = event.target;
+      const fullSizeButton = target.closest(FULL_SIZE_BUTTON_SELECTOR);
+      if (fullSizeButton && state.removeWatermark) {
+        // Keep Gemini's native resolver and downloader. The response-blob hook
+        // above processes the full-resolution bytes immediately before save.
+        queueNativeWatermarkDownload(fullSizeButton);
+      }
       if (
         target.closest(MODE_BUTTON_SELECTOR) ||
         target.closest(MODE_ITEM_SELECTOR)
@@ -3484,8 +3618,7 @@
         scheduleGeneratedImageCapture();
         scheduleModeDefaults({ delay: 600 });
       }
-      // Deliberately leave Gemini's full-size download button alone. Its native
-      // handler owns private image metadata that is not exposed by the DOM URL.
+      // Gemini's full-size click is never cancelled or propagation-stopped.
     },
     true,
   );

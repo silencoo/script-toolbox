@@ -14,6 +14,8 @@ conversation's full-size images, and safely managing conversations.
   model change in the current chat
 - Leaves Gemini's existing **Download full size image** button untouched, so
   Gemini's current native download RPC—not a page preview—selects the file
+- When watermark removal is enabled, processes the full-resolution blob
+  returned by that native download immediately before Gemini saves it
 - Treats `blob:` images, `s1024` assets, and ordinary `rd-*` redirect routes as
   previews; the toolkit exporter never silently substitutes them for an
   original-size file
@@ -27,7 +29,8 @@ conversation's full-size images, and safely managing conversations.
   image at a time with stable response-, attachment-, and asset-based filenames
 - Retries only transient image failures up to three times, keeps a persistent
   result summary, and lets you retry only eligible failures
-- Provides a persistent watermark-removal switch for toolkit bulk exports
+- Provides one persistent watermark-removal switch for both native
+  single-image downloads and toolkit bulk exports
 - Uses web2gem-plus's bottom-right crop strategy and its vendored GargantuaX
   adaptive watermark core, including newer 36/48/96-pixel variants, while
   releasing image and canvas memory after every file
@@ -75,11 +78,14 @@ deleted before cancellation cannot be restored.
 ### Full-size image downloads
 
 - Select Gemini's existing **Download full size image** button on any generated
-  image. The userscript deliberately does not intercept this click; Gemini's
-  native downloader resolves the current original-size file.
-- Turn on **Remove watermark during export** in **Gemini Toolkit** when toolkit
-  bulk exports should be processed. Native single-image downloads are left
-  unchanged. The setting is off by default and persists until changed.
+  image. The userscript does not replace or cancel this click; Gemini's native
+  downloader resolves the current original-size file.
+- Turn on **Remove image watermark** in **Gemini Toolkit** to process both
+  native single-image downloads and toolkit bulk exports. For a native click,
+  the toolkit waits for Gemini's authenticated full-resolution response,
+  removes the supported bottom-right watermark, and then returns that processed
+  blob to Gemini's own downloader. The setting is off by default and persists
+  until changed.
 - Open **Toolkit** and select **Export full-size images**, review the ordered
   file list, readiness status, and watermark setting, then select
   **Download images**. Each image is fetched and downloaded separately before
