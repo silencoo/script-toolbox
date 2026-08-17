@@ -12,11 +12,12 @@ exporting a conversation's full-size images, and safely managing conversations.
   on, off, or Gemini's own choice
 - Re-applies defaults after Gemini navigation without overriding a manual
   model change in the current chat
-- Resolves Gemini's current full-size asset URL before replacing the native
-  click handler, so different images can download concurrently instead of
-  disabling every image button
+- Tracks Gemini's generated-image source before the current frontend converts
+  it into a page-local `blob:` URL, so different images can download
+  concurrently instead of disabling every image button
 - Recognizes current tiered `gg-*-dl` and `rd-*` original-image routes and
-  refuses to silently substitute a smaller preview when original lookup fails
+  probes the original route before using Gemini's own blob-backed image data
+  when the legacy full-size lookup no longer returns a URL
 - Remembers generated images as they appear while a conversation is scrolled,
   even after Gemini removes their virtualized DOM elements
 - Shows the ordered export manifest and flags images that are missing

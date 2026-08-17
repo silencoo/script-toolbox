@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.1
+// @version      0.7.2
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -16,7 +16,7 @@
 // @noframes
 // ==/UserScript==
 
-(() => {
+(async () => {
   "use strict";
 
   const RPC = Object.freeze({
@@ -101,6 +101,18 @@
       return { original: download || hasDownloadTail, download };
     } catch {
       return null;
+    }
+  }
+
+  function isPageBlobImageUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      return (
+        parsed.protocol === "blob:" &&
+        parsed.origin === "https://gemini.google.com"
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -271,6 +283,12 @@
     if (classifyGeminiAssetUrl(record?.sourceUrl)?.original === true) {
       return { ready: true, reason: "Original-size asset available" };
     }
+    if (
+      isPageBlobImageUrl(record?.pageBlobUrl) ||
+      isPageBlobImageUrl(record?.sourceUrl)
+    ) {
+      return { ready: true, reason: "Gemini image data available" };
+    }
     return {
       ready: false,
       reason: "Original-size metadata is unavailable",
@@ -331,6 +349,8 @@
         record.attachmentIndex ?? existing?.attachmentIndex ?? 0,
       conversationId:
         record.conversationId || existing?.conversationId || "",
+      pageBlobUrl:
+        record.pageBlobUrl || existing?.pageBlobUrl || "",
       discoveryIndex: existing?.discoveryIndex || registry.size + 1,
     };
     registry.set(record.sourceUrl, remembered);
@@ -430,6 +450,7 @@
       imageRecordAvailability,
       isRetryableHttpStatus,
       isRetryableImageExportError,
+      isPageBlobImageUrl,
       modelLabelMatches,
       modeFocusRestorePlan,
       modeLabelHasExtended,
@@ -447,6 +468,77 @@
   const pageWindow =
     typeof unsafeWindow === "undefined" ? window : unsafeWindow;
   const pageFetch = pageWindow.fetch.bind(pageWindow);
+  const generatedImageSourceByBlob = new WeakMap();
+  const generatedImageSourceByObjectUrl = new Map();
+
+  function installGeneratedImageSourceCapture() {
+    // Gemini now fetches generated assets and exposes only blob: URLs in the
+    // DOM. Preserve the response-to-object-URL relationship before it is lost.
+    const responsePrototype = pageWindow.Response?.prototype;
+    const originalResponseBlob = responsePrototype?.blob;
+    if (typeof originalResponseBlob === "function") {
+      try {
+        responsePrototype.blob = async function (...args) {
+          const blob = await Reflect.apply(originalResponseBlob, this, args);
+          if (classifyGeminiAssetUrl(this?.url)) {
+            generatedImageSourceByBlob.set(blob, this.url);
+          }
+          return blob;
+        };
+      } catch (error) {
+        console.warn(
+          "[Gemini Toolkit] Could not observe image response blobs",
+          error,
+        );
+      }
+    }
+
+    const originalCreateObjectURL = pageWindow.URL?.createObjectURL;
+    if (typeof originalCreateObjectURL === "function") {
+      try {
+        pageWindow.URL.createObjectURL = function (object) {
+          const objectUrl = Reflect.apply(
+            originalCreateObjectURL,
+            this,
+            [object],
+          );
+          const sourceUrl = generatedImageSourceByBlob.get(object);
+          if (sourceUrl) {
+            generatedImageSourceByObjectUrl.set(objectUrl, sourceUrl);
+          }
+          return objectUrl;
+        };
+      } catch (error) {
+        console.warn(
+          "[Gemini Toolkit] Could not observe image object URLs",
+          error,
+        );
+      }
+    }
+
+    const originalRevokeObjectURL = pageWindow.URL?.revokeObjectURL;
+    if (typeof originalRevokeObjectURL === "function") {
+      try {
+        pageWindow.URL.revokeObjectURL = function (objectUrl) {
+          generatedImageSourceByObjectUrl.delete(String(objectUrl || ""));
+          return Reflect.apply(originalRevokeObjectURL, this, [objectUrl]);
+        };
+      } catch (error) {
+        console.warn(
+          "[Gemini Toolkit] Could not observe revoked image URLs",
+          error,
+        );
+      }
+    }
+  }
+
+  installGeneratedImageSourceCapture();
+
+  if (document.readyState === "loading") {
+    await new Promise((resolve) => {
+      document.addEventListener("DOMContentLoaded", resolve, { once: true });
+    });
+  }
   const dateFormatter = new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "2-digit",
@@ -1289,7 +1381,58 @@
     );
   }
 
+  async function fetchPageImageBlob(url, signal) {
+    let response;
+    try {
+      response = await pageFetch(url, {
+        cache: "no-store",
+        signal,
+      });
+    } catch (cause) {
+      if (cause?.name === "AbortError") throw cause;
+      throw new ImageDownloadError(
+        "Gemini's current image data is no longer available. Scroll the image back into view and try again.",
+        { code: "blob-unavailable", cause },
+      );
+    }
+
+    if (!response.ok) {
+      throw new ImageDownloadError(
+        `Gemini's current image request returned HTTP ${response.status}.`,
+        {
+          retryable: isRetryableHttpStatus(response.status),
+          status: response.status,
+          code: "blob-http-error",
+        },
+      );
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0) {
+      throw new ImageDownloadError(
+        "Gemini returned empty image data.",
+        { code: "empty-blob-response" },
+      );
+    }
+    const declaredType = response.headers.get("content-type") || "";
+    const imageType = imageMimeTypeFromBytes(buffer, declaredType);
+    if (!imageType) {
+      throw new ImageDownloadError(
+        "Gemini's current image data was not a supported image.",
+        { code: "invalid-blob-image" },
+      );
+    }
+    return new Blob([buffer], { type: imageType });
+  }
+
   async function fetchFullSizeImageBlob(record, signal) {
+    let lastError = null;
+    let retryableError = null;
+    const rememberFailure = (error) => {
+      lastError = error;
+      if (isRetryableImageExportError(error)) retryableError = error;
+    };
+
     if (record.fullSizeRefs) {
       try {
         const rpcText = await executeRpcText(
@@ -1310,26 +1453,57 @@
         );
       } catch (error) {
         if (error?.name === "AbortError") throw error;
+        rememberFailure(error);
         console.warn(
           "[Gemini Toolkit] Native full-size image lookup failed",
           error,
         );
-        throw new ImageDownloadError(
-          `Could not resolve Gemini's original-size image. The preview was not downloaded. ${error?.message || ""}`.trim(),
-          {
-            retryable: isRetryableImageExportError(error),
-            status: error?.status,
-            code: error?.code || "original-lookup-failed",
-            cause: error,
-          },
+      }
+    }
+
+    if (classifyGeminiAssetUrl(record.sourceUrl)) {
+      try {
+        return await fetchImageBlobFromProbes(
+          buildFullSizeProbeUrls(record.sourceUrl),
+          signal,
+        );
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        rememberFailure(error);
+        console.warn(
+          "[Gemini Toolkit] Captured image asset lookup failed",
+          error,
         );
       }
     }
 
-    if (classifyGeminiAssetUrl(record.sourceUrl)?.original === true) {
-      return await fetchImageBlobFromProbes(
-        buildFullSizeProbeUrls(record.sourceUrl),
-        signal,
+    const pageBlobUrl =
+      (isPageBlobImageUrl(record.pageBlobUrl) && record.pageBlobUrl) ||
+      (isPageBlobImageUrl(record.sourceUrl) && record.sourceUrl) ||
+      "";
+    if (pageBlobUrl) {
+      try {
+        return await fetchPageImageBlob(pageBlobUrl, signal);
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        rememberFailure(error);
+        console.warn(
+          "[Gemini Toolkit] Current Gemini image data fallback failed",
+          error,
+        );
+      }
+    }
+
+    const finalError = retryableError || lastError;
+    if (finalError) {
+      throw new ImageDownloadError(
+        `Could not resolve Gemini's original-size image. ${finalError?.message || ""}`.trim(),
+        {
+          retryable: isRetryableImageExportError(finalError),
+          status: finalError?.status,
+          code: finalError?.code || "original-lookup-failed",
+          cause: finalError,
+        },
       );
     }
     throw new ImageDownloadError(
@@ -1353,12 +1527,13 @@
   function imageRecordFromButton(button, index = 0) {
     const image = findImageForDownloadButton(button);
     if (!image) return null;
+    const displayedSource = image.currentSrc || image.src || "";
     const sourceUrl =
       image.getAttribute("data-gwr-stable-source") ||
       image.getAttribute("data-gwr-source-url") ||
       image.getAttribute("data-gwr-page-image-source") ||
-      image.currentSrc ||
-      image.src ||
+      generatedImageSourceByObjectUrl.get(displayedSource) ||
+      displayedSource ||
       "";
     const normalizedSource = normalizeGeneratedImageUrl(sourceUrl);
     if (!normalizedSource) return null;
@@ -1381,6 +1556,9 @@
       responseId,
       fullSizeRefs,
       attachmentIndex,
+      pageBlobUrl: isPageBlobImageUrl(displayedSource)
+        ? displayedSource
+        : "",
       conversationId:
         fullSizeRefs?.conversationId || getCurrentConversationId(),
       index,

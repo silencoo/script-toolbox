@@ -12,6 +12,7 @@ const {
   fullSizeImageUrlsFromRpcText,
   generatedImageFilenameForRecord,
   imageRecordAvailability,
+  isPageBlobImageUrl,
   isRetryableHttpStatus,
   isRetryableImageExportError,
   normalizeGeneratedImageUrl,
@@ -29,6 +30,20 @@ test("normalizes Gemini preview transforms to an asset URL", () => {
     ),
     "https://lh3.googleusercontent.com/gg/asset-token",
   );
+});
+
+test("recognizes Gemini's blob-backed image URLs", () => {
+  assert.equal(
+    isPageBlobImageUrl(
+      "blob:https://gemini.google.com/0830f4bb-63a4-4af8-95f7-b3251d12248a",
+    ),
+    true,
+  );
+  assert.equal(
+    isPageBlobImageUrl("https://lh3.googleusercontent.com/gg/asset"),
+    false,
+  );
+  assert.equal(isPageBlobImageUrl("blob:https://example.com/image"), false);
 });
 
 test("builds live and legacy full-size probes for gg and rd-gg", () => {
@@ -180,6 +195,16 @@ test("classifies image records before an export begins", () => {
       reason: "Original-size metadata is unavailable",
     },
   );
+  assert.deepEqual(
+    imageRecordAvailability({
+      sourceUrl:
+        "blob:https://gemini.google.com/0830f4bb-63a4-4af8-95f7-b3251d12248a",
+    }),
+    {
+      ready: true,
+      reason: "Gemini image data available",
+    },
+  );
 });
 
 test("builds stable unique filenames from image metadata", () => {
@@ -223,6 +248,7 @@ test("retains image metadata after virtualized DOM records are replaced", () => 
     responseId: "",
     attachmentIndex: 1,
     conversationId: "c_chat",
+    pageBlobUrl: "blob:https://gemini.google.com/captured-image",
   });
   rememberGeneratedImageRecord(registry, {
     sourceUrl: "https://lh3.googleusercontent.com/gg/captured-image",
@@ -249,6 +275,11 @@ test("retains image metadata after virtualized DOM records are replaced", () => 
     registry.get("https://lh3.googleusercontent.com/gg/captured-image")
       .fullSizeRefs.responseId,
     "r_reply",
+  );
+  assert.equal(
+    registry.get("https://lh3.googleusercontent.com/gg/captured-image")
+      .pageBlobUrl,
+    "blob:https://gemini.google.com/captured-image",
   );
   assert.equal(
     registry.get("https://lh3.googleusercontent.com/gg/later-image")
