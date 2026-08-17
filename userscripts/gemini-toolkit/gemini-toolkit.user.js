@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.2
+// @version      0.7.3
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -33,7 +33,7 @@
   const IMAGE_EXPORT_MAX_ATTEMPTS = 3;
   const IMAGE_EXPORT_RETRY_DELAY = 900;
   const IMAGE_CAPTURE_DELAY = 80;
-  const FULL_SIZE_REDIRECT_HOPS = 4;
+  const FULL_SIZE_REDIRECT_HOPS = 10;
   const CORNER_CROP_EDGE = 384;
   const MODE_BUTTON_SELECTOR =
     '[data-test-id="bard-mode-menu-button"]';
@@ -88,17 +88,30 @@
         return null;
       }
       const segment = parsed.pathname.split("/").filter(Boolean)[0] || "";
-      const hasDownloadTail = /=(?:d|d-I)$/iu.test(parsed.pathname);
+      const transform =
+        parsed.pathname.match(/=([^/=]+)$/u)?.[1]
+          ?.split("-")
+          .map((part) => part.toLocaleLowerCase()) || [];
+      const hasDownloadTransform =
+        transform.includes("d") &&
+        (transform.length === 1 || transform.includes("i"));
       if (segment.startsWith("rd-")) {
-        return { original: true, download: segment.endsWith("-dl") };
+        const download = segment.endsWith("-dl") || hasDownloadTransform;
+        return { original: download, download };
       }
       if (segment === "gg") {
-        return { original: hasDownloadTail, download: hasDownloadTail };
+        return {
+          original: hasDownloadTransform,
+          download: hasDownloadTransform,
+        };
       }
       if (!segment.startsWith("gg-")) return null;
       const variant = segment.slice(3);
-      const download = variant === "dl" || variant.endsWith("-dl");
-      return { original: download || hasDownloadTail, download };
+      const download =
+        variant === "dl" ||
+        variant.endsWith("-dl") ||
+        hasDownloadTransform;
+      return { original: download, download };
     } catch {
       return null;
     }
@@ -120,22 +133,10 @@
     if (classifyGeminiAssetUrl(value)?.original !== true) return "";
     try {
       const parsed = new URL(String(value));
-      const path = parsed.pathname;
-      const dimensions = /=w\d+-h\d+([^/]*)$/iu;
-      const nativeDownload = /=(?:d|d-I)$/iu;
-      const size = /=(?:s|w|h)\d+([^/]*)$/iu;
-      if (dimensions.test(path)) {
-        parsed.pathname = path.replace(dimensions, "=s0$1");
-      } else if (nativeDownload.test(path)) {
-        parsed.pathname = path.replace(
-          nativeDownload,
-          (match) => `=s0-${match.slice(1)}`,
-        );
-      } else if (size.test(path)) {
-        parsed.pathname = path.replace(size, "=s0$1");
-      } else {
-        parsed.pathname = `${path}=s0`;
-      }
+      parsed.hash = "";
+      parsed.search = "";
+      parsed.pathname = `${parsed.pathname.replace(/=[^/=]+$/u, "")}=s0-d-i-rw`;
+      parsed.searchParams.set("alr", "yes");
       return parsed.toString();
     } catch {
       return "";
@@ -166,28 +167,8 @@
   }
 
   function buildFullSizeProbeUrls(value) {
-    const base = normalizeGeneratedImageUrl(value);
-    if (!base) {
-      return [];
-    }
-    const candidates = [];
-    const add = (candidate) => {
-      if (candidate && !candidates.includes(candidate)) {
-        candidates.push(candidate);
-      }
-    };
-    add(normalizeOriginalImageUrl(value));
-    const addForBase = (candidateBase) => {
-      add(`${candidateBase}=s0-d-I?alr=yes`);
-      add(`${candidateBase}=d-I?alr=yes`);
-      add(`${candidateBase}?alr=yes`);
-    };
-    addForBase(base);
-    const rdGg = rewriteGoogleusercontentGgToRdGg(base);
-    if (rdGg) {
-      addForBase(rdGg);
-    }
-    return candidates;
+    const nativeDownloadUrl = normalizeOriginalImageUrl(value);
+    return nativeDownloadUrl ? [nativeDownloadUrl] : [];
   }
 
   function parseFullSizeImageRefs(value, imageIndex = 0) {
@@ -282,12 +263,6 @@
     }
     if (classifyGeminiAssetUrl(record?.sourceUrl)?.original === true) {
       return { ready: true, reason: "Original-size asset available" };
-    }
-    if (
-      isPageBlobImageUrl(record?.pageBlobUrl) ||
-      isPageBlobImageUrl(record?.sourceUrl)
-    ) {
-      return { ready: true, reason: "Gemini image data available" };
     }
     return {
       ready: false,
@@ -467,7 +442,6 @@
 
   const pageWindow =
     typeof unsafeWindow === "undefined" ? window : unsafeWindow;
-  const pageFetch = pageWindow.fetch.bind(pageWindow);
   const generatedImageSourceByBlob = new WeakMap();
   const generatedImageSourceByObjectUrl = new Map();
 
@@ -1202,7 +1176,6 @@
     throw lastError;
   }
 
-  const activeImageDownloads = new WeakSet();
   let watermarkEnginePromise = null;
   const capturedGeneratedImages = new Map();
   let capturedImageConversationKey = "";
@@ -1381,50 +1354,6 @@
     );
   }
 
-  async function fetchPageImageBlob(url, signal) {
-    let response;
-    try {
-      response = await pageFetch(url, {
-        cache: "no-store",
-        signal,
-      });
-    } catch (cause) {
-      if (cause?.name === "AbortError") throw cause;
-      throw new ImageDownloadError(
-        "Gemini's current image data is no longer available. Scroll the image back into view and try again.",
-        { code: "blob-unavailable", cause },
-      );
-    }
-
-    if (!response.ok) {
-      throw new ImageDownloadError(
-        `Gemini's current image request returned HTTP ${response.status}.`,
-        {
-          retryable: isRetryableHttpStatus(response.status),
-          status: response.status,
-          code: "blob-http-error",
-        },
-      );
-    }
-
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength === 0) {
-      throw new ImageDownloadError(
-        "Gemini returned empty image data.",
-        { code: "empty-blob-response" },
-      );
-    }
-    const declaredType = response.headers.get("content-type") || "";
-    const imageType = imageMimeTypeFromBytes(buffer, declaredType);
-    if (!imageType) {
-      throw new ImageDownloadError(
-        "Gemini's current image data was not a supported image.",
-        { code: "invalid-blob-image" },
-      );
-    }
-    return new Blob([buffer], { type: imageType });
-  }
-
   async function fetchFullSizeImageBlob(record, signal) {
     let lastError = null;
     let retryableError = null;
@@ -1461,7 +1390,7 @@
       }
     }
 
-    if (classifyGeminiAssetUrl(record.sourceUrl)) {
+    if (classifyGeminiAssetUrl(record.sourceUrl)?.original === true) {
       try {
         return await fetchImageBlobFromProbes(
           buildFullSizeProbeUrls(record.sourceUrl),
@@ -1472,23 +1401,6 @@
         rememberFailure(error);
         console.warn(
           "[Gemini Toolkit] Captured image asset lookup failed",
-          error,
-        );
-      }
-    }
-
-    const pageBlobUrl =
-      (isPageBlobImageUrl(record.pageBlobUrl) && record.pageBlobUrl) ||
-      (isPageBlobImageUrl(record.sourceUrl) && record.sourceUrl) ||
-      "";
-    if (pageBlobUrl) {
-      try {
-        return await fetchPageImageBlob(pageBlobUrl, signal);
-      } catch (error) {
-        if (error?.name === "AbortError") throw error;
-        rememberFailure(error);
-        console.warn(
-          "[Gemini Toolkit] Current Gemini image data fallback failed",
           error,
         );
       }
@@ -2417,14 +2329,14 @@
     const removeWatermark = addElement(removeWatermarkLabel, "input", {
       id: "remove-watermark",
       attributes: {
-        "aria-label": "Remove watermark from downloaded Gemini images",
+        "aria-label": "Remove watermark during toolkit image export",
       },
       properties: {
         type: "checkbox",
         checked: state.removeWatermark,
       },
     });
-    removeWatermarkLabel.append("Remove image watermark");
+    removeWatermarkLabel.append("Remove watermark during export");
     const defaultStatus = addElement(defaults, "span", {
       id: "default-status",
       className: "default-status",
@@ -2769,78 +2681,6 @@
     } catch (error) {
       console.warn("[Gemini Toolkit] Watermark removal failed", error);
       return { blob: originalBlob, removed: false, watermarkError: error };
-    }
-  }
-
-  async function downloadSingleGeneratedImage(button) {
-    if (activeImageDownloads.has(button)) {
-      setImageToast("This image download is already running.");
-      return;
-    }
-    const liveRecord = imageRecordFromButton(button, 1);
-    const allRecords = collectGeneratedImageRecords();
-    const capturedRecord = allRecords.find(
-      (candidate) => candidate.sourceUrl === liveRecord?.sourceUrl,
-    );
-    const record = capturedRecord
-      ? { ...capturedRecord, button, image: liveRecord?.image }
-      : liveRecord;
-    if (!record) {
-      setImageToast("Could not locate the full-size source for this image.", true);
-      return;
-    }
-
-    activeImageDownloads.add(button);
-    button.setAttribute("aria-busy", "true");
-    button.dataset.geminiToolkitDownload = "active";
-    setImageToast(
-      state.removeWatermark
-        ? "Downloading full-size image and removing watermark…"
-        : "Downloading full-size image…",
-    );
-    try {
-      const result = await retryOperation(
-        () => prepareDownloadedImage(record, state.removeWatermark),
-        {
-          attempts: IMAGE_EXPORT_MAX_ATTEMPTS,
-          shouldRetry: isRetryableImageExportError,
-          onRetry: (_error, nextAttempt) => {
-            setImageToast(
-              `Temporary download failure. Retrying ${nextAttempt}/${IMAGE_EXPORT_MAX_ATTEMPTS}…`,
-            );
-          },
-          wait: (attempt) =>
-            sleep(IMAGE_EXPORT_RETRY_DELAY * 2 ** (attempt - 1)),
-        },
-      );
-      saveBlob(
-        result.blob,
-        generatedImageFilename(record, result.blob.type),
-      );
-      if (result.watermarkError) {
-        setImageToast(
-          "The original image was downloaded, but watermark removal failed.",
-          true,
-        );
-      } else {
-        setImageToast(
-          result.removed
-            ? "Full-size image downloaded without the detected watermark."
-            : "Full-size image downloaded.",
-        );
-      }
-    } catch (error) {
-      console.warn("[Gemini Toolkit] Full-size download failed", error);
-      setImageToast(
-        error?.name === "AbortError"
-          ? "Image download cancelled."
-          : error?.message || "Full-size image download failed.",
-        true,
-      );
-    } finally {
-      activeImageDownloads.delete(button);
-      button.removeAttribute("aria-busy");
-      delete button.dataset.geminiToolkitDownload;
     }
   }
 
@@ -3627,14 +3467,6 @@
         return;
       }
       const target = event.target;
-      const fullSizeButton = target.closest(FULL_SIZE_BUTTON_SELECTOR);
-      if (fullSizeButton) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        void downloadSingleGeneratedImage(fullSizeButton);
-        return;
-      }
       if (
         target.closest(MODE_BUTTON_SELECTOR) ||
         target.closest(MODE_ITEM_SELECTOR)
@@ -3652,6 +3484,8 @@
         scheduleGeneratedImageCapture();
         scheduleModeDefaults({ delay: 600 });
       }
+      // Deliberately leave Gemini's full-size download button alone. Its native
+      // handler owns private image metadata that is not exposed by the DOM URL.
     },
     true,
   );

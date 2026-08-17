@@ -1,8 +1,8 @@
 # Gemini Toolkit
 
 A Tampermonkey or Violentmonkey userscript for keeping preferred Gemini model
-defaults, downloading generated images without Gemini's global download lock,
-exporting a conversation's full-size images, and safely managing conversations.
+defaults, preserving Gemini's native full-size image downloads, exporting a
+conversation's full-size images, and safely managing conversations.
 
 ## Features
 
@@ -12,12 +12,13 @@ exporting a conversation's full-size images, and safely managing conversations.
   on, off, or Gemini's own choice
 - Re-applies defaults after Gemini navigation without overriding a manual
   model change in the current chat
-- Tracks Gemini's generated-image source before the current frontend converts
-  it into a page-local `blob:` URL, so different images can download
-  concurrently instead of disabling every image button
-- Recognizes current tiered `gg-*-dl` and `rd-*` original-image routes and
-  probes the original route before using Gemini's own blob-backed image data
-  when the legacy full-size lookup no longer returns a URL
+- Leaves Gemini's existing **Download full size image** button untouched, so
+  Gemini's current native download RPC—not a page preview—selects the file
+- Treats `blob:` images, `s1024` assets, and ordinary `rd-*` redirect routes as
+  previews; the toolkit exporter never silently substitutes them for an
+  original-size file
+- Accepts only explicit download routes and applies Gemini's current native
+  `s0-d-i-rw` transform when an original-size URL is available
 - Remembers generated images as they appear while a conversation is scrolled,
   even after Gemini removes their virtualized DOM elements
 - Shows the ordered export manifest and flags images that are missing
@@ -26,8 +27,7 @@ exporting a conversation's full-size images, and safely managing conversations.
   image at a time with stable response-, attachment-, and asset-based filenames
 - Retries only transient image failures up to three times, keeps a persistent
   result summary, and lets you retry only eligible failures
-- Provides one persistent, independently controlled watermark-removal switch
-  for both single-image and bulk downloads
+- Provides a persistent watermark-removal switch for toolkit bulk exports
 - Uses web2gem-plus's bottom-right crop strategy and its vendored GargantuaX
   adaptive watermark core, including newer 36/48/96-pixel variants, while
   releasing image and canvas memory after every file
@@ -75,11 +75,11 @@ deleted before cancellation cannot be restored.
 ### Full-size image downloads
 
 - Select Gemini's existing **Download full size image** button on any generated
-  image. The userscript handles that request independently, so another image's
-  button remains available while the first request is running.
-- Turn on **Remove image watermark** in **Gemini Toolkit** when single-image and
-  bulk downloads should be processed. It is off by default and persists until
-  changed.
+  image. The userscript deliberately does not intercept this click; Gemini's
+  native downloader resolves the current original-size file.
+- Turn on **Remove watermark during export** in **Gemini Toolkit** when toolkit
+  bulk exports should be processed. Native single-image downloads are left
+  unchanged. The setting is off by default and persists until changed.
 - Open **Toolkit** and select **Export full-size images**, review the ordered
   file list, readiness status, and watermark setting, then select
   **Download images**. Each image is fetched and downloaded separately before

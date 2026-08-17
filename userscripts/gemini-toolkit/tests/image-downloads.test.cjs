@@ -46,18 +46,19 @@ test("recognizes Gemini's blob-backed image URLs", () => {
   assert.equal(isPageBlobImageUrl("blob:https://example.com/image"), false);
 });
 
-test("builds live and legacy full-size probes for gg and rd-gg", () => {
+test("builds only Gemini's native probe for a verified download route", () => {
   assert.deepEqual(
     buildFullSizeProbeUrls(
       "https://lh3.googleusercontent.com/gg/asset-token=s1024-rj",
     ),
+    [],
+  );
+  assert.deepEqual(
+    buildFullSizeProbeUrls(
+      "https://lh3.googleusercontent.com/gg-premium-dl/asset-token=s1024-rj",
+    ),
     [
-      "https://lh3.googleusercontent.com/gg/asset-token=s0-d-I?alr=yes",
-      "https://lh3.googleusercontent.com/gg/asset-token=d-I?alr=yes",
-      "https://lh3.googleusercontent.com/gg/asset-token?alr=yes",
-      "https://lh3.googleusercontent.com/rd-gg/asset-token=s0-d-I?alr=yes",
-      "https://lh3.googleusercontent.com/rd-gg/asset-token=d-I?alr=yes",
-      "https://lh3.googleusercontent.com/rd-gg/asset-token?alr=yes",
+      "https://lh3.googleusercontent.com/gg-premium-dl/asset-token=s0-d-i-rw?alr=yes",
     ],
   );
 });
@@ -73,7 +74,7 @@ test("recognizes current tiered Gemini original download routes", () => {
     classifyGeminiAssetUrl(
       "https://lh3.googleusercontent.com/rd-gg-premium/asset=s1024-rj",
     ),
-    { original: true, download: false },
+    { original: false, download: false },
   );
   assert.deepEqual(
     classifyGeminiAssetUrl(
@@ -88,7 +89,7 @@ test("normalizes original routes without turning previews into originals", () =>
     normalizeOriginalImageUrl(
       "https://lh3.googleusercontent.com/gg-premium-dl/asset=s1024-rj",
     ),
-    "https://lh3.googleusercontent.com/gg-premium-dl/asset=s0-rj",
+    "https://lh3.googleusercontent.com/gg-premium-dl/asset=s0-d-i-rw?alr=yes",
   );
   assert.equal(
     normalizeOriginalImageUrl(
@@ -147,7 +148,7 @@ test("extracts only an HTTP URL from the full-size RPC response", () => {
       null,
       ["https://lh3.googleusercontent.com/gg-premium-dl/full=s1024-rj"],
     ]),
-    "https://lh3.googleusercontent.com/gg-premium-dl/full=s0-rj",
+    "https://lh3.googleusercontent.com/gg-premium-dl/full=s0-d-i-rw?alr=yes",
   );
   assert.equal(fullSizeImageUrlFromRpc(["not-a-url"]), "");
 });
@@ -157,7 +158,7 @@ test("extracts escaped original URLs from the current RPC response shape", () =>
   assert.deepEqual(
     fullSizeImageUrlsFromRpcText(rpcText),
     [
-      "https://lh3.googleusercontent.com/gg-premium-dl/original=s0-rj",
+      "https://lh3.googleusercontent.com/gg-premium-dl/original=s0-d-i-rw?alr=yes",
     ],
   );
   assert.equal(
@@ -201,8 +202,8 @@ test("classifies image records before an export begins", () => {
         "blob:https://gemini.google.com/0830f4bb-63a4-4af8-95f7-b3251d12248a",
     }),
     {
-      ready: true,
-      reason: "Gemini image data available",
+      ready: false,
+      reason: "Original-size metadata is unavailable",
     },
   );
 });
