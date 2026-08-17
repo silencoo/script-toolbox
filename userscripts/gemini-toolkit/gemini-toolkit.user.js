@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.4
+// @version      0.7.5
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -493,6 +493,7 @@
 
   const pageWindow =
     typeof unsafeWindow === "undefined" ? window : unsafeWindow;
+  const pageFetch = pageWindow.fetch.bind(pageWindow);
   const generatedImageSourceByBlob = new WeakMap();
   const generatedImageSourceByObjectUrl = new Map();
   const pendingNativeWatermarkDownloads = [];
