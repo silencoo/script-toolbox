@@ -16,6 +16,12 @@
   catalogs now record the checksum of the platform-materialized files, so a
   valid cloud Skill such as `frontend-dev` is not immediately misreported as
   having changed outside skillsctl.
+- Added guided first-device adoption for Workspace MCP Profiles and Skills
+  Packs. When the corresponding local Store is absent, Apply now offers to
+  restore the full encrypted child Store and its recovery capability before
+  applying the selection, continue with selected-only isolated materialization,
+  or cancel. Existing local Stores remain untouched, and Workspace-owned Skill
+  links are released before the restored local Pack takes ownership.
 
 ## 2026-08-16 — clearer Skill switching and compact Provider views
 

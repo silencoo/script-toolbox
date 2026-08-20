@@ -747,6 +747,11 @@ decrypts a child Store only when its section is opened. Plans remain in memory;
 an apply writes only the chosen selection and its dependencies to
 `~/.local/share/agentctl/workspaces/<workspace-store-id>/` (or the platform data
 directory on Windows), then invokes the existing controller transaction.
+If the selected MCP or Skills component has no initialized local Store, the TUI
+offers an explicit first-adoption choice: restore the full attached child Store
+and its recovery capability locally so Local Switches work, continue with the
+selected-only isolated runtime, or cancel. It never overwrites an existing
+local Store through this shortcut.
 Provider catalogs remain independently exportable local Stores even when they
 are also backed up in Workspace; generated provider configuration always
 remains device-local.

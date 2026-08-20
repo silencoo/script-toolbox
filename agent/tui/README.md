@@ -136,8 +136,14 @@ read-only. Applying it requires an in-TUI `y` confirmation and materializes only
 the selected item and its inherited dependencies under the per-Workspace
 runtime directory. Prompt Markdown is written only for the selected target
 because promptctl needs that editable local source. Whole child-Store pulls
-remain explicit CLI operations; the Providers view exposes only the bounded
-agent-bundle upload and merge-restore operations described above.
+remain explicit except during first MCP/Skills adoption: when the corresponding
+local Store is not initialized, Apply offers `y` to restore the full encrypted
+child Store and install its recovery capability locally, `s` to keep the
+selected-only isolated Workspace behavior, or `n` to cancel. A confirmed full
+restore then applies the selection through the normal local controller so
+Local Switches become immediately available. Existing local Stores are never
+replaced by this flow. The Providers view exposes only the bounded agent-bundle
+upload and merge-restore operations described above.
 
 When a first Workspace MCP apply finds same-name client entries that are not
 owned by mcpctl, it remains fail-closed and shows a second, explicit adoption

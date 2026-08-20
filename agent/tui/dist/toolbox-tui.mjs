@@ -24711,6 +24711,7 @@ function createRemoteWorkspace({
   workspaceConfig = defaultConfigPath(),
   runtimeRoot = defaultRuntimeRoot(),
   localHome = homedir3(),
+  localConfigHome = platformConfigHome({ home: localHome }),
   loadWorkspaceFn = loadRemoteWorkspace,
   readConfigFn = readRemoteConfig,
   statusFn = loadRemoteStatus,
@@ -24917,6 +24918,7 @@ function createRemoteWorkspace({
       mcp: join3(root, "mcp"),
       mcpRemote: join3(root, "mcp-remote.json"),
       skills: join3(root, "skills"),
+      skillsRemote: join3(root, "skills-remote.json"),
       presets: join3(root, "presets.json"),
       presetState: join3(root, "preset-state.json"),
       promptBackups: join3(root, "prompt-backups"),
@@ -24929,6 +24931,7 @@ function createRemoteWorkspace({
       MCPCTL_STORE: paths.mcp,
       MCPCTL_REMOTE_CONFIG: paths.mcpRemote,
       SKILLSCTL_STORE: paths.skills,
+      SKILLSCTL_REMOTE_CONFIG: paths.skillsRemote,
       AGENTCTL_PRESETS_FILE: paths.presets,
       AGENTCTL_PRESET_STATE_FILE: paths.presetState
     };
@@ -24940,6 +24943,34 @@ function createRemoteWorkspace({
       skills: await pathExists2(join3(paths.skills, "catalog.json")),
       presets: await pathExists2(paths.presets)
     };
+  }
+  async function withLocalChildCapability(type, callback) {
+    if (!["mcp", "skills"].includes(type) || typeof callback !== "function") {
+      throw new RemoteWorkspaceError("local child Store restore request is invalid");
+    }
+    const { config } = await child(type);
+    const paths = await runtimePaths();
+    const stagedConfig = type === "mcp" ? paths.mcpRemote : paths.skillsRemote;
+    const localConfig = join3(localConfigHome, `${type}ctl`, "remote.json");
+    let existing = null;
+    if (await pathExists2(localConfig)) {
+      existing = await readRemoteConfig(localConfig);
+      validateRemoteConfig(existing, PROTOCOLS[type]);
+      if (existing.endpoint !== config.endpoint || existing.store_id !== config.store_id || existing.root_key !== config.root_key) {
+        throw new RemoteWorkspaceError(
+          `local ${type}ctl remote configuration belongs to a different encrypted Store`
+        );
+      }
+    }
+    await ensureDirectory(dirname3(stagedConfig));
+    await writeJsonAtomic(stagedConfig, config);
+    const result = await callback({ remoteConfig: stagedConfig });
+    const succeeded = result && (result.ok === true || Number.isInteger(result.code) && result.code === 0);
+    if (succeeded && !existing) {
+      await ensureDirectory(dirname3(localConfig));
+      await writeJsonAtomic(localConfig, config);
+    }
+    return result;
   }
   async function materializeMcp(name, target) {
     const { snapshot, config } = await child("mcp");
@@ -25216,6 +25247,7 @@ function createRemoteWorkspace({
     selectionPlan,
     snippetSelection,
     withProviderFiles,
+    withLocalChildCapability,
     writeSnippet,
     writePrompt
   };
@@ -25246,6 +25278,10 @@ function sanitizeOutput(value) {
 }
 function mcpApplyNeedsForce(value) {
   return /same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names/i.test(String(value || ""));
+}
+function localComponentStoreMissing(type, value) {
+  const detail = String(value || "");
+  return type === "mcp" ? /store not initialized: missing .*catalog\.json/i.test(detail) : /skills store not found:|skills store is not initialized:/i.test(detail);
 }
 function parseJsonOutput(result, label) {
   const output = String(result.stdout || "").trim();
@@ -26104,10 +26140,91 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : sanitizeOutput(result.stderr || result.stdout) || `Skills Store backup failed with code ${result.code}`
     };
   }
-  async function remoteComponentAction(actionName, type, name, target, { force = false } = {}) {
+  async function localComponentStoreStatus(type) {
+    const args = type === "mcp" ? ["profile", "list"] : ["list", "--json"];
+    const result = await runController(tools[type], args);
+    const detail = sanitizeOutput(result.stderr || result.stdout);
+    return {
+      initialized: result.code === 0,
+      missing: result.code !== 0 && localComponentStoreMissing(type, detail),
+      detail
+    };
+  }
+  async function initializeLocalComponentStore(type) {
+    if (typeof remoteWorkspace.withLocalChildCapability !== "function") {
+      throw new Error("Workspace local Store initialization is unavailable.");
+    }
+    return remoteWorkspace.withLocalChildCapability(type, async ({ remoteConfig }) => {
+      const args = type === "mcp" ? ["restore", "--remote-config", remoteConfig] : ["restore", "--remote-config", remoteConfig, "--yes"];
+      return runController(tools[type], args);
+    });
+  }
+  async function releaseWorkspaceSkillLinks(selection, target, env3) {
+    if (!Array.isArray(selection.skills) || selection.skills.length === 0) return null;
+    const args = ["skill", "set", "--target", target];
+    for (const skill of selection.skills) args.push("--disable", skill);
+    args.push("--yes");
+    const result = await runController(tools.skills, args, env3);
+    if (result.code !== 0) {
+      throw new Error(sanitizeOutput(result.stderr || result.stdout) || "Could not release the Workspace-managed Skill links before local initialization.");
+    }
+    return result;
+  }
+  async function remoteComponentAction(actionName, type, name, target, {
+    force = false,
+    initializeLocal = false,
+    skipLocalInitialization = false
+  } = {}) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
+    }
+    if (["mcp", "skills"].includes(type)) {
+      const localStore = await localComponentStoreStatus(type);
+      if (localStore.missing && !initializeLocal && !skipLocalInitialization) {
+        return {
+          ok: false,
+          data: { type, name, target, localInitializationRequired: true },
+          detail: `The local ${type}ctl Store is not initialized. Restore the full encrypted ${type === "mcp" ? "MCP" : "Skills"} Store from Workspace to enable Local Switches, or continue with only this Workspace selection.`
+        };
+      }
+      if (initializeLocal && localStore.missing) {
+        const selection2 = await remoteWorkspace.materializeComponent(type, name, target);
+        const restored = await initializeLocalComponentStore(type);
+        if (!restored || restored.code !== 0) {
+          const detail2 = sanitizeOutput(restored?.stderr || restored?.stdout) || `Local ${type}ctl Store restore failed`;
+          return { ok: false, data: { type, name, target }, detail: detail2 };
+        }
+        if (type === "skills") {
+          await releaseWorkspaceSkillLinks(
+            selection2,
+            target,
+            await remoteWorkspace.runtimeEnvironment()
+          );
+        }
+        const args = type === "mcp" ? ["apply", "--target", target, "--profile", name] : ["apply", "--target", target, "--pack", name, "--yes"];
+        if (type === "mcp" && force) args.push("--force");
+        const result = await runController(tools[type], args);
+        const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
+        return {
+          ok: result.code === 0,
+          data: {
+            type,
+            name,
+            target,
+            initializedLocal: result.code === 0,
+            forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
+          },
+          detail: result.code === 0 ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and applied ${name}; Local Switches are ready` : detail
+        };
+      }
+      if (!localStore.initialized && !localStore.missing && !skipLocalInitialization) {
+        return {
+          ok: false,
+          data: { type, name, target },
+          detail: localStore.detail || `Local ${type}ctl Store status is unavailable.`
+        };
+      }
     }
     if (type === "skills") {
       const remotePlan = await remoteWorkspace.componentPlan(type, name, target);
@@ -26232,7 +26349,9 @@ No remote catalog was written locally.`;
     target = "codex",
     changes = [],
     replace = false,
-    force = false
+    force = false,
+    initializeLocal = false,
+    skipLocalInitialization = false
   } = {}) {
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
@@ -26295,7 +26414,11 @@ No remote catalog was written locally.`;
     }
     const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
     if (component) {
-      return remoteComponentAction(actionName, component[1], selection, target, { force });
+      return remoteComponentAction(actionName, component[1], selection, target, {
+        force,
+        initializeLocal,
+        skipLocalInitialization
+      });
     }
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);
@@ -28307,9 +28430,28 @@ function App2({ initialSection, controller, onLaunch }) {
         target: actionTarget,
         changes: payload.changes || [],
         replace: action === "mcp-profile-update",
-        force: payload.force === true
+        force: payload.force === true,
+        initializeLocal: payload.initializeLocal === true,
+        skipLocalInitialization: payload.skipLocalInitialization === true
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
+      if (!result.ok && ["mcp-apply", "skills-apply"].includes(action) && result.data?.localInitializationRequired && payload.initializeLocal !== true && payload.skipLocalInitialization !== true) {
+        const componentLabel = action === "mcp-apply" ? "MCP" : "Skills";
+        setLastDetail(result.detail || "");
+        setMessage(`Choose how to apply this Workspace ${componentLabel} selection.`);
+        setConfirm({
+          action,
+          selection,
+          target: actionTarget,
+          initializationChoice: true,
+          label: `Initialize the local ${componentLabel} Store from Workspace`,
+          detail: `The local ${componentLabel} Store is not initialized.
+[y] restores the full encrypted Store, installs its recovery capability locally, and enables Local Switches.
+[s] applies only ${selection} from the isolated Workspace runtime.
+[n] cancels without further changes.`
+        });
+        return;
+      }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
         setLastDetail(result.detail || "");
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
@@ -28373,7 +28515,11 @@ function App2({ initialSection, controller, onLaunch }) {
   use_input_default((input, key) => {
     if (busy) return;
     if (confirm) {
-      if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
+      if (confirm.initializationChoice && (input === "y" || input === "Y")) {
+        void executeAction(confirm.action, { ...confirm, initializeLocal: true });
+      } else if (confirm.initializationChoice && (input === "s" || input === "S")) {
+        void executeAction(confirm.action, { ...confirm, skipLocalInitialization: true });
+      } else if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
       else if (input === "n" || input === "N" || key.escape) {
         setMessage("Cancelled; no changes were made.");
         setConfirm(null);
@@ -28997,7 +29143,7 @@ function App2({ initialSection, controller, onLaunch }) {
       dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), mcpProfilePrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "magenta", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, mcpProfilePrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), mcpProfilePrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, mcpProfilePrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 allowed: letters, numbers, . _ -")) : skillsPackPrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, skillsPackPrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), skillsPackPrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, skillsPackPrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 lowercase letters, numbers, single hyphens")) : confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, flexDirection: "column" }, confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: confirm.warning ? "red" : "gray" }, line)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? [y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), mcpProfilePrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "magenta", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, mcpProfilePrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), mcpProfilePrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, mcpProfilePrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 allowed: letters, numbers, . _ -")) : skillsPackPrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, skillsPackPrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), skillsPackPrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, skillsPackPrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 lowercase letters, numbers, single hyphens")) : confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, flexDirection: "column" }, confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: confirm.warning ? "red" : "gray" }, line)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? ", confirm.initializationChoice ? "[y] initialize / [s] selected only / [n] cancel" : "[y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
 }
 var options;
 try {

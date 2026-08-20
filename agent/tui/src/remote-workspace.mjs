@@ -528,6 +528,7 @@ export function createRemoteWorkspace({
   workspaceConfig = defaultConfigPath(),
   runtimeRoot = defaultRuntimeRoot(),
   localHome = homedir(),
+  localConfigHome = platformConfigHome({ home: localHome }),
   loadWorkspaceFn = loadRemoteWorkspace,
   readConfigFn = readRemoteConfig,
   statusFn = loadRemoteStatus,
@@ -751,6 +752,7 @@ export function createRemoteWorkspace({
       mcp: join(root, "mcp"),
       mcpRemote: join(root, "mcp-remote.json"),
       skills: join(root, "skills"),
+      skillsRemote: join(root, "skills-remote.json"),
       presets: join(root, "presets.json"),
       presetState: join(root, "preset-state.json"),
       promptBackups: join(root, "prompt-backups"),
@@ -764,6 +766,7 @@ export function createRemoteWorkspace({
       MCPCTL_STORE: paths.mcp,
       MCPCTL_REMOTE_CONFIG: paths.mcpRemote,
       SKILLSCTL_STORE: paths.skills,
+      SKILLSCTL_REMOTE_CONFIG: paths.skillsRemote,
       AGENTCTL_PRESETS_FILE: paths.presets,
       AGENTCTL_PRESET_STATE_FILE: paths.presetState
     };
@@ -776,6 +779,37 @@ export function createRemoteWorkspace({
       skills: await pathExists(join(paths.skills, "catalog.json")),
       presets: await pathExists(paths.presets)
     };
+  }
+
+  async function withLocalChildCapability(type, callback) {
+    if (!["mcp", "skills"].includes(type) || typeof callback !== "function") {
+      throw new RemoteWorkspaceError("local child Store restore request is invalid");
+    }
+    const { config } = await child(type);
+    const paths = await runtimePaths();
+    const stagedConfig = type === "mcp" ? paths.mcpRemote : paths.skillsRemote;
+    const localConfig = join(localConfigHome, `${type}ctl`, "remote.json");
+    let existing = null;
+    if (await pathExists(localConfig)) {
+      existing = await readRemoteConfig(localConfig);
+      validateRemoteConfig(existing, PROTOCOLS[type]);
+      if (existing.endpoint !== config.endpoint || existing.store_id !== config.store_id ||
+          existing.root_key !== config.root_key) {
+        throw new RemoteWorkspaceError(
+          `local ${type}ctl remote configuration belongs to a different encrypted Store`
+        );
+      }
+    }
+    await ensureDirectory(dirname(stagedConfig));
+    await writeJsonAtomic(stagedConfig, config);
+    const result = await callback({ remoteConfig: stagedConfig });
+    const succeeded = result &&
+      (result.ok === true || (Number.isInteger(result.code) && result.code === 0));
+    if (succeeded && !existing) {
+      await ensureDirectory(dirname(localConfig));
+      await writeJsonAtomic(localConfig, config);
+    }
+    return result;
   }
 
   async function materializeMcp(name, target) {
@@ -1062,6 +1096,7 @@ export function createRemoteWorkspace({
     selectionPlan,
     snippetSelection,
     withProviderFiles,
+    withLocalChildCapability,
     writeSnippet,
     writePrompt
   };

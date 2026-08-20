@@ -42,6 +42,13 @@ export function mcpApplyNeedsForce(value) {
     .test(String(value || ""));
 }
 
+function localComponentStoreMissing(type, value) {
+  const detail = String(value || "");
+  return type === "mcp"
+    ? /store not initialized: missing .*catalog\.json/i.test(detail)
+    : /skills store not found:|skills store is not initialized:/i.test(detail);
+}
+
 export function parseJsonOutput(result, label) {
   const output = String(result.stdout || "").trim();
   if (output) {
@@ -982,10 +989,103 @@ export function createController({
     };
   }
 
-  async function remoteComponentAction(actionName, type, name, target, { force = false } = {}) {
+  async function localComponentStoreStatus(type) {
+    const args = type === "mcp" ? ["profile", "list"] : ["list", "--json"];
+    const result = await runController(tools[type], args);
+    const detail = sanitizeOutput(result.stderr || result.stdout);
+    return {
+      initialized: result.code === 0,
+      missing: result.code !== 0 && localComponentStoreMissing(type, detail),
+      detail
+    };
+  }
+
+  async function initializeLocalComponentStore(type) {
+    if (typeof remoteWorkspace.withLocalChildCapability !== "function") {
+      throw new Error("Workspace local Store initialization is unavailable.");
+    }
+    return remoteWorkspace.withLocalChildCapability(type, async ({ remoteConfig }) => {
+      const args = type === "mcp"
+        ? ["restore", "--remote-config", remoteConfig]
+        : ["restore", "--remote-config", remoteConfig, "--yes"];
+      return runController(tools[type], args);
+    });
+  }
+
+  async function releaseWorkspaceSkillLinks(selection, target, env) {
+    if (!Array.isArray(selection.skills) || selection.skills.length === 0) return null;
+    const args = ["skill", "set", "--target", target];
+    for (const skill of selection.skills) args.push("--disable", skill);
+    args.push("--yes");
+    const result = await runController(tools.skills, args, env);
+    if (result.code !== 0) {
+      throw new Error(sanitizeOutput(result.stderr || result.stdout) ||
+        "Could not release the Workspace-managed Skill links before local initialization.");
+    }
+    return result;
+  }
+
+  async function remoteComponentAction(actionName, type, name, target, {
+    force = false,
+    initializeLocal = false,
+    skipLocalInitialization = false
+  } = {}) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
+    }
+    if (["mcp", "skills"].includes(type)) {
+      const localStore = await localComponentStoreStatus(type);
+      if (localStore.missing && !initializeLocal && !skipLocalInitialization) {
+        return {
+          ok: false,
+          data: { type, name, target, localInitializationRequired: true },
+          detail: `The local ${type}ctl Store is not initialized. Restore the full encrypted ${type === "mcp" ? "MCP" : "Skills"} Store from Workspace to enable Local Switches, or continue with only this Workspace selection.`
+        };
+      }
+      if (initializeLocal && localStore.missing) {
+        const selection = await remoteWorkspace.materializeComponent(type, name, target);
+        const restored = await initializeLocalComponentStore(type);
+        if (!restored || restored.code !== 0) {
+          const detail = sanitizeOutput(restored?.stderr || restored?.stdout) ||
+            `Local ${type}ctl Store restore failed`;
+          return { ok: false, data: { type, name, target }, detail };
+        }
+        if (type === "skills") {
+          await releaseWorkspaceSkillLinks(
+            selection,
+            target,
+            await remoteWorkspace.runtimeEnvironment()
+          );
+        }
+        const args = type === "mcp"
+          ? ["apply", "--target", target, "--profile", name]
+          : ["apply", "--target", target, "--pack", name, "--yes"];
+        if (type === "mcp" && force) args.push("--force");
+        const result = await runController(tools[type], args);
+        const detail = sanitizeOutput(result.stderr || result.stdout) ||
+          `Action failed with code ${result.code}`;
+        return {
+          ok: result.code === 0,
+          data: {
+            type,
+            name,
+            target,
+            initializedLocal: result.code === 0,
+            forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
+          },
+          detail: result.code === 0
+            ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and applied ${name}; Local Switches are ready`
+            : detail
+        };
+      }
+      if (!localStore.initialized && !localStore.missing && !skipLocalInitialization) {
+        return {
+          ok: false,
+          data: { type, name, target },
+          detail: localStore.detail || `Local ${type}ctl Store status is unavailable.`
+        };
+      }
     }
     if (type === "skills") {
       const remotePlan = await remoteWorkspace.componentPlan(type, name, target);
@@ -1114,7 +1214,9 @@ export function createController({
     target = "codex",
     changes = [],
     replace = false,
-    force = false
+    force = false,
+    initializeLocal = false,
+    skipLocalInitialization = false
   } = {}) {
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
@@ -1184,7 +1286,11 @@ export function createController({
     }
     const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
     if (component) {
-      return remoteComponentAction(actionName, component[1], selection, target, { force });
+      return remoteComponentAction(actionName, component[1], selection, target, {
+        force,
+        initializeLocal,
+        skipLocalInitialization
+      });
     }
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);

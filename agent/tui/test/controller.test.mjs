@@ -27,6 +27,9 @@ test("Workspace MCP apply reports a retryable force-adoption conflict without fo
   const calls = [];
   const runner = async (executable, args) => {
     calls.push({ executable, args });
+    if (args.join(" ") === "profile list") {
+      return { code: 0, stdout: "daily\n", stderr: "" };
+    }
     return {
       code: 1,
       stdout: "",
@@ -44,8 +47,86 @@ test("Workspace MCP apply reports a retryable force-adoption conflict without fo
   });
   assert.equal(result.ok, false);
   assert.equal(result.data.forceRequired, true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].args.includes("--force"), false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].args.includes("--force"), false);
+});
+
+test("Workspace MCP apply offers and performs full local Store initialization", async () => {
+  const calls = [];
+  let materialized = 0;
+  const runner = async (_executable, args, options = {}) => {
+    calls.push({ args, env: options.env || {} });
+    if (args.join(" ") === "profile list") {
+      return { code: 1, stdout: "", stderr: "store not initialized: missing /local/mcp/catalog.json" };
+    }
+    return { code: 0, stdout: "ok\n", stderr: "" };
+  };
+  const remoteWorkspace = {
+    materializeComponent: async () => {
+      materialized += 1;
+      return { name: "daily", target: "codex" };
+    },
+    withLocalChildCapability: async (_type, callback) => callback({
+      remoteConfig: "/runtime/mcp-remote.json"
+    })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const prompt = await controller.action("mcp-apply", {
+    selection: "daily",
+    target: "codex"
+  });
+  assert.equal(prompt.ok, false);
+  assert.equal(prompt.data.localInitializationRequired, true);
+  assert.equal(materialized, 0);
+
+  const applied = await controller.action("mcp-apply", {
+    selection: "daily",
+    target: "codex",
+    initializeLocal: true
+  });
+  assert.equal(applied.ok, true);
+  assert.equal(applied.data.initializedLocal, true);
+  assert.equal(materialized, 1);
+  assert.deepEqual(calls.slice(-2).map(({ args }) => args), [
+    ["restore", "--remote-config", "/runtime/mcp-remote.json"],
+    ["apply", "--target", "codex", "--profile", "daily"]
+  ]);
+});
+
+test("Workspace Skills initialization releases isolated links before local apply", async () => {
+  const calls = [];
+  const runner = async (_executable, args, options = {}) => {
+    calls.push({ args, env: options.env || {} });
+    if (args.join(" ") === "list --json") {
+      return { code: 1, stdout: "", stderr: "skills store not found: /local/skills" };
+    }
+    return { code: 0, stdout: "ok\n", stderr: "" };
+  };
+  const remoteWorkspace = {
+    materializeComponent: async () => ({
+      name: "frontend",
+      target: "codex",
+      skills: ["creative-frontend", "frontend-dev"]
+    }),
+    withLocalChildCapability: async (_type, callback) => callback({
+      remoteConfig: "/runtime/skills-remote.json"
+    }),
+    runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex",
+    initializeLocal: true
+  });
+  assert.equal(applied.ok, true);
+  assert.deepEqual(calls.slice(-3).map(({ args }) => args), [
+    ["restore", "--remote-config", "/runtime/skills-remote.json", "--yes"],
+    ["skill", "set", "--target", "codex", "--disable", "creative-frontend", "--disable", "frontend-dev", "--yes"],
+    ["apply", "--target", "codex", "--pack", "frontend", "--yes"]
+  ]);
+  assert.equal(calls.at(-2).env.SKILLSCTL_STORE, "/runtime/skills");
+  assert.deepEqual(calls.at(-1).env, {});
 });
 
 test("process runner bounds hung children and honors refresh cancellation", async () => {
@@ -643,6 +724,9 @@ test("remote actions plan without writes and apply through the selected runtime"
   const writes = [];
   const runner = async (executable, args, options = {}) => {
     calls.push({ executable, args, env: options.env || {} });
+    if (args.join(" ") === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
     return { code: 0, stdout: '{"ok":true}', stderr: "" };
   };
   const remoteWorkspace = {
@@ -734,6 +818,9 @@ test("Workspace Skill apply reuses an identical local Pack without crossing stor
   const calls = [];
   const runner = async (executable, args, options = {}) => {
     calls.push({ executable, args, env: options.env || {} });
+    if (args.join(" ") === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
     if (args.join(" ") === "pack show frontend --target codex") {
       return {
         code: 0,
@@ -787,6 +874,7 @@ test("Workspace Skill apply reuses an identical local Pack without crossing stor
   assert.equal(applied.data.state.pack, "frontend");
   assert.match(applied.detail, /verified active with 2 Skills/);
   assert.deepEqual(calls.map(({ args }) => args), [
+    ["list", "--json"],
     ["pack", "show", "frontend", "--target", "codex"],
     ["apply", "--target", "codex", "--pack", "frontend", "--yes"],
     ["current", "--target", "codex", "--json"]
@@ -796,6 +884,9 @@ test("Workspace Skill apply reuses an identical local Pack without crossing stor
 
 test("Workspace Skill apply does not report success when the verified local Pack differs", async () => {
   const runner = async (_executable, args) => {
+    if (args.join(" ") === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
     if (args.join(" ") === "pack show frontend --target codex") {
       return {
         code: 0,

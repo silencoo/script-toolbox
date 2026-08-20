@@ -2069,9 +2069,27 @@ function App({ initialSection, controller, onLaunch }) {
         target: actionTarget,
         changes: payload.changes || [],
         replace: action === "mcp-profile-update",
-        force: payload.force === true
+        force: payload.force === true,
+        initializeLocal: payload.initializeLocal === true,
+        skipLocalInitialization: payload.skipLocalInitialization === true
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
+      if (!result.ok && ["mcp-apply", "skills-apply"].includes(action) &&
+          result.data?.localInitializationRequired &&
+          payload.initializeLocal !== true && payload.skipLocalInitialization !== true) {
+        const componentLabel = action === "mcp-apply" ? "MCP" : "Skills";
+        setLastDetail(result.detail || "");
+        setMessage(`Choose how to apply this Workspace ${componentLabel} selection.`);
+        setConfirm({
+          action,
+          selection,
+          target: actionTarget,
+          initializationChoice: true,
+          label: `Initialize the local ${componentLabel} Store from Workspace`,
+          detail: `The local ${componentLabel} Store is not initialized.\n[y] restores the full encrypted Store, installs its recovery capability locally, and enables Local Switches.\n[s] applies only ${selection} from the isolated Workspace runtime.\n[n] cancels without further changes.`
+        });
+        return;
+      }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
         setLastDetail(result.detail || "");
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
@@ -2123,7 +2141,11 @@ function App({ initialSection, controller, onLaunch }) {
   useInput((input, key) => {
     if (busy) return;
     if (confirm) {
-      if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
+      if (confirm.initializationChoice && (input === "y" || input === "Y")) {
+        void executeAction(confirm.action, { ...confirm, initializeLocal: true });
+      } else if (confirm.initializationChoice && (input === "s" || input === "S")) {
+        void executeAction(confirm.action, { ...confirm, skipLocalInitialization: true });
+      } else if (input === "y" || input === "Y") void executeAction(confirm.action, confirm);
       else if (input === "n" || input === "N" || key.escape) {
         setMessage("Cancelled; no changes were made.");
         setConfirm(null);
@@ -2847,7 +2869,11 @@ function App({ initialSection, controller, onLaunch }) {
           {confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => (
             <Text key={`${index}-${line}`} color={confirm.warning ? "red" : "gray"}>{line}</Text>
           ))}
-          <Text color="yellow" bold>{confirm.label}? [y/N]</Text>
+          <Text color="yellow" bold>
+            {confirm.label}? {confirm.initializationChoice
+              ? "[y] initialize / [s] selected only / [n] cancel"
+              : "[y/N]"}
+          </Text>
         </Box>
       ) : (
         <Box marginTop={1} justifyContent="space-between">

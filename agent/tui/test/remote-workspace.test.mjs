@@ -202,6 +202,7 @@ async function fixture() {
     workspaceConfig: join(root, "workspace.json"),
     runtimeRoot: join(root, "runtime"),
     localHome: join(root, "home"),
+    localConfigHome: join(root, "config"),
     loadWorkspaceFn: async () => workspaceSnapshot(),
     readConfigFn: async () => masterConfig,
     statusFn: async () => ({ latest: { version: "v1" }, web_ui_enabled: true }),
@@ -214,6 +215,25 @@ async function fixture() {
   });
   return { remote, root, downloads };
 }
+
+test("successful local child restore installs only that child capability", async () => {
+  const { remote, root } = await fixture();
+  const result = await remote.withLocalChildCapability("skills", async ({ remoteConfig }) => {
+    const staged = JSON.parse(await readFile(remoteConfig, "utf8"));
+    assert.equal(staged.store_id, childConfigs.skills.store_id);
+    return { code: 0 };
+  });
+  assert.equal(result.code, 0);
+  const installed = JSON.parse(await readFile(
+    join(root, "config", "skillsctl", "remote.json"),
+    "utf8"
+  ));
+  assert.equal(installed.store_id, childConfigs.skills.store_id);
+  await assert.rejects(
+    readFile(join(root, "config", "mcpctl", "remote.json"), "utf8"),
+    { code: "ENOENT" }
+  );
+});
 
 test("remote Workspace index and catalogs never expose capabilities or Secret values", async () => {
   assert.equal(validateWorkspaceSnapshot(workspaceSnapshot()).schema, 3);
