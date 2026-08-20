@@ -9,10 +9,44 @@ import {
   normalizeMcpServerCatalog,
   normalizeSkillsCatalog,
   normalizeSnippetMetadata,
+  mcpApplyNeedsForce,
   parseJsonOutput,
   readPromptPreviewFile,
   sanitizeOutput
 } from "../src/controller.mjs";
+
+test("MCP force adoption detection accepts only the explicit ownership conflict", () => {
+  assert.equal(mcpApplyNeedsForce(
+    "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names"
+  ), true);
+  assert.equal(mcpApplyNeedsForce("missing required MCP secret"), false);
+  assert.equal(mcpApplyNeedsForce("request timed out"), false);
+});
+
+test("Workspace MCP apply reports a retryable force-adoption conflict without forcing implicitly", async () => {
+  const calls = [];
+  const runner = async (executable, args) => {
+    calls.push({ executable, args });
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names"
+    };
+  };
+  const remoteWorkspace = {
+    materializeComponent: async () => ({ name: "daily", target: "codex" }),
+    runtimeEnvironment: async () => ({ MCPCTL_STORE: "/runtime/mcp" })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const result = await controller.action("mcp-apply", {
+    selection: "daily",
+    target: "codex"
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.data.forceRequired, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.includes("--force"), false);
+});
 
 test("process runner bounds hung children and honors refresh cancellation", async () => {
   const runner = createProcessRunner({ cwd: tmpdir(), timeoutMs: 30 });
@@ -669,6 +703,16 @@ test("remote actions plan without writes and apply through the selected runtime"
   assert.deepEqual(writes, ["materialize:skills:frontend:claude"]);
   assert.deepEqual(calls.at(-1).args, ["apply", "--target", "claude", "--pack", "frontend", "--yes"]);
   assert.equal(calls.at(-1).env.MCPCTL_STORE, "/runtime/mcp");
+
+  const forcedMcp = await controller.action("mcp-apply", {
+    selection: "frontend",
+    target: "codex",
+    force: true
+  });
+  assert.equal(forcedMcp.ok, true);
+  assert.deepEqual(calls.at(-1).args, [
+    "apply", "--target", "codex", "--profile", "frontend", "--force"
+  ]);
 
   const snippetPlan = await controller.action("snippets-plan", { selection: "review-code" });
   assert.match(snippetPlan.detail, /content remains hidden/);

@@ -159,7 +159,16 @@ done
 grep -q '^release_id=test-v2$' "$RUNTIME/.script-toolbox-agent-runtime" ||
   fail "standalone update did not replace runtime metadata"
 
-"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v2 --yes \
+# Windows cannot rename a runtime while its updater script is still open.
+# Exercise the in-memory handoff on every platform so the Windows-only path
+# cannot regress into recursion or lose update arguments.
+SCRIPT_TOOLBOX_UPDATE_PLATFORM=windows \
+  "$PREFIX/agentctl" update --yes \
+    --source "$REPO_ROOT" --release-id test-v3 >"$TEST_ROOT/update-windows-handoff.out" 2>&1
+grep -q '^release_id=test-v3$' "$RUNTIME/.script-toolbox-agent-runtime" ||
+  fail "Windows in-memory update handoff did not replace runtime metadata"
+
+"$INSTALLER" --prefix "$PREFIX" --runtime "$RUNTIME" --release-id test-v3 --yes \
   >"$TEST_ROOT/reinstall.out" 2>&1
 grep -q "keep     $PREFIX/agentctl" "$TEST_ROOT/reinstall.out" ||
   fail "standalone reinstall was not link-idempotent"

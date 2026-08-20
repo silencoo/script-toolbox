@@ -10,6 +10,32 @@ DEFAULT_REPOSITORY="silencoo/script-toolbox"
 REPOSITORY="${SCRIPT_TOOLBOX_UPDATE_REPOSITORY:-$DEFAULT_REPOSITORY}"
 CALLER="${SCRIPT_TOOLBOX_UPDATE_CALLER:-agentctl}"
 
+# Windows may deny renaming the standalone runtime while Bash is still reading
+# this updater from inside it. Re-exec the script body from Bash's in-memory
+# command string before staging or replacing any runtime files. The original
+# script handle is closed by exec, while $0 keeps path/default resolution
+# identical. The guard makes the handoff single-shot.
+if [ "${SCRIPT_TOOLBOX_UPDATE_IN_MEMORY:-0}" != 1 ]; then
+  update_apply_requested=0
+  for update_argument in "$@"; do
+    case "$update_argument" in --yes|-y) update_apply_requested=1 ;; esac
+  done
+  update_platform="${SCRIPT_TOOLBOX_UPDATE_PLATFORM:-$(uname -s 2>/dev/null || true)}"
+  case "$update_platform" in
+    MINGW*|MSYS*|CYGWIN*|windows)
+      if [ "$update_apply_requested" = 1 ]; then
+        update_script_body="$(cat "$0")" || {
+          printf '✗ could not prepare the Windows updater handoff\n' >&2
+          exit 1
+        }
+        SCRIPT_TOOLBOX_UPDATE_IN_MEMORY=1 \
+          exec bash -c "$update_script_body" "$0" "$@"
+      fi
+      ;;
+  esac
+fi
+unset update_apply_requested update_argument update_platform update_script_body
+
 # shellcheck source=ctl-lib.sh
 . "${SCRIPT_DIR}/ctl-lib.sh"
 

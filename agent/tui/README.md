@@ -139,6 +139,12 @@ because promptctl needs that editable local source. Whole child-Store pulls
 remain explicit CLI operations; the Providers view exposes only the bounded
 agent-bundle upload and merge-restore operations described above.
 
+When a first Workspace MCP apply finds same-name client entries that are not
+owned by mcpctl, it remains fail-closed and shows a second, explicit adoption
+confirmation. Accepting that prompt retries with `--force`, which replaces
+only those same-name MCP entries and preserves unrelated client configuration.
+Other MCP failures never offer or trigger a forced retry.
+
 The Providers detail pane reports the resolved compaction behavior as one
 plain-language value: `Remote · native`, `Messages · Anthropic beta`, or a
 local fallback. This is derived from Provider Store schema 2 capability and

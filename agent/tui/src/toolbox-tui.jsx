@@ -2068,9 +2068,24 @@ function App({ initialSection, controller, onLaunch }) {
           : snapshot?.presetSource || "local",
         target: actionTarget,
         changes: payload.changes || [],
-        replace: action === "mcp-profile-update"
+        replace: action === "mcp-profile-update",
+        force: payload.force === true
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
+      if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
+        setLastDetail(result.detail || "");
+        setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
+        setConfirm({
+          action,
+          selection,
+          target: actionTarget,
+          force: true,
+          warning: true,
+          label: `Replace only same-name MCP entries with Workspace ${selection}`,
+          detail: "The target already contains matching MCP names that mcpctl does not own.\nContinuing with --force replaces only those same-name entries; unrelated MCP configuration is preserved."
+        });
+        return;
+      }
       setMessage(result.ok
         ? action === "skills-apply" && firstDetailLine
           ? `Done: ${firstDetailLine}`

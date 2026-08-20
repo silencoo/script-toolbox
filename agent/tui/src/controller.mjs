@@ -37,6 +37,11 @@ export function sanitizeOutput(value) {
     .trim();
 }
 
+export function mcpApplyNeedsForce(value) {
+  return /same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names/i
+    .test(String(value || ""));
+}
+
 export function parseJsonOutput(result, label) {
   const output = String(result.stdout || "").trim();
   if (output) {
@@ -977,7 +982,7 @@ export function createController({
     };
   }
 
-  async function remoteComponentAction(actionName, type, name, target) {
+  async function remoteComponentAction(actionName, type, name, target, { force = false } = {}) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
@@ -1050,14 +1055,22 @@ export function createController({
         : type === "skills"
           ? ["apply", "--target", target, "--pack", name, "--yes"]
           : ["apply", "--target", target, "--profile", name, "--yes"];
+      if (type === "mcp" && force) args.push("--force");
       const result = await runController(tools[type], args, env);
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection);
+      const detail = sanitizeOutput(result.stderr || result.stdout) ||
+        `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: { type, name, target },
+        data: {
+          type,
+          name,
+          target,
+          forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
+        },
         detail: result.code === 0
           ? `${name} applied from Workspace; start a new ${target} session`
-          : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+          : detail
       };
     } catch (error) {
       if (promptWritten) await remoteWorkspace.restorePrompt(selection).catch(() => {});
@@ -1100,7 +1113,8 @@ export function createController({
     source = "local",
     target = "codex",
     changes = [],
-    replace = false
+    replace = false,
+    force = false
   } = {}) {
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
@@ -1169,7 +1183,9 @@ export function createController({
       };
     }
     const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
-    if (component) return remoteComponentAction(actionName, component[1], selection, target);
+    if (component) {
+      return remoteComponentAction(actionName, component[1], selection, target, { force });
+    }
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);
     }

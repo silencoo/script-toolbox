@@ -1,5 +1,17 @@
 # Changelog — agent/
 
+## 2026-08-20 — guided Workspace MCP adoption
+
+- Workspace MCP apply in the unified TUI now recognizes mcpctl's exact
+  same-name ownership conflict and offers a second explicit confirmation to
+  retry with `--force`. The forced retry replaces only those same-name MCP
+  entries, preserves unrelated client configuration, and is never offered for
+  other failures.
+- Fixed `agentctl update --yes` and the other shared updater entrypoints on
+  Windows by handing the updater body to an in-memory Bash process before the
+  standalone runtime transaction. The running updater no longer keeps its own
+  runtime file open while the installer atomically renames that directory.
+
 ## 2026-08-16 — clearer Skill switching and compact Provider views
 
 - Added a `Current → Selected` comparison to the TUI Workspace Skill Pack

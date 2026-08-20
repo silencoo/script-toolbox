@@ -799,6 +799,11 @@ promptctl update --yes
 skillsctl update --yes
 ```
 
+On Git for Windows/MSYS2, an applying update first re-executes the updater body
+in memory so the installed runtime script is no longer open when its directory
+is atomically replaced. No administrator shell or manual permission change is
+required for a user-owned installation.
+
 For development, `--link` keeps repository-backed links instead:
 
 ```bash

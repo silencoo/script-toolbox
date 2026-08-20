@@ -25225,6 +25225,9 @@ function wait(milliseconds) {
 function sanitizeOutput(value) {
   return String(value || "").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[redacted]").replace(/(["']?\b(?:(?:x[_-])?api[_-]?key|key|client[_-]?secret|private[_-]?key|subscription[_-]?key|auth[_-]?token|access[_-]?token|token|password|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, "$1[redacted]").trim();
 }
+function mcpApplyNeedsForce(value) {
+  return /same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names/i.test(String(value || ""));
+}
 function parseJsonOutput(result, label) {
   const output = String(result.stdout || "").trim();
   if (output) {
@@ -26082,7 +26085,7 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : sanitizeOutput(result.stderr || result.stdout) || `Skills Store backup failed with code ${result.code}`
     };
   }
-  async function remoteComponentAction(actionName, type, name, target) {
+  async function remoteComponentAction(actionName, type, name, target, { force = false } = {}) {
     if (actionName.endsWith("-plan")) {
       const plan = await remoteWorkspace.componentPlan(type, name, target);
       return { ok: true, data: plan, detail: planDetail(plan) };
@@ -26148,12 +26151,19 @@ No remote catalog was written locally.`;
         promptWritten = true;
       }
       const args = type === "mcp" ? ["apply", "--target", target, "--profile", name] : type === "skills" ? ["apply", "--target", target, "--pack", name, "--yes"] : ["apply", "--target", target, "--profile", name, "--yes"];
+      if (type === "mcp" && force) args.push("--force");
       const result = await runController(tools[type], args, env3);
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection);
+      const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: { type, name, target },
-        detail: result.code === 0 ? `${name} applied from Workspace; start a new ${target} session` : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+        data: {
+          type,
+          name,
+          target,
+          forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
+        },
+        detail: result.code === 0 ? `${name} applied from Workspace; start a new ${target} session` : detail
       };
     } catch (error) {
       if (promptWritten) await remoteWorkspace.restorePrompt(selection).catch(() => {
@@ -26202,7 +26212,8 @@ No remote catalog was written locally.`;
     source = "local",
     target = "codex",
     changes = [],
-    replace = false
+    replace = false,
+    force = false
   } = {}) {
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
@@ -26264,7 +26275,9 @@ No remote catalog was written locally.`;
       };
     }
     const component = /^(mcp|skills|prompts|snippets)-(plan|apply)$/.exec(actionName);
-    if (component) return remoteComponentAction(actionName, component[1], selection, target);
+    if (component) {
+      return remoteComponentAction(actionName, component[1], selection, target, { force });
+    }
     if (source === "cloud" && (actionName === "plan" || actionName === "apply")) {
       return remotePresetAction(actionName, preset, target);
     }
@@ -28274,9 +28287,24 @@ function App2({ initialSection, controller, onLaunch }) {
         source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
         target: actionTarget,
         changes: payload.changes || [],
-        replace: action === "mcp-profile-update"
+        replace: action === "mcp-profile-update",
+        force: payload.force === true
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
+      if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
+        setLastDetail(result.detail || "");
+        setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
+        setConfirm({
+          action,
+          selection,
+          target: actionTarget,
+          force: true,
+          warning: true,
+          label: `Replace only same-name MCP entries with Workspace ${selection}`,
+          detail: "The target already contains matching MCP names that mcpctl does not own.\nContinuing with --force replaces only those same-name entries; unrelated MCP configuration is preserved."
+        });
+        return;
+      }
       setMessage(result.ok ? action === "skills-apply" && firstDetailLine ? `Done: ${firstDetailLine}` : `Done: ${actionLabel(action, selection, actionTarget)}` : `Failed: ${firstDetailLine || actionLabel(action, selection, actionTarget)}`);
       setLastDetail(result.detail || "");
       if (localMcpAction) {

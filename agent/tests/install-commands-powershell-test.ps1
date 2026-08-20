@@ -74,6 +74,26 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
     Assert-True ($version -eq 'agentctl 0.17.4') "agentctl.cmd returned an unexpected version: $version"
 
+    # The updater must leave its installed runtime before asking the shared
+    # installer to rename it. Windows otherwise reports access denied while
+    # the updater script is still open inside that directory.
+    $cygpathCandidates = @(
+        (Join-Path (Split-Path -Parent $Bash) 'cygpath.exe'),
+        (Join-Path (Split-Path -Parent $Bash) '..\usr\bin\cygpath.exe')
+    )
+    $Cygpath = $cygpathCandidates | Where-Object {
+        Test-Path -LiteralPath $_ -PathType Leaf
+    } | Select-Object -First 1
+    Assert-True (-not [string]::IsNullOrWhiteSpace($Cygpath)) 'could not locate cygpath for update test'
+    $RepoRoot = [IO.Path]::GetFullPath((Join-Path $AgentDir '..'))
+    $RepoRootMsys = ([string](& $Cygpath -u -- $RepoRoot | Select-Object -Last 1)).Trim()
+    $updateOutput = & (Join-Path $Prefix 'agentctl.cmd') update --yes `
+        --source $RepoRootMsys --release-id powershell-test-v2 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -eq 0) "agentctl update failed on Windows: $updateOutput"
+    $runtimeMarker = Get-Content -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -Raw
+    Assert-True ($runtimeMarker -match '(?m)^release_id=powershell-test-v2$') `
+        'agentctl update did not replace the Windows runtime metadata'
+
     $agentctlShim = Join-Path $Prefix 'agentctl.cmd'
     $shimHashBefore = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash
     $reinstallArguments = $common.Clone()
