@@ -11,6 +11,11 @@
   Windows by handing the updater body to an in-memory Bash process before the
   standalone runtime transaction. The running updater no longer keeps its own
   runtime file open while the installer atomically renames that directory.
+- Fixed Workspace and standalone Skills restoration on Windows when a snapshot
+  contains a shebang script recorded without a Unix execute bit. Restored
+  catalogs now record the checksum of the platform-materialized files, so a
+  valid cloud Skill such as `frontend-dev` is not immediately misreported as
+  having changed outside skillsctl.
 
 ## 2026-08-16 — clearer Skill switching and compact Provider views
 

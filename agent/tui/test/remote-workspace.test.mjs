@@ -8,10 +8,36 @@ import test from "node:test";
 import { decryptValue } from "../../remote-store.mjs";
 import {
   createRemoteWorkspace,
+  materializedSkillDigest,
   mcpSelection,
   skillSelection,
   validateWorkspaceSnapshot
 } from "../src/remote-workspace.mjs";
+
+test("Windows materialized Skill digests normalize shebang files to executable mode", () => {
+  const files = {
+    "SKILL.md": {
+      encoding: "base64",
+      content: Buffer.from("---\nname: portable\ndescription: Portable\n---\n").toString("base64"),
+      mode: 0o600
+    },
+    "scripts/check.py": {
+      encoding: "base64",
+      content: Buffer.from("#!/usr/bin/env python3\n").toString("base64"),
+      mode: 0o600
+    }
+  };
+  assert.notEqual(
+    materializedSkillDigest(files, "win32"),
+    materializedSkillDigest(files, "darwin")
+  );
+  const executableFiles = structuredClone(files);
+  executableFiles["scripts/check.py"].mode = 0o700;
+  assert.equal(
+    materializedSkillDigest(files, "win32"),
+    materializedSkillDigest(executableFiles, "darwin")
+  );
+});
 
 const secretValue = "never-render-this-secret";
 const childConfigs = Object.fromEntries(["mcp", "skills", "prompts"].map((type, index) => [

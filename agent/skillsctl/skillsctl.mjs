@@ -1538,7 +1538,11 @@ async function writeSnapshotToStore(storePath, snapshot, force) {
   const backup = `${resolvedStore}.restore-backup-${suffix}`;
   await mkdirStoreLayout(stage);
   try {
-    await writeJsonAtomic(join(stage, "catalog.json"), snapshot.catalog);
+    const restoredCatalog = structuredClone(snapshot.catalog);
+    for (const [name, skill] of Object.entries(snapshot.skills)) {
+      restoredCatalog.skills[name].sha256 = materializedSnapshotSkillDigest(skill.files);
+    }
+    await writeJsonAtomic(join(stage, "catalog.json"), restoredCatalog);
     for (const [name, pack] of Object.entries(snapshot.packs)) {
       await writeJsonAtomic(packPath(stage, name), pack);
     }
@@ -1600,6 +1604,21 @@ async function writeSnapshotToStore(storePath, snapshot, force) {
   } else if (backupCreated) {
     await rm(backup, { recursive: true, force: true });
   }
+}
+
+function materializedSnapshotSkillDigest(files) {
+  const hash = createHash("sha256");
+  for (const [path, file] of Object.entries(files)
+    .sort(([left], [right]) => left.localeCompare(right))) {
+    const content = decodeCanonicalBase64(file.content, path);
+    hash.update(path);
+    hash.update("\0");
+    hash.update(String(sanitizeMode(file.mode, content)));
+    hash.update("\0");
+    hash.update(content);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 async function inspectSkillDirectory(directory, expectedName, includeContent = false) {

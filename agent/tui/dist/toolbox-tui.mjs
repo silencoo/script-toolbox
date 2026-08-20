@@ -24613,6 +24613,22 @@ function decodeFile(file, label) {
   }
   return bytes;
 }
+function materializedSkillDigest(files, platform2 = process.platform) {
+  const hash = createHash("sha256");
+  for (const [path, file] of Object.entries(files).sort(([left], [right]) => left.localeCompare(right))) {
+    validateRelativePath(path);
+    const bytes = decodeFile(file, path);
+    const portableShebang = platform2 === "win32" && bytes.length >= 2 && bytes[0] === 35 && bytes[1] === 33;
+    const mode = (file.mode & 73) !== 0 || portableShebang ? 448 : 384;
+    hash.update(path);
+    hash.update("\0");
+    hash.update(String(mode));
+    hash.update("\0");
+    hash.update(bytes);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
 async function writeSkill(runtime, name, skill) {
   assertName(name, SKILL_NAME, "Skill name");
   const root = join3(runtime, "skills");
@@ -24974,7 +24990,10 @@ function createRemoteWorkspace({
     }
     for (const skill of selection.skills) {
       await writeSkill(paths.skills, skill, snapshot.skills[skill]);
-      catalog2.skills[skill] = snapshot.catalog.skills[skill];
+      catalog2.skills[skill] = {
+        ...snapshot.catalog.skills[skill],
+        sha256: materializedSkillDigest(snapshot.skills[skill].files)
+      };
     }
     await writeJsonAtomic(catalogPath, catalog2);
     for (const pack of selection.packs) {
