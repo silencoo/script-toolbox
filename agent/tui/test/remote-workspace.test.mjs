@@ -325,7 +325,9 @@ test("remote Provider actions use selected owner-only temporary files and clean 
     });
     assert.deepEqual(Object.keys(secrets.secrets), ["gateway_key"]);
     assert.equal(secrets.secrets.gateway_key.value, secretValue);
-    assert.equal((await lstat(secretsPath)).mode & 0o077, 0);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(secretsPath)).mode & 0o077, 0);
+    }
   });
   await assert.rejects(() => lstat(temporary), { code: "ENOENT" });
 });

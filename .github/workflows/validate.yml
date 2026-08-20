@@ -148,6 +148,7 @@ jobs:
       - name: Test Promptctl advanced Codex deployer on Windows
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
       - name: Test portable agent TUI bundle on Windows
+        shell: bash
         run: |
           node --test agent/tui/test/*.test.mjs
           node agent/tui/dist/toolbox-tui.mjs --help

@@ -253,7 +253,8 @@ export function createProcessRunner({
 export function createController({
   agentRoot = defaultAgentRoot,
   runner,
-  remoteWorkspace = createRemoteWorkspace()
+  remoteWorkspace = createRemoteWorkspace(),
+  platform = process.platform
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
   const orchestrator = join(agentRoot, "agentctl", "orchestrator-client.mjs");
@@ -280,7 +281,7 @@ export function createController({
   }
 
   function controllerCommand(executable, args) {
-    return bashScriptCommand(executable, args);
+    return bashScriptCommand(executable, args, { platform });
   }
 
   async function runJson(script, args, label, env = {}, runOptions = {}) {
@@ -1313,7 +1314,7 @@ export function createController({
     }
   }
 
-  async function action(actionName, {
+  async function dispatchAction(actionName, {
     agent = "",
     preset = "",
     selection = "",
@@ -1442,6 +1443,53 @@ export function createController({
       detail: result.code === 0 ? successDetail :
         sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
+  }
+
+  async function locateSkillsDriftScope(name, actionName, options) {
+    const local = await runController(tools.skills, ["list", "--json"]);
+    const localDetail = sanitizeOutput(local.stderr || local.stdout);
+    if (skillsCatalogDriftName(localDetail) === name) return "local";
+
+    const workspaceAction = actionName === "skills-apply" ||
+      (options?.source === "cloud" && ["plan", "apply"].includes(actionName));
+    if (workspaceAction && typeof remoteWorkspace.runtimeEnvironment === "function") {
+      try {
+        const env = await remoteWorkspace.runtimeEnvironment();
+        const staged = await runController(tools.skills, ["list", "--json"], env);
+        const stagedDetail = sanitizeOutput(staged.stderr || staged.stdout);
+        if (skillsCatalogDriftName(stagedDetail) === name) return "workspace";
+      } catch {
+        // The original exact diagnostic remains authoritative. Scope falls
+        // back to the action boundary when the staging runtime cannot probe.
+      }
+    }
+    return workspaceAction ? "workspace" : "local";
+  }
+
+  async function action(actionName, options = {}) {
+    try {
+      const result = await dispatchAction(actionName, options);
+      if (result?.ok || result?.data?.skillDriftRepairRequired) return result;
+      const detail = sanitizeOutput(result?.detail || "");
+      const name = skillsCatalogDriftName(detail);
+      if (!name) return result;
+      const scope = await locateSkillsDriftScope(name, actionName, options);
+      return {
+        ...result,
+        data: withSkillsDrift(result?.data || {}, detail, scope),
+        detail
+      };
+    } catch (error) {
+      const detail = sanitizeOutput(error?.message || error);
+      const name = skillsCatalogDriftName(detail);
+      if (!name) throw error;
+      const scope = await locateSkillsDriftScope(name, actionName, options);
+      return {
+        ok: false,
+        data: withSkillsDrift({}, detail, scope),
+        detail
+      };
+    }
   }
 
   return {

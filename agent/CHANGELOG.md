@@ -30,6 +30,14 @@
   --yes`, and retries the original action. Each changed Skill is confirmed
   separately; accepting one checksum never rewrites files or accepts unrelated
   drift. Bumped `skillsctl` to 0.4.3.
+- Fixed the Windows verification gap behind that recovery flow. The controller
+  action boundary now converts any exact skillsctl drift diagnostic, including
+  one thrown before a specialized handler returns, into the same scoped
+  confirmation. A real Git Bash-style process test creates and edits a
+  `cloudflare` Skill, verifies the guided response, accepts the checksum, and
+  retries the original action through the actual skillsctl entrypoint. Windows
+  TUI tests now run under fail-fast Bash instead of allowing a later `--help`
+  command to hide Node test failures. Bumped `agentctl` to 0.17.5.
 
 ## 2026-08-16 — clearer Skill switching and compact Provider views
 

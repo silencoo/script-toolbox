@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  createController,
+  createController as createControllerForPlatform,
   createProcessRunner,
   normalizeMcpServerCatalog,
   normalizeSkillsCatalog,
@@ -15,6 +15,14 @@ import {
   sanitizeOutput,
   skillsCatalogDriftName
 } from "../src/controller.mjs";
+
+// Unit runners assert controller argv rather than spawning Git Bash. Keep
+// those assertions platform-neutral; process-integration.test.mjs exercises
+// the real win32 Bash argv boundary with actual controller processes.
+const createController = (options) => createControllerForPlatform({
+  ...options,
+  platform: "linux"
+});
 
 test("MCP force adoption detection accepts only the explicit ownership conflict", () => {
   assert.equal(mcpApplyNeedsForce(
@@ -119,6 +127,25 @@ test("Workspace Preset apply identifies drift in the isolated Skills runtime", a
   });
   assert.equal(retried.ok, true);
   assert.equal(calls.at(-2).env.SKILLSCTL_STORE, "/runtime/skills");
+});
+
+test("Action boundary converts an otherwise thrown checksum diagnostic into a guided retry", async () => {
+  const drift = "skill 'cloudflare' changed outside skillsctl; re-add it to update the catalog checksum";
+  const runner = async () => ({ code: 1, stdout: "", stderr: "skills store not found" });
+  const remoteWorkspace = {
+    materializePreset: async () => { throw new Error(drift); },
+    runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const result = await controller.action("apply", {
+    preset: "daily",
+    source: "cloud",
+    target: "codex"
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.data.skillDriftRepairRequired, true);
+  assert.equal(result.data.skillDriftName, "cloudflare");
+  assert.equal(result.data.skillDriftScope, "workspace");
 });
 
 test("Workspace MCP apply reports a retryable force-adoption conflict without forcing implicitly", async () => {

@@ -25468,7 +25468,8 @@ function createProcessRunner({
 function createController({
   agentRoot = defaultAgentRoot,
   runner,
-  remoteWorkspace = createRemoteWorkspace()
+  remoteWorkspace = createRemoteWorkspace(),
+  platform: platform2 = process.platform
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
   const orchestrator = join4(agentRoot, "agentctl", "orchestrator-client.mjs");
@@ -25493,7 +25494,7 @@ function createController({
     }
   }
   function controllerCommand(executable, args) {
-    return bashScriptCommand(executable, args);
+    return bashScriptCommand(executable, args, { platform: platform2 });
   }
   async function runJson(script, args, label, env3 = {}, runOptions = {}) {
     return parseJsonOutput(
@@ -25552,7 +25553,7 @@ function createController({
       runAgentctlJson(["proxy", "usage", "--summary", "--json"], "proxy usage")
     ]);
     const status = providerStatus.data || {};
-    const platform2 = status.platform || process.platform;
+    const platform3 = status.platform || process.platform;
     const profiles = Array.isArray(providerList.data) ? providerList.data : [];
     const errors = [
       ["Provider status", providerStatus],
@@ -25565,7 +25566,7 @@ function createController({
     return {
       schema: 1,
       target,
-      platform: platform2,
+      platform: platform3,
       profiles,
       status,
       failover: failover.data || { status: "unavailable", routes: 0 },
@@ -26422,7 +26423,7 @@ No remote catalog was written locally.`;
       throw error;
     }
   }
-  async function action(actionName, {
+  async function dispatchAction(actionName, {
     agent = "",
     preset = "",
     selection = "",
@@ -26541,6 +26542,47 @@ No remote catalog was written locally.`;
       ),
       detail: result.code === 0 ? successDetail : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
+  }
+  async function locateSkillsDriftScope(name, actionName, options2) {
+    const local = await runController(tools.skills, ["list", "--json"]);
+    const localDetail = sanitizeOutput(local.stderr || local.stdout);
+    if (skillsCatalogDriftName(localDetail) === name) return "local";
+    const workspaceAction = actionName === "skills-apply" || options2?.source === "cloud" && ["plan", "apply"].includes(actionName);
+    if (workspaceAction && typeof remoteWorkspace.runtimeEnvironment === "function") {
+      try {
+        const env3 = await remoteWorkspace.runtimeEnvironment();
+        const staged = await runController(tools.skills, ["list", "--json"], env3);
+        const stagedDetail = sanitizeOutput(staged.stderr || staged.stdout);
+        if (skillsCatalogDriftName(stagedDetail) === name) return "workspace";
+      } catch {
+      }
+    }
+    return workspaceAction ? "workspace" : "local";
+  }
+  async function action(actionName, options2 = {}) {
+    try {
+      const result = await dispatchAction(actionName, options2);
+      if (result?.ok || result?.data?.skillDriftRepairRequired) return result;
+      const detail = sanitizeOutput(result?.detail || "");
+      const name = skillsCatalogDriftName(detail);
+      if (!name) return result;
+      const scope = await locateSkillsDriftScope(name, actionName, options2);
+      return {
+        ...result,
+        data: withSkillsDrift(result?.data || {}, detail, scope),
+        detail
+      };
+    } catch (error) {
+      const detail = sanitizeOutput(error?.message || error);
+      const name = skillsCatalogDriftName(detail);
+      if (!name) throw error;
+      const scope = await locateSkillsDriftScope(name, actionName, options2);
+      return {
+        ok: false,
+        data: withSkillsDrift({}, detail, scope),
+        detail
+      };
+    }
   }
   return {
     snapshot,
