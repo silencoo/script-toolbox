@@ -24,6 +24,12 @@ const createController = (options) => createControllerForPlatform({
   platform: "linux"
 });
 
+// node:path uses the host separator even when the mocked controller command is
+// pinned to Unix execution semantics. Normalize only for executable identity
+// checks so these unit runners behave the same on Linux, macOS, and Windows.
+const controllerExecutableIs = (executable, name) =>
+  String(executable).replaceAll("\\", "/").endsWith(`/${name}`);
+
 test("MCP force adoption detection accepts only the explicit ownership conflict", () => {
   assert.equal(mcpApplyNeedsForce(
     "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names"
@@ -733,7 +739,7 @@ test("Prompt content is loaded only through an explicit local or Workspace previ
   const path = join(root, "personal.md");
   await writeFile(path, "Local preview body.\n", { mode: 0o600 });
   const runner = async (executable, args) => {
-    if (executable.endsWith("/promptctl") && args[0] === "path") {
+    if (controllerExecutableIs(executable, "promptctl") && args[0] === "path") {
       return { code: 0, stdout: JSON.stringify({ codex: path }), stderr: "" };
     }
     return { code: 0, stdout: "{}", stderr: "" };
@@ -760,14 +766,14 @@ test("controller composes snapshot and confirmed preset action commands", async 
   const calls = [];
   const runner = async (executable, args) => {
     calls.push(args.slice(1));
-    if (executable.endsWith("/promptctl") && args[0] === "snippet") {
+    if (controllerExecutableIs(executable, "promptctl") && args[0] === "snippet") {
       return {
         code: 0,
         stdout: '[{"name":"review-code","path":"/snippets/review-code.md","state":"regular"}]',
         stderr: ""
       };
     }
-    if (executable.endsWith("/agentctl") && args.includes("status")) {
+    if (controllerExecutableIs(executable, "agentctl") && args.includes("status")) {
       return { code: 0, stdout: '[{"client":"codex","provider_status":"configured"}]', stderr: "" };
     }
     if (args.includes("doctor")) return { code: 1, stdout: '{"healthy":false,"targets":[]}', stderr: "" };
@@ -806,10 +812,10 @@ test("local snapshot publishes account and agent state before Workspace hydratio
   const remoteIndex = new Promise((resolve) => { resolveWorkspace = resolve; });
   const runner = async (executable, args) => {
     const command = args.join(" ");
-    if (executable.endsWith("/promptctl") && command === "snippet list --json") {
+    if (controllerExecutableIs(executable, "promptctl") && command === "snippet list --json") {
       return { code: 0, stdout: '[{"name":"review-code","path":"/snippets/review-code.md","state":"regular"}]', stderr: "" };
     }
-    if (executable.endsWith("/agentctl") && command === "status all --json") {
+    if (controllerExecutableIs(executable, "agentctl") && command === "status all --json") {
       return {
         code: 0,
         stdout: JSON.stringify([{
@@ -820,7 +826,7 @@ test("local snapshot publishes account and agent state before Workspace hydratio
         stderr: ""
       };
     }
-    if (executable.endsWith("/agentctl") && command === "account status --json") {
+    if (controllerExecutableIs(executable, "agentctl") && command === "account status --json") {
       return {
         code: 0,
         stdout: JSON.stringify({
