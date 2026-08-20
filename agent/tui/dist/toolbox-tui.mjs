@@ -25279,6 +25279,10 @@ function sanitizeOutput(value) {
 function mcpApplyNeedsForce(value) {
   return /same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names/i.test(String(value || ""));
 }
+function skillsCatalogDriftName(value) {
+  const match = /skill '([a-z0-9]+(?:-[a-z0-9]+)*)' changed outside skillsctl; re-add it to update the catalog checksum/i.exec(String(value || ""));
+  return match?.[1] || "";
+}
 function localComponentStoreMissing(type, value) {
   const detail = String(value || "");
   return type === "mcp" ? /store not initialized: missing .*catalog\.json/i.test(detail) : /skills store not found:|skills store is not initialized:/i.test(detail);
@@ -25510,6 +25514,32 @@ function createController({
   }
   async function runAgentctlJson(args, label, runOptions = {}) {
     return runControllerJson(agentctl, args, label, {}, runOptions);
+  }
+  function withSkillsDrift(data, detail, scope) {
+    const skill = skillsCatalogDriftName(detail);
+    return skill ? {
+      ...data,
+      skillDriftRepairRequired: true,
+      skillDriftName: skill,
+      skillDriftScope: scope
+    } : data;
+  }
+  async function acceptSkillsDrift(request2) {
+    if (!request2 || typeof request2 !== "object" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(request2.name || "") || !["local", "workspace"].includes(request2.scope)) {
+      throw new Error("The Skill checksum acceptance request is invalid.");
+    }
+    const env3 = request2.scope === "workspace" ? await remoteWorkspace.runtimeEnvironment() : {};
+    const result = await runController(
+      tools.skills,
+      ["skill", "accept", request2.name, "--yes"],
+      env3
+    );
+    const detail = sanitizeOutput(result.stderr || result.stdout) || `Skill checksum acceptance failed with code ${result.code}`;
+    return {
+      ok: result.code === 0,
+      data: result.code === 0 ? { acceptedSkillDrift: request2 } : withSkillsDrift({ acceptedSkillDrift: null }, detail, request2.scope),
+      detail
+    };
   }
   async function providerDashboard(target = "codex") {
     if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Provider target: ${target}`);
@@ -26021,10 +26051,11 @@ No remote catalog was written locally.`;
       pack,
       "--yes"
     ]);
+    const detail = sanitizeOutput(result.stderr || result.stdout) || `Skills repair failed with code ${result.code}`;
     return {
       ok: result.code === 0,
-      data: { pack, target },
-      detail: result.code === 0 ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.` : sanitizeOutput(result.stderr || result.stdout) || `Skills repair failed with code ${result.code}`
+      data: result.code === 0 ? { pack, target } : withSkillsDrift({ pack, target }, detail, "local"),
+      detail: result.code === 0 ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.` : detail
     };
   }
   async function localSkillsState(target) {
@@ -26083,7 +26114,11 @@ No remote catalog was written locally.`;
     const state = result.ok && result.data?.target === target ? result.data : null;
     return {
       ok: Boolean(state),
-      data: { target, changes: normalized, state },
+      data: state ? { target, changes: normalized, state } : withSkillsDrift(
+        { target, changes: normalized, state },
+        result.error || "",
+        "local"
+      ),
       detail: state ? `${normalized.length} Skill change(s) were written for ${target} in one skillsctl transaction; other clients and the canonical Store were preserved.` : result.error || "Skills batch update did not return the updated local state."
     };
   }
@@ -26108,10 +26143,11 @@ No remote catalog was written locally.`;
     if (replace) saveArgs.push("--force");
     const saved = await runController(tools.skills, saveArgs);
     if (saved.code !== 0) {
+      const detail = sanitizeOutput(saved.stderr || saved.stdout) || `Skill Pack save failed with code ${saved.code}`;
       return {
         ok: false,
-        data: { pack, target },
-        detail: sanitizeOutput(saved.stderr || saved.stdout) || `Skill Pack save failed with code ${saved.code}`
+        data: withSkillsDrift({ pack, target }, detail, "local"),
+        detail
       };
     }
     const applied = await runController(tools.skills, [
@@ -26123,10 +26159,11 @@ No remote catalog was written locally.`;
       "--yes"
     ]);
     const state = applied.code === 0 ? await localSkillsState(target) : null;
+    const failedDetail = state ? "" : sanitizeOutput(applied.stderr || applied.stdout) || `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`;
     return {
       ok: Boolean(state),
-      data: { pack, target, state },
-      detail: state ? `The current ${target} Skill selection was saved as '${pack}' and reapplied as a named Pack.` : sanitizeOutput(applied.stderr || applied.stdout) || `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`
+      data: state ? { pack, target, state } : withSkillsDrift({ pack, target, state }, failedDetail, "local"),
+      detail: state ? `The current ${target} Skill selection was saved as '${pack}' and reapplied as a named Pack.` : failedDetail
     };
   }
   async function localSkillsBackup(pack) {
@@ -26134,10 +26171,11 @@ No remote catalog was written locally.`;
       throw new Error("Save the current Skill selection as a named Pack before backing it up.");
     }
     const result = await runController(tools.skills, ["backup"]);
+    const detail = sanitizeOutput(result.stderr || result.stdout) || `Skills Store backup failed with code ${result.code}`;
     return {
       ok: result.code === 0,
-      data: { pack },
-      detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : sanitizeOutput(result.stderr || result.stdout) || `Skills Store backup failed with code ${result.code}`
+      data: result.code === 0 ? { pack } : withSkillsDrift({ pack }, detail, "local"),
+      detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : detail
     };
   }
   async function localComponentStoreStatus(type) {
@@ -26147,6 +26185,7 @@ No remote catalog was written locally.`;
     return {
       initialized: result.code === 0,
       missing: result.code !== 0 && localComponentStoreMissing(type, detail),
+      driftSkill: type === "skills" ? skillsCatalogDriftName(detail) : "",
       detail
     };
   }
@@ -26160,14 +26199,13 @@ No remote catalog was written locally.`;
     });
   }
   async function releaseWorkspaceSkillLinks(selection, target, env3) {
-    if (!Array.isArray(selection.skills) || selection.skills.length === 0) return null;
+    if (!Array.isArray(selection.skills) || selection.skills.length === 0) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
     const args = ["skill", "set", "--target", target];
     for (const skill of selection.skills) args.push("--disable", skill);
     args.push("--yes");
     const result = await runController(tools.skills, args, env3);
-    if (result.code !== 0) {
-      throw new Error(sanitizeOutput(result.stderr || result.stdout) || "Could not release the Workspace-managed Skill links before local initialization.");
-    }
     return result;
   }
   async function remoteComponentAction(actionName, type, name, target, {
@@ -26181,6 +26219,13 @@ No remote catalog was written locally.`;
     }
     if (["mcp", "skills"].includes(type)) {
       const localStore = await localComponentStoreStatus(type);
+      if (type === "skills" && localStore.driftSkill) {
+        return {
+          ok: false,
+          data: withSkillsDrift({ type, name, target }, localStore.detail, "local"),
+          detail: localStore.detail
+        };
+      }
       if (localStore.missing && !initializeLocal && !skipLocalInitialization) {
         return {
           ok: false,
@@ -26188,19 +26233,31 @@ No remote catalog was written locally.`;
           detail: `The local ${type}ctl Store is not initialized. Restore the full encrypted ${type === "mcp" ? "MCP" : "Skills"} Store from Workspace to enable Local Switches, or continue with only this Workspace selection.`
         };
       }
-      if (initializeLocal && localStore.missing) {
+      if (initializeLocal) {
         const selection2 = await remoteWorkspace.materializeComponent(type, name, target);
-        const restored = await initializeLocalComponentStore(type);
-        if (!restored || restored.code !== 0) {
-          const detail2 = sanitizeOutput(restored?.stderr || restored?.stdout) || `Local ${type}ctl Store restore failed`;
-          return { ok: false, data: { type, name, target }, detail: detail2 };
+        let restoredNow = false;
+        if (localStore.missing) {
+          const restored = await initializeLocalComponentStore(type);
+          if (!restored || restored.code !== 0) {
+            const detail2 = sanitizeOutput(restored?.stderr || restored?.stdout) || `Local ${type}ctl Store restore failed`;
+            return { ok: false, data: { type, name, target }, detail: detail2 };
+          }
+          restoredNow = true;
         }
         if (type === "skills") {
-          await releaseWorkspaceSkillLinks(
+          const released = await releaseWorkspaceSkillLinks(
             selection2,
             target,
             await remoteWorkspace.runtimeEnvironment()
           );
+          if (!released || released.code !== 0) {
+            const detail2 = sanitizeOutput(released?.stderr || released?.stdout) || "Could not release the Workspace-managed Skill links before local initialization.";
+            return {
+              ok: false,
+              data: withSkillsDrift({ type, name, target }, detail2, "workspace"),
+              detail: detail2
+            };
+          }
         }
         const args = type === "mcp" ? ["apply", "--target", target, "--profile", name] : ["apply", "--target", target, "--pack", name, "--yes"];
         if (type === "mcp" && force) args.push("--force");
@@ -26208,14 +26265,28 @@ No remote catalog was written locally.`;
         const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
         return {
           ok: result.code === 0,
-          data: {
+          data: result.code === 0 ? {
             type,
             name,
             target,
             initializedLocal: result.code === 0,
+            restoredLocalStore: restoredNow,
             forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
+          } : type === "skills" ? withSkillsDrift({
+            type,
+            name,
+            target,
+            initializedLocal: false,
+            restoredLocalStore: restoredNow
+          }, detail, "local") : {
+            type,
+            name,
+            target,
+            initializedLocal: false,
+            restoredLocalStore: restoredNow,
+            forceRequired: !force && mcpApplyNeedsForce(detail)
           },
-          detail: result.code === 0 ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and applied ${name}; Local Switches are ready` : detail
+          detail: result.code === 0 ? `${restoredNow ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and ` : ""}applied ${name} through the local Store; Local Switches are ready` : detail
         };
       }
       if (!localStore.initialized && !localStore.missing && !skipLocalInitialization) {
@@ -26245,10 +26316,15 @@ No remote catalog was written locally.`;
           "--yes"
         ]);
         if (result.code !== 0) {
+          const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
           return {
             ok: false,
-            data: { type, name, target, matchedLocalPack: true },
-            detail: sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+            data: withSkillsDrift(
+              { type, name, target, matchedLocalPack: true },
+              detail,
+              "local"
+            ),
+            detail
           };
         }
         let state;
@@ -26293,7 +26369,11 @@ No remote catalog was written locally.`;
       const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: {
+        data: type === "skills" && result.code !== 0 ? withSkillsDrift({
+          type,
+          name,
+          target
+        }, detail, "workspace") : {
           type,
           name,
           target,
@@ -26330,10 +26410,11 @@ No remote catalog was written locally.`;
       ], { env: env3 });
       const parsed = parseJsonOutput(result, "remote preset apply");
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection.prompt);
+      const detail = sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: parsed.data,
-        detail: result.code === 0 ? "configuration applied from Workspace; start a new agent session" : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+        data: result.code === 0 ? parsed.data : withSkillsDrift(parsed.data || { preset, target }, detail, "workspace"),
+        detail: result.code === 0 ? "configuration applied from Workspace; start a new agent session" : detail
       };
     } catch (error) {
       if (promptWritten) await remoteWorkspace.restorePrompt(selection.prompt).catch(() => {
@@ -26351,8 +26432,13 @@ No remote catalog was written locally.`;
     replace = false,
     force = false,
     initializeLocal = false,
-    skipLocalInitialization = false
+    skipLocalInitialization = false,
+    acceptSkillDrift = null
   } = {}) {
+    if (acceptSkillDrift) {
+      const accepted = await acceptSkillsDrift(acceptSkillDrift);
+      if (!accepted.ok) return accepted;
+    }
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
     }
@@ -26448,7 +26534,11 @@ No remote catalog was written locally.`;
     if (actionName === "pull") successDetail = `${parsed.data?.presets?.length || 0} preset(s) pulled`;
     return {
       ok: result.code === 0,
-      data: parsed.data,
+      data: result.code === 0 ? parsed.data : withSkillsDrift(
+        parsed.data || { preset, target },
+        sanitizeOutput(result.stderr || result.stdout),
+        "local"
+      ),
       detail: result.code === 0 ? successDetail : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
   }
@@ -28426,13 +28516,14 @@ function App2({ initialSection, controller, onLaunch }) {
         agent: selectedAgentId,
         preset: selectedPreset,
         selection,
-        source: providerAction ? selectedProviderSource : snapshot?.presetSource || "local",
+        source: payload.source || (providerAction ? selectedProviderSource : snapshot?.presetSource || "local"),
         target: actionTarget,
         changes: payload.changes || [],
         replace: action === "mcp-profile-update",
         force: payload.force === true,
         initializeLocal: payload.initializeLocal === true,
-        skipLocalInitialization: payload.skipLocalInitialization === true
+        skipLocalInitialization: payload.skipLocalInitialization === true,
+        acceptSkillDrift: payload.acceptSkillDrift || null
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
       if (!result.ok && ["mcp-apply", "skills-apply"].includes(action) && result.data?.localInitializationRequired && payload.initializeLocal !== true && payload.skipLocalInitialization !== true) {
@@ -28452,12 +28543,41 @@ function App2({ initialSection, controller, onLaunch }) {
         });
         return;
       }
+      const driftRequest = result.data?.skillDriftRepairRequired ? {
+        name: result.data.skillDriftName,
+        scope: result.data.skillDriftScope
+      } : null;
+      const attemptedDrift = payload.acceptSkillDrift;
+      const alreadyAttempted = driftRequest && attemptedDrift && driftRequest.name === attemptedDrift.name && driftRequest.scope === attemptedDrift.scope;
+      if (!result.ok && driftRequest && !alreadyAttempted) {
+        const workspaceRuntime = driftRequest.scope === "workspace";
+        setLastDetail(result.detail || "");
+        setMessage(`Confirmation required: Skill '${driftRequest.name}' changed outside skillsctl.`);
+        setConfirm({
+          ...payload,
+          action,
+          selection,
+          source: payload.source || (providerAction ? selectedProviderSource : snapshot?.presetSource || "local"),
+          target: actionTarget,
+          acceptSkillDrift: driftRequest,
+          warning: true,
+          label: `Trust current files for Skill '${driftRequest.name}' and retry`,
+          detail: workspaceRuntime ? `The isolated Workspace runtime copy of '${driftRequest.name}' changed through a previously managed link.
+[y] updates only that staging checksum and retries the original action. The encrypted Workspace and local canonical Store are unchanged.
+[n] cancels without accepting the checksum.` : `The local canonical Skill '${driftRequest.name}' no longer matches its recorded checksum.
+Review its current files before continuing. [y] keeps those files, updates only this Skill's catalog checksum, and retries the original action.
+[n] cancels without accepting the checksum.`
+        });
+        return;
+      }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
         setLastDetail(result.detail || "");
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
         setConfirm({
+          ...payload,
           action,
           selection,
+          source: payload.source || (providerAction ? selectedProviderSource : snapshot?.presetSource || "local"),
           target: actionTarget,
           force: true,
           warning: true,

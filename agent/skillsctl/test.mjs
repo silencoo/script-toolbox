@@ -47,7 +47,7 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.4.2");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.4.3");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
@@ -69,15 +69,42 @@ assert.deepEqual(JSON.parse(run(["list", "--store", store, "--json"])), [
 // while normal Store reads continue to reject the unacknowledged drift.
 const storedFrontend = join(store, "skills", "frontend-dev");
 const storedFrontendMarkdown = join(storedFrontend, "SKILL.md");
+const storedBackendMarkdown = join(store, "skills", "backend-dev", "SKILL.md");
 await writeFile(
   storedFrontendMarkdown,
   `${await readFile(storedFrontendMarkdown, "utf8")}\nUpdated intentionally.\n`
+);
+await writeFile(
+  storedBackendMarkdown,
+  `${await readFile(storedBackendMarkdown, "utf8")}\nUpdated independently.\n`
 );
 const driftedStatus = spawnSync(process.execPath, [
   engine, "status", "--store", store
 ], { encoding: "utf8" });
 assert.notEqual(driftedStatus.status, 0);
 assert.match(driftedStatus.stderr, /changed outside skillsctl/);
+const acceptPreview = spawnSync(process.execPath, [
+  engine, "skill", "accept", "frontend-dev", "--store", store
+], { encoding: "utf8" });
+assert.notEqual(acceptPreview.status, 0);
+assert.match(acceptPreview.stderr, /preview complete; re-run with --yes/);
+assert.match(run([
+  "skill", "accept", "frontend-dev", "--store", store, "--yes"
+]), /Accepted current files and refreshed checksum/);
+const remainingDrift = spawnSync(process.execPath, [
+  engine, "status", "--store", store
+], { encoding: "utf8" });
+assert.notEqual(remainingDrift.status, 0);
+assert.match(remainingDrift.stderr, /skill 'backend-dev' changed outside skillsctl/);
+assert.match(run([
+  "skill", "accept", "backend-dev", "--store", store, "--yes"
+]), /Accepted current files and refreshed checksum/);
+assert.match(run(["status", "--store", store]), /Skills:\s+2/);
+// A later edit must still be rejected until that new content is accepted.
+await writeFile(
+  storedFrontendMarkdown,
+  `${await readFile(storedFrontendMarkdown, "utf8")}\nUpdated again.\n`
+);
 const reAddPreview = spawnSync(process.execPath, [
   engine, "skill", "add", storedFrontend, "--name", "frontend-dev",
   "--store", store, "--force"

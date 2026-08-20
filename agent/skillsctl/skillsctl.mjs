@@ -37,7 +37,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.4.2";
+const VERSION = "0.4.3";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -75,6 +75,7 @@ Usage:
   skillsctl doctor [--store <dir>]
 
   skillsctl skill add <directory> [--name <name>] [--store <dir>] --yes
+  skillsctl skill accept <name> [--store <dir>] --yes
   skillsctl skill remove <name> [--store <dir>] [--force] --yes
   skillsctl skill enable|disable <name> --target <target> [--store <dir>] [--yes]
   skillsctl skill set --target <target> [--enable <name>] [--disable <name>]
@@ -348,7 +349,10 @@ async function mkdirStoreLayout(store) {
   if (process.platform !== "win32") await chmod(store, 0o700);
 }
 
-async function loadStore(store, { allowedSkillDrift = new Set() } = {}) {
+async function loadStore(store, {
+  allowedSkillDrift = new Set(),
+  skipSkillValidation = false
+} = {}) {
   const catalogPath = join(store, "catalog.json");
   await assertRealDirectory(store, "skills store");
   await assertRegularFile(catalogPath, "skills catalog");
@@ -358,7 +362,9 @@ async function loadStore(store, { allowedSkillDrift = new Set() } = {}) {
   );
   validateCatalog(catalog);
   const packs = await loadPacks(store);
-  await validateStoreSkillDirectories(store, catalog, allowedSkillDrift);
+  if (!skipSkillValidation) {
+    await validateStoreSkillDirectories(store, catalog, allowedSkillDrift);
+  }
   return { store, catalog, packs };
 }
 
@@ -560,6 +566,14 @@ async function runSkillCommand(positional, options) {
     await addSkill(source, options);
     return;
   }
+  if (action === "accept") {
+    const name = positional.shift();
+    if (!name || positional.length > 0) {
+      throw new SkillsError("usage: skillsctl skill accept <name> --yes");
+    }
+    await acceptSkill(name, options);
+    return;
+  }
   if (action === "remove") {
     const name = positional.shift();
     if (!name || positional.length > 0) {
@@ -594,7 +608,43 @@ async function runSkillCommand(positional, options) {
     await setTargetSkills(options, changes);
     return;
   }
-  throw new SkillsError("skill command must be add, remove, enable, disable, or set");
+  throw new SkillsError("skill command must be add, accept, remove, enable, disable, or set");
+}
+
+async function acceptSkill(name, options) {
+  validateName(name, "skill");
+  const store = await loadStore(options.store, {
+    // This command verifies and accepts exactly the named canonical directory.
+    // Other drift stays recorded and will be surfaced by the retry, allowing
+    // the TUI to request one explicit confirmation per changed Skill instead
+    // of deadlocking when two names have drifted at once.
+    skipSkillValidation: true
+  });
+  const existing = store.catalog.skills[name];
+  if (!existing) throw new SkillsError(`unknown skill: ${name}`);
+  const directory = skillPath(options.store, name);
+  const inspected = await inspectSkillDirectory(directory, name);
+  if (existing.sha256 === inspected.sha256 &&
+      existing.description === inspected.description) {
+    process.stdout.write(`Skill checksum already matches: ${name}\n`);
+    return;
+  }
+  requireApply(options, "--yes");
+
+  // Re-inspect after confirmation so the checksum describes the files at the
+  // point of the atomic catalog update, not an earlier preview read.
+  const accepted = await inspectSkillDirectory(directory, name);
+  store.catalog.skills[name] = {
+    ...existing,
+    description: accepted.description,
+    sha256: accepted.sha256,
+    source: {
+      ...(existing.source && typeof existing.source === "object" ? existing.source : {}),
+      accepted_at: new Date().toISOString()
+    }
+  };
+  await writeJsonAtomic(join(options.store, "catalog.json"), store.catalog);
+  process.stdout.write(`Accepted current files and refreshed checksum for skill '${name}'\n`);
 }
 
 async function addSkill(source, options) {

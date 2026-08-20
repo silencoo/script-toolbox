@@ -2063,15 +2063,16 @@ function App({ initialSection, controller, onLaunch }) {
         agent: selectedAgentId,
         preset: selectedPreset,
         selection,
-        source: providerAction
+        source: payload.source || (providerAction
           ? selectedProviderSource
-          : snapshot?.presetSource || "local",
+          : snapshot?.presetSource || "local"),
         target: actionTarget,
         changes: payload.changes || [],
         replace: action === "mcp-profile-update",
         force: payload.force === true,
         initializeLocal: payload.initializeLocal === true,
-        skipLocalInitialization: payload.skipLocalInitialization === true
+        skipLocalInitialization: payload.skipLocalInitialization === true,
+        acceptSkillDrift: payload.acceptSkillDrift || null
       });
       const firstDetailLine = String(result.detail || "").split("\n")[0];
       if (!result.ok && ["mcp-apply", "skills-apply"].includes(action) &&
@@ -2090,12 +2091,46 @@ function App({ initialSection, controller, onLaunch }) {
         });
         return;
       }
+      const driftRequest = result.data?.skillDriftRepairRequired
+        ? {
+            name: result.data.skillDriftName,
+            scope: result.data.skillDriftScope
+          }
+        : null;
+      const attemptedDrift = payload.acceptSkillDrift;
+      const alreadyAttempted = driftRequest && attemptedDrift &&
+        driftRequest.name === attemptedDrift.name && driftRequest.scope === attemptedDrift.scope;
+      if (!result.ok && driftRequest && !alreadyAttempted) {
+        const workspaceRuntime = driftRequest.scope === "workspace";
+        setLastDetail(result.detail || "");
+        setMessage(`Confirmation required: Skill '${driftRequest.name}' changed outside skillsctl.`);
+        setConfirm({
+          ...payload,
+          action,
+          selection,
+          source: payload.source || (providerAction
+            ? selectedProviderSource
+            : snapshot?.presetSource || "local"),
+          target: actionTarget,
+          acceptSkillDrift: driftRequest,
+          warning: true,
+          label: `Trust current files for Skill '${driftRequest.name}' and retry`,
+          detail: workspaceRuntime
+            ? `The isolated Workspace runtime copy of '${driftRequest.name}' changed through a previously managed link.\n[y] updates only that staging checksum and retries the original action. The encrypted Workspace and local canonical Store are unchanged.\n[n] cancels without accepting the checksum.`
+            : `The local canonical Skill '${driftRequest.name}' no longer matches its recorded checksum.\nReview its current files before continuing. [y] keeps those files, updates only this Skill's catalog checksum, and retries the original action.\n[n] cancels without accepting the checksum.`
+        });
+        return;
+      }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
         setLastDetail(result.detail || "");
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
         setConfirm({
+          ...payload,
           action,
           selection,
+          source: payload.source || (providerAction
+            ? selectedProviderSource
+            : snapshot?.presetSource || "local"),
           target: actionTarget,
           force: true,
           warning: true,

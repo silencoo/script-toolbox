@@ -151,6 +151,15 @@ confirmation. Accepting that prompt retries with `--force`, which replaces
 only those same-name MCP entries and preserves unrelated client configuration.
 Other MCP failures never offer or trigger a forced retry.
 
+Skills checksum drift uses the same fail-closed interaction everywhere it can
+block a write: Local Switches, Pack repair/upload, Workspace Pack apply, and
+combined Workspace Preset apply. The TUI names the exact changed Skill and
+asks before keeping its current files, updating only that catalog checksum,
+and retrying the original action. Drift in the isolated Workspace staging
+runtime is accepted only in that runtime; it does not alter the encrypted
+Workspace or the device's canonical local Store. If several Skills changed,
+each one requires its own confirmation.
+
 The Providers detail pane reports the resolved compaction behavior as one
 plain-language value: `Remote · native`, `Messages · Anthropic beta`, or a
 local fallback. This is derived from Provider Store schema 2 capability and

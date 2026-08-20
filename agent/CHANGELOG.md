@@ -22,6 +22,14 @@
   applying the selection, continue with selected-only isolated materialization,
   or cancel. Existing local Stores remain untouched, and Workspace-owned Skill
   links are released before the restored local Pack takes ownership.
+- Added one guided checksum-drift recovery path across local Skills switches,
+  Pack apply/repair/upload, Workspace Pack apply, combined Workspace Preset
+  apply, and the isolated Workspace runtime. The TUI recognizes only
+  skillsctl's exact named-drift diagnostic, asks before trusting the current
+  files, runs the new target-Store-scoped `skillsctl skill accept <name>
+  --yes`, and retries the original action. Each changed Skill is confirmed
+  separately; accepting one checksum never rewrites files or accepts unrelated
+  drift. Bumped `skillsctl` to 0.4.3.
 
 ## 2026-08-16 — clearer Skill switching and compact Provider views
 

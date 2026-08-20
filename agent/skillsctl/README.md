@@ -129,18 +129,18 @@ catalog checksum stale until the change is explicitly accepted.
 Review the diff, then preview and accept only that named Skill:
 
 ```bash
-# Codex example; realpath resolves the managed link to the canonical directory.
-skillsctl skill add "$(realpath ~/.agents/skills/frontend-dev)" \
-  --name frontend-dev --force
-skillsctl skill add "$(realpath ~/.agents/skills/frontend-dev)" \
-  --name frontend-dev --force --yes
+skillsctl skill accept frontend-dev
+skillsctl skill accept frontend-dev --yes
 skillsctl status
 ```
 
-If the Skill is maintained in a separate source directory, re-add that source
-instead. `--force` replaces only the same-name canonical Skill, preserves the
-previous copy under `store/backups/`, and still fails if any unrelated Skill
-has unacknowledged drift.
+`skill accept` changes only that Skill's catalog description and checksum; it
+does not rewrite its current files or accept any other name. If another Skill
+also drifted, the next Store operation reports that name so it can be reviewed
+and accepted separately. If the Skill is maintained in a separate source
+directory, use `skill add <source> --name <name> --force --yes` instead to
+replace the canonical copy and preserve the previous version under
+`store/backups/`.
 
 After the local Store is healthy, upload its encrypted snapshot:
 

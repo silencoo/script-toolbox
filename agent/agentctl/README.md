@@ -752,6 +752,11 @@ offers an explicit first-adoption choice: restore the full attached child Store
 and its recovery capability locally so Local Switches work, continue with the
 selected-only isolated runtime, or cancel. It never overwrites an existing
 local Store through this shortcut.
+If skillsctl reports that a named Skill changed outside its catalog, the TUI
+offers a separate confirmation to keep those current files, refresh only that
+Skill's checksum, and retry the original local or Workspace action. Multiple
+changed Skills are confirmed one at a time, and Workspace-runtime repair stays
+inside the isolated runtime.
 Provider catalogs remain independently exportable local Stores even when they
 are also backed up in Workspace; generated provider configuration always
 remains device-local.

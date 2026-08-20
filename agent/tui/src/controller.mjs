@@ -42,6 +42,12 @@ export function mcpApplyNeedsForce(value) {
     .test(String(value || ""));
 }
 
+export function skillsCatalogDriftName(value) {
+  const match = /skill '([a-z0-9]+(?:-[a-z0-9]+)*)' changed outside skillsctl; re-add it to update the catalog checksum/i
+    .exec(String(value || ""));
+  return match?.[1] || "";
+}
+
 function localComponentStoreMissing(type, value) {
   const detail = String(value || "");
   return type === "mcp"
@@ -300,6 +306,43 @@ export function createController({
 
   async function runAgentctlJson(args, label, runOptions = {}) {
     return runControllerJson(agentctl, args, label, {}, runOptions);
+  }
+
+  function withSkillsDrift(data, detail, scope) {
+    const skill = skillsCatalogDriftName(detail);
+    return skill
+      ? {
+          ...data,
+          skillDriftRepairRequired: true,
+          skillDriftName: skill,
+          skillDriftScope: scope
+        }
+      : data;
+  }
+
+  async function acceptSkillsDrift(request) {
+    if (!request || typeof request !== "object" ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(request.name || "") ||
+        !["local", "workspace"].includes(request.scope)) {
+      throw new Error("The Skill checksum acceptance request is invalid.");
+    }
+    const env = request.scope === "workspace"
+      ? await remoteWorkspace.runtimeEnvironment()
+      : {};
+    const result = await runController(
+      tools.skills,
+      ["skill", "accept", request.name, "--yes"],
+      env
+    );
+    const detail = sanitizeOutput(result.stderr || result.stdout) ||
+      `Skill checksum acceptance failed with code ${result.code}`;
+    return {
+      ok: result.code === 0,
+      data: result.code === 0
+        ? { acceptedSkillDrift: request }
+        : withSkillsDrift({ acceptedSkillDrift: null }, detail, request.scope),
+      detail
+    };
   }
 
   async function providerDashboard(target = "codex") {
@@ -853,13 +896,16 @@ export function createController({
     const result = await runController(tools.skills, [
       "apply", "--target", target, "--pack", pack, "--yes"
     ]);
+    const detail = sanitizeOutput(result.stderr || result.stdout) ||
+      `Skills repair failed with code ${result.code}`;
     return {
       ok: result.code === 0,
-      data: { pack, target },
+      data: result.code === 0
+        ? { pack, target }
+        : withSkillsDrift({ pack, target }, detail, "local"),
       detail: result.code === 0
         ? `${pack} was reapplied to ${target}; missing managed skill links were restored, unrelated local skills were preserved, and a new ${target} session is recommended.`
-        : sanitizeOutput(result.stderr || result.stdout) ||
-          `Skills repair failed with code ${result.code}`
+        : detail
     };
   }
 
@@ -922,7 +968,13 @@ export function createController({
     const state = result.ok && result.data?.target === target ? result.data : null;
     return {
       ok: Boolean(state),
-      data: { target, changes: normalized, state },
+      data: state
+        ? { target, changes: normalized, state }
+        : withSkillsDrift(
+            { target, changes: normalized, state },
+            result.error || "",
+            "local"
+          ),
       detail: state
         ? `${normalized.length} Skill change(s) were written for ${target} in one skillsctl transaction; other clients and the canonical Store were preserved.`
         : result.error || "Skills batch update did not return the updated local state."
@@ -953,24 +1005,28 @@ export function createController({
     if (replace) saveArgs.push("--force");
     const saved = await runController(tools.skills, saveArgs);
     if (saved.code !== 0) {
+      const detail = sanitizeOutput(saved.stderr || saved.stdout) ||
+        `Skill Pack save failed with code ${saved.code}`;
       return {
         ok: false,
-        data: { pack, target },
-        detail: sanitizeOutput(saved.stderr || saved.stdout) ||
-          `Skill Pack save failed with code ${saved.code}`
+        data: withSkillsDrift({ pack, target }, detail, "local"),
+        detail
       };
     }
     const applied = await runController(tools.skills, [
       "apply", "--target", target, "--pack", pack, "--yes"
     ]);
     const state = applied.code === 0 ? await localSkillsState(target) : null;
+    const failedDetail = state ? "" : sanitizeOutput(applied.stderr || applied.stdout) ||
+      `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`;
     return {
       ok: Boolean(state),
-      data: { pack, target, state },
+      data: state
+        ? { pack, target, state }
+        : withSkillsDrift({ pack, target, state }, failedDetail, "local"),
       detail: state
         ? `The current ${target} Skill selection was saved as '${pack}' and reapplied as a named Pack.`
-        : sanitizeOutput(applied.stderr || applied.stdout) ||
-          `Pack '${pack}' was saved, but applying it failed with code ${applied.code}`
+        : failedDetail
     };
   }
 
@@ -979,13 +1035,16 @@ export function createController({
       throw new Error("Save the current Skill selection as a named Pack before backing it up.");
     }
     const result = await runController(tools.skills, ["backup"]);
+    const detail = sanitizeOutput(result.stderr || result.stdout) ||
+      `Skills Store backup failed with code ${result.code}`;
     return {
       ok: result.code === 0,
-      data: { pack },
+      data: result.code === 0
+        ? { pack }
+        : withSkillsDrift({ pack }, detail, "local"),
       detail: result.code === 0
         ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.`
-        : sanitizeOutput(result.stderr || result.stdout) ||
-          `Skills Store backup failed with code ${result.code}`
+        : detail
     };
   }
 
@@ -996,6 +1055,7 @@ export function createController({
     return {
       initialized: result.code === 0,
       missing: result.code !== 0 && localComponentStoreMissing(type, detail),
+      driftSkill: type === "skills" ? skillsCatalogDriftName(detail) : "",
       detail
     };
   }
@@ -1013,15 +1073,13 @@ export function createController({
   }
 
   async function releaseWorkspaceSkillLinks(selection, target, env) {
-    if (!Array.isArray(selection.skills) || selection.skills.length === 0) return null;
+    if (!Array.isArray(selection.skills) || selection.skills.length === 0) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
     const args = ["skill", "set", "--target", target];
     for (const skill of selection.skills) args.push("--disable", skill);
     args.push("--yes");
     const result = await runController(tools.skills, args, env);
-    if (result.code !== 0) {
-      throw new Error(sanitizeOutput(result.stderr || result.stdout) ||
-        "Could not release the Workspace-managed Skill links before local initialization.");
-    }
     return result;
   }
 
@@ -1036,6 +1094,13 @@ export function createController({
     }
     if (["mcp", "skills"].includes(type)) {
       const localStore = await localComponentStoreStatus(type);
+      if (type === "skills" && localStore.driftSkill) {
+        return {
+          ok: false,
+          data: withSkillsDrift({ type, name, target }, localStore.detail, "local"),
+          detail: localStore.detail
+        };
+      }
       if (localStore.missing && !initializeLocal && !skipLocalInitialization) {
         return {
           ok: false,
@@ -1043,20 +1108,33 @@ export function createController({
           detail: `The local ${type}ctl Store is not initialized. Restore the full encrypted ${type === "mcp" ? "MCP" : "Skills"} Store from Workspace to enable Local Switches, or continue with only this Workspace selection.`
         };
       }
-      if (initializeLocal && localStore.missing) {
+      if (initializeLocal) {
         const selection = await remoteWorkspace.materializeComponent(type, name, target);
-        const restored = await initializeLocalComponentStore(type);
-        if (!restored || restored.code !== 0) {
-          const detail = sanitizeOutput(restored?.stderr || restored?.stdout) ||
-            `Local ${type}ctl Store restore failed`;
-          return { ok: false, data: { type, name, target }, detail };
+        let restoredNow = false;
+        if (localStore.missing) {
+          const restored = await initializeLocalComponentStore(type);
+          if (!restored || restored.code !== 0) {
+            const detail = sanitizeOutput(restored?.stderr || restored?.stdout) ||
+              `Local ${type}ctl Store restore failed`;
+            return { ok: false, data: { type, name, target }, detail };
+          }
+          restoredNow = true;
         }
         if (type === "skills") {
-          await releaseWorkspaceSkillLinks(
+          const released = await releaseWorkspaceSkillLinks(
             selection,
             target,
             await remoteWorkspace.runtimeEnvironment()
           );
+          if (!released || released.code !== 0) {
+            const detail = sanitizeOutput(released?.stderr || released?.stdout) ||
+              "Could not release the Workspace-managed Skill links before local initialization.";
+            return {
+              ok: false,
+              data: withSkillsDrift({ type, name, target }, detail, "workspace"),
+              detail
+            };
+          }
         }
         const args = type === "mcp"
           ? ["apply", "--target", target, "--profile", name]
@@ -1067,15 +1145,31 @@ export function createController({
           `Action failed with code ${result.code}`;
         return {
           ok: result.code === 0,
-          data: {
+          data: result.code === 0 ? {
             type,
             name,
             target,
             initializedLocal: result.code === 0,
+            restoredLocalStore: restoredNow,
             forceRequired: type === "mcp" && !force && mcpApplyNeedsForce(detail)
-          },
+          } : type === "skills"
+            ? withSkillsDrift({
+                type,
+                name,
+                target,
+                initializedLocal: false,
+                restoredLocalStore: restoredNow
+              }, detail, "local")
+            : {
+                type,
+                name,
+                target,
+                initializedLocal: false,
+                restoredLocalStore: restoredNow,
+                forceRequired: !force && mcpApplyNeedsForce(detail)
+              },
           detail: result.code === 0
-            ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and applied ${name}; Local Switches are ready`
+            ? `${restoredNow ? `Restored the full ${type === "mcp" ? "MCP" : "Skills"} Store locally and ` : ""}applied ${name} through the local Store; Local Switches are ready`
             : detail
         };
       }
@@ -1105,11 +1199,16 @@ export function createController({
           "apply", "--target", target, "--pack", name, "--yes"
         ]);
         if (result.code !== 0) {
+          const detail = sanitizeOutput(result.stderr || result.stdout) ||
+            `Action failed with code ${result.code}`;
           return {
             ok: false,
-            data: { type, name, target, matchedLocalPack: true },
-            detail: sanitizeOutput(result.stderr || result.stdout) ||
-              `Action failed with code ${result.code}`
+            data: withSkillsDrift(
+              { type, name, target, matchedLocalPack: true },
+              detail,
+              "local"
+            ),
+            detail
           };
         }
         let state;
@@ -1162,7 +1261,11 @@ export function createController({
         `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: {
+        data: type === "skills" && result.code !== 0 ? withSkillsDrift({
+          type,
+          name,
+          target
+        }, detail, "workspace") : {
           type,
           name,
           target,
@@ -1193,12 +1296,16 @@ export function createController({
         "--target", target, "--yes", "--json"], { env });
       const parsed = parseJsonOutput(result, "remote preset apply");
       if (result.code !== 0 && promptWritten) await remoteWorkspace.restorePrompt(selection.prompt);
+      const detail = sanitizeOutput(result.stderr || result.stdout) ||
+        `Action failed with code ${result.code}`;
       return {
         ok: result.code === 0,
-        data: parsed.data,
+        data: result.code === 0
+          ? parsed.data
+          : withSkillsDrift(parsed.data || { preset, target }, detail, "workspace"),
         detail: result.code === 0
           ? "configuration applied from Workspace; start a new agent session"
-          : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
+          : detail
       };
     } catch (error) {
       if (promptWritten) await remoteWorkspace.restorePrompt(selection.prompt).catch(() => {});
@@ -1216,8 +1323,13 @@ export function createController({
     replace = false,
     force = false,
     initializeLocal = false,
-    skipLocalInitialization = false
+    skipLocalInitialization = false,
+    acceptSkillDrift = null
   } = {}) {
+    if (acceptSkillDrift) {
+      const accepted = await acceptSkillsDrift(acceptSkillDrift);
+      if (!accepted.ok) return accepted;
+    }
     if (["proxy-start", "proxy-stop", "proxy-attach", "proxy-detach"].includes(actionName)) {
       return proxyAction(actionName);
     }
@@ -1320,7 +1432,13 @@ export function createController({
     if (actionName === "pull") successDetail = `${parsed.data?.presets?.length || 0} preset(s) pulled`;
     return {
       ok: result.code === 0,
-      data: parsed.data,
+      data: result.code === 0
+        ? parsed.data
+        : withSkillsDrift(
+            parsed.data || { preset, target },
+            sanitizeOutput(result.stderr || result.stdout),
+            "local"
+          ),
       detail: result.code === 0 ? successDetail :
         sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };

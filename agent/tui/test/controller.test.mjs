@@ -12,7 +12,8 @@ import {
   mcpApplyNeedsForce,
   parseJsonOutput,
   readPromptPreviewFile,
-  sanitizeOutput
+  sanitizeOutput,
+  skillsCatalogDriftName
 } from "../src/controller.mjs";
 
 test("MCP force adoption detection accepts only the explicit ownership conflict", () => {
@@ -21,6 +22,103 @@ test("MCP force adoption detection accepts only the explicit ownership conflict"
   ), true);
   assert.equal(mcpApplyNeedsForce("missing required MCP secret"), false);
   assert.equal(mcpApplyNeedsForce("request timed out"), false);
+});
+
+test("Skills checksum drift detection accepts only the explicit skillsctl diagnostic", () => {
+  assert.equal(skillsCatalogDriftName(
+    "skill 'cloudflare' changed outside skillsctl; re-add it to update the catalog checksum"
+  ), "cloudflare");
+  assert.equal(skillsCatalogDriftName("skill 'Cloudflare' changed outside skillsctl"), "");
+  assert.equal(skillsCatalogDriftName("unknown skill: cloudflare"), "");
+});
+
+test("Local Skills actions offer named checksum acceptance and retry the original change", async () => {
+  const calls = [];
+  let accepted = false;
+  const drift = "skill 'cloudflare' changed outside skillsctl; re-add it to update the catalog checksum";
+  const runner = async (_executable, args) => {
+    calls.push(args);
+    if (args.join(" ") === "skill accept cloudflare --yes") {
+      accepted = true;
+      return { code: 0, stdout: "Accepted current files and refreshed checksum\n", stderr: "" };
+    }
+    if (args[0] === "skill" && args[1] === "set") {
+      return accepted
+        ? {
+            code: 0,
+            stdout: JSON.stringify({
+              target: "codex",
+              selection_mode: "manual",
+              skills: [],
+              healthy: true
+            }),
+            stderr: ""
+          }
+        : { code: 1, stdout: "", stderr: drift };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  const payload = {
+    selection: "cloudflare",
+    target: "codex"
+  };
+  const blocked = await controller.action("skills-disable", payload);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.data.skillDriftRepairRequired, true);
+  assert.equal(blocked.data.skillDriftName, "cloudflare");
+  assert.equal(blocked.data.skillDriftScope, "local");
+
+  const retried = await controller.action("skills-disable", {
+    ...payload,
+    acceptSkillDrift: { name: "cloudflare", scope: "local" }
+  });
+  assert.equal(retried.ok, true);
+  assert.deepEqual(calls.slice(-2), [
+    ["skill", "accept", "cloudflare", "--yes"],
+    ["skill", "set", "--target", "codex", "--disable", "cloudflare", "--yes", "--json"]
+  ]);
+});
+
+test("Workspace Preset apply identifies drift in the isolated Skills runtime", async () => {
+  const calls = [];
+  let accepted = false;
+  const drift = "skill 'cloudflare' changed outside skillsctl; re-add it to update the catalog checksum";
+  const runner = async (_executable, args, options = {}) => {
+    calls.push({ args, env: options.env || {} });
+    if (args.join(" ") === "skill accept cloudflare --yes") {
+      accepted = true;
+      return { code: 0, stdout: "Accepted current files and refreshed checksum\n", stderr: "" };
+    }
+    return accepted
+      ? { code: 0, stdout: '{"ok":true}', stderr: "" }
+      : { code: 1, stdout: "", stderr: drift };
+  };
+  const remoteWorkspace = {
+    selectionPlan: async () => ({}),
+    materializePreset: async () => ({ prompt: {} }),
+    runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" }),
+    writePrompt: async () => {},
+    restorePrompt: async () => {}
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const blocked = await controller.action("apply", {
+    preset: "daily",
+    source: "cloud",
+    target: "codex"
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.data.skillDriftName, "cloudflare");
+  assert.equal(blocked.data.skillDriftScope, "workspace");
+
+  const retried = await controller.action("apply", {
+    preset: "daily",
+    source: "cloud",
+    target: "codex",
+    acceptSkillDrift: { name: "cloudflare", scope: "workspace" }
+  });
+  assert.equal(retried.ok, true);
+  assert.equal(calls.at(-2).env.SKILLSCTL_STORE, "/runtime/skills");
 });
 
 test("Workspace MCP apply reports a retryable force-adoption conflict without forcing implicitly", async () => {
@@ -93,6 +191,57 @@ test("Workspace MCP apply offers and performs full local Store initialization", 
   ]);
 });
 
+test("Workspace MCP initialization resumes locally after force confirmation without restoring twice", async () => {
+  const calls = [];
+  let restored = false;
+  const conflict = "same-name MCP entries are not owned by mcpctl; re-run with --force to replace only those names";
+  const runner = async (_executable, args) => {
+    calls.push(args);
+    if (args.join(" ") === "profile list") {
+      return restored
+        ? { code: 0, stdout: "daily\n", stderr: "" }
+        : { code: 1, stdout: "", stderr: "store not initialized: missing /local/mcp/catalog.json" };
+    }
+    if (args[0] === "restore") {
+      restored = true;
+      return { code: 0, stdout: "restored\n", stderr: "" };
+    }
+    if (args[0] === "apply") {
+      return args.includes("--force")
+        ? { code: 0, stdout: "applied\n", stderr: "" }
+        : { code: 1, stdout: "", stderr: conflict };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const remoteWorkspace = {
+    materializeComponent: async () => ({ name: "daily", target: "codex" }),
+    withLocalChildCapability: async (_type, callback) => callback({
+      remoteConfig: "/runtime/mcp-remote.json"
+    })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const blocked = await controller.action("mcp-apply", {
+    selection: "daily",
+    target: "codex",
+    initializeLocal: true
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.data.forceRequired, true);
+  assert.equal(blocked.data.restoredLocalStore, true);
+
+  const applied = await controller.action("mcp-apply", {
+    selection: "daily",
+    target: "codex",
+    initializeLocal: true,
+    force: true
+  });
+  assert.equal(applied.ok, true);
+  assert.equal(calls.filter((args) => args[0] === "restore").length, 1);
+  assert.deepEqual(calls.at(-1), [
+    "apply", "--target", "codex", "--profile", "daily", "--force"
+  ]);
+});
+
 test("Workspace Skills initialization releases isolated links before local apply", async () => {
   const calls = [];
   const runner = async (_executable, args, options = {}) => {
@@ -126,6 +275,68 @@ test("Workspace Skills initialization releases isolated links before local apply
     ["apply", "--target", "codex", "--pack", "frontend", "--yes"]
   ]);
   assert.equal(calls.at(-2).env.SKILLSCTL_STORE, "/runtime/skills");
+  assert.deepEqual(calls.at(-1).env, {});
+});
+
+test("Workspace Skills initialization resumes after staging checksum acceptance", async () => {
+  const calls = [];
+  let restored = false;
+  let accepted = false;
+  const drift = "skill 'cloudflare' changed outside skillsctl; re-add it to update the catalog checksum";
+  const runner = async (_executable, args, options = {}) => {
+    calls.push({ args, env: options.env || {} });
+    if (args.join(" ") === "list --json") {
+      return restored
+        ? { code: 0, stdout: "[]", stderr: "" }
+        : { code: 1, stdout: "", stderr: "skills store not found: /local/skills" };
+    }
+    if (args[0] === "restore") {
+      restored = true;
+      return { code: 0, stdout: "restored\n", stderr: "" };
+    }
+    if (args.join(" ") === "skill accept cloudflare --yes") {
+      accepted = true;
+      return { code: 0, stdout: "accepted\n", stderr: "" };
+    }
+    if (args[0] === "skill" && args[1] === "set") {
+      return accepted
+        ? { code: 0, stdout: "released\n", stderr: "" }
+        : { code: 1, stdout: "", stderr: drift };
+    }
+    if (args[0] === "apply") return { code: 0, stdout: "applied\n", stderr: "" };
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const remoteWorkspace = {
+    materializeComponent: async () => ({
+      name: "frontend",
+      target: "codex",
+      skills: ["frontend-dev"]
+    }),
+    withLocalChildCapability: async (_type, callback) => callback({
+      remoteConfig: "/runtime/skills-remote.json"
+    }),
+    runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const blocked = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex",
+    initializeLocal: true
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.data.skillDriftScope, "workspace");
+
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex",
+    initializeLocal: true,
+    acceptSkillDrift: { name: "cloudflare", scope: "workspace" }
+  });
+  assert.equal(applied.ok, true);
+  assert.equal(calls.filter(({ args }) => args[0] === "restore").length, 1);
+  assert.deepEqual(calls.at(-1).args, [
+    "apply", "--target", "codex", "--pack", "frontend", "--yes"
+  ]);
   assert.deepEqual(calls.at(-1).env, {});
 });
 
