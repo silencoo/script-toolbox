@@ -47,11 +47,16 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.4.3");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.4.4");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
-  "scripts/check.sh": "#!/usr/bin/env sh\nexit 0\n"
+  "scripts/check.sh": "#!/usr/bin/env sh\nexit 0\n",
+  // A recursive filesystem walk visits the sibling directory `api` before
+  // `api-shield`; flattened path sorting reverses them because it compares
+  // '/' with '-'. Keep this regression fixture through export and restore.
+  "references/api/api.md": "API\n",
+  "references/api-shield/api.md": "Shield\n"
 });
 await chmod(join(frontend, "scripts/check.sh"), 0o755);
 const backend = await makeSkill("backend-dev", "Build reliable backend services");

@@ -37,7 +37,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.4.3";
+const VERSION = "0.4.4";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -1659,7 +1659,7 @@ async function writeSnapshotToStore(storePath, snapshot, force) {
 function materializedSnapshotSkillDigest(files) {
   const hash = createHash("sha256");
   for (const [path, file] of Object.entries(files)
-    .sort(([left], [right]) => left.localeCompare(right))) {
+    .sort(([left], [right]) => compareSkillTraversalPaths(left, right))) {
     const content = decodeCanonicalBase64(file.content, path);
     hash.update(path);
     hash.update("\0");
@@ -1669,6 +1669,22 @@ function materializedSnapshotSkillDigest(files) {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+
+function compareSkillTraversalPaths(left, right) {
+  // inspectSkillDirectory hashes a recursively sorted directory walk. A flat
+  // localeCompare is not equivalent: for example, `api-shield/file` sorts
+  // before `api/file` because '-' sorts before '/', while the recursive walk
+  // compares the sibling directory names and visits `api` first. Reproduce
+  // that segment-by-segment order when deriving a restored catalog checksum.
+  const leftParts = left.split("/");
+  const rightParts = right.split("/");
+  const length = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const order = leftParts[index].localeCompare(rightParts[index]);
+    if (order !== 0) return order;
+  }
+  return leftParts.length - rightParts.length;
 }
 
 async function inspectSkillDirectory(directory, expectedName, includeContent = false) {

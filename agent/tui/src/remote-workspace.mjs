@@ -426,7 +426,7 @@ function decodeFile(file, label) {
 export function materializedSkillDigest(files, platform = process.platform) {
   const hash = createHash("sha256");
   for (const [path, file] of Object.entries(files)
-    .sort(([left], [right]) => left.localeCompare(right))) {
+    .sort(([left], [right]) => compareSkillTraversalPaths(left, right))) {
     validateRelativePath(path);
     const bytes = decodeFile(file, path);
     const portableShebang = platform === "win32" &&
@@ -440,6 +440,21 @@ export function materializedSkillDigest(files, platform = process.platform) {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+
+function compareSkillTraversalPaths(left, right) {
+  // Match skillsctl's recursively sorted filesystem walk. Sorting flattened
+  // paths directly changes the order of sibling names such as `api` and
+  // `api-shield`, which produces a catalog checksum that immediately appears
+  // drifted after the Workspace files are materialized.
+  const leftParts = left.split("/");
+  const rightParts = right.split("/");
+  const length = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const order = leftParts[index].localeCompare(rightParts[index]);
+    if (order !== 0) return order;
+  }
+  return leftParts.length - rightParts.length;
 }
 
 async function writeSkill(runtime, name, skill) {

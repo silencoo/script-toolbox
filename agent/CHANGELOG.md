@@ -1,5 +1,15 @@
 # Changelog — agent/
 
+## 2026-08-21 — portable nested Skill checksums
+
+- Fixed nested Skill snapshot checksums for names such as `api` and
+  `api-shield`. Restore and Workspace materialization previously sorted flattened
+  paths, while the canonical Store hashes a recursively sorted directory walk;
+  large Skills such as `cloudflare` could therefore restore as drifted and then
+  surface as unknown during local Pack initialization. Both paths now reproduce
+  the canonical traversal order, with export/restore and Workspace regressions.
+  Bumped `skillsctl` to 0.4.4 and `agentctl` to 0.17.6.
+
 ## 2026-08-20 — guided Workspace MCP adoption
 
 - Workspace MCP apply in the unified TUI now recognizes mcpctl's exact

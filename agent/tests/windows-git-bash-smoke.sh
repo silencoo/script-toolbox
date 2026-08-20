@@ -43,7 +43,7 @@ export APPDATA="$(cygpath -w "$APPDATA_DIR")"
 export LOCALAPPDATA="$(cygpath -w "$LOCALAPPDATA_DIR")"
 
 [ "$(bash "$AGENT_DIR/agentctl/agentctl" --version)" = \
-  "agentctl 0.17.5" ] || fail "agentctl did not launch through Git Bash"
+  "agentctl 0.17.6" ] || fail "agentctl did not launch through Git Bash"
 
 provider_catalog="$(
   bash "$AGENT_DIR/agentctl/agentctl" provider list \
@@ -107,7 +107,7 @@ for name in agentctl mcpctl promptctl skillsctl; do
   grep -q '^# script-toolbox-agent-command v1$' "$COMMAND_PREFIX/$name" ||
     fail "Windows $name launcher is missing its ownership marker"
 done
-[ "$("$COMMAND_PREFIX/agentctl" --version)" = "agentctl 0.17.5" ] ||
+[ "$("$COMMAND_PREFIX/agentctl" --version)" = "agentctl 0.17.6" ] ||
   fail "installed Windows agentctl launcher did not resolve its runtime"
 bash "$COMMAND_RUNTIME/install-commands.sh" \
   --prefix "$COMMAND_PREFIX" --uninstall --yes >/dev/null

@@ -112,7 +112,7 @@ done
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
 
-[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.5" ] ||
+[ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.6" ] ||
   fail "agentctl did not work through its standalone link"
 [ -x "$RUNTIME/claude-code/statusline-setup.sh" ] ||
   fail "standalone runtime omitted the Claude status-line manager"
@@ -285,7 +285,7 @@ for name in agentctl mcpctl promptctl skillsctl; do
   grep -q '^# script-toolbox-agent-command v1$' "$LAUNCHER_PREFIX/$name" ||
     fail "launcher install omitted the ownership marker for $name"
 done
-[ "$("$LAUNCHER_PREFIX/agentctl" --version)" = "agentctl 0.17.5" ] ||
+[ "$("$LAUNCHER_PREFIX/agentctl" --version)" = "agentctl 0.17.6" ] ||
   fail "agentctl did not work through a managed Bash launcher"
 SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
   "$LAUNCHER_RUNTIME/install-commands.sh" --prefix "$LAUNCHER_PREFIX" \
@@ -310,7 +310,7 @@ SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
     --release-id migrated-msys --yes >"$TEST_ROOT/msys-migration.out" 2>&1
 grep -q "refresh  $MSYS_PREFIX/agentctl" "$TEST_ROOT/msys-migration.out" ||
   fail "legacy MSYS command copy was not migrated without --force"
-[ "$("$MSYS_PREFIX/agentctl" --version)" = "agentctl 0.17.5" ] ||
+[ "$("$MSYS_PREFIX/agentctl" --version)" = "agentctl 0.17.6" ] ||
   fail "migrated MSYS launcher did not resolve the standalone runtime"
 SCRIPT_TOOLBOX_INSTALL_COMMAND_STYLE=launcher \
   "$MSYS_RUNTIME/install-commands.sh" --prefix "$MSYS_PREFIX" \

@@ -24615,7 +24615,7 @@ function decodeFile(file, label) {
 }
 function materializedSkillDigest(files, platform2 = process.platform) {
   const hash = createHash("sha256");
-  for (const [path, file] of Object.entries(files).sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [path, file] of Object.entries(files).sort(([left], [right]) => compareSkillTraversalPaths(left, right))) {
     validateRelativePath(path);
     const bytes = decodeFile(file, path);
     const portableShebang = platform2 === "win32" && bytes.length >= 2 && bytes[0] === 35 && bytes[1] === 33;
@@ -24628,6 +24628,16 @@ function materializedSkillDigest(files, platform2 = process.platform) {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+function compareSkillTraversalPaths(left, right) {
+  const leftParts = left.split("/");
+  const rightParts = right.split("/");
+  const length = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const order = leftParts[index].localeCompare(rightParts[index]);
+    if (order !== 0) return order;
+  }
+  return leftParts.length - rightParts.length;
 }
 async function writeSkill(runtime, name, skill) {
   assertName(name, SKILL_NAME, "Skill name");

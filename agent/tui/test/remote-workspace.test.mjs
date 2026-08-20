@@ -73,6 +73,11 @@ for (const [path, file] of Object.entries(skillFiles)) {
   skillHasher.update("\0");
 }
 const skillHash = skillHasher.digest("hex");
+assert.equal(
+  materializedSkillDigest(skillFiles, "darwin"),
+  skillHash,
+  "Workspace materialization must preserve recursive Skill traversal order"
+);
 const snapshots = {
   mcp: {
     schema: 1,
