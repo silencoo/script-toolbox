@@ -1,6 +1,8 @@
 // Sub-Store script operator: add or normalize country flags from node names.
 
 const COUNTRY_FLAG_PATTERN = /(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
+const HAS_COUNTRY_FLAG_PATTERN = /(?:[\uD83C][\uDDE6-\uDDFF]){2}/;
+const DEFAULT_LOCATION_ICON = "🌐";
 
 const COUNTRY_RULES = [
   {
@@ -233,13 +235,16 @@ function addCountryFlagToName(value) {
   if (!name) return name;
 
   const flag = findCountryFlag(name);
-  if (!flag) return name;
+  if (!flag && HAS_COUNTRY_FLAG_PATTERN.test(name)) return name;
 
-  const nameWithoutFlags = name
+  const normalizedName = name
     .replace(COUNTRY_FLAG_PATTERN, "")
+    .split(DEFAULT_LOCATION_ICON)
+    .join("")
     .replace(/\s{2,}/g, " ")
     .trim();
-  return nameWithoutFlags ? `${flag} ${nameWithoutFlags}` : flag;
+  const icon = flag || DEFAULT_LOCATION_ICON;
+  return normalizedName ? `${icon} ${normalizedName}` : icon;
 }
 
 function addCountryFlag(proxy) {

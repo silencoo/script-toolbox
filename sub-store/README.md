@@ -35,4 +35,5 @@ Add `add-country-flags.js` as a script operation on the individual subscription
 that needs renaming. It recognizes 30 common locations across Asia, Europe, the
 Americas, and Oceania from common Chinese names, English names, abbreviations,
 and major city names. Existing flags are normalized rather than duplicated, and
-unrecognized node names are left unchanged.
+unrecognized node names receive the neutral `🌐` icon. Existing flags for
+locations outside the built-in mapping are preserved.

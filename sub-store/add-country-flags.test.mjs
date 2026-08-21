@@ -71,7 +71,7 @@ test("normalizes existing flags without duplicating them", () => {
   );
 });
 
-test("leaves unknown nodes and their other fields unchanged", () => {
+test("adds a neutral globe to unknown nodes and preserves their other fields", () => {
   const { operator } = loadOperator();
   const unknown = {
     name: "Premium Node 01",
@@ -81,8 +81,12 @@ test("leaves unknown nodes and their other fields unchanged", () => {
   };
   const output = operator([unknown]);
 
-  assert.equal(output[0], unknown);
-  assert.deepEqual(JSON.parse(JSON.stringify(output[0])), unknown);
+  assert.notEqual(output[0], unknown);
+  assert.deepEqual(JSON.parse(JSON.stringify(output[0])), {
+    ...unknown,
+    name: "🌐 Premium Node 01",
+  });
+  assert.equal(unknown.name, "Premium Node 01");
 });
 
 test("does not treat country-code substrings as standalone regions", () => {
@@ -98,8 +102,38 @@ test("does not treat country-code substrings as standalone regions", () => {
 
   assert.deepEqual(
     Array.from(output, (proxy) => proxy.name),
-    names,
+    names.map((name) => `🌐 ${name}`),
   );
+});
+
+test("keeps the default icon idempotent and preserves unknown country flags", () => {
+  const { operator } = loadOperator();
+  const once = operator([
+    { name: "🌐 Premium Node 01", type: "ss" },
+    { name: "🌐 🌐 Premium Node 02", type: "ss" },
+    { name: "🇧🇪 Premium Node 03", type: "ss" },
+  ]);
+  const twice = operator(once);
+
+  const expected = [
+    "🌐 Premium Node 01",
+    "🌐 Premium Node 02",
+    "🇧🇪 Premium Node 03",
+  ];
+  assert.deepEqual(
+    Array.from(once, (proxy) => proxy.name),
+    expected,
+  );
+  assert.deepEqual(
+    Array.from(twice, (proxy) => proxy.name),
+    expected,
+  );
+});
+
+test("replaces the default icon when a country later becomes recognizable", () => {
+  const { operator } = loadOperator();
+  const output = operator([{ name: "🌐 Japan 01", type: "ss" }]);
+  assert.equal(output[0].name, "🇯🇵 Japan 01");
 });
 
 test("supports Sub-Store single-node shortcut-script mode", () => {
