@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek Enhance
 // @namespace    http://www.nodeseek.com/
-// @version      1.4.8
+// @version      1.4.9
 // @description  【NodeSeek增强脚本】全面增强 NodeSeek/DeepFlood 论坛体验。核心功能：自动签到（支持随机/固定鸡腿）、无缝翻页（帖子列表和评论自动加载）、快捷回复（浮动编辑器）、代码高亮（支持亮色/暗色主题）、图片滑动查看。内容管理：屏蔽用户/帖子/分类（支持关键词和正则）、帖子排序（按回复数/查看数/已访问置底）、隐藏元素（页脚/分类标签/帖子信息/推荐轮播/用户统计面板）。界面优化：紧凑模式（1-4列多栏布局，自定义间距/字体/头像大小）、自定义背景图（支持URL/本地上传）、Header/Frame透明度（支持模糊和饱和度）、字体排版自定义（标题/Tag/元数据/内容）、已访问链接标记（可隐藏/置底）、默认头像替换（自动识别系统头像）。增强功能：用户卡片扩展（显示@我/私信/回复通知）、等级标签显示（楼主等级和统计信息）、浏览历史记录（下拉菜单快速访问）、键盘快捷键（左右箭头翻页、Ctrl+Enter提交）、强制新标签页打开帖子、自动跳转外部链接、平滑滚动、即时页面预加载。设置管理：可视化设置面板（集成到导航栏）、设置导入导出、一键恢复默认样式。支持深色模式自动适配。
 // @author       silencoo
 // @match        *://www.nodeseek.com/*
@@ -977,6 +977,11 @@ const applyTypographyStyle = (type, config) => {
         return stored.frame_opacity || null;
     };
 
+    const getTypographyStoredConfigs = () => {
+        const stored = getStoredSettings();
+        return isPlainObject(stored?.typography) ? stored.typography : null;
+    };
+
     const applyEarlyVisibilityClasses = () => {
         const stored = getStoredSettings();
         if (!stored) return;
@@ -1014,6 +1019,16 @@ const applyTypographyStyle = (type, config) => {
         applyFrameOpacityCSS(config);
     };
 
+    const applyEarlyTypographyStyles = () => {
+        const typography = getTypographyStoredConfigs();
+        if (!typography) return;
+        ['title', 'tag', 'meta', 'content'].forEach(type => {
+            if (typography[type]?.enabled === true) {
+                applyTypographyStyle(type, typography[type]);
+            }
+        });
+    };
+
     // 立即注入早期样式
     injectBaseUtilityStyles();
 
@@ -1045,6 +1060,8 @@ const applyTypographyStyle = (type, config) => {
     applyEarlyCustomBackgroundStyle();
     applyEarlyHeaderOpacityStyle();
     applyEarlyFrameOpacityStyle();
+    // 字体设置不依赖帖子 DOM，尽早注入可避免慢速帖子页错过初始化时机。
+    applyEarlyTypographyStyles();
 
     const onDocumentReady = (fn) => {
         if (document.readyState === 'loading') {
@@ -1060,17 +1077,20 @@ const applyTypographyStyle = (type, config) => {
             resolve(existing);
             return;
         }
+        let timer = null;
         const observer = new MutationObserver(() => {
             const element = document.querySelector(selector);
             if (!element) return;
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
             observer.disconnect();
             resolve(element);
         });
-        const timer = setTimeout(() => {
-            observer.disconnect();
-            resolve(null);
-        }, timeout);
+        if (Number.isFinite(timeout) && timeout > 0) {
+            timer = setTimeout(() => {
+                observer.disconnect();
+                resolve(null);
+            }, timeout);
+        }
         observer.observe(document.body, { childList: true, subtree: true });
     });
 
@@ -6058,6 +6078,42 @@ const applyTypographyStyle = (type, config) => {
                     return undefined;
                 }
             },
+            async syncPostPageStylesWhenReady() {
+                if (!opts.comment.pathPattern.test(location.pathname)) return;
+
+                // 帖子主体可能由站点脚本延迟渲染。不要依赖一个较短的固定延时，
+                // 而是观察真正的帖子内容出现后，再在渲染帧末尾统一校准样式。
+                const postContent = await waitForElement(
+                    '#nsk-body .nsk-post .post-content',
+                    0
+                );
+                if (!postContent || !postContent.isConnected) return;
+
+                await new Promise(resolve => {
+                    if (typeof requestAnimationFrame !== 'function') {
+                        setTimeout(resolve, 0);
+                        return;
+                    }
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                });
+                if (!opts.comment.pathPattern.test(location.pathname) || !postContent.isConnected) return;
+
+                [
+                    ['settled compact mode', this.updateCompactModeStyle],
+                    ['settled custom background', this.updateCustomBackground],
+                    ['settled visited-link style', this.updateVisitedLinkStyle],
+                    ['settled typography', this.updateAllTypography],
+                    ['settled promotions', this.togglePromotions],
+                    ['settled header opacity', this.updateHeaderOpacityStyle],
+                    ['settled frame opacity', this.updateFrameOpacityStyle],
+                    ['settled category navigation', this.mergeCategoryToNav],
+                    ['settled user stats panel', this.toggleUserStatsPanel],
+                    ['settled footer visibility', this.toggleFooter],
+                    ['settled post category visibility', this.togglePostCategory],
+                    ['settled post info visibility', this.togglePostInfo],
+                    ['settled carousel visibility', this.toggleTopicCarousel]
+                ].forEach(([featureName, initializer]) => this.safeInit(featureName, initializer));
+            },
             initEditorShortcut() {
                 const codeMirrorInstance = document.querySelector('.CodeMirror')?.CodeMirror;
                 const submitButton = document.querySelector('.md-editor button.submit.btn');
@@ -6119,7 +6175,8 @@ const applyTypographyStyle = (type, config) => {
                     ['highlight observer', this.startRightPanelHighlightObserver],
                     ['keyboard navigation', this.initKeyboardNavigation],
                     ['visited post tracking', this.initPostVisitListener],
-                    ['post sorting', this.sortPostList]
+                    ['post sorting', this.sortPostList],
+                    ['post style readiness', this.syncPostPageStylesWhenReady]
                 ];
                 if (Config.getConfig('default_avatar.enabled') === true) {
                     initializers.push(['avatar observer', this.startAvatarObserver]);

@@ -186,3 +186,23 @@ test('紧凑模式搜索框保持定位上下文，避免搜索图标跑到主�
     assert.match(source, /html\.nsx-compact-mode #nsk-head \.search-box\s*\{[\s\S]*?position: relative !important;/);
     assert.doesNotMatch(source, /html\.nsx-compact-mode #nsk-head \.search-box\s*\{\s*position: static !important;/);
 });
+
+test('自定义字体样式在等待页面模块之前提前注入', () => {
+    const earlyTypographyIndex = source.indexOf('applyEarlyTypographyStyles();');
+    const documentReadyIndex = source.indexOf('onDocumentReady(() => {');
+    assert.ok(earlyTypographyIndex > 0);
+    assert.ok(documentReadyIndex > earlyTypographyIndex);
+});
+
+test('帖子页等待真实内容渲染后再次校准样式', () => {
+    assert.match(
+        source,
+        /syncPostPageStylesWhenReady\(\)[\s\S]*?waitForElement\([\s\S]*?#nsk-body \.nsk-post \.post-content[\s\S]*?0[\s\S]*?\)/
+    );
+    assert.match(source, /Number\.isFinite\(timeout\) && timeout > 0/);
+    assert.match(
+        source,
+        /requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)[\s\S]*?settled typography[\s\S]*?this\.updateAllTypography/
+    );
+    assert.match(source, /\['post style readiness', this\.syncPostPageStylesWhenReady\]/);
+});
