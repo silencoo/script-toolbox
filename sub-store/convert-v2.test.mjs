@@ -209,6 +209,85 @@ test("allows periodic URL tests to be tuned or disabled", async () => {
   }
 });
 
+test("emits the documented Mihomo fake-IP DNS fields", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+
+  assert.equal(profile.dns["enhanced-mode"], "fake-ip");
+  assert.equal(profile.dns["fake-ip-range"], "198.18.0.1/16");
+  assert.equal(profile.dns["fake-ip-range6"], "fdfe:dcba:9876::1/64");
+  assert.equal(profile.dns["fake-ip"], undefined);
+
+  const redirHostConvert = await loadConverter({ fakeip: "false" });
+  const redirHostProfile = redirHostConvert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  assert.equal(redirHostProfile.dns["enhanced-mode"], "redir-host");
+});
+
+test("uses the provider DNS only for matching proxy server domains", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      {
+        name: "Special DNS Node",
+        type: "ss",
+        server: "edge.PLACUDOSHAI.fun.",
+        port: 443,
+      },
+      {
+        name: "Regular Node",
+        type: "ss",
+        server: "regular.example.com",
+        port: 443,
+      },
+    ],
+  });
+
+  const expectedPolicy = {
+    "+.placudoshai.fun": "https://jeeyio.com/api/dns-query",
+  };
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(profile.dns["nameserver-policy"])),
+    expectedPolicy,
+  );
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(profile.dns["proxy-server-nameserver-policy"]),
+    ),
+    expectedPolicy,
+  );
+  assert.deepEqual(
+    Array.from(profile.dns["proxy-server-nameserver"]),
+    Array.from(profile.dns.nameserver),
+  );
+  assert.ok(
+    !profile.dns["proxy-server-nameserver"].includes(
+      "https://jeeyio.com/api/dns-query",
+    ),
+  );
+});
+
+test("omits provider DNS overrides for unrelated subscriptions", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      {
+        name: "Regular Node",
+        type: "ss",
+        server: "regular.example.com",
+        port: 443,
+      },
+    ],
+  });
+
+  assert.equal(profile.dns["nameserver-policy"], undefined);
+  assert.equal(profile.dns["proxy-server-nameserver"], undefined);
+  assert.equal(profile.dns["proxy-server-nameserver-policy"], undefined);
+});
+
 test("turns account information nodes into zero-proxy-traffic delay targets", async () => {
   const convert = await loadConverter();
   const profile = convert({

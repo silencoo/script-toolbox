@@ -18,6 +18,12 @@ const MIN_URL_TEST_INTERVAL = 300;
 const DEFAULT_URL_TEST_TOLERANCE = 100;
 const Z_ICON_BASE =
   "https://raw.githubusercontent.com/silencoo/z-icon/main/icon/";
+const PROVIDER_DNS_RULES = [
+  {
+    domainSuffix: "placudoshai.fun",
+    resolver: "https://jeeyio.com/api/dns-query",
+  },
+];
 
 function zIcon(path) {
   return Z_ICON_BASE + path;
@@ -156,6 +162,29 @@ const RESIDENTIAL_NODE_KEYWORDS =
 
 function uniqueList(items) {
   return [...new Set(items.filter(Boolean))];
+}
+
+function normalizeServerHostname(server) {
+  return String(server || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, "");
+}
+
+function serverMatchesDomainSuffix(server, domainSuffix) {
+  const hostname = normalizeServerHostname(server);
+  const suffix = normalizeServerHostname(domainSuffix);
+  return hostname === suffix || hostname.endsWith(`.${suffix}`);
+}
+
+function buildProviderDnsPolicy(proxies) {
+  return Object.fromEntries(
+    PROVIDER_DNS_RULES.filter(({ domainSuffix }) =>
+      proxies.some((proxy) =>
+        serverMatchesDomainSuffix(proxy?.server, domainSuffix),
+      ),
+    ).map(({ domainSuffix, resolver }) => [`+.${domainSuffix}`, resolver]),
+  );
 }
 
 function getNodeTags(name) {
@@ -1031,6 +1060,7 @@ function main(e) {
 
   // 去重处理：重复节点 name 自动加序号
   proxies = deduplicateProxies(proxies);
+  const providerDnsPolicy = buildProviderDnsPolicy(proxies);
 
   // 信息伪节点只负责展示名称。改为本地直连出站后，Clash 内测速无需
   // 连接机场提供的无效 server，也不会消耗订阅流量。
@@ -1143,11 +1173,22 @@ function main(e) {
   }
 
   // DNS 配置
+  const nameservers = [
+    "119.29.29.29",
+    "223.5.5.5",
+    "tls://223.5.5.5:853",
+    "tls://223.6.6.6:853",
+    "tls://120.53.53.53",
+    "tls://1.12.12.12",
+  ];
   const dnsConfig = {
     enable: true,
     ipv6: ipv6Enabled,
-    "fake-ip": "fakeip" in rawArgs ? fakeIPEnabled : true,
     listen: "0.0.0.0:53",
+    "enhanced-mode":
+      "fakeip" in rawArgs && !fakeIPEnabled ? "redir-host" : "fake-ip",
+    "fake-ip-range": "198.18.0.1/16",
+    "fake-ip-range6": "fdfe:dcba:9876::1/64",
     "fake-ip-filter": [
       "*.lan",
       "*.srv.nintendo.net",
@@ -1159,15 +1200,16 @@ function main(e) {
       "rtc.goodfone.co.kr",
       "*.chattti.com",
     ],
-    nameserver: [
-      "119.29.29.29",
-      "223.5.5.5",
-      "tls://223.5.5.5:853",
-      "tls://223.6.6.6:853",
-      "tls://120.53.53.53",
-      "tls://1.12.12.12",
-    ],
+    nameserver: nameservers,
   };
+
+  if (Object.keys(providerDnsPolicy).length > 0) {
+    // 仅在订阅确实包含对应节点域名时启用机场专用 DNS。
+    // 其他节点仍使用默认解析器，避免将所有机场域名暴露给单一服务商。
+    dnsConfig["nameserver-policy"] = providerDnsPolicy;
+    dnsConfig["proxy-server-nameserver"] = [...nameservers];
+    dnsConfig["proxy-server-nameserver-policy"] = providerDnsPolicy;
+  }
 
   return (
     Object.assign(t, {
