@@ -6,6 +6,7 @@ Standalone scripts intended for use with Sub-Store.
 | --- | --- | --- |
 | [`convert-v2.js`](./convert-v2.js) | Tag-aware profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/convert-v2.js) |
 | [`ios-adapter.js`](./ios-adapter.js) | iOS compatibility operator | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/ios-adapter.js) |
+| [`add-country-flags.js`](./add-country-flags.js) | Add or normalize flags on one subscription's nodes | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/add-country-flags.js) |
 
 Use the raw URL required by your Sub-Store configuration. Review each script's
 header and settings before enabling it.
@@ -27,3 +28,11 @@ unrelated subscriptions.
 
 The legacy `convert.js` operator was removed. Existing configurations should
 migrate to `convert-v2.js`.
+
+## Country flags for one subscription
+
+Add `add-country-flags.js` as a script operation on the individual subscription
+that needs renaming. It recognizes 30 common locations across Asia, Europe, the
+Americas, and Oceania from common Chinese names, English names, abbreviations,
+and major city names. Existing flags are normalized rather than duplicated, and
+unrecognized node names are left unchanged.
