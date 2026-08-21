@@ -16,6 +16,9 @@ expensive residential node.
   plus exact flags and proxy-client icons from the general catalog.
 - Mihomo/Clash profile generation remains in `../sub-store/convert-v2.js` instead
   of duplicating a second client implementation here.
+- The Quantumult X template binds `*.placudoshai.fun` to the provider's
+  `https://jeeyio.com/api/dns-query` endpoint. The domain-scoped `doh-server`
+  form keeps the template's normal DNS servers in use for every other domain.
 - GOODBYEADS domain and allow outputs are merged with Cats-Team AdRules' native
   Quantumult X output by `scripts/update-ads.mjs`. The result is normalized,
   deduplicated, and filtered so GOODBYEADS allow rules take precedence over

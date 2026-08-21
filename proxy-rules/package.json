@@ -4,10 +4,11 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "test": "node --test scripts/*.test.mjs",
     "test:ads": "node --test scripts/update-ads.test.mjs",
     "update:ads": "node scripts/update-ads.mjs",
     "update:pt": "node scripts/update-pt.mjs",
     "update:external": "npm run update:ads && npm run update:pt",
-    "check": "npm run test:ads && node scripts/build.mjs --check && node scripts/check-ads.mjs && node scripts/check-pt.mjs"
+    "check": "npm test && node scripts/build.mjs --check && node scripts/check-ads.mjs && node scripts/check-pt.mjs"
   }
 }
