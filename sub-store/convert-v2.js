@@ -1,6 +1,6 @@
 // author=silencoo; profile-patch=codex-5.6 sol extra high
-// v2: tag-aware profile. [pro]/AI/residential nodes are kept out of country
-// auto groups and exposed directly through the AI policy group.
+// v2: [pro]-prefixed nodes are kept out of country auto groups and exposed
+// directly through the AI policy group.
 // URL-test args: autotestinterval=1800, countrytestinterval=600,
 // fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
 // urltestinterval overrides all three intervals; 0 disables periodic tests.
@@ -199,30 +199,38 @@ function hasNodeTag(name, tags) {
 }
 
 function isProProxyName(name) {
-  return hasNodeTag(name, ["pro"]);
+  return /^\[pro\]/i.test(String(name));
 }
 
 function isAIProxyName(name) {
-  return hasNodeTag(name, AI_TAGS) || AI_NODE_KEYWORDS.test(name);
+  return isProProxyName(name);
+  // Previous tag/keyword recognition (kept for optional fallback):
+  // return hasNodeTag(name, AI_TAGS) || AI_NODE_KEYWORDS.test(name);
 }
 
 function isPremiumProxyName(name) {
-  return hasNodeTag(name, PREMIUM_TAGS);
+  return isProProxyName(name);
+  // Previous tag recognition (kept for optional fallback):
+  // return hasNodeTag(name, PREMIUM_TAGS);
 }
 
 function isResidentialProxyName(name) {
-  return (
-    hasNodeTag(name, RESIDENTIAL_TAGS) || RESIDENTIAL_NODE_KEYWORDS.test(name)
-  );
+  return isProProxyName(name);
+  // Previous tag/keyword recognition (kept for optional fallback):
+  // return (
+  //   hasNodeTag(name, RESIDENTIAL_TAGS) || RESIDENTIAL_NODE_KEYWORDS.test(name)
+  // );
 }
 
 function isStandardProxyName(name) {
-  return (
-    !isProProxyName(name) &&
-    !isAIProxyName(name) &&
-    !isPremiumProxyName(name) &&
-    !isResidentialProxyName(name)
-  );
+  return !isProProxyName(name);
+  // Previous tag/keyword exclusion (kept for optional fallback):
+  // return (
+  //   !isProProxyName(name) &&
+  //   !isAIProxyName(name) &&
+  //   !isPremiumProxyName(name) &&
+  //   !isResidentialProxyName(name)
+  // );
 }
 
 function buildBaseLists({
@@ -1076,13 +1084,16 @@ function main(e) {
     .map((p) => p.name);
 
   const nodePools = {
-    ai: realProxyNames.filter(
-      (name) => isAIProxyName(name) || isPremiumProxyName(name),
-    ),
+    // AI follows the Residential pool, matching the Quantumult X template.
+    ai: [],
     residential: realProxyNames.filter(isResidentialProxyName),
+    // Previous independent AI tag/keyword pool (kept for optional fallback):
+    // ai: realProxyNames.filter(
+    //   (name) => isAIProxyName(name) || isPremiumProxyName(name),
+    // ),
   };
 
-  // 地区自动组只使用普通节点，避免 [pro]/AI/家宽专用节点被自动选中。
+  // 地区自动组只使用普通节点，避免 [pro] 专用节点被自动选中。
   const standardProxyNames = realProxyNames.filter(isStandardProxyName);
 
   const t = { proxies: proxies };

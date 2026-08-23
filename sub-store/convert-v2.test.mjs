@@ -73,7 +73,8 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   const convert = await loadConverter();
   const profile = convert({
     proxies: [
-      { name: "[grok] Residential AI", type: "ss" },
+      { name: "[pro] Residential AI", type: "ss" },
+      { name: "[grok] Non-Pro AI", type: "ss" },
       { name: "Japan Node", type: "ss" },
       { name: "Singapore Node", type: "ss" },
       { name: "United States Node", type: "ss" },
@@ -87,7 +88,8 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   );
   assert.ok(groups.has("AI"));
   assert.ok(groups.has("Gemini"));
-  assert.ok(groups.get("AI").proxies.includes("[grok] Residential AI"));
+  assert.ok(groups.get("AI").proxies.includes("[pro] Residential AI"));
+  assert.ok(!groups.get("AI").proxies.includes("[grok] Non-Pro AI"));
   assert.deepEqual(Array.from(groups.get("Gemini").proxies), [
     "United States",
     "Proxies",
@@ -100,7 +102,7 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   ]);
   assert.equal(groups.get("Gemini").proxies[0], "United States");
   assert.ok(!groups.get("Gemini").proxies.includes("Hong Kong"));
-  assert.ok(!groups.get("Gemini").proxies.includes("[grok] Residential AI"));
+  assert.ok(!groups.get("Gemini").proxies.includes("[pro] Residential AI"));
   assert.deepEqual(Array.from(groups.get("Proxies").proxies.slice(0, 6)), [
     "Auto",
     "Japan",

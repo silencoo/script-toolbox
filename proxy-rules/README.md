@@ -105,21 +105,13 @@ Do not enable the old all-in-one AI resource at the same time. Its broad Google
 suffixes would overlap these isolated policies.
 
 The public template keeps `Gemini` limited to the built-in `proxy` and
-`direct` choices. A single `Residential` child policy uses narrow resource and
-server tag regexes aligned with `sub-store/convert-v2.js`; it reads only the
-`Primary Subscription` resource and includes residential, home, ISP,
-original-route, or Chinese home-broadband nodes. `AI` references that child
-policy instead of listing those nodes again. It never uses
-`server-tag-regex=^.*`.
-
-The `Residential` server regex uses
-`EXCLUDE_KEYWORD1|EXCLUDE_KEYWORD2` as an exclusion example. Replace both
-placeholders with real keywords and append more using `|`; a node is excluded
-when its name contains any listed keyword, regardless of position. Its
-positive side already recognizes residential node names. Escape regex
-characters such as `[`, `]`, and `.` when they should be treated literally.
-The policy also includes the built-in `proxy` choice as a normal-proxy
-fallback.
+`direct` choices. A single `Residential` child policy reads only the `Primary
+Subscription` resource and includes nodes whose tags start with the literal
+`[pro]` prefix. `AI` references that child policy instead of listing those
+nodes again. The previous residential, home, ISP, original-route, and Chinese
+home-broadband keyword matcher remains commented out directly below the active
+policy as an optional fallback. The policy also includes the built-in `proxy`
+choice as a normal-proxy fallback and never uses `server-tag-regex=^.*`.
 
 Every other routing policy combines negative and positive placeholders:
 
