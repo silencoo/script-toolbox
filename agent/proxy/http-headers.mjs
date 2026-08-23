@@ -64,11 +64,13 @@ export function upstreamHeaders(request, protocol, backend, secret, bodyLength =
   return headers;
 }
 
-export function responseHeaders(headers) {
+export function responseHeaders(headers, { reframeBody = false } = {}) {
   const result = {};
   const hopByHop = hopByHopHeaders(headers);
   for (const [name, value] of Object.entries(headers)) {
-    if (!hopByHop.has(name.toLowerCase()) && value !== undefined) result[name] = value;
+    const lower = name.toLowerCase();
+    if (reframeBody && lower === "content-length") continue;
+    if (!hopByHop.has(lower) && value !== undefined) result[name] = value;
   }
   return result;
 }

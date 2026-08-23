@@ -1847,7 +1847,10 @@ function runUpstreamAttempt({
         });
         usageObserver.onDrain(onObserverDrain);
         if (streaming) clearTimeout(totalTimer);
-        response.writeHead(status, responseHeaders(incoming.headers));
+        // End the downstream framing ourselves. Keeping the upstream Content-Length
+        // lets a client finish as soon as the last body byte arrives, before usage
+        // observation completes and the admission lease is released.
+        response.writeHead(status, responseHeaders(incoming.headers, { reframeBody: true }));
         resetIdle();
         incoming.on("data", (chunk) => {
           bytesOut += chunk.length;

@@ -524,6 +524,13 @@ test("proxy header projection removes every local credential before upstream aut
   assert.equal(projectedResponse["keep-alive"], undefined);
   assert.equal(projectedResponse["x-upstream-hop"], undefined);
   assert.equal(projectedResponse["content-type"], "application/json");
+
+  const reframedResponse = responseHeaders({
+    "content-length": "17",
+    "content-type": "application/json"
+  }, { reframeBody: true });
+  assert.equal(reframedResponse["content-length"], undefined);
+  assert.equal(reframedResponse["content-type"], "application/json");
 });
 
 test("request admission bounds concurrent work and buffered bytes", () => {
@@ -570,7 +577,10 @@ test("named proxy defaults isolate every device-local runtime path", () => {
     assert.notEqual(work[key], base[key], `${key} should be instance-local`);
   }
   assert.notEqual(work.port, base.port);
-  assert.match(work.proxyState, /\/proxy\/instances\/work-one\/state\.json$/);
+  assert.match(
+    work.proxyState.replaceAll("\\", "/"),
+    /\/proxy\/instances\/work-one\/state\.json$/
+  );
   assert.throws(() => controllerProxyDefaults({ instance: "Not Valid" }), /lowercase/);
 });
 
@@ -1424,7 +1434,11 @@ test("Provider connect/disconnect is preview-first, guarded, and exact-restore",
   const upstreamPort = await listen(upstream);
   const proxyPort = await freePort();
   const commonProxy = proxyArgs(root, proxyPort);
-  const environment = { HOME: home, AGENTCTL_AGENT_ROOT: agentRoot };
+  const environment = {
+    HOME: home,
+    USERPROFILE: home,
+    AGENTCTL_AGENT_ROOT: agentRoot
+  };
   let proxyPid = 0;
   try {
     await mkdir(dirname(setup), { recursive: true });
@@ -1753,7 +1767,7 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     });
     assert.equal(response.status, 200);
     assert.equal(response.headers["content-encoding"], "gzip");
-    assert.equal(response.headers["content-length"], String(compressedUpstreamResponse.length));
+    assert.equal(response.headers["content-length"], undefined);
     assert.deepEqual(response.body, compressedUpstreamResponse);
     assert.equal(observed.length, 1);
     assert.equal(observed[0].path, "/backend-api/codex/responses");
