@@ -191,6 +191,35 @@ test("defaults AI traffic to Proxies when no dedicated AI node exists", async ()
   assert.deepEqual(Array.from(ai.proxies), ["Proxies", "Fallback", "Direct"]);
 });
 
+test("recognizes pro nodes after a leading country or location icon", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "🇺🇸 [pro] Residential AI", type: "ss" },
+      { name: "🇯🇵[PRO] Premium AI", type: "ss" },
+      { name: "🌐 [pro] Unclassified AI", type: "ss" },
+      { name: "🇺🇸 Standard Node", type: "ss" },
+      { name: "🇺🇸 Regular [pro] Label", type: "ss" },
+    ],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  assert.deepEqual(Array.from(groups.get("AI").proxies), [
+    "🇺🇸 [pro] Residential AI",
+    "🇯🇵[PRO] Premium AI",
+    "🌐 [pro] Unclassified AI",
+    "Proxies",
+    "Fallback",
+    "Direct",
+  ]);
+  assert.deepEqual(Array.from(groups.get("Auto").proxies), [
+    "🇺🇸 Standard Node",
+    "🇺🇸 Regular [pro] Label",
+  ]);
+});
+
 test("allows periodic URL tests to be tuned or disabled", async () => {
   const convert = await loadConverter({
     urltestinterval: "0",

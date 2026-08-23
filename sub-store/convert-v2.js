@@ -1,6 +1,7 @@
 // author=silencoo; profile-patch=codex-5.6 sol extra high
-// v2: [pro]-prefixed nodes are kept out of country auto groups and exposed
-// directly through the AI policy group.
+// v2: [pro]-tagged nodes (optionally preceded by a country/location icon) are
+// kept out of country auto groups and exposed directly through the AI policy
+// group.
 // URL-test args: autotestinterval=1800, countrytestinterval=600,
 // fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
 // urltestinterval overrides all three intervals; 0 disables periodic tests.
@@ -154,6 +155,8 @@ const AI_TAGS = [
 ];
 const PREMIUM_TAGS = ["pro"];
 const RESIDENTIAL_TAGS = ["res", "home", "isp", "residential", "家宽"];
+const LEADING_LOCATION_ICON_PATTERN =
+  /^(?:(?:(?:[\uD83C][\uDDE6-\uDDFF]){2}|🌐)\s*)*/;
 
 const AI_NODE_KEYWORDS =
   /\b(AI|OpenAI|ChatGPT|Claude|Gemini|Copilot|Perplexity|Grok|xAI)\b|人工智能|智算/i;
@@ -199,7 +202,11 @@ function hasNodeTag(name, tags) {
 }
 
 function isProProxyName(name) {
-  return /^\[pro\]/i.test(String(name));
+  const nameWithoutLocationIcon = String(name).replace(
+    LEADING_LOCATION_ICON_PATTERN,
+    "",
+  );
+  return /^\[pro\]/i.test(nameWithoutLocationIcon);
 }
 
 function isAIProxyName(name) {
