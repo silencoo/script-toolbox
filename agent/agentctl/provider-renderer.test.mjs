@@ -169,6 +169,7 @@ test("direct compatibility is explicit instead of inferred from endpoint names",
   assert.match(claudeResponses.issue, /requires anthropic_messages/);
   assert.equal(proxyCompatibilityIssue("codex", "openai_responses"), "");
   assert.match(proxyCompatibilityIssue("codex", "openai_chat"), /Responses proxy/);
+  assert.equal(proxyCompatibilityIssue("opencode", "google_generative"), "");
   assert.equal(proxyCompatibilityIssue("pi", "google_generative"), "");
 
   const piLocal = renderProviderPlan({

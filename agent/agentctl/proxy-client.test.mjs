@@ -31,11 +31,14 @@ import {
   joinUpstream,
   pruneLogs,
   projectPassthroughUrl,
+  responseHeaders,
   rotateLog,
   upstreamHeaders,
   validateConfig,
   websocketObserver
 } from "../proxy/agentproxyd.mjs";
+import { RequestAdmission } from "../proxy/admission.mjs";
+import { proxyDefaults as controllerProxyDefaults } from "./proxy-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROVIDER_CLIENT = join(HERE, "provider-client.mjs");
@@ -66,10 +69,32 @@ function proxyArgs(root, port) {
     "--proxy-runtime-log", join(root, "proxy", "daemon.log"),
     "--proxy-attach-state", join(root, "proxy", "attachment.json"),
     "--proxy-attach-backup", join(root, "proxy", "codex-config.backup.toml"),
+    "--proxy-connect-state", join(root, "proxy", "connection.json"),
+    "--proxy-connect-backup", join(root, "proxy", "connection-backups"),
     "--codex-config", join(root, "codex", "config.toml"),
     "--failover-store", join(root, "config", "failover.json"),
     "--pricing", join(root, "config", "pricing.json"),
     "--port", String(port)
+  ];
+}
+
+function namedProxyArgs(root, port, instance) {
+  const runtime = join(root, "proxy", "instances", instance);
+  return [
+    ...proxyArgs(root, port),
+    "--instance", instance,
+    "--proxy-config", join(runtime, "config.json"),
+    "--proxy-state", join(runtime, "state.json"),
+    "--proxy-lock", join(runtime, "runtime.lock"),
+    "--proxy-capability", join(root, "config", "proxy-capabilities", `${instance}.json`),
+    "--proxy-log", join(runtime, "requests.jsonl"),
+    "--proxy-usage-log", join(runtime, "usage.jsonl"),
+    "--circuit-state", join(runtime, "circuits.json"),
+    "--proxy-runtime-log", join(runtime, "daemon.log"),
+    "--proxy-attach-state", join(runtime, "attachment.json"),
+    "--proxy-attach-backup", join(runtime, "codex-config.backup.toml"),
+    "--proxy-connect-state", join(runtime, "connection.json"),
+    "--proxy-connect-backup", join(runtime, "connection-backups")
   ];
 }
 
@@ -454,7 +479,9 @@ test("proxy header projection removes every local credential before upstream aut
       "content-type": "application/json",
       "content-length": "999",
       digest: "sha-256=STALE-BODY-DIGEST",
-      connection: "keep-alive"
+      connection: "keep-alive, x-private-hop",
+      "x-private-hop": "must-not-cross-proxy",
+      "proxy-connection": "keep-alive"
     }
   }, "openai_responses", {
     auth: { mode: "bearer" }
@@ -463,6 +490,8 @@ test("proxy header projection removes every local credential before upstream aut
   assert.equal(headers["x-agentctl-proxy-token"], undefined);
   assert.equal(headers["x-api-key"], undefined);
   assert.equal(headers.connection, undefined);
+  assert.equal(headers["proxy-connection"], undefined);
+  assert.equal(headers["x-private-hop"], undefined);
   assert.equal(headers.digest, undefined);
   assert.equal(headers["content-length"], "17");
   assert.equal(headers["accept-encoding"], "identity");
@@ -484,13 +513,73 @@ test("proxy header projection removes every local credential before upstream aut
   assert.equal(passthrough["user-agent"], "codex-cli/test");
   assert.equal(passthrough["accept-encoding"], "gzip, br");
   assert.equal(passthrough["x-agentctl-proxy-token"], undefined);
+
+  const projectedResponse = responseHeaders({
+    connection: "keep-alive, x-upstream-hop",
+    "keep-alive": "timeout=5",
+    "x-upstream-hop": "must-not-reach-client",
+    "content-type": "application/json"
+  });
+  assert.equal(projectedResponse.connection, undefined);
+  assert.equal(projectedResponse["keep-alive"], undefined);
+  assert.equal(projectedResponse["x-upstream-hop"], undefined);
+  assert.equal(projectedResponse["content-type"], "application/json");
+});
+
+test("request admission bounds concurrent work and buffered bytes", () => {
+  const admission = new RequestAdmission({ maxRequests: 2, maxBytes: 10 });
+  const first = admission.acquire(6);
+  assert.ok(first);
+  const second = admission.acquire(0);
+  assert.ok(second);
+  assert.equal(second.add(4), true);
+  assert.equal(second.add(1), false);
+  assert.equal(admission.acquire(0), null);
+  assert.deepEqual(admission.status(), {
+    active_requests: 2,
+    max_requests: 2,
+    inflight_request_bytes: 10,
+    max_inflight_request_bytes: 10,
+    rejected_requests: 1
+  });
+  assert.equal(second.releaseBytes(4), true);
+  first.release();
+  second.release();
+  assert.equal(admission.status().active_requests, 0);
+  assert.equal(admission.status().inflight_request_bytes, 0);
+});
+
+test("named proxy defaults isolate every device-local runtime path", () => {
+  const base = controllerProxyDefaults({
+    platform: "linux",
+    environment: {},
+    home: "/tmp/agentctl-instance-home",
+    instance: "default"
+  });
+  const work = controllerProxyDefaults({
+    platform: "linux",
+    environment: {},
+    home: "/tmp/agentctl-instance-home",
+    instance: "work-one"
+  });
+  for (const key of [
+    "proxyConfig", "proxyState", "proxyLock", "proxyCapability", "proxyLog",
+    "proxyUsageLog", "proxyRuntimeLog", "proxyCircuitState", "proxyAttachState",
+    "proxyAttachBackup", "proxyConnectState", "proxyConnectBackup"
+  ]) {
+    assert.notEqual(work[key], base[key], `${key} should be instance-local`);
+  }
+  assert.notEqual(work.port, base.port);
+  assert.match(work.proxyState, /\/proxy\/instances\/work-one\/state\.json$/);
+  assert.throws(() => controllerProxyDefaults({ instance: "Not Valid" }), /lowercase/);
 });
 
 test("daemon config rejects a non-loopback listener", () => {
   const root = "/tmp/agentctl-proxy-test";
   const config = {
-    schema: 5,
+    schema: 6,
     kind: "agentctl-proxy-config",
+    instance: "default",
     instance_id: "11111111-1111-4111-8111-111111111111",
     created_at: new Date().toISOString(),
     mode: "provider",
@@ -526,12 +615,19 @@ test("daemon config rejects a non-loopback listener", () => {
     retention: { files: 5, max_age_days: 30 },
     pricing: { catalog: join(root, "pricing"), model_source: "response" },
     listen: { host: "0.0.0.0", port: 17321 },
-    timeouts: { first_byte_ms: 1000, stream_idle_ms: 1000, request_ms: 1000 },
+    timeouts: {
+      first_byte_ms: 1000,
+      stream_idle_ms: 1000,
+      request_ms: 1000,
+      request_body_ms: 1000
+    },
     limits: {
       request_bytes: 1024,
       log_bytes: 65536,
       usage_log_bytes: 65536,
-      usage_capture_bytes: 1024
+      usage_capture_bytes: 1024,
+      max_concurrent_requests: 1,
+      max_inflight_request_bytes: 1024
     },
     paths: {
       state: join(root, "state"),
@@ -542,6 +638,12 @@ test("daemon config rejects a non-loopback listener", () => {
       usage_log: join(root, "usage-log"),
       circuit_state: join(root, "circuit-state"),
       runtime_log: join(root, "runtime-log")
+    },
+    sources: {
+      provider_store: join(root, "providers"),
+      provider_secrets: join(root, "secrets"),
+      failover_store: null,
+      pricing_catalog: join(root, "pricing")
     }
   };
   assert.throws(() => validateConfig(config), /loopback/);
@@ -1020,7 +1122,23 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(running.observability.circuit_state.last_error, null);
     assert.equal(running.pricing_model_source, "response");
     assert.equal(running.compaction.mode, "remote_native");
+    assert.deepEqual(running.configuration, { restart_required: false, changed: [] });
+    assert.equal(running.admission.max_requests, 64);
+    assert.equal(running.admission.active_requests, 0);
     assert.equal(Object.hasOwn(running, "token"), false);
+
+    const providerStorePath = join(root, "config", "providers.json");
+    await writeFile(
+      providerStorePath,
+      `${await readFile(providerStorePath, "utf8")}\n`,
+      { mode: 0o600 }
+    );
+    const drifted = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ]).stdout);
+    assert.equal(drifted.status, "running");
+    assert.equal(drifted.configuration.restart_required, true);
+    assert.ok(drifted.configuration.changed.includes("provider_store"));
 
     const capabilityPath = join(root, "config", "proxy-capability.json");
     const capability = JSON.parse(await readFile(capabilityPath, "utf8"));
@@ -1196,10 +1314,258 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
   }
 });
 
+test("named proxy instances run and stop independently", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-multi-instance-"));
+  let requests = 0;
+  const upstream = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requests += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  const alphaPort = await freePort();
+  let betaPort = await freePort();
+  while (betaPort === alphaPort) betaPort = await freePort();
+  const alpha = namedProxyArgs(root, alphaPort, "alpha");
+  const beta = namedProxyArgs(root, betaPort, "beta");
+  let alphaPid = 0;
+  let betaPid = 0;
+  try {
+    run(PROVIDER_CLIENT, ["init", ...providerArgs(root), "--yes"]);
+    run(PROVIDER_CLIENT, [
+      "create", "multi-instance",
+      "--protocol", "openai_responses",
+      "--base-url", `http://127.0.0.1:${upstreamPort}/v1`,
+      "--model", "model-shared",
+      "--auth-mode", "bearer",
+      "--secret", "shared_key",
+      ...providerArgs(root), "--yes"
+    ]);
+    const keyFile = join(root, "shared-key");
+    await writeFile(keyFile, "SHARED-UPSTREAM-KEY\n", { mode: 0o600 });
+    run(PROVIDER_CLIENT, [
+      "secret", "set", "shared_key", "--secret-file", keyFile,
+      ...providerArgs(root), "--yes"
+    ]);
+
+    const alphaStarted = JSON.parse(run(PROXY_CLIENT, [
+      "start", "multi-instance", "--target", "codex", ...alpha, "--yes", "--json"
+    ]).stdout);
+    alphaPid = alphaStarted.pid;
+    const betaStarted = JSON.parse(run(PROXY_CLIENT, [
+      "start", "multi-instance", "--target", "codex", ...beta, "--yes", "--json"
+    ]).stdout);
+    betaPid = betaStarted.pid;
+    assert.equal(alphaStarted.instance, "alpha");
+    assert.equal(betaStarted.instance, "beta");
+    assert.notEqual(alphaPid, betaPid);
+
+    for (const [args, port, instance] of [
+      [alpha, alphaPort, "alpha"],
+      [beta, betaPort, "beta"]
+    ]) {
+      const state = JSON.parse(run(PROXY_CLIENT, ["status", ...args, "--json"]).stdout);
+      assert.equal(state.status, "running");
+      assert.equal(state.instance, instance);
+      const capability = JSON.parse(await readFile(state.capability_file, "utf8"));
+      const forwarded = await rawHttp(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: {
+          "x-agentctl-proxy-token": capability.token,
+          "content-type": "application/json"
+        },
+        body: Buffer.from('{"model":"model-shared","input":"instance-test"}')
+      });
+      assert.equal(forwarded.status, 200);
+    }
+    assert.equal(requests, 2);
+
+    run(PROXY_CLIENT, ["stop", ...alpha, "--yes", "--json"]);
+    alphaPid = 0;
+    assert.equal(
+      JSON.parse(run(PROXY_CLIENT, ["status", ...beta, "--json"]).stdout).status,
+      "running"
+    );
+    run(PROXY_CLIENT, ["stop", ...beta, "--yes", "--json"]);
+    betaPid = 0;
+  } finally {
+    for (const pid of [alphaPid, betaPid]) {
+      if (!pid) continue;
+      try { process.kill(pid, "SIGTERM"); } catch {}
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    await closeServer(upstream);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Provider connect/disconnect is preview-first, guarded, and exact-restore", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-proxy-connect-"));
+  const home = join(root, "home");
+  const agentRoot = join(root, "fake-agent");
+  const codexRoot = join(home, ".codex");
+  const codexConfig = join(codexRoot, "config.toml");
+  const codexAuth = join(codexRoot, "auth.json");
+  const originalConfig = Buffer.from(
+    'model_provider = "external"\napproval_policy = "on-request"\n'
+  );
+  const originalAuth = Buffer.from('{"account":"official-identity"}\n');
+  const setup = join(agentRoot, "codex", "setup.sh");
+  const upstream = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  const proxyPort = await freePort();
+  const commonProxy = proxyArgs(root, proxyPort);
+  const environment = { HOME: home, AGENTCTL_AGENT_ROOT: agentRoot };
+  let proxyPid = 0;
+  try {
+    await mkdir(dirname(setup), { recursive: true });
+    await writeFile(setup, [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "base_url=''",
+      "model=''",
+      "key_file=''",
+      "force=0",
+      "while [ \"$#\" -gt 0 ]; do",
+      "  case \"$1\" in",
+      "    --base-url) base_url=$2; shift 2 ;;",
+      "    --model) model=$2; shift 2 ;;",
+      "    --key-file) key_file=$2; shift 2 ;;",
+      "    --force) force=1; shift ;;",
+      "    --skip-validate) shift ;;",
+      "    *) if [ \"$#\" -gt 1 ] && [[ $2 != --* ]]; then shift 2; else shift; fi ;;",
+      "  esac",
+      "done",
+      "root=$HOME/.codex",
+      "if [ -e \"$root/config.toml\" ] && [ \"$force\" -ne 1 ]; then exit 42; fi",
+      "mkdir -p \"$root/provider-keys\"",
+      "key=$root/provider-keys/script_toolbox_custom.key",
+      "cp \"$key_file\" \"$key\"",
+      "chmod 600 \"$key\"",
+      "printf 'model_provider = \"agentctl-proxy\"\\nmodel = \"%s\"\\nbase_url = \"%s\"\\n' \"$model\" \"$base_url\" > \"$root/config.toml\"",
+      "printf '%s\\n' \"$key\" > \"$root/.script-toolbox-provider-key\"",
+      "printf 'managed-by-fake-backend\\n' > \"$root/.script-toolbox-defaults-backup.toml\"",
+      ""
+    ].join("\n"), { mode: 0o700 });
+    await chmod(setup, 0o700);
+    await mkdir(codexRoot, { recursive: true });
+    await writeFile(codexConfig, originalConfig, { mode: 0o640 });
+    await writeFile(codexAuth, originalAuth, { mode: 0o600 });
+
+    run(PROVIDER_CLIENT, ["init", ...providerArgs(root), "--yes"]);
+    run(PROVIDER_CLIENT, [
+      "create", "connectable",
+      "--protocol", "openai_responses",
+      "--base-url", `http://127.0.0.1:${upstreamPort}/v1`,
+      "--model", "model-connect",
+      "--auth-mode", "bearer",
+      "--secret", "connect_upstream",
+      "--compaction-upstream", "responses_v2",
+      ...providerArgs(root), "--yes"
+    ]);
+    const upstreamKey = join(root, "upstream-connect.key");
+    await writeFile(upstreamKey, "CONNECT-UPSTREAM-KEY\n", { mode: 0o600 });
+    run(PROVIDER_CLIENT, [
+      "secret", "set", "connect_upstream", "--secret-file", upstreamKey,
+      ...providerArgs(root), "--yes"
+    ]);
+    proxyPid = JSON.parse(run(PROXY_CLIENT, [
+      "start", "connectable", "--target", "codex",
+      ...commonProxy, "--yes", "--json"
+    ], { environment }).stdout).pid;
+
+    const preview = JSON.parse(run(PROXY_CLIENT, [
+      "connect", "codex", ...commonProxy, "--json"
+    ], { environment }).stdout);
+    assert.equal(preview.preview, true);
+    assert.deepEqual(await readFile(codexConfig), originalConfig);
+
+    const refused = run(PROXY_CLIENT, [
+      "connect", "codex", ...commonProxy, "--yes", "--json"
+    ], { status: 1, environment });
+    assert.match(refused.stderr, /previous files will be restored/);
+    assert.deepEqual(await readFile(codexConfig), originalConfig);
+
+    const connected = JSON.parse(run(PROXY_CLIENT, [
+      "connect", "codex", ...commonProxy, "--force", "--yes", "--json"
+    ], { environment }).stdout);
+    assert.equal(connected.status, "connected");
+    const connectedConfig = await readFile(codexConfig);
+    const connectedMode = (await lstat(codexConfig)).mode & 0o777;
+    assert.match(connectedConfig.toString("utf8"), new RegExp(
+      `base_url = "http:\\/\\/127\\.0\\.0\\.1:${proxyPort}\\/v1"`
+    ));
+    assert.deepEqual(await readFile(codexAuth), originalAuth);
+    const connectionStatus = JSON.parse(run(PROXY_CLIENT, [
+      "status", ...commonProxy, "--json"
+    ], { environment }).stdout);
+    assert.equal(connectionStatus.connection.status, "connected");
+    assert.equal(connectionStatus.connection.target, "codex");
+
+    const guardedStop = run(PROXY_CLIENT, [
+      "stop", ...commonProxy, "--yes", "--json"
+    ], { status: 1, environment });
+    assert.match(guardedStop.stderr, /disconnect codex before stopping/);
+
+    await writeFile(codexConfig, "tampered\n", { mode: connectedMode });
+    const guardedDisconnect = run(PROXY_CLIENT, [
+      "disconnect", "codex", ...commonProxy, "--yes", "--json"
+    ], { status: 1, environment });
+    assert.match(guardedDisconnect.stderr, /changed after proxy connect/);
+    await writeFile(codexConfig, connectedConfig, { mode: connectedMode });
+    await chmod(codexConfig, connectedMode);
+
+    const disconnectPreview = JSON.parse(run(PROXY_CLIENT, [
+      "disconnect", "codex", ...commonProxy, "--json"
+    ], { environment }).stdout);
+    assert.equal(disconnectPreview.preview, true);
+    const disconnected = JSON.parse(run(PROXY_CLIENT, [
+      "disconnect", "codex", ...commonProxy, "--yes", "--json"
+    ], { environment }).stdout);
+    assert.equal(disconnected.status, "disconnected");
+    assert.deepEqual(await readFile(codexConfig), originalConfig);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(codexConfig)).mode & 0o777, 0o640);
+    }
+    assert.deepEqual(await readFile(codexAuth), originalAuth);
+    for (const path of [
+      join(codexRoot, ".script-toolbox-provider-key"),
+      join(codexRoot, ".script-toolbox-defaults-backup.toml"),
+      join(codexRoot, "provider-keys", "script_toolbox_custom.key"),
+      join(root, "proxy", "connection.json"),
+      join(root, "proxy", "connection-backups")
+    ]) {
+      await assert.rejects(() => lstat(path), { code: "ENOENT" });
+    }
+    run(PROXY_CLIENT, ["stop", ...commonProxy, "--yes", "--json"], { environment });
+    proxyPid = 0;
+  } finally {
+    if (proxyPid) {
+      try { process.kill(proxyPid, "SIGTERM"); } catch {}
+      await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    }
+    await closeServer(upstream);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("OpenAI subscription passthrough is byte-preserving and detach preserves Codex App edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-proxy-passthrough-"));
   const observed = [];
   const observedWebSockets = [];
+  let resolveStreamProbe;
+  const streamProbeSeen = new Promise((resolveProbe) => {
+    resolveStreamProbe = resolveProbe;
+  });
   const websocketRequestPayload = {
     type: "response.create",
     response: {
@@ -1233,7 +1599,10 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
   const compressedUpstreamResponse = gzipSync(upstreamResponseBody);
   const upstream = createServer((request, response) => {
     const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("data", (chunk) => {
+      chunks.push(chunk);
+      if (request.url.includes("stream_probe=1")) resolveStreamProbe();
+    });
     request.on("end", () => {
       observed.push({
         path: request.url,
@@ -1315,6 +1684,8 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
   const proxyPort = await freePort();
   const commonProxy = [
     ...proxyArgs(root, proxyPort),
+    "--max-concurrent-requests", "1",
+    "--request-body-timeout-ms", "1200",
     "--upstream-base-url", `http://127.0.0.1:${upstreamPort}/backend-api/codex`
   ];
   const codexConfig = join(root, "codex", "config.toml");
@@ -1435,6 +1806,83 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     assert.deepEqual(observed[1].body, realtimeBody);
     assert.equal(observed[2].path, "/backend-api/codex/alpha/search");
     assert.deepEqual(observed[2].body, searchBody);
+
+    const streamedBody = Buffer.from(
+      '{"model":"gpt-streamed","input":"request is forwarded before upload completes"}'
+    );
+    const splitAt = 28;
+    let streamedRequest;
+    const streamedResponse = new Promise((resolveResponse, rejectResponse) => {
+      streamedRequest = httpRequest(`${plan.local_base_url}/responses?stream_probe=1`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+          "content-type": "application/json"
+        }
+      }, (incoming) => {
+        const chunks = [];
+        incoming.on("data", (chunk) => chunks.push(chunk));
+        incoming.on("end", () => resolveResponse({
+          status: incoming.statusCode,
+          body: Buffer.concat(chunks)
+        }));
+        incoming.on("error", rejectResponse);
+      });
+      streamedRequest.on("error", rejectResponse);
+    });
+    streamedRequest.write(streamedBody.subarray(0, splitAt));
+    await Promise.race([
+      streamProbeSeen,
+      new Promise((_, rejectWait) => setTimeout(
+        () => rejectWait(new Error("passthrough request was buffered instead of streamed")),
+        1000
+      ))
+    ]);
+    const capacityRejected = await rawHttp(`${plan.local_base_url}/alpha/search`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+        "content-type": "application/json"
+      },
+      body: searchBody
+    });
+    assert.equal(capacityRejected.status, 503);
+    assert.deepEqual(JSON.parse(capacityRejected.body), { error: "proxy_capacity_exceeded" });
+    streamedRequest.end(streamedBody.subarray(splitAt));
+    const streamed = await streamedResponse;
+    assert.equal(streamed.status, 200);
+    assert.deepEqual(streamed.body, compressedUpstreamResponse);
+    assert.equal(observed.length, 4);
+    assert.equal(
+      observed[3].path,
+      "/backend-api/codex/responses?stream_probe=1"
+    );
+    assert.deepEqual(observed[3].body, streamedBody);
+
+    let stalledRequest;
+    const stalledResponse = new Promise((resolveResponse, rejectResponse) => {
+      stalledRequest = httpRequest(`${plan.local_base_url}/responses?body_timeout=1`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer OFFICIAL-CHATGPT-OAUTH",
+          "content-type": "application/json"
+        }
+      }, (incoming) => {
+        const chunks = [];
+        incoming.on("data", (chunk) => chunks.push(chunk));
+        incoming.on("end", () => resolveResponse({
+          status: incoming.statusCode,
+          body: Buffer.concat(chunks)
+        }));
+        incoming.on("error", rejectResponse);
+      });
+      stalledRequest.on("error", rejectResponse);
+    });
+    stalledRequest.write('{"model":"never-finishes"');
+    const bodyTimedOut = await stalledResponse;
+    stalledRequest.destroy();
+    assert.equal(bodyTimedOut.status, 408);
+    assert.deepEqual(JSON.parse(bodyTimedOut.body), { error: "request_body_timeout" });
 
     const rejectedStatus = await rejectedWebSocketAndReset(
       `${plan.local_base_url}/responses?reject_reset=1`,

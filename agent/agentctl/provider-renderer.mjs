@@ -126,8 +126,8 @@ export function proxyCompatibilityIssue(target, protocol) {
     return "Codex can connect to an OpenAI Responses proxy only";
   }
   if (target === "opencode" &&
-      !["anthropic_messages", "openai_responses", "openai_chat"].includes(protocol)) {
-    return "OpenCode can connect to Anthropic Messages, OpenAI Responses, or OpenAI Chat proxies";
+      !["anthropic_messages", "openai_responses", "openai_chat", "google_generative"].includes(protocol)) {
+    return "OpenCode can connect to Anthropic Messages, OpenAI Responses, OpenAI Chat, or Google Generative proxies";
   }
   return "";
 }

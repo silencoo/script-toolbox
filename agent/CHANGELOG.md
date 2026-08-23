@@ -1,5 +1,25 @@
 # Changelog — agent/
 
+## 2026-08-23 — proxy lifecycle and runtime hardening
+
+- Added preview-first `agentctl proxy connect/disconnect` for Provider mode.
+  Connections reuse the target renderer, preserve Codex official Identity,
+  hash-bind all managed files, restore their original bytes and modes, and
+  block stop/capability rotation until disconnected.
+- Added named, independently addressable proxy instances with stable
+  instance-derived ports and separate capabilities, configs, state, locks,
+  logs, attachments, and connection backups.
+- Split strict proxy config/capability/state validation into a shared schema
+  module used by both controller and daemon. Schema 6 adds explicit instance,
+  source, request-body timeout, concurrency, and in-flight byte policy.
+- Added bounded concurrent-request and buffered-byte admission, slow-body
+  timeouts, and backpressured byte-preserving request streaming for ChatGPT
+  subscription passthrough. HTTP and WebSocket work share the admission limit.
+- Health now reports content-free source/config drift as restart-required while
+  the daemon keeps using its validated startup snapshot. Request/response and
+  WebSocket forwarding now strips RFC hop-by-hop headers and every field named
+  by `Connection`.
+
 ## 2026-08-21 — portable nested Skill checksums
 
 - Fixed nested Skill snapshot checksums for names such as `api` and

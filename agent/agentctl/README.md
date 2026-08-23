@@ -360,15 +360,33 @@ request. See
 ## Optional native protocol proxy
 
 The proxy is a separate Node process with an explicit lifecycle. It does not
-run inside agentctl, start with the TUI, or modify an agent configuration:
+run inside agentctl or start with the TUI. Starting it never modifies an agent;
+Provider connection is a separate preview-first operation:
 
 ```bash
 agentctl proxy plan work-gateway --target codex
 agentctl proxy start work-gateway --target codex --yes
+agentctl proxy connect codex
+agentctl proxy connect codex --yes
 agentctl proxy status --json
+agentctl proxy disconnect codex --yes
 agentctl proxy stop
 agentctl proxy stop --yes
 ```
+
+`connect` reuses the target's ownership-safe Provider renderer with the local
+proxy URL and hidden capability. It snapshots every managed file, verifies that
+Codex official Identity is unchanged, and makes `disconnect` an exact restore.
+Target drift refuses disconnect rather than overwriting user edits; an external
+target configuration requires `--force`. Stop and capability rotation are
+blocked while a target remains connected.
+
+Use `--instance <name>` on every command to run independent daemons with
+instance-derived ports and separate capabilities, state, locks, logs,
+attachments, and connection backups. Override `--port` if two names ever hash
+to the same default. `status` also reports bounded admission counters and content-free
+configuration drift. Changes to the selected Provider/Secret/failover/pricing
+sources require an explicit restart and never hot-mutate the running snapshot.
 
 ### Pure observation for an official Codex subscription
 
@@ -398,7 +416,9 @@ OpenAI bearer, `ChatGPT-Account-ID`, request model, body, and response without
 substituting a Provider Secret or alias. It disables failover and replay. The
 HTTP path preserves Codex's `Accept-Encoding` and relays compressed upstream
 response bytes unchanged while a streaming decompressor feeds only the bounded
-in-memory usage collector. The WebSocket path forwards Codex's
+in-memory usage collector. Request bytes are piped upstream with backpressure;
+only a bounded, globally accounted side copy is inspected, so passthrough does
+not require whole-body buffering. The WebSocket path forwards Codex's
 `permessage-deflate` offer and the upstream negotiation, then relays compressed
 frames unchanged. A bounded side observer inflates only its own frame-payload
 copies, including fragmented messages and context takeover, to inspect
@@ -410,6 +430,10 @@ Each WebSocket close record reports observation as `complete`, `degraded`, or
 number of response turns that closed before usage was captured. This makes
 partial accounting explicit without logging the missed content or decoder
 errors verbatim.
+HTTP and WebSocket traffic share a configurable concurrent-request admission
+limit. Native body buffering also has a global byte limit and upload timeout.
+RFC hop-by-hop fields and all fields nominated by `Connection` are stripped in
+both directions.
 Token counts come from the upstream response. Any catalog-derived dollar value
 is an API-price estimate, not a ChatGPT subscription charge or authoritative
 quota balance.

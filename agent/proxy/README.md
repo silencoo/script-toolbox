@@ -9,8 +9,30 @@ Use the public controller rather than invoking the daemon directly:
 ```bash
 agentctl proxy plan work-gateway --target codex
 agentctl proxy start work-gateway --target codex --yes
+agentctl proxy connect codex
+agentctl proxy connect codex --yes
 agentctl proxy status
+agentctl proxy disconnect codex --yes
 agentctl proxy stop --yes
+```
+
+`start` never edits a client. In Provider mode, `connect` renders the verified
+loopback endpoint and hidden local capability through the target's existing
+setup backend. It snapshots every managed target file first, leaves Codex
+`auth.json` untouched, and records hashes for an exact `disconnect` restore.
+External target configuration requires `--force`; later target drift causes a
+safe disconnect refusal. A connected target must be disconnected before the
+daemon can stop or its capability can rotate.
+
+Independent daemons use a validated instance name. Named instances receive
+separate state, lock, config, logs, capability, attachment, and connection
+paths, plus a stable instance-derived default port (`--port` resolves a rare
+hash collision):
+
+```bash
+agentctl proxy start work-gateway --target codex --instance work --yes
+agentctl proxy status --instance work
+agentctl proxy stop --instance work --yes
 ```
 
 For an official ChatGPT-subscription Codex session, use the reserved
@@ -74,7 +96,7 @@ authentication belongs to each resolved Provider backend and can differ among
 backends. Protocol conversion and automatic target attachment are absent.
 
 Provider Store schema 2 declares compaction separately from protocol. The
-proxy's generated schema 5 config opens the compact route only when every
+proxy's generated schema 6 config opens the compact route only when every
 selected backend resolves to `responses_v1` or `responses_v2` under an
 `auto`/`remote` policy for Codex. A mixed or unverified failover route stays on
 client-local compaction. Anthropic `anthropic-beta` and `context_management`
@@ -114,6 +136,9 @@ state, never endpoints or Secrets.
 - The daemon removes the local capability from every supported authentication
   header and injects the real upstream Secret from the owner-only Provider
   Secret Store in memory.
+- RFC hop-by-hop headers, including every header named by `Connection`, are
+  removed in both directions. WebSocket forwarding rebuilds only the required
+  Upgrade hop explicitly.
 - OpenAI subscription passthrough instead requires Codex's bearer on data
   routes and forwards it unchanged with the account header. The hidden
   capability remains isolated to health/control. The listener is still
@@ -133,6 +158,10 @@ state, never endpoints or Secrets.
   query parameters.
 - State, circuit counters, config, capability, metadata, lifecycle logs, and locks are exact
   device-local paths; none belong in the portable Provider Store.
+- Health fingerprints the generated config, local capability, and every
+  selected Provider, Secret, failover, and pricing source. A changed source is reported as
+  `configuration.restart_required` with content-free source names; the running
+  daemon keeps using its validated startup snapshot until explicitly restarted.
 
 The client capability can be rotated only while the daemon is stopped:
 
@@ -163,7 +192,10 @@ agentctl proxy start work-gateway --target codex \
   --first-byte-timeout-ms 30000 \
   --stream-idle-timeout-ms 120000 \
   --request-timeout-ms 300000 \
+  --request-body-timeout-ms 30000 \
   --request-bytes 16777216 \
+  --max-concurrent-requests 64 \
+  --max-inflight-request-bytes 67108864 \
   --log-bytes 5242880 \
   --usage-log-bytes 5242880 \
   --usage-capture-bytes 2097152 \
@@ -175,9 +207,14 @@ agentctl proxy start work-gateway --target codex \
 The first-byte timer covers upstream response headers. SSE responses clear the
 non-streaming total timer after headers and then use a separately reset idle
 timer. Request-size checks use `Content-Length` when available and enforce the
-same limit while reading an unknown-length body. Native JSON requests are held
-only within that bound so the exact model field can be rewritten, then sent
-upstream; compressed request bodies are rejected.
+same limit while reading an unknown-length body. A separate body timer prevents
+slow uploads from holding capacity indefinitely. Native JSON requests are held
+only within the per-request and global buffered-byte bounds so the exact model
+field can be rewritten, then sent upstream; compressed request bodies are
+rejected. Subscription requests are piped upstream with backpressure instead of
+being fully buffered; only a bounded, separately accounted side copy is used for
+model/tier observation. HTTP and WebSocket work share the concurrent-request
+admission limit, and overload fails locally with `503`.
 
 Request and usage metadata rotate independently at their configured byte
 thresholds. Active plus rotated file count and rotated-file age are both

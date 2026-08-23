@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -15,21 +15,13 @@ import {
   unlink,
   writeFile
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as zlib from "node:zlib";
 
 import {
   ProviderSchemaError,
-  validateAuthMode,
-  validateEndpoint,
-  validateModelId,
-  validatePlatform,
-  validateProfileName,
-  validateProtocol,
-  validateProviderSecrets,
-  validateReferenceName,
-  validateTarget
+  validateProviderSecrets
 } from "../agentctl/provider-schema.mjs";
 import {
   createPricingEngine,
@@ -37,45 +29,37 @@ import {
   validatePricingCatalog
 } from "../pricing/pricing.mjs";
 import {
-  mapNativeModelRequest,
-  resolveExactModel
+  mapNativeModelRequest
 } from "./model-mapper.mjs";
 import { UsageCollector, extractUsage } from "./usage.mjs";
+import { RequestAdmission } from "./admission.mjs";
+import {
+  hopByHopHeaders,
+  responseHeaders,
+  upstreamHeaders
+} from "./http-headers.mjs";
+import {
+  OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH,
+  PASSTHROUGH_MODE,
+  PROVIDER_MODE,
+  PROXY_STATE_KIND as STATE_KIND,
+  ProxySchemaError,
+  validateProxyCapability as validateCapability,
+  validateProxyConfig as validateConfig,
+  validateProxyState as validateState
+} from "./schema.mjs";
 import {
   CircuitRegistry,
   newCircuitState,
   validateCircuitState
 } from "./circuit-breaker.mjs";
 
-const CONFIG_KIND = "agentctl-proxy-config";
-const CAPABILITY_KIND = "agentctl-proxy-capability";
-const STATE_KIND = "agentctl-proxy-state";
-const PASSTHROUGH_MODE = "openai_subscription_passthrough";
-const PROVIDER_MODE = "provider";
-const OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
-const OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH = "/backend-api/codex/realtime";
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_PRICING_BYTES = 5 * 1024 * 1024;
+const MAX_SOURCE_FINGERPRINT_BYTES = 5 * 1024 * 1024;
 const LOG_MAINTENANCE_MS = 60_000;
 const LOG_MAX_QUEUE = 2048;
 const CIRCUIT_PERSIST_DELAY_MS = 50;
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "host"
-]);
-const CLIENT_AUTH_HEADERS = new Set([
-  "authorization",
-  "x-api-key",
-  "x-goog-api-key",
-  "x-agentctl-proxy-token"
-]);
 
 class ProxyDaemonError extends Error {
   constructor(message) {
@@ -108,191 +92,6 @@ function parseArguments(argv) {
 
 function plainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function exactKeys(value, allowed, label) {
-  if (!plainObject(value)) throw new ProxyDaemonError(`${label} must be an object`);
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) throw new ProxyDaemonError(`${label} contains unsupported field '${key}'`);
-  }
-}
-
-function boundedInteger(value, label, minimum, maximum) {
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new ProxyDaemonError(`${label} must be an integer from ${minimum} to ${maximum}`);
-  }
-  return value;
-}
-
-function validatePath(value, label) {
-  if (typeof value !== "string" || !isAbsolute(value) || value.length > 4096 ||
-      value.includes("\0")) {
-    throw new ProxyDaemonError(`${label} must be a normalized absolute path`);
-  }
-  return resolve(value);
-}
-
-function validateConfig(value) {
-  exactKeys(value, [
-    "schema", "kind", "instance_id", "created_at", "mode", "profile", "target",
-    "platform", "protocol", "route", "backends", "retry", "circuit",
-    "compaction", "retention", "listen", "timeouts", "limits", "pricing", "paths"
-  ], "proxy config");
-  if (value.schema !== 5 || value.kind !== CONFIG_KIND ||
-      typeof value.instance_id !== "string" ||
-      !/^[a-f0-9-]{36}$/.test(value.instance_id) ||
-      typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at))) {
-    throw new ProxyDaemonError("proxy config identity is invalid");
-  }
-  if (![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode)) {
-    throw new ProxyDaemonError("proxy mode is invalid");
-  }
-  validateProfileName(value.profile);
-  validateTarget(value.target);
-  validatePlatform(value.platform);
-  validateProtocol(value.protocol);
-  exactKeys(value.compaction, ["mode", "label", "responses_compact"], "proxy compaction");
-  if (!["client_local", "remote_native", "messages_native"].includes(value.compaction.mode) ||
-      typeof value.compaction.label !== "string" || value.compaction.label.length < 1 ||
-      value.compaction.label.length > 100 ||
-      typeof value.compaction.responses_compact !== "boolean" ||
-      (value.compaction.responses_compact &&
-       (value.protocol !== "openai_responses" || value.compaction.mode !== "remote_native"))) {
-    throw new ProxyDaemonError("proxy compaction configuration is invalid");
-  }
-  if (value.route !== null &&
-      (typeof value.route !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.route) ||
-       value.route.length > 64)) {
-    throw new ProxyDaemonError("proxy route must be null or a valid route name");
-  }
-  if (!Array.isArray(value.backends) || value.backends.length < 1 ||
-      value.backends.length > 8) {
-    throw new ProxyDaemonError("proxy backends must contain 1-8 entries");
-  }
-  const backendNames = new Set();
-  for (const backend of value.backends) {
-    exactKeys(backend, ["profile", "endpoint", "auth", "models"], "proxy backend");
-    validateProfileName(backend.profile, "proxy backend profile");
-    if (backendNames.has(backend.profile)) throw new ProxyDaemonError("proxy backend profiles must be unique");
-    backendNames.add(backend.profile);
-    backend.endpoint = validateEndpoint(backend.endpoint, "proxy backend endpoint");
-    exactKeys(backend.auth, ["mode", "secret"], "proxy backend auth");
-    if (backend.auth.mode === "openai_passthrough") {
-      if (value.mode !== PASSTHROUGH_MODE || backend.auth.secret !== null) {
-        throw new ProxyDaemonError("OpenAI passthrough authentication is limited to passthrough mode");
-      }
-    } else {
-      validateAuthMode(backend.auth.mode);
-    }
-    if (["none", "openai_passthrough"].includes(backend.auth.mode)) {
-      if (backend.auth.secret !== null) {
-        throw new ProxyDaemonError("unauthenticated proxy backend must not name a Secret");
-      }
-    } else {
-      validateReferenceName(backend.auth.secret, "proxy backend Secret reference");
-    }
-    exactKeys(backend.models, ["default", "aliases"], "proxy backend models");
-    validateModelId(backend.models.default, "proxy backend default model");
-    if (!plainObject(backend.models.aliases) || Object.keys(backend.models.aliases).length > 256) {
-      throw new ProxyDaemonError("proxy backend model aliases must have at most 256 entries");
-    }
-    for (const [requested, outbound] of Object.entries(backend.models.aliases)) {
-      validateModelId(requested, "proxy requested model alias");
-      validateModelId(outbound, `proxy outbound model alias '${requested}'`);
-      resolveExactModel(backend.models, requested);
-    }
-    resolveExactModel(backend.models);
-  }
-  if (value.profile !== value.backends[0].profile) {
-    throw new ProxyDaemonError("proxy primary profile must match the first backend");
-  }
-  if (value.route === null && value.backends.length !== 1) {
-    throw new ProxyDaemonError("a proxy without a route must have exactly one backend");
-  }
-  if (value.mode === PASSTHROUGH_MODE) {
-    const backend = value.backends[0];
-    const endpoint = new URL(backend.endpoint);
-    const loopbackEndpoint = ["127.0.0.1", "[::1]"].includes(
-      endpoint.hostname
-    );
-    if (value.target !== "codex" || value.protocol !== "openai_responses" ||
-        value.route !== null || value.backends.length !== 1 ||
-        backend.auth.mode !== "openai_passthrough" ||
-        Object.keys(backend.models.aliases).length !== 0 ||
-        (backend.endpoint !== OPENAI_SUBSCRIPTION_ENDPOINT && !loopbackEndpoint) ||
-        value.compaction.mode !== "remote_native" ||
-        !value.compaction.responses_compact) {
-      throw new ProxyDaemonError(
-        "OpenAI subscription passthrough requires one safe, unmapped Codex Responses backend"
-      );
-    }
-  }
-  exactKeys(value.retry, ["mode", "max_attempts", "status_codes", "network_errors"], "proxy retry policy");
-  if (!["next_request", "same_request"].includes(value.retry.mode)) {
-    throw new ProxyDaemonError("proxy retry mode must be next_request or same_request");
-  }
-  boundedInteger(value.retry.max_attempts, "proxy max attempts", 1, value.backends.length);
-  if (!Array.isArray(value.retry.status_codes) || value.retry.status_codes.length > 32 ||
-      new Set(value.retry.status_codes).size !== value.retry.status_codes.length) {
-    throw new ProxyDaemonError("proxy retry status codes must be a unique array");
-  }
-  for (const status of value.retry.status_codes) {
-    boundedInteger(status, "proxy retry status", 400, 599);
-  }
-  if (typeof value.retry.network_errors !== "boolean") {
-    throw new ProxyDaemonError("proxy retry network_errors must be boolean");
-  }
-  if (value.mode === PASSTHROUGH_MODE &&
-      (value.retry.mode !== "next_request" || value.retry.max_attempts !== 1 ||
-       value.retry.status_codes.length !== 0 || value.retry.network_errors)) {
-    throw new ProxyDaemonError("OpenAI subscription passthrough cannot retry or replay requests");
-  }
-  exactKeys(value.circuit, [
-    "enabled", "failure_threshold", "recovery_timeout_ms",
-    "half_open_max_requests", "state_retention_days"
-  ], "proxy circuit policy");
-  if (typeof value.circuit.enabled !== "boolean") {
-    throw new ProxyDaemonError("proxy circuit enabled must be boolean");
-  }
-  boundedInteger(value.circuit.failure_threshold, "circuit failure threshold", 1, 20);
-  boundedInteger(value.circuit.recovery_timeout_ms, "circuit recovery timeout", 1000, 3600000);
-  boundedInteger(value.circuit.half_open_max_requests, "circuit half-open max", 1, 5);
-  boundedInteger(value.circuit.state_retention_days, "circuit state retention", 1, 365);
-  if (value.route === null && value.circuit.enabled) {
-    throw new ProxyDaemonError("single-backend proxy circuit must be disabled");
-  }
-  exactKeys(value.retention, ["files", "max_age_days"], "proxy log retention");
-  boundedInteger(value.retention.files, "proxy retention files", 1, 20);
-  boundedInteger(value.retention.max_age_days, "proxy retention days", 1, 365);
-  exactKeys(value.listen, ["host", "port"], "proxy config listen");
-  if (value.listen.host !== "127.0.0.1" && value.listen.host !== "::1") {
-    throw new ProxyDaemonError("proxy listener must use an explicit loopback address");
-  }
-  boundedInteger(value.listen.port, "proxy port", 1024, 65535);
-  exactKeys(value.timeouts, ["first_byte_ms", "stream_idle_ms", "request_ms"], "proxy timeouts");
-  boundedInteger(value.timeouts.first_byte_ms, "first-byte timeout", 100, 600000);
-  boundedInteger(value.timeouts.stream_idle_ms, "stream idle timeout", 1000, 3600000);
-  boundedInteger(value.timeouts.request_ms, "request timeout", 1000, 3600000);
-  exactKeys(value.limits, [
-    "request_bytes", "log_bytes", "usage_log_bytes", "usage_capture_bytes"
-  ], "proxy limits");
-  boundedInteger(value.limits.request_bytes, "request byte limit", 1024, 64 * 1024 * 1024);
-  boundedInteger(value.limits.log_bytes, "log byte limit", 65536, 100 * 1024 * 1024);
-  boundedInteger(value.limits.usage_log_bytes, "usage log byte limit", 65536, 100 * 1024 * 1024);
-  boundedInteger(value.limits.usage_capture_bytes, "usage capture byte limit", 1024, 16 * 1024 * 1024);
-  exactKeys(value.pricing, ["catalog", "model_source"], "proxy pricing");
-  value.pricing.catalog = validatePath(value.pricing.catalog, "proxy pricing catalog path");
-  if (!["request", "response"].includes(value.pricing.model_source)) {
-    throw new ProxyDaemonError("proxy pricing model_source must be request or response");
-  }
-  exactKeys(value.paths, [
-    "state", "lock", "capability", "secrets", "log", "usage_log",
-    "circuit_state", "runtime_log"
-  ], "proxy paths");
-  for (const [name, path] of Object.entries(value.paths)) {
-    value.paths[name] = validatePath(path, `proxy ${name} path`);
-  }
-  return value;
 }
 
 async function readPrivateJson(path, label, validator) {
@@ -362,6 +161,56 @@ async function readCircuitState(path) {
     throw error;
   }
   return validateCircuitState(value);
+}
+
+async function sourceFingerprint(path) {
+  try {
+    const details = await lstat(path);
+    if (details.isSymbolicLink() || !details.isFile()) {
+      return { status: "unsafe" };
+    }
+    if (details.size > MAX_SOURCE_FINGERPRINT_BYTES) {
+      return { status: "oversized", size: details.size };
+    }
+    const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+    return {
+      status: "present",
+      dev: String(details.dev),
+      ino: String(details.ino),
+      mode: details.mode & 0o777,
+      size: details.size,
+      mtime_ms: Math.trunc(details.mtimeMs),
+      sha256: digest
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: "missing" };
+    return { status: "unreadable" };
+  }
+}
+
+async function snapshotRuntimeSources(config, configPath) {
+  const entries = {
+    daemon_config: configPath,
+    proxy_capability: config.paths.capability,
+    ...config.sources
+  };
+  const snapshots = new Map();
+  for (const [name, path] of Object.entries(entries)) {
+    if (path) snapshots.set(name, { path, fingerprint: await sourceFingerprint(path) });
+  }
+  return snapshots;
+}
+
+async function runtimeSourceDrift(snapshots) {
+  const changed = [];
+  for (const [name, source] of snapshots) {
+    const current = await sourceFingerprint(source.path);
+    if (JSON.stringify(current) !== JSON.stringify(source.fingerprint)) changed.push(name);
+  }
+  return {
+    restart_required: changed.length > 0,
+    changed
+  };
 }
 
 function safePersistenceStatus(error) {
@@ -436,16 +285,6 @@ function circuitPersister(path, registry, {
     last_error: safePersistenceStatus(lastError)
   });
   return persist;
-}
-
-function validateCapability(value) {
-  exactKeys(value, ["schema", "kind", "created_at", "token"], "proxy capability");
-  if (value.schema !== 1 || value.kind !== CAPABILITY_KIND ||
-      typeof value.created_at !== "string" || Number.isNaN(Date.parse(value.created_at)) ||
-      typeof value.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value.token)) {
-    throw new ProxyDaemonError("proxy capability is invalid");
-  }
-  return value;
 }
 
 async function writeJsonAtomic(path, value) {
@@ -567,37 +406,6 @@ function joinUpstream(endpoint, localUrl, { stripVersionPrefix = false } = {}) {
   return upstream;
 }
 
-function upstreamHeaders(request, protocol, backend, secret, bodyLength = undefined, {
-  mode = PROVIDER_MODE
-} = {}) {
-  const headers = {};
-  for (const [name, value] of Object.entries(request.headers)) {
-    const lower = name.toLowerCase();
-    const localCredential = mode === PASSTHROUGH_MODE
-      ? lower === "x-agentctl-proxy-token"
-      : CLIENT_AUTH_HEADERS.has(lower);
-    const invalidatedByBodyRewrite = mode === PASSTHROUGH_MODE
-      ? lower === "content-length"
-      : [
-          "accept-encoding", "content-length", "content-encoding",
-          "content-md5", "digest"
-        ].includes(lower);
-    if (HOP_BY_HOP_HEADERS.has(lower) || localCredential ||
-        invalidatedByBodyRewrite) continue;
-    if (value !== undefined) headers[lower] = value;
-  }
-  if (mode !== PASSTHROUGH_MODE) headers["accept-encoding"] = "identity";
-  if (mode !== PASSTHROUGH_MODE) headers["user-agent"] = "agentproxyd/5";
-  if (Number.isSafeInteger(bodyLength)) headers["content-length"] = String(bodyLength);
-  if (backend.auth.mode === "bearer") headers.authorization = `Bearer ${secret}`;
-  if (backend.auth.mode === "x-api-key") headers["x-api-key"] = secret;
-  if (backend.auth.mode === "x-goog-api-key") headers["x-goog-api-key"] = secret;
-  if (protocol === "anthropic_messages" && !headers["anthropic-version"]) {
-    headers["anthropic-version"] = "2023-06-01";
-  }
-  return headers;
-}
-
 function validOpenAiAuthorization(request) {
   const authorization = request.headers.authorization;
   return typeof authorization === "string" && authorization.length <= 16_384 &&
@@ -639,8 +447,7 @@ function inspectPassthroughRequest(body, contentEncoding = "", maxBytes = 2 * 10
     requested_model: requestedModel,
     requested_service_tier: requestedServiceTier,
     outbound_model: requestedModel,
-    mapped: false,
-    body
+    mapped: false
   };
 }
 
@@ -656,17 +463,21 @@ function writeRawHttp(socket, status, reason, body = "") {
 
 function rawUpgradeResponse(socket, response) {
   let head = `HTTP/1.1 ${response.statusCode || 101} ${response.statusMessage || "Switching Protocols"}\r\n`;
-  for (let index = 0; index < response.rawHeaders.length; index += 2) {
-    head += `${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}\r\n`;
+  for (const [name, value] of Object.entries(responseHeaders(response.headers))) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      head += `${name}: ${item}\r\n`;
+    }
   }
+  head += `Connection: Upgrade\r\nUpgrade: ${response.headers.upgrade || "websocket"}\r\n`;
   socket.write(`${head}\r\n`);
 }
 
 function websocketHeaders(request) {
   const headers = {};
+  const blocked = hopByHopHeaders(request.headers);
   for (const [name, value] of Object.entries(request.headers)) {
     const lower = name.toLowerCase();
-    if (lower === "host" || lower === "x-agentctl-proxy-token" || value === undefined) continue;
+    if (blocked.has(lower) || lower === "x-agentctl-proxy-token" || value === undefined) continue;
     headers[lower] = value;
   }
   headers.connection = "Upgrade";
@@ -1016,16 +827,6 @@ function websocketObserver(maxMessageBytes, onJson, {
   return observe;
 }
 
-function responseHeaders(headers) {
-  const result = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (!HOP_BY_HOP_HEADERS.has(name.toLowerCase()) && value !== undefined) {
-      result[name] = value;
-    }
-  }
-  return result;
-}
-
 function responseContentCodings(headers) {
   const value = headers["content-encoding"];
   if (value === undefined) return [];
@@ -1169,32 +970,6 @@ function sendJson(response, status, body) {
     "cache-control": "no-store"
   });
   response.end(bytes);
-}
-
-function validateState(value, instanceId = "") {
-  exactKeys(value, [
-    "schema", "kind", "instance_id", "pid", "started_at", "host", "port",
-    "mode", "profile", "target", "protocol", "config", "route", "backend_profiles", "compaction",
-    "local_base_url"
-  ], "proxy state");
-  if (value.schema !== 1 || value.kind !== STATE_KIND ||
-      (instanceId && value.instance_id !== instanceId) ||
-      !Number.isInteger(value.pid) || value.pid < 1 ||
-      (value.local_base_url !== undefined &&
-       (value.mode !== PASSTHROUGH_MODE || typeof value.local_base_url !== "string" ||
-        !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+\/backend-api\/codex\/realtime$/.test(value.local_base_url))) ||
-      (value.route !== undefined && value.route !== null && typeof value.route !== "string") ||
-      (value.backend_profiles !== undefined &&
-       (!Array.isArray(value.backend_profiles) ||
-        value.backend_profiles.some((profile) => typeof profile !== "string"))) ||
-      ![PROVIDER_MODE, PASSTHROUGH_MODE].includes(value.mode) ||
-      !plainObject(value.compaction) ||
-      typeof value.compaction.responses_compact !== "boolean" ||
-      !["client_local", "remote_native", "messages_native"].includes(value.compaction.mode)) {
-    throw new ProxyDaemonError("proxy state is invalid");
-  }
-  for (const profile of value.backend_profiles || []) validateProfileName(profile);
-  return value;
 }
 
 async function removeOwnedState(config) {
@@ -1394,36 +1169,59 @@ function jsonlLogger(path, maxBytes, retention, label, {
   return append;
 }
 
-function collectRequestBody(request, maxBytes) {
+function collectRequestBody(request, maxBytes, {
+  timeoutMs,
+  onBufferedBytes = () => true,
+  bytesReserved = false
+} = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const chunks = [];
     let bytes = 0;
     let settled = false;
+    const timer = setTimeout(() => fail("request_body_timeout"), timeoutMs);
+    timer.unref?.();
+    const cleanup = () => {
+      clearTimeout(timer);
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("aborted", onAborted);
+      request.off("error", onError);
+    };
     const fail = (code) => {
       if (settled) return;
       settled = true;
+      cleanup();
       for (const chunk of chunks) chunk.fill(0);
       chunks.length = 0;
       const error = new Error(code);
       error.code = code;
       rejectPromise(error);
     };
-    request.on("data", (chunk) => {
+    const onData = (chunk) => {
       if (settled) return;
       bytes += chunk.length;
       if (bytes > maxBytes) {
         fail("request_too_large");
         return;
       }
-      chunks.push(chunk);
-    });
-    request.on("end", () => {
+      if (!bytesReserved && !onBufferedBytes(chunk.length)) {
+        fail("request_capacity_exceeded");
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    };
+    const onEnd = () => {
       if (settled) return;
       settled = true;
+      cleanup();
       resolvePromise({ body: Buffer.concat(chunks), bytes });
-    });
-    request.on("aborted", () => fail("client_aborted"));
-    request.on("error", () => fail("client_request_error"));
+    };
+    const onAborted = () => fail("client_aborted");
+    const onError = () => fail("client_request_error");
+    request.on("data", onData);
+    request.on("end", onEnd);
+    request.on("aborted", onAborted);
+    request.on("error", onError);
   });
 }
 
@@ -1570,7 +1368,7 @@ function usageRecord({
 }
 
 function proxyWebSocket(request, socket, head, context) {
-  const { config, backendSecrets, pricing, log, usageLog } = context;
+  const { config, pricing, admission, log, usageLog } = context;
   const connectionStarted = Date.now();
   // Upgrade sockets are handled outside Node's normal HTTP response lifecycle.
   // Always consume transport errors, including a client reset while an
@@ -1591,6 +1389,11 @@ function proxyWebSocket(request, socket, head, context) {
   localUrl = projectPassthroughUrl(localUrl);
   if (!allowedPassthroughWebSocketRoute(localUrl.pathname)) {
     writeRawHttp(socket, 404, "Not Found", '{"error":"route_not_available_for_proxy_protocol"}\n');
+    return;
+  }
+  const admissionLease = admission.acquire(0);
+  if (!admissionLease) {
+    writeRawHttp(socket, 503, "Service Unavailable", '{"error":"proxy_capacity_exceeded"}\n');
     return;
   }
 
@@ -1682,6 +1485,7 @@ function proxyWebSocket(request, socket, head, context) {
   const finishConnection = (outcome) => {
     if (closed) return;
     closed = true;
+    admissionLease.release();
     Promise.allSettled([
       observeClient?.close?.(),
       observeServer?.close?.()
@@ -1781,10 +1585,11 @@ function proxyWebSocket(request, socket, head, context) {
   upstream.on("response", (response) => {
     clearTimeout(firstByteTimer);
     let responseHead = `HTTP/1.1 ${response.statusCode || 502} ${response.statusMessage || "Bad Gateway"}\r\n`;
-    for (const [name, value] of Object.entries(response.headers)) {
-      if (["connection", "content-length", "transfer-encoding"].includes(name) ||
-          value === undefined) continue;
-      responseHead += `${name}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`;
+    for (const [name, value] of Object.entries(responseHeaders(response.headers))) {
+      if (name.toLowerCase() === "content-length") continue;
+      for (const item of Array.isArray(value) ? value : [value]) {
+        responseHead += `${name}: ${item}\r\n`;
+      }
     }
     socket.write(`${responseHead}Connection: close\r\n\r\n`);
     response.on("data", (chunk) => socket.write(chunk));
@@ -1819,10 +1624,20 @@ function runUpstreamAttempt({
   secret,
   localUrl,
   rawBody,
-  allowRetry
+  allowRetry,
+  streamRequest = false,
+  inspectionLease = null
 }) {
   const attemptStarted = Date.now();
-  const mapping = config.mode === PASSTHROUGH_MODE
+  let mapping = streamRequest
+    ? {
+        requested_model: null,
+        requested_service_tier: null,
+        outbound_model: null,
+        mapped: false,
+        pathname: localUrl.pathname
+      }
+    : config.mode === PASSTHROUGH_MODE
     ? {
         ...inspectPassthroughRequest(
           rawBody,
@@ -1844,7 +1659,7 @@ function runUpstreamAttempt({
     stripVersionPrefix: config.mode === PASSTHROUGH_MODE
   });
   const transport = destination.protocol === "https:" ? httpsRequest : httpRequest;
-  const requestBody = mapping.body ?? rawBody;
+  const requestBody = streamRequest ? null : mapping.body ?? rawBody;
 
   return new Promise((resolveAttempt) => {
     let complete = false;
@@ -1853,22 +1668,81 @@ function runUpstreamAttempt({
     let firstByteTimer;
     let totalTimer;
     let idleTimer;
+    let bodyTimer;
     let failureCode = "";
     let bytesOut = 0;
     let cleared = false;
     let usageObserver = null;
     let responseBackpressured = false;
     let observerBackpressured = false;
+    let receivedHeaders = false;
+    let requestBytes = 0;
+    let inspectionBytes = 0;
+    let inspectionChunks = [];
+    let inspectionActive = streamRequest;
+    let inspectionSettled = !streamRequest;
+    let resolveInspection;
+    const inspectionDone = streamRequest
+      ? new Promise((resolvePromise) => { resolveInspection = resolvePromise; })
+      : Promise.resolve();
+
+    const settleInspection = (inspect = false) => {
+      if (inspectionSettled) return;
+      inspectionSettled = true;
+      clearTimeout(bodyTimer);
+      if (inspect && inspectionActive) {
+        const captured = Buffer.concat(inspectionChunks, inspectionBytes);
+        mapping = {
+          ...inspectPassthroughRequest(
+            captured,
+            request.headers["content-encoding"],
+            config.limits.usage_capture_bytes
+          ),
+          pathname: localUrl.pathname
+        };
+        captured.fill(0);
+      }
+      for (const chunk of inspectionChunks) chunk.fill(0);
+      inspectionChunks = [];
+      if (inspectionBytes) inspectionLease?.releaseBytes(inspectionBytes);
+      inspectionBytes = 0;
+      resolveInspection?.();
+    };
+    const disableInspection = () => {
+      inspectionActive = false;
+      for (const chunk of inspectionChunks) chunk.fill(0);
+      inspectionChunks = [];
+      if (inspectionBytes) inspectionLease?.releaseBytes(inspectionBytes);
+      inspectionBytes = 0;
+    };
+    const onStreamData = (chunk) => {
+      requestBytes += chunk.length;
+      if (requestBytes > config.limits.request_bytes) {
+        disableInspection();
+        fail("request_too_large");
+        return;
+      }
+      if (!inspectionActive) return;
+      if (inspectionBytes + chunk.length > config.limits.usage_capture_bytes ||
+          !inspectionLease?.add(chunk.length)) {
+        disableInspection();
+        return;
+      }
+      inspectionChunks.push(Buffer.from(chunk));
+      inspectionBytes += chunk.length;
+    };
+    const onStreamEnd = () => settleInspection(true);
 
     const clearMappedBody = () => {
       if (cleared) return;
       cleared = true;
-      if (requestBody !== rawBody) requestBody.fill(0);
+      if (requestBody && requestBody !== rawBody) requestBody.fill(0);
     };
     const clearTimers = () => {
       clearTimeout(firstByteTimer);
       clearTimeout(totalTimer);
       clearTimeout(idleTimer);
+      clearTimeout(bodyTimer);
     };
     const cleanup = () => {
       clearTimers();
@@ -1876,6 +1750,11 @@ function runUpstreamAttempt({
       request.off("aborted", onClientAborted);
       response.off("close", onClientClosed);
       response.off("drain", onDrain);
+      if (streamRequest) {
+        request.off("data", onStreamData);
+        request.off("end", onStreamEnd);
+        settleInspection(false);
+      }
     };
     const finish = (result) => {
       if (complete) return;
@@ -1885,6 +1764,7 @@ function runUpstreamAttempt({
         ...result,
         profile: backend.profile,
         mapping,
+        bytes_in: streamRequest ? requestBytes : rawBody?.length || 0,
         bytes_out: bytesOut,
         duration_ms: Date.now() - attemptStarted
       });
@@ -1934,10 +1814,15 @@ function runUpstreamAttempt({
           config.protocol,
           backend,
           secret,
-          request.method === "GET" ? undefined : requestBody.length,
-          { mode: config.mode }
+          request.method === "GET" ? undefined : streamRequest
+            ? (/^[0-9]+$/.test(String(request.headers["content-length"] || ""))
+                ? Number(request.headers["content-length"])
+                : undefined)
+            : requestBody.length,
+          { mode: config.mode, preserveBodyLength: streamRequest }
         )
       }, (incoming) => {
+        receivedHeaders = true;
         upstreamResponse = incoming;
         clearTimeout(firstByteTimer);
         const status = incoming.statusCode || 502;
@@ -1973,8 +1858,7 @@ function runUpstreamAttempt({
         });
         incoming.on("end", () => {
           clearTimeout(idleTimer);
-          response.end();
-          usageObserver.finish().then((extracted) => {
+          Promise.all([usageObserver.finish(), inspectionDone]).then(([extracted]) => {
             finish({
               kind: "response",
               status,
@@ -2000,16 +1884,17 @@ function runUpstreamAttempt({
       return;
     }
 
-    firstByteTimer = setTimeout(() => fail("first_byte_timeout"), config.timeouts.first_byte_ms);
     totalTimer = setTimeout(() => fail("request_timeout"), config.timeouts.request_ms);
-    firstByteTimer.unref?.();
     totalTimer.unref?.();
 
     upstream.on("error", () => {
       clearMappedBody();
       if (complete) return;
       const code = failureCode || "upstream_error";
-      const status = code.includes("timeout") ? 504 :
+      const status = code === "request_too_large" ? 413 :
+        code === "request_capacity_exceeded" ? 503 :
+        code === "request_body_timeout" ? 408 :
+        code.includes("timeout") ? 504 :
         code.startsWith("client_") ? 499 : 502;
       const retry = allowRetry && config.retry.network_errors &&
         !code.startsWith("client_") && !response.headersSent;
@@ -2035,8 +1920,29 @@ function runUpstreamAttempt({
         extracted: null
       });
     });
-    upstream.once("finish", clearMappedBody);
-    upstream.end(requestBody);
+    upstream.once("finish", () => {
+      clearMappedBody();
+      clearTimeout(bodyTimer);
+      if (!receivedHeaders) {
+        firstByteTimer = setTimeout(
+          () => fail("first_byte_timeout"),
+          config.timeouts.first_byte_ms
+        );
+        firstByteTimer.unref?.();
+      }
+    });
+    if (streamRequest) {
+      bodyTimer = setTimeout(
+        () => fail("request_body_timeout"),
+        config.timeouts.request_body_ms
+      );
+      bodyTimer.unref?.();
+      request.on("data", onStreamData);
+      request.on("end", onStreamEnd);
+      request.pipe(upstream);
+    } else {
+      upstream.end(requestBody);
+    }
   });
 }
 
@@ -2048,6 +1954,8 @@ async function proxyRequest(request, response, context) {
     pricing,
     circuits,
     persistCircuits,
+    admission,
+    sourceSnapshots,
     log,
     usageLog
   } = context;
@@ -2072,9 +1980,11 @@ async function proxyRequest(request, response, context) {
       ? config.backends.map((backend) => circuits.inspect(backend.profile, config.target))
       : [];
     if (config.circuit.enabled) persistCircuits();
+    const configuration = await runtimeSourceDrift(sourceSnapshots);
     sendJson(response, 200, {
       schema: 1,
       kind: "agentctl-proxy-health",
+      instance: config.instance,
       instance_id: config.instance_id,
       profile: config.profile,
       route: config.route,
@@ -2083,6 +1993,7 @@ async function proxyRequest(request, response, context) {
       target: config.target,
       protocol: config.protocol,
       mode: config.mode,
+      client_model: config.backends[0].models.default,
       local_base_url: config.mode === PASSTHROUGH_MODE
         ? passthroughLocalBaseUrl(config)
         : null,
@@ -2093,7 +2004,9 @@ async function proxyRequest(request, response, context) {
         circuit_state: persistCircuits.status(),
         metadata_log: log.status(),
         usage_log: usageLog.status()
-      }
+      },
+      admission: admission.status(),
+      configuration
     });
     return;
   }
@@ -2141,8 +2054,9 @@ async function proxyRequest(request, response, context) {
     return;
   }
 
-  const contentLength = Number(request.headers["content-length"] || 0);
-  if (Number.isFinite(contentLength) && contentLength > config.limits.request_bytes) {
+  const rawContentLength = String(request.headers["content-length"] || "");
+  const contentLength = /^[0-9]+$/.test(rawContentLength) ? Number(rawContentLength) : null;
+  if (Number.isSafeInteger(contentLength) && contentLength > config.limits.request_bytes) {
     sendJson(response, 413, { error: "request_body_too_large" });
     finishMetadata(413, "request_too_large");
     request.resume();
@@ -2158,22 +2072,90 @@ async function proxyRequest(request, response, context) {
     return;
   }
 
-  let collected;
-  try {
-    collected = await collectRequestBody(request, config.limits.request_bytes);
-  } catch (error) {
-    const outcome = error?.code || "client_request_error";
-    const status = outcome === "request_too_large" ? 413 : 400;
-    sendJson(response, status, { error: outcome });
-    finishMetadata(status, outcome);
+  if (config.mode === PASSTHROUGH_MODE) {
+    const lease = admission.acquire(0);
+    if (!lease) {
+      sendJson(response, 503, { error: "proxy_capacity_exceeded" });
+      finishMetadata(503, "request_capacity_exceeded");
+      request.resume();
+      return;
+    }
+    try {
+      const backend = config.backends[0];
+      const result = await runUpstreamAttempt({
+        request,
+        response,
+        config,
+        backend,
+        secret: "",
+        localUrl,
+        rawBody: null,
+        allowRetry: false,
+        streamRequest: true,
+        inspectionLease: lease
+      });
+      attempts.push({
+        profile: backend.profile,
+        outcome: result.outcome,
+        circuit: "disabled",
+        status: result.status,
+        duration_ms: result.duration_ms
+      });
+      if (result.kind === "response" &&
+          (result.mapping?.requested_model || result.extracted)) {
+        usageLog(usageRecord({
+          config,
+          backend,
+          pricing,
+          mapping: result.mapping,
+          extracted: result.extracted,
+          requestId,
+          requestStartedAt,
+          started,
+          status: result.status
+        }));
+      }
+      finishMetadata(result.status, result.outcome, result.bytes_in, result.bytes_out);
+      lease.release();
+      if (!response.destroyed && !response.writableEnded) response.end();
+    } finally {
+      lease.release();
+    }
     return;
   }
 
-  const sameRequest = config.retry.mode === "same_request";
-  const maxAttempts = sameRequest ? config.retry.max_attempts : 1;
-  let attempted = 0;
+  const reservedBytes = Number.isSafeInteger(contentLength) ? contentLength : 0;
+  const lease = admission.acquire(reservedBytes);
+  if (!lease) {
+    sendJson(response, 503, { error: "proxy_capacity_exceeded" });
+    finishMetadata(503, "request_capacity_exceeded");
+    request.resume();
+    return;
+  }
   try {
-    for (let index = 0; index < config.backends.length && attempted < maxAttempts; index += 1) {
+    let collected;
+    try {
+      collected = await collectRequestBody(request, config.limits.request_bytes, {
+        timeoutMs: config.timeouts.request_body_ms,
+        onBufferedBytes: (bytes) => lease.add(bytes, { countRejection: true }),
+        bytesReserved: reservedBytes > 0
+      });
+    } catch (error) {
+      const outcome = error?.code || "client_request_error";
+      const status = outcome === "request_too_large" ? 413 :
+        outcome === "request_body_timeout" ? 408 :
+        outcome === "request_capacity_exceeded" ? 503 : 400;
+      sendJson(response, status, { error: outcome });
+      finishMetadata(status, outcome);
+      request.resume();
+      return;
+    }
+
+    const sameRequest = config.retry.mode === "same_request";
+    const maxAttempts = sameRequest ? config.retry.max_attempts : 1;
+    let attempted = 0;
+    try {
+      for (let index = 0; index < config.backends.length && attempted < maxAttempts; index += 1) {
       const backend = config.backends[index];
       const reservation = config.circuit.enabled
         ? circuits.reserve(backend.profile, config.target)
@@ -2242,13 +2224,19 @@ async function proxyRequest(request, response, context) {
         }));
       }
       finishMetadata(result.status, result.outcome, collected.bytes, result.bytes_out);
+      collected.body.fill(0);
+      lease.release();
+      if (!response.destroyed && !response.writableEnded) response.end();
       return;
+      }
+      const outcome = attempted === 0 ? "all_backends_unavailable" : "failover_exhausted";
+      sendJson(response, 503, { error: outcome });
+      finishMetadata(503, outcome, collected.bytes);
+    } finally {
+      collected.body.fill(0);
     }
-    const outcome = attempted === 0 ? "all_backends_unavailable" : "failover_exhausted";
-    sendJson(response, 503, { error: outcome });
-    finishMetadata(503, outcome, collected.bytes);
   } finally {
-    collected.body.fill(0);
+    lease.release();
   }
 }
 
@@ -2274,6 +2262,7 @@ async function acquireLock(config) {
 
 async function run(configPath) {
   const config = await readPrivateJson(configPath, "proxy config", validateConfig);
+  const sourceSnapshots = await snapshotRuntimeSources(config, configPath);
   const capability = await readPrivateJson(
     config.paths.capability,
     "proxy capability",
@@ -2334,6 +2323,10 @@ async function run(configPath) {
     { onError: persistenceErrorReporter("proxy usage log") }
   );
   const sockets = new Set();
+  const admission = new RequestAdmission({
+    maxRequests: config.limits.max_concurrent_requests,
+    maxBytes: config.limits.max_inflight_request_bytes
+  });
   let shuttingDown = false;
   const requestContext = {
     config,
@@ -2342,6 +2335,8 @@ async function run(configPath) {
     pricing,
     circuits,
     persistCircuits,
+    admission,
+    sourceSnapshots,
     log,
     usageLog
   };
@@ -2352,6 +2347,8 @@ async function run(configPath) {
       else response.destroy();
     });
   });
+  server.requestTimeout = config.timeouts.request_body_ms;
+  server.headersTimeout = Math.min(60_000, config.timeouts.request_body_ms);
   server.on("upgrade", (request, socket, head) => {
     try {
       proxyWebSocket(request, socket, head, requestContext);
@@ -2411,6 +2408,7 @@ async function run(configPath) {
   const state = {
     schema: 1,
     kind: STATE_KIND,
+    instance: config.instance,
     instance_id: config.instance_id,
     pid: process.pid,
     started_at: new Date().toISOString(),
@@ -2420,6 +2418,7 @@ async function run(configPath) {
     mode: config.mode,
     target: config.target,
     protocol: config.protocol,
+    client_model: config.backends[0].models.default,
     ...(config.mode === PASSTHROUGH_MODE
       ? { local_base_url: passthroughLocalBaseUrl(config) }
       : {}),
@@ -2439,6 +2438,7 @@ async function run(configPath) {
     schema: 1,
     timestamp: new Date().toISOString(),
     event: "proxy_started",
+    instance: config.instance,
     instance_id: config.instance_id,
     profile: config.profile,
     mode: config.mode,
@@ -2459,7 +2459,8 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
-    const safe = error instanceof ProxyDaemonError || error instanceof ProviderSchemaError
+    const safe = error instanceof ProxyDaemonError || error instanceof ProxySchemaError ||
+      error instanceof ProviderSchemaError
       ? error.message
       : "unexpected proxy daemon failure";
     process.stderr.write(`[error] ${safe}\n`);
@@ -2471,10 +2472,12 @@ export {
   allowedPassthroughWebSocketRoute,
   allowedRoute,
   circuitPersister,
+  hopByHopHeaders,
   jsonlLogger,
   joinUpstream,
   pruneLogs,
   projectPassthroughUrl,
+  responseHeaders,
   rotateLog,
   upstreamHeaders,
   validateConfig,

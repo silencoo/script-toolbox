@@ -44,7 +44,7 @@ Usage:
   agentctl account <status|list|login|save|use|delete> ...
   agentctl failover <command> [options]
   agentctl pricing <command> [options]
-  agentctl proxy <plan|start|status|usage|attach|detach|stop|token> ...
+  agentctl proxy <plan|start|status|usage|connect|disconnect|attach|detach|stop|token> ...
   agentctl uninstall <claude|codex|opencode|pi> [--yes]
   agentctl workspace <command> [options]
   agentctl preset <list|show|create|delete|plan|apply|current|rollback|push|pull> ...
@@ -65,7 +65,8 @@ Commands:
   pricing     Manage an independent versioned fixed-decimal price catalog and
               calculate normalized token costs without floating point.
   proxy       Manage the optional loopback-only native protocol proxy, with
-              explicit Codex passthrough attach/detach when requested.
+              named instances, explicit Provider connect/disconnect, and
+              Codex passthrough attach/detach when requested.
   uninstall   Remove only provider/model/credential state owned by setup.sh.
               It does not remove MCP state, Promptctl files, or the CLI binary.
   workspace   Manage one encrypted recovery key for portable Provider,
