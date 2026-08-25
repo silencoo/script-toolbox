@@ -3,9 +3,9 @@
 ## Node diagnostics
 
 Four standalone UIActions provide complementary checks from a selected node or
-policy. Their result HTML intentionally uses a narrow, linear layout because
-Quantumult X does not reliably render browser-style flex, card, and table CSS in
-its native popup.
+policy. NodeBenchmark uses Quantumult X's native message rendering for reliable
+light/dark appearance; the other results use narrow, linear HTML without
+browser-style flex, card, or table layouts.
 
 | Script | Purpose | Raw URL |
 | --- | --- | --- |

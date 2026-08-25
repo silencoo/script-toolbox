@@ -10,7 +10,7 @@
  * - Loaded latency (download & upload bufferbloat approximation)
  * - Cloudflare exit IP / ASN / organization / colo / location / HTTP protocol
  * - Quantumult X selected policy-chain lookup when available
- * - Compact Quantumult X-compatible HTML result panel
+ * - Native Quantumult X result summary with automatic light/dark appearance
  *
  * Notes
  * - "Latency" is HTTP request RTT/TTFB-like wall time, not ICMP ping.
@@ -25,7 +25,7 @@
  * profile=lite|balanced|heavy&streams=4&upload=1
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const CF = "https://speed.cloudflare.com";
 const MiB = 1024 * 1024;
 const KiB = 1024;
@@ -202,11 +202,11 @@ let startedAt = Date.now();
     exitIp: result.meta && result.meta.clientIp, colo: result.meta && result.meta.colo
   }));
 
-  const html = renderPanel(result);
-  $done({ title: "⚡ Node Benchmark", htmlMessage: html });
+  const message = renderMessage(result);
+  $done({ title: "⚡ Node Benchmark", message });
 })().catch(err => {
   console.log("NodeBenchmark error: " + (err && err.stack ? err.stack : err));
-  finishError("测速异常", escapeHtml(String(err && err.message ? err.message : err)));
+  finishError("测速异常", String(err && err.message ? err.message : err));
 });
 
 function getPolicy() {
@@ -451,7 +451,7 @@ async function getPolicyChain(policyName) {
   }
 }
 
-function renderPanel(r) {
+function renderMessage(r) {
   const idleMs = r.idle.median;
   const jitter = r.idle.jitter;
   const loss = r.idle.lossPct;
@@ -471,7 +471,6 @@ function renderPanel(r) {
   const loc = [meta.city, meta.region, meta.country].filter(Boolean).join(", ") || "—";
   const asText = meta.asn ? ("AS" + meta.asn + (meta.asOrganization ? " · " + meta.asOrganization : "")) : (meta.asOrganization || "—");
 
-  const titleColor = qualityColor(idleMs, jitter, loss, dlBloat);
   const quality = qualityLabel(idleMs, jitter, loss, dlBloat);
   const compactMeta = [
     r.profileName.toUpperCase(),
@@ -479,58 +478,61 @@ function renderPanel(r) {
     meta.colo ? "CF " + meta.colo : "CF",
     meta.httpProtocol || "HTTP"
   ].join(" · ");
-  const downloadLine = speedInline("Download", singleDown, multiDown, r.streams, downGain);
+  const downloadLine = speedInlineText("Download", singleDown, multiDown, r.streams, downGain);
   const uploadLine = r.singleUpload
-    ? speedInline("Upload", singleUp, multiUp, r.streams, upGain)
+    ? speedInlineText("Upload", singleUp, multiUp, r.streams, upGain)
     : "";
-  const downloadDetail = "1× " + fmtBytes(r.singleBytes) + "/" + fmtMs(r.singleDownload.elapsedMs)
-    + " · " + r.streams + "× " + fmtBytes(r.multiPerStream * r.streams) + "/" + fmtMs(r.multiDownload.elapsedMs);
+  const downloadDetail = "1× " + fmtBytes(r.singleBytes) + " / " + fmtMs(r.singleDownload.elapsedMs)
+    + " · " + r.streams + "× " + fmtBytes(r.multiPerStream * r.streams) + " / " + fmtMs(r.multiDownload.elapsedMs);
   const uploadDetail = r.singleUpload
-    ? "1× " + fmtBytes(r.singleUpload.bytesPerStream) + "/" + fmtMs(r.singleUpload.elapsedMs)
-      + " · " + r.streams + "× " + fmtBytes(r.multiUpload.bytesPerStream * r.streams) + "/" + fmtMs(r.multiUpload.elapsedMs)
+    ? "1× " + fmtBytes(r.singleUpload.bytesPerStream) + " / " + fmtMs(r.singleUpload.elapsedMs)
+      + " · " + r.streams + "× " + fmtBytes(r.multiUpload.bytesPerStream * r.streams) + " / " + fmtMs(r.multiUpload.elapsedMs)
     : "";
   const loadedUp = r.upLoaded
-    ? " · ↑ " + colored(fmtMs(upLoadedMs), metricColorBloat(upBloat)) + " (+" + escapeHtml(fmtMs(upBloat)) + ")"
+    ? " · ↑ " + fmtMs(upLoadedMs) + " (" + fmtDelta(upBloat) + ")"
     : "";
   const precisionWarning = r.multiDownload.elapsedMs < 450
-    ? "<br><font color=\"#d97706\">Fast sample; use the heavy profile for a steadier high-speed result.</font>"
+    ? "Fast sample: use the heavy profile for a steadier high-speed result."
     : "";
 
-  // Quantumult X's htmlMessage renderer only implements a small HTML/CSS
-  // subset. Keep the panel linear: tables, flexbox, cards, and backgrounds are
-  // intentionally avoided because they become detached white text boxes in
-  // the native popup.
-  return `<div style="font-family:-apple-system;font-size:15px;line-height:1.55;word-break:break-word;">
-    <p style="text-align:center;margin:0;"><b>${escapeHtml(r.chain || r.policy)}</b><br><font color="#8e8e93">${escapeHtml(compactMeta)}</font></p>
-    <hr>
-    <p style="margin:0;"><b>Latency / quality</b><br>
-      Idle ${colored(fmtMs(idleMs), metricColorLatency(idleMs))} · p95 ${escapeHtml(fmtMs(r.idle.p95))}<br>
-      Jitter ${colored(fmtMs(jitter), metricColorJitter(jitter))} · loss ${colored(fmtPct(loss), metricColorLoss(loss))}<br>
-      Loaded ↓ ${colored(fmtMs(dlLoadedMs), metricColorBloat(dlBloat))} (+${escapeHtml(fmtMs(dlBloat))})${loadedUp}
-    </p>
-    <hr>
-    <p style="margin:0;"><b>Throughput</b><br>
-      ${downloadLine}<br><font color="#8e8e93">${escapeHtml(downloadDetail)}</font>${precisionWarning}
-      ${r.singleUpload ? `<br>${uploadLine}<br><font color="#8e8e93">${escapeHtml(uploadDetail)}</font>` : ""}
-    </p>
-    <hr>
-    <p style="margin:0;"><b>Exit / edge</b><br>
-      ${escapeHtml(meta.clientIp || "—")} · ${escapeHtml(loc)} · CF ${escapeHtml(meta.colo || "—")}<br>
-      ${escapeHtml(asText)}
-    </p>
-    <hr>
-    <p style="margin:0;"><b><font color="${titleColor}">${escapeHtml(quality)}</font></b> · ${escapeHtml(fmtSec(r.elapsedMs))} · ${escapeHtml(fmtBytes(r.estimatedTrafficBytes))}<br>
-      <font color="#8e8e93">HTTP latency/loss are not ICMP or UDP measurements. NodeBenchmark-QX v${VERSION}</font>
-    </p>
-  </div>`;
+  // Use Quantumult X's native message field rather than htmlMessage. The
+  // latter may apply a white background while preserving theme-derived white
+  // text, even when the supplied markup contains no background rules.
+  const lines = [
+    r.chain || r.policy,
+    compactMeta,
+    "",
+    "LATENCY / QUALITY",
+    "Idle " + fmtMs(idleMs) + " · p95 " + fmtMs(r.idle.p95),
+    "Jitter " + fmtMs(jitter) + " · loss " + fmtPct(loss) + " (" + r.idle.failed + "/" + r.idle.attempted + " failed)",
+    "Loaded ↓ " + fmtMs(dlLoadedMs) + " (" + fmtDelta(dlBloat) + ")" + loadedUp,
+    "",
+    "THROUGHPUT",
+    downloadLine,
+    downloadDetail
+  ];
+
+  if (precisionWarning) lines.push(precisionWarning);
+  if (r.singleUpload) lines.push(uploadLine, uploadDetail);
+
+  lines.push(
+    "",
+    "EXIT / EDGE",
+    (meta.clientIp || "—") + " · " + loc + " · CF " + (meta.colo || "—"),
+    asText,
+    "",
+    quality + " · " + fmtSec(r.elapsedMs) + " · " + fmtBytes(r.estimatedTrafficBytes),
+    "HTTP latency/loss are not ICMP or UDP measurements.",
+    "NodeBenchmark-QX v" + VERSION
+  );
+
+  return lines.join("\n");
 }
 
-function speedInline(label, singleBps, multiBps, streamCount, gain) {
-  const singleText = speedText(singleBps);
-  const multiText = speedText(multiBps);
+function speedInlineText(label, singleBps, multiBps, streamCount, gain) {
   const gainText = gain == null ? "" : " (" + signedPct(gain) + ")";
-  return `<b>${escapeHtml(label)}</b> · 1× ${colored(singleText, speedColor(singleBps / 1000000))}`
-    + ` · ${streamCount}× ${colored(multiText, speedColor(multiBps / 1000000))}${escapeHtml(gainText)}`;
+  return label + " · 1× " + speedText(singleBps)
+    + " · " + streamCount + "× " + speedText(multiBps) + gainText;
 }
 
 function speedText(bps) {
@@ -539,14 +541,10 @@ function speedText(bps) {
   return fmtNum(mbps, mbps >= 100 ? 0 : 1) + " Mbps";
 }
 
-function colored(text, color) {
-  return `<b><font color="${color}">${escapeHtml(text)}</font></b>`;
-}
-
 function finishError(title, body) {
   $done({
     title: "⚡ Node Benchmark",
-    htmlMessage: `<p style="font-family:-apple-system;text-align:center;font-size:15px;line-height:1.55;"><b><font color="#d70015">${escapeHtml(title)}</font></b><br>${escapeHtml(body)}</p>`
+    message: title + "\n" + body
   });
 }
 
@@ -579,6 +577,7 @@ function fmtMs(v) {
 }
 function fmtSec(ms) { return fmtNum(ms / 1000, 1) + " s"; }
 function fmtPct(v) { return v == null ? "—" : fmtNum(v, v < 10 ? 1 : 0) + "%"; }
+function fmtDelta(v) { return v == null || !isFinite(v) ? "—" : "+" + fmtMs(v); }
 function signedPct(v) { return (v >= 0 ? "+" : "") + fmtNum(v, 0) + "%"; }
 function fmtNum(v, d) { return Number(v || 0).toFixed(d); }
 function fmtBytes(bytes) {
@@ -588,51 +587,8 @@ function fmtBytes(bytes) {
   return bytes + " B";
 }
 
-function metricColorLatency(ms) {
-  if (ms == null) return "#d70015";
-  if (ms <= 60) return "#16a34a";
-  if (ms <= 120) return "#d97706";
-  return "#d70015";
-}
-function metricColorJitter(ms) {
-  if (ms == null) return "#d70015";
-  if (ms <= 10) return "#16a34a";
-  if (ms <= 30) return "#d97706";
-  return "#d70015";
-}
-function metricColorLoss(pct) {
-  if (pct == null) return "#d70015";
-  if (pct === 0) return "#16a34a";
-  if (pct <= 5) return "#d97706";
-  return "#d70015";
-}
-function metricColorBloat(ms) {
-  if (ms == null) return "#8e8e93";
-  if (ms <= 30) return "#16a34a";
-  if (ms <= 100) return "#d97706";
-  return "#d70015";
-}
-function speedColor(mbps) {
-  if (mbps >= 100) return "#16a34a";
-  if (mbps >= 30) return "#007aff";
-  if (mbps >= 10) return "#d97706";
-  return "#d70015";
-}
-function qualityColor(latency, jitter, loss, bloat) {
-  if (latency == null || loss > 5) return "#d70015";
-  if (latency <= 80 && (jitter == null || jitter <= 15) && loss === 0 && (bloat == null || bloat <= 50)) return "#16a34a";
-  return "#d97706";
-}
 function qualityLabel(latency, jitter, loss, bloat) {
   if (latency == null || loss > 5) return "Poor connection";
   if (latency <= 80 && (jitter == null || jitter <= 15) && loss === 0 && (bloat == null || bloat <= 50)) return "Good connection";
   return "Fair connection";
-}
-function escapeHtml(s) {
-  return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

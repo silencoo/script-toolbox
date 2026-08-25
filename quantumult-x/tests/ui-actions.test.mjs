@@ -21,15 +21,23 @@ test("all Quantumult X UIActions parse as JavaScript", async () => {
   }
 });
 
-test("UIActions finish once and emit native-popup-safe linear HTML", async () => {
+test("UIActions finish once and emit native-popup-safe output", async () => {
   for (const file of SCRIPT_FILES) {
     const result = await runUiAction(file);
     assert.equal(result.doneCount, 1, `${file} called $done more than once`);
-    assert.equal(typeof result.output.htmlMessage, "string", `${file} did not emit htmlMessage`);
-    assert.match(result.output.htmlMessage, /<p\b/i, `${file} did not emit readable paragraphs`);
-    assert.doesNotMatch(result.output.htmlMessage, /<table\b/i, `${file} uses a fragile table layout`);
-    assert.doesNotMatch(result.output.htmlMessage, /display\s*:\s*flex/i, `${file} uses unsupported flex layout`);
-    assert.doesNotMatch(result.output.htmlMessage, /background\s*:/i, `${file} uses popup background cards`);
+    const content = result.output.message || result.output.htmlMessage;
+    assert.equal(typeof content, "string", `${file} did not emit popup content`);
+    assert.doesNotMatch(content, /<table\b/i, `${file} uses a fragile table layout`);
+    assert.doesNotMatch(content, /display\s*:\s*flex/i, `${file} uses unsupported flex layout`);
+    assert.doesNotMatch(content, /background\s*:/i, `${file} uses popup background cards`);
+
+    if (file === "NodeBenchmark-QX.js") {
+      assert.equal(result.output.htmlMessage, undefined, "NodeBenchmark must not use htmlMessage");
+      assert.match(result.output.message, /LATENCY \/ QUALITY/);
+      assert.doesNotMatch(result.output.message, /<[^>]+>/, "NodeBenchmark message must be plain text");
+    } else {
+      assert.match(result.output.htmlMessage, /<p\b/i, `${file} did not emit readable paragraphs`);
+    }
   }
 });
 
