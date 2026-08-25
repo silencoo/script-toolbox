@@ -10,7 +10,7 @@
  * - Loaded latency (download & upload bufferbloat approximation)
  * - Cloudflare exit IP / ASN / organization / colo / location / HTTP protocol
  * - Quantumult X selected policy-chain lookup when available
- * - Rich HTML result panel
+ * - Compact Quantumult X-compatible HTML result panel
  *
  * Notes
  * - "Latency" is HTTP request RTT/TTFB-like wall time, not ICMP ping.
@@ -25,7 +25,7 @@
  * profile=lite|balanced|heavy&streams=4&upload=1
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const CF = "https://speed.cloudflare.com";
 const MiB = 1024 * 1024;
 const KiB = 1024;
@@ -471,105 +471,82 @@ function renderPanel(r) {
   const loc = [meta.city, meta.region, meta.country].filter(Boolean).join(", ") || "—";
   const asText = meta.asn ? ("AS" + meta.asn + (meta.asOrganization ? " · " + meta.asOrganization : "")) : (meta.asOrganization || "—");
 
+  const titleColor = qualityColor(idleMs, jitter, loss, dlBloat);
+  const quality = qualityLabel(idleMs, jitter, loss, dlBloat);
+  const compactMeta = [
+    r.profileName.toUpperCase(),
+    r.streams + " streams",
+    meta.colo ? "CF " + meta.colo : "CF",
+    meta.httpProtocol || "HTTP"
+  ].join(" · ");
+  const downloadLine = speedInline("Download", singleDown, multiDown, r.streams, downGain);
+  const uploadLine = r.singleUpload
+    ? speedInline("Upload", singleUp, multiUp, r.streams, upGain)
+    : "";
+  const downloadDetail = "1× " + fmtBytes(r.singleBytes) + "/" + fmtMs(r.singleDownload.elapsedMs)
+    + " · " + r.streams + "× " + fmtBytes(r.multiPerStream * r.streams) + "/" + fmtMs(r.multiDownload.elapsedMs);
+  const uploadDetail = r.singleUpload
+    ? "1× " + fmtBytes(r.singleUpload.bytesPerStream) + "/" + fmtMs(r.singleUpload.elapsedMs)
+      + " · " + r.streams + "× " + fmtBytes(r.multiUpload.bytesPerStream * r.streams) + "/" + fmtMs(r.multiUpload.elapsedMs)
+    : "";
+  const loadedUp = r.upLoaded
+    ? " · ↑ " + colored(fmtMs(upLoadedMs), metricColorBloat(upBloat)) + " (+" + escapeHtml(fmtMs(upBloat)) + ")"
+    : "";
   const precisionWarning = r.multiDownload.elapsedMs < 450
-    ? `<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:#fff4d6;color:#8a5a00;font-size:12px;">⚠️ 多流下载仅 ${fmtMs(r.multiDownload.elapsedMs)}，高速线路可能仍偏“突发值”；可改用 heavy profile。</div>`
+    ? "<br><font color=\"#d97706\">Fast sample; use the heavy profile for a steadier high-speed result.</font>"
     : "";
 
-  const titleColor = qualityColor(idleMs, jitter, loss, dlBloat);
-
-  return `
-  <div style="font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;color:#1d1d1f;padding:2px 2px 8px 2px;">
-    <div style="border-radius:18px;padding:15px 15px 13px;background:linear-gradient(135deg,#111827,#273449);color:white;box-shadow:0 5px 18px rgba(0,0,0,.16);">
-      <div style="font-size:20px;font-weight:750;letter-spacing:.2px;">⚡ Node Benchmark</div>
-      <div style="font-size:13px;opacity:.78;margin-top:5px;word-break:break-all;">${escapeHtml(r.chain || r.policy)}</div>
-      <div style="margin-top:12px;display:flex;gap:7px;flex-wrap:wrap;">
-        ${pill(profileName.toUpperCase())}
-        ${pill(r.streams + " STREAMS")}
-        ${pill(meta.colo ? "CF " + meta.colo : "CF")}
-        ${pill(meta.httpProtocol || "HTTP")}
-      </div>
-    </div>
-
-    <div style="margin-top:10px;border-radius:16px;padding:12px;background:#f5f5f7;">
-      <div style="font-size:12px;font-weight:700;color:#6e6e73;margin-bottom:8px;">LATENCY / QUALITY</div>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        ${metricRow("Idle latency", fmtMs(idleMs), metricColorLatency(idleMs), "p95 " + fmtMs(r.idle.p95))}
-        ${metricRow("Jitter", fmtMs(jitter), metricColorJitter(jitter), "min " + fmtMs(r.idle.min) + " · max " + fmtMs(r.idle.max))}
-        ${metricRow("Request loss", fmtPct(loss), metricColorLoss(loss), r.idle.failed + "/" + r.idle.attempted + " failed")}
-        ${metricRow("Loaded ↓", fmtMs(dlLoadedMs), metricColorBloat(dlBloat), "Δ +" + fmtMs(dlBloat))}
-        ${r.upLoaded ? metricRow("Loaded ↑", fmtMs(upLoadedMs), metricColorBloat(upBloat), "Δ +" + fmtMs(upBloat)) : ""}
-      </table>
-    </div>
-
-    <div style="margin-top:10px;border-radius:16px;padding:12px;background:#f5f5f7;">
-      <div style="font-size:12px;font-weight:700;color:#6e6e73;margin-bottom:8px;">DOWNLOAD</div>
-      ${speedCard("1 stream", singleDown, r.singleBytes, r.singleDownload.elapsedMs, "")}
-      <div style="height:7px"></div>
-      ${speedCard(r.streams + " streams", multiDown, r.multiPerStream * r.streams, r.multiDownload.elapsedMs, downGain == null ? "" : signedPct(downGain))}
-      ${precisionWarning}
-    </div>
-
-    ${r.singleUpload ? `
-    <div style="margin-top:10px;border-radius:16px;padding:12px;background:#f5f5f7;">
-      <div style="font-size:12px;font-weight:700;color:#6e6e73;margin-bottom:8px;">UPLOAD</div>
-      ${speedCard("1 stream", singleUp, r.singleUpload.bytesPerStream, r.singleUpload.elapsedMs, "")}
-      <div style="height:7px"></div>
-      ${speedCard(r.streams + " streams", multiUp, r.multiUpload.bytesPerStream * r.streams, r.multiUpload.elapsedMs, upGain == null ? "" : signedPct(upGain))}
-    </div>` : ""}
-
-    <div style="margin-top:10px;border-radius:16px;padding:12px;background:#f5f5f7;">
-      <div style="font-size:12px;font-weight:700;color:#6e6e73;margin-bottom:8px;">EXIT / EDGE</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;line-height:1.45;">
-        ${infoRow("Exit IP", meta.clientIp || "—")}
-        ${infoRow("ASN / ISP", asText)}
-        ${infoRow("Location", loc)}
-        ${infoRow("Cloudflare POP", meta.colo || "—")}
-      </table>
-    </div>
-
-    <div style="margin-top:10px;border-radius:16px;padding:11px 12px;border:1px solid #e5e5ea;background:white;font-size:12px;color:#6e6e73;line-height:1.55;">
-      <div><b style="color:${titleColor};">●</b> 测试耗时 ${fmtSec(r.elapsedMs)} · 估算流量 ${fmtBytes(r.estimatedTrafficBytes)}</div>
-      <div>HTTP 延迟 ≠ ICMP Ping；Request loss ≠ UDP packet loss。</div>
-      <div>${r.streams}-stream 为并发 HTTP 流，底层连接是否复用由 Quantumult X / HTTP 栈决定。</div>
-      <div style="margin-top:3px;opacity:.7;">NodeBenchmark-QX v${VERSION}</div>
-    </div>
+  // Quantumult X's htmlMessage renderer only implements a small HTML/CSS
+  // subset. Keep the panel linear: tables, flexbox, cards, and backgrounds are
+  // intentionally avoided because they become detached white text boxes in
+  // the native popup.
+  return `<div style="font-family:-apple-system;font-size:15px;line-height:1.55;word-break:break-word;">
+    <p style="text-align:center;margin:0;"><b>${escapeHtml(r.chain || r.policy)}</b><br><font color="#8e8e93">${escapeHtml(compactMeta)}</font></p>
+    <hr>
+    <p style="margin:0;"><b>Latency / quality</b><br>
+      Idle ${colored(fmtMs(idleMs), metricColorLatency(idleMs))} · p95 ${escapeHtml(fmtMs(r.idle.p95))}<br>
+      Jitter ${colored(fmtMs(jitter), metricColorJitter(jitter))} · loss ${colored(fmtPct(loss), metricColorLoss(loss))}<br>
+      Loaded ↓ ${colored(fmtMs(dlLoadedMs), metricColorBloat(dlBloat))} (+${escapeHtml(fmtMs(dlBloat))})${loadedUp}
+    </p>
+    <hr>
+    <p style="margin:0;"><b>Throughput</b><br>
+      ${downloadLine}<br><font color="#8e8e93">${escapeHtml(downloadDetail)}</font>${precisionWarning}
+      ${r.singleUpload ? `<br>${uploadLine}<br><font color="#8e8e93">${escapeHtml(uploadDetail)}</font>` : ""}
+    </p>
+    <hr>
+    <p style="margin:0;"><b>Exit / edge</b><br>
+      ${escapeHtml(meta.clientIp || "—")} · ${escapeHtml(loc)} · CF ${escapeHtml(meta.colo || "—")}<br>
+      ${escapeHtml(asText)}
+    </p>
+    <hr>
+    <p style="margin:0;"><b><font color="${titleColor}">${escapeHtml(quality)}</font></b> · ${escapeHtml(fmtSec(r.elapsedMs))} · ${escapeHtml(fmtBytes(r.estimatedTrafficBytes))}<br>
+      <font color="#8e8e93">HTTP latency/loss are not ICMP or UDP measurements. NodeBenchmark-QX v${VERSION}</font>
+    </p>
   </div>`;
 }
 
-function speedCard(label, bps, bytes, elapsedMs, badge) {
+function speedInline(label, singleBps, multiBps, streamCount, gain) {
+  const singleText = speedText(singleBps);
+  const multiText = speedText(multiBps);
+  const gainText = gain == null ? "" : " (" + signedPct(gain) + ")";
+  return `<b>${escapeHtml(label)}</b> · 1× ${colored(singleText, speedColor(singleBps / 1000000))}`
+    + ` · ${streamCount}× ${colored(multiText, speedColor(multiBps / 1000000))}${escapeHtml(gainText)}`;
+}
+
+function speedText(bps) {
+  if (!(bps > 0)) return "FAILED";
   const mbps = bps / 1000000;
-  const mbpsText = bps > 0 ? fmtNum(mbps, mbps >= 100 ? 0 : 1) + " Mbps" : "FAILED";
-  const mbpsColor = bps > 0 ? speedColor(mbps) : "#d70015";
-  return `<div style="border-radius:12px;background:white;padding:10px 11px;border:1px solid #ececf1;">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-      <span style="font-size:13px;color:#6e6e73;font-weight:650;">${escapeHtml(label)}</span>
-      ${badge ? `<span style="font-size:11px;font-weight:700;color:#6e6e73;">${escapeHtml(badge)}</span>` : ""}
-    </div>
-    <div style="font-size:24px;font-weight:780;color:${mbpsColor};margin-top:2px;">${mbpsText}</div>
-    <div style="font-size:11px;color:#8e8e93;margin-top:2px;">${fmtBytes(bytes)} · ${fmtMs(elapsedMs)}</div>
-  </div>`;
+  return fmtNum(mbps, mbps >= 100 ? 0 : 1) + " Mbps";
 }
 
-function metricRow(name, value, color, note) {
-  return `<tr>
-    <td style="padding:5px 2px;color:#3a3a3c;font-weight:600;">${escapeHtml(name)}</td>
-    <td style="padding:5px 3px;text-align:right;font-weight:760;color:${color};white-space:nowrap;">${escapeHtml(value)}</td>
-    <td style="padding:5px 2px;text-align:right;color:#8e8e93;font-size:11px;white-space:nowrap;">${escapeHtml(note || "")}</td>
-  </tr>`;
-}
-
-function infoRow(name, value) {
-  return `<tr><td style="padding:4px 2px;color:#8e8e93;width:30%;">${escapeHtml(name)}</td><td style="padding:4px 2px;text-align:right;font-weight:600;word-break:break-all;">${escapeHtml(String(value))}</td></tr>`;
-}
-
-function pill(text) {
-  return `<span style="display:inline-block;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.13);font-size:10px;font-weight:750;letter-spacing:.35px;">${escapeHtml(text)}</span>`;
+function colored(text, color) {
+  return `<b><font color="${color}">${escapeHtml(text)}</font></b>`;
 }
 
 function finishError(title, body) {
   $done({
     title: "⚡ Node Benchmark",
-    htmlMessage: `<div style="font-family:-apple-system;padding:16px;"><div style="font-size:19px;font-weight:750;color:#d70015;">${escapeHtml(title)}</div><div style="margin-top:8px;font-size:13px;color:#6e6e73;">${escapeHtml(body)}</div></div>`
+    htmlMessage: `<p style="font-family:-apple-system;text-align:center;font-size:15px;line-height:1.55;"><b><font color="#d70015">${escapeHtml(title)}</font></b><br>${escapeHtml(body)}</p>`
   });
 }
 
@@ -645,6 +622,11 @@ function qualityColor(latency, jitter, loss, bloat) {
   if (latency == null || loss > 5) return "#d70015";
   if (latency <= 80 && (jitter == null || jitter <= 15) && loss === 0 && (bloat == null || bloat <= 50)) return "#16a34a";
   return "#d97706";
+}
+function qualityLabel(latency, jitter, loss, bloat) {
+  if (latency == null || loss > 5) return "Poor connection";
+  if (latency <= 80 && (jitter == null || jitter <= 15) && loss === 0 && (bloat == null || bloat <= 50)) return "Good connection";
+  return "Fair connection";
 }
 function escapeHtml(s) {
   return String(s == null ? "" : s)

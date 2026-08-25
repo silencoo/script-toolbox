@@ -7,6 +7,16 @@ third-party-derived files.
 - `quantumult-x/resource-parser.js` retains its upstream attribution to
   KOP-XIAO/Shawn. Use and redistribution of that file remain subject to any
   applicable upstream terms.
+- `quantumult-x/StreamingCheck-QX.js` and
+  `quantumult-x/GoogleLocation-QX.js` are rewritten and adapted from
+  KOP-XIAO/QuantumultX scripts at the source commits recorded in their headers.
+  The upstream repository does not declare a license, so the repository-level
+  MIT license does not assert rights over the upstream-derived portions.
+- `quantumult-x/ExitIPCheck-QX.js` is rewritten and adapted from ddgksf2013's
+  `server-info-pure.js` snapshot dated 2025-12-14. The upstream file does not
+  declare a license, so the repository-level MIT license does not assert rights
+  over the upstream-derived portions. Runtime IP reputation data is supplied
+  by the external IPPure service and remains subject to its service terms.
 - `proxy-rules/` contains curated rule content derived in part from
   `blackmatrix7/ios_rule_script`; that material is distributed under GPL-2.0 as
   documented in `proxy-rules/LICENSE.GPL-2.0`. The ByteDance source and

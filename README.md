@@ -9,7 +9,7 @@ documentation so scripts can evolve without crowding the repository root.
 | Directory | Tools |
 | --- | --- |
 | [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
-| [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser |
+| [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser and node diagnostic UIActions |
 | [`proxy-rules/`](./proxy-rules/) | Reusable Quantumult X profile plus generated AI and ad rules |
 | [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
 | [`extensions/cookie-exporter/`](./extensions/cookie-exporter/) | Per-site Chromium Cookie export in JSON, Netscape, request-header, and CSV formats |
