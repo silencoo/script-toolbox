@@ -47,7 +47,7 @@ async function makeSkill(name, description, extra = {}) {
 }
 
 run(["init", "--store", store, "--yes"]);
-assert.equal(run(["-V"]).trim(), "skillsctl 0.4.4");
+assert.equal(run(["-V"]).trim(), "skillsctl 0.4.5");
 assert.match(run(["status", "--store", store]), /Skills: 0[\s\S]*Packs:\s+5/);
 
 const frontend = await makeSkill("frontend-dev", "Build responsive frontend interfaces", {
@@ -64,10 +64,12 @@ const backend = await makeSkill("backend-dev", "Build reliable backend services"
 run(["skill", "add", frontend, "--store", store, "--yes"]);
 run(["skill", "add", backend, "--store", store, "--yes"]);
 assert.match(run(["list", "--store", store]), /frontend-dev\tBuild responsive frontend interfaces across supported agents\./);
-assert.deepEqual(JSON.parse(run(["list", "--store", store, "--json"])), [
+const listedSkills = JSON.parse(run(["list", "--store", store, "--json"]));
+assert.deepEqual(listedSkills.map(({ name, description }) => ({ name, description })), [
   { name: "backend-dev", description: "Build reliable backend services across supported agents." },
   { name: "frontend-dev", description: "Build responsive frontend interfaces across supported agents." }
 ]);
+for (const skill of listedSkills) assert.match(skill.sha256, /^[a-f0-9]{64}$/);
 
 // Editing through a managed target link changes the canonical Store directly.
 // The named Skill can be reviewed and force re-added to accept its new checksum,

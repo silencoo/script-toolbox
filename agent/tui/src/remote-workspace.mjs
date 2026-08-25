@@ -690,7 +690,11 @@ export function createRemoteWorkspace({
             unit: "skills",
             source: "cloud",
             packs: selected.packs,
-            items: selected.skills
+            items: selected.skills,
+            checksums: Object.fromEntries(selected.skills.map((skill) => [
+              skill,
+              snapshot.catalog.skills[skill].sha256
+            ]))
           };
         });
     }

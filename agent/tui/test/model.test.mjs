@@ -28,6 +28,7 @@ import {
   selectionDelta,
   selectionDiff,
   selectionWindow,
+  skillContentDiff,
   skillEntries,
   skillTargetState,
   snippetEntries,
@@ -241,6 +242,30 @@ test("Skill Pack comparison separates added, removed, and unchanged Skills", () 
     }
   );
   assert.deepEqual(selectionDiff(null, null), { added: [], removed: [], unchanged: [] });
+});
+
+test("Skill content comparison distinguishes same names with different canonical files", () => {
+  assert.deepEqual(skillContentDiff([
+    { name: "creative-frontend", sha256: "a".repeat(64) },
+    { name: "frontend-dev", sha256: "b".repeat(64) },
+    { name: "unchecked", sha256: "invalid" }
+  ], ["unchecked", "frontend-dev", "cloud-only", "creative-frontend"], {
+    "creative-frontend": "a".repeat(64),
+    "frontend-dev": "c".repeat(64),
+    unchecked: "d".repeat(64),
+    "cloud-only": "e".repeat(64)
+  }), {
+    same: ["creative-frontend"],
+    different: ["frontend-dev"],
+    workspaceOnly: ["cloud-only"],
+    unchecked: ["unchecked"]
+  });
+  assert.deepEqual(skillContentDiff(null, null, null), {
+    same: [],
+    different: [],
+    workspaceOnly: [],
+    unchecked: []
+  });
 });
 
 test("catalog windows keep the selected item visible without rendering the full store", () => {

@@ -37,7 +37,7 @@ import {
   writeJsonAtomic
 } from "../remote-store.mjs";
 
-const VERSION = "0.4.4";
+const VERSION = "0.4.5";
 const SCHEMA = 1;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TARGETS = ["codex", "claude", "opencode", "pi"];
@@ -453,7 +453,8 @@ async function listSkills(options) {
   if (options.json) {
     process.stdout.write(`${JSON.stringify(names.map((name) => ({
       name,
-      description: catalog.skills[name].description || ""
+      description: catalog.skills[name].description || "",
+      sha256: catalog.skills[name].sha256
     })), null, 2)}\n`);
     return;
   }

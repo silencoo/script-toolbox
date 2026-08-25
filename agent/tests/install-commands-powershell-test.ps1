@@ -72,7 +72,7 @@ try {
 
     $version = (& (Join-Path $Prefix 'agentctl.cmd') --version | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
-    Assert-True ($version -eq 'agentctl 0.17.6') "agentctl.cmd returned an unexpected version: $version"
+    Assert-True ($version -eq 'agentctl 0.17.7') "agentctl.cmd returned an unexpected version: $version"
 
     # The updater must leave its installed runtime before asking the shared
     # installer to rename it. Windows otherwise reports access denied while

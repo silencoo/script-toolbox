@@ -24857,7 +24857,11 @@ function createRemoteWorkspace({
           unit: "skills",
           source: "cloud",
           packs: selected.packs,
-          items: selected.skills
+          items: selected.skills,
+          checksums: Object.fromEntries(selected.skills.map((skill) => [
+            skill,
+            snapshot.catalog.skills[skill].sha256
+          ]))
         };
       });
     }
@@ -25341,7 +25345,8 @@ function normalizeSkillsCatalog(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((entry) => entry && typeof entry.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name)).map((entry) => ({
     name: entry.name,
-    description: typeof entry.description === "string" ? sanitizeOutput(entry.description).slice(0, 500) : ""
+    description: typeof entry.description === "string" ? sanitizeOutput(entry.description).slice(0, 500) : "",
+    sha256: typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.sha256) ? entry.sha256 : ""
   }));
 }
 async function readPromptPreviewFile(path) {
@@ -26932,6 +26937,34 @@ function selectionDiff(currentItems, selectedItems) {
     unchanged: [...selected].filter((name) => current.has(name)).sort()
   };
 }
+function skillContentDiff(localCatalog, selectedItems, workspaceChecksums) {
+  const localChecksums = new Map(
+    (Array.isArray(localCatalog) ? localCatalog : []).filter((entry) => entry && typeof entry.name === "string").map((entry) => [entry.name, entry.sha256])
+  );
+  const remote = workspaceChecksums && typeof workspaceChecksums === "object" && !Array.isArray(workspaceChecksums) ? workspaceChecksums : {};
+  const result = {
+    same: [],
+    different: [],
+    workspaceOnly: [],
+    unchecked: []
+  };
+  for (const name of [...new Set(Array.isArray(selectedItems) ? selectedItems : [])].sort()) {
+    if (!localChecksums.has(name)) {
+      result.workspaceOnly.push(name);
+      continue;
+    }
+    const localChecksum = localChecksums.get(name);
+    const workspaceChecksum = remote[name];
+    if (!/^[a-f0-9]{64}$/.test(localChecksum || "") || !/^[a-f0-9]{64}$/.test(workspaceChecksum || "")) {
+      result.unchecked.push(name);
+    } else if (localChecksum === workspaceChecksum) {
+      result.same.push(name);
+    } else {
+      result.different.push(name);
+    }
+  }
+  return result;
+}
 function skillEntries(catalogItems, states, target) {
   const active = new Set(skillTargetState(states, target).skills);
   const enabledByTarget = Object.fromEntries(SKILL_TARGETS.map((client) => [
@@ -26941,6 +26974,7 @@ function skillEntries(catalogItems, states, target) {
   return (Array.isArray(catalogItems) ? catalogItems : []).filter((item) => item && typeof item.name === "string" && item.name.length > 0).map((item) => ({
     name: item.name,
     description: typeof item.description === "string" ? item.description : "",
+    sha256: typeof item.sha256 === "string" ? item.sha256 : "",
     enabled: active.has(item.name),
     enabledTargets: SKILL_TARGETS.filter((client) => client !== target && enabledByTarget[client].has(item.name))
   })).sort((left, right) => Number(right.enabled) - Number(left.enabled) || Number(right.enabledTargets.length > 0) - Number(left.enabledTargets.length > 0) || left.name.localeCompare(right.name));
@@ -27746,7 +27780,8 @@ function CloudCatalog({
   target,
   component,
   currentSelection = "",
-  currentItems = []
+  currentItems = [],
+  localSkillCatalog = []
 }) {
   if (catalog.loading) return /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Decrypting this catalog in memory\u2026");
   if (catalog.error) return /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: catalog.error });
@@ -27756,6 +27791,13 @@ function CloudCatalog({
   const visible = selectionWindow(catalog.items, safeIndex);
   const catalogLabel = component === "mcp" ? "MCP profiles" : component === "skills" ? "Skill packs" : "Prompt profiles";
   const diff2 = component === "skills" ? selectionDiff(currentItems, item.items) : null;
+  const contentDiff = component === "skills" ? skillContentDiff(localSkillCatalog, item.items, item.checksums) : null;
+  const contentSummary = contentDiff ? [
+    contentDiff.same.length > 0 ? `${contentDiff.same.length} same` : "",
+    contentDiff.different.length > 0 ? `${contentDiff.different.length} different` : "",
+    contentDiff.workspaceOnly.length > 0 ? `${contentDiff.workspaceOnly.length} Workspace-only` : "",
+    contentDiff.unchecked.length > 0 ? `${contentDiff.unchecked.length} unchecked` : ""
+  ].filter(Boolean).join(" \xB7 ") || "no Skills" : "";
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Workspace ", catalogLabel), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "for"), /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target, selected: true })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", minWidth: 30 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, component === "skills" ? "Packs" : "Profiles", " ", visible.total > 0 ? visible.start + 1 : 0, "\u2013", visible.end, " of ", visible.total), visible.items.map(({ item: entry, index }) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: entry.name, color: index === safeIndex ? "magenta" : "white", bold: index === safeIndex }, index === safeIndex ? "\u203A " : "  ", entry.name))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "cyan", paddingX: 1, flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Selected ", component === "skills" ? "pack" : "profile"), /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "magenta" }, item.name), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Includes", value: `${item.count} ${item.unit}` }), item.clients?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Available to", value: item.clients.map(targetLabel).join(", ") }), item.description && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "About", value: item.description }), diff2 && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "Current \u2192 Selected"), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
@@ -27763,7 +27805,14 @@ function CloudCatalog({
       value: `${currentSelection || "none"} \u2192 ${item.name}`,
       kind: currentSelection === item.name ? "good" : "selected"
     }
-  ), item.packs?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Inheritance", value: item.packs.join(" \u2192 "), kind: "muted" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Add", items: diff2.added, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Remove", items: diff2.removed, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Keep", items: diff2.unchanged, kind: "muted" })))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
+  ), item.packs?.length > 0 && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Inheritance", value: item.packs.join(" \u2192 "), kind: "muted" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Enable", items: diff2.added, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Disable", items: diff2.removed, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Stay enabled", items: diff2.unchanged, kind: "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "Canonical files"), /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Content",
+      value: contentSummary,
+      kind: contentDiff.different.length > 0 ? "bad" : contentDiff.workspaceOnly.length > 0 || contentDiff.unchecked.length > 0 ? "selected" : "good"
+    }
+  ), contentDiff.different.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Different", items: contentDiff.different, kind: "bad" }), contentDiff.workspaceOnly.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Workspace only", items: contentDiff.workspaceOnly, kind: "selected" }), contentDiff.unchecked.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Unchecked", items: contentDiff.unchecked, kind: "selected" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Checksums only; Skill files stay outside the view.")))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
 }
 function LocalMcpCatalog({
   target,
@@ -27962,7 +28011,8 @@ function SkillsView({
       target,
       component: "skills",
       currentSelection: active.selection,
-      currentItems: active.skills
+      currentItems: active.skills,
+      localSkillCatalog: dashboard.catalog
     }
   ) : /* @__PURE__ */ import_react34.default.createElement(WorkspaceCatalogFallback, { snapshot }));
 }

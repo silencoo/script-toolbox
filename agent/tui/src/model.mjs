@@ -393,6 +393,41 @@ export function selectionDiff(currentItems, selectedItems) {
   };
 }
 
+export function skillContentDiff(localCatalog, selectedItems, workspaceChecksums) {
+  const localChecksums = new Map(
+    (Array.isArray(localCatalog) ? localCatalog : [])
+      .filter((entry) => entry && typeof entry.name === "string")
+      .map((entry) => [entry.name, entry.sha256])
+  );
+  const remote = workspaceChecksums && typeof workspaceChecksums === "object" &&
+    !Array.isArray(workspaceChecksums)
+    ? workspaceChecksums
+    : {};
+  const result = {
+    same: [],
+    different: [],
+    workspaceOnly: [],
+    unchecked: []
+  };
+  for (const name of [...new Set(Array.isArray(selectedItems) ? selectedItems : [])].sort()) {
+    if (!localChecksums.has(name)) {
+      result.workspaceOnly.push(name);
+      continue;
+    }
+    const localChecksum = localChecksums.get(name);
+    const workspaceChecksum = remote[name];
+    if (!/^[a-f0-9]{64}$/.test(localChecksum || "") ||
+        !/^[a-f0-9]{64}$/.test(workspaceChecksum || "")) {
+      result.unchecked.push(name);
+    } else if (localChecksum === workspaceChecksum) {
+      result.same.push(name);
+    } else {
+      result.different.push(name);
+    }
+  }
+  return result;
+}
+
 export function skillEntries(catalogItems, states, target) {
   const active = new Set(skillTargetState(states, target).skills);
   const enabledByTarget = Object.fromEntries(SKILL_TARGETS.map((client) => [
@@ -404,6 +439,7 @@ export function skillEntries(catalogItems, states, target) {
     .map((item) => ({
       name: item.name,
       description: typeof item.description === "string" ? item.description : "",
+      sha256: typeof item.sha256 === "string" ? item.sha256 : "",
       enabled: active.has(item.name),
       enabledTargets: SKILL_TARGETS.filter((client) =>
         client !== target && enabledByTarget[client].has(item.name))

@@ -33,6 +33,7 @@ import {
   selectionDelta,
   selectionDiff,
   selectionWindow,
+  skillContentDiff,
   skillEntries,
   skillTargetState,
   snippetEntries,
@@ -748,7 +749,8 @@ function CloudCatalog({
   target,
   component,
   currentSelection = "",
-  currentItems = []
+  currentItems = [],
+  localSkillCatalog = []
 }) {
   if (catalog.loading) return <Text color="gray">Decrypting this catalog in memory…</Text>;
   if (catalog.error) return <ErrorText value={catalog.error} />;
@@ -760,6 +762,19 @@ function CloudCatalog({
     ? "MCP profiles"
     : component === "skills" ? "Skill packs" : "Prompt profiles";
   const diff = component === "skills" ? selectionDiff(currentItems, item.items) : null;
+  const contentDiff = component === "skills"
+    ? skillContentDiff(localSkillCatalog, item.items, item.checksums)
+    : null;
+  const contentSummary = contentDiff
+    ? [
+        contentDiff.same.length > 0 ? `${contentDiff.same.length} same` : "",
+        contentDiff.different.length > 0 ? `${contentDiff.different.length} different` : "",
+        contentDiff.workspaceOnly.length > 0
+          ? `${contentDiff.workspaceOnly.length} Workspace-only`
+          : "",
+        contentDiff.unchecked.length > 0 ? `${contentDiff.unchecked.length} unchecked` : ""
+      ].filter(Boolean).join(" · ") || "no Skills"
+    : "";
   return (
     <Box flexDirection="column" marginTop={1}>
       <Box gap={1}>
@@ -793,9 +808,29 @@ function CloudCatalog({
                 kind={currentSelection === item.name ? "good" : "selected"}
               />
               {item.packs?.length > 0 && <Row label="Inheritance" value={item.packs.join(" → ")} kind="muted" />}
-              <ItemGroup label="Add" items={diff.added} kind="good" />
-              <ItemGroup label="Remove" items={diff.removed} kind="bad" />
-              <ItemGroup label="Keep" items={diff.unchanged} kind="muted" />
+              <ItemGroup label="Enable" items={diff.added} kind="good" />
+              <ItemGroup label="Disable" items={diff.removed} kind="bad" />
+              <ItemGroup label="Stay enabled" items={diff.unchanged} kind="muted" />
+              <Text color="cyan" bold>Canonical files</Text>
+              <Row
+                label="Content"
+                value={contentSummary}
+                kind={contentDiff.different.length > 0
+                  ? "bad"
+                  : contentDiff.workspaceOnly.length > 0 || contentDiff.unchecked.length > 0
+                    ? "selected"
+                    : "good"}
+              />
+              {contentDiff.different.length > 0 && (
+                <ItemGroup label="Different" items={contentDiff.different} kind="bad" />
+              )}
+              {contentDiff.workspaceOnly.length > 0 && (
+                <ItemGroup label="Workspace only" items={contentDiff.workspaceOnly} kind="selected" />
+              )}
+              {contentDiff.unchecked.length > 0 && (
+                <ItemGroup label="Unchecked" items={contentDiff.unchecked} kind="selected" />
+              )}
+              <Text color="gray">Checksums only; Skill files stay outside the view.</Text>
             </Box>
           )}
         </Box>
@@ -1196,6 +1231,7 @@ function SkillsView({
               component="skills"
               currentSelection={active.selection}
               currentItems={active.skills}
+              localSkillCatalog={dashboard.catalog}
             />
           : <WorkspaceCatalogFallback snapshot={snapshot} />}
     </Box>

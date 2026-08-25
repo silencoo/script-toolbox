@@ -1,5 +1,17 @@
 # Changelog — agent/
 
+## 2026-08-26 — visible local/Workspace Skill content differences
+
+- Split the TUI Workspace Pack comparison into selection and canonical-file
+  status. Same-name Skills now report `same`, `different`, `Workspace-only`, or
+  `unchecked` from validated SHA-256 catalog metadata, so matching Pack members
+  no longer hide different files such as `frontend-dev`. Skill bodies remain
+  outside the React view.
+- Added canonical checksums to the additive `skillsctl list --json` metadata
+  contract and covered normalization, content-diff classification, remote
+  catalog projection, and the real Skills controller. Bumped `skillsctl` to
+  0.4.5 and `agentctl` to 0.17.7.
+
 ## 2026-08-23 — proxy lifecycle and runtime hardening
 
 - Added preview-first `agentctl proxy connect/disconnect` for Provider mode.

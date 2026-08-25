@@ -80,9 +80,9 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.17.6" ] ||
+  "agentctl 0.17.7" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.17.6" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.17.7" ] ||
   fail "version output is incorrect"
 
 run_agentctl failover --help >/dev/null ||

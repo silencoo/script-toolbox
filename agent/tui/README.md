@@ -112,9 +112,14 @@ When `Drift` is reported, `f` confirms reapplying the active pack to restore
 missing managed links. Unrelated local skills are preserved and Workspace is
 not required. The Workspace Pack detail pane compares the current local Pack
 with the selected Pack, shows its resolved inheritance chain, and lists the
-Skills that will be added, removed, or retained. When a Workspace Pack resolves
-to the same Skills as an existing local canonical Pack, apply reuses that local
-Pack so its managed links do not cross Store ownership boundaries.
+Skills that will be enabled, disabled, or remain enabled. It separately compares
+the canonical local and Workspace file checksums, naming same-name Skills whose
+contents differ, Workspace-only Skills, and entries that could not be checked.
+Only the checksums enter the React view; Skill files remain in the controller
+and encrypted Store layers. When a Workspace Pack resolves to the same Skills
+as an existing local canonical Pack, apply reuses that local Pack so its managed
+links do not cross Store ownership boundaries; the content comparison therefore
+also makes any local-versus-backup difference visible before that action.
 
 The Prompts view likewise shows both clients' local Promptctl bindings before
 the Workspace catalog: active profile, managed state, binding path,

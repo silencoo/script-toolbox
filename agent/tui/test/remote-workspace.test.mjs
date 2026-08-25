@@ -302,7 +302,8 @@ test("remote Workspace index and catalogs never expose capabilities or Secret va
     unit: "skills",
     source: "cloud",
     packs: ["base", "frontend"],
-    items: ["cloud-skill"]
+    items: ["cloud-skill"],
+    checksums: { "cloud-skill": skillHash }
   });
   assert.deepEqual(await remote.catalog("prompts", "claude"), []);
   const snippets = await remote.catalog("snippets");

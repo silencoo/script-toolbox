@@ -118,6 +118,9 @@ export function normalizeSkillsCatalog(value) {
       name: entry.name,
       description: typeof entry.description === "string"
         ? sanitizeOutput(entry.description).slice(0, 500)
+        : "",
+      sha256: typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.sha256)
+        ? entry.sha256
         : ""
     }));
 }

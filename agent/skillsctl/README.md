@@ -71,6 +71,11 @@ target plan, rolls completed link operations back if publication fails, and
 with `--json` returns the final state without a second `current` process.
 Disable wins when the same Skill appears in both lists.
 
+`skillsctl list --json` returns each canonical Skill's name, description, and
+SHA-256 file-tree checksum. The shared TUI uses that content-free metadata to
+distinguish a same-name local Skill from a different encrypted Workspace copy;
+it never sends Skill files into the React view.
+
 Turn an exact custom selection into a reusable target-specific Pack without
 changing other clients:
 

@@ -455,11 +455,16 @@ test("Skills controller catalog keeps display metadata only and rejects unsafe n
   assert.deepEqual(normalizeSkillsCatalog([{
     name: "frontend-dev",
     description: "Frontend development",
+    sha256: "a".repeat(64),
     files: ["never-render"]
   }, {
     name: "../unsafe",
     description: "drop"
-  }]), [{ name: "frontend-dev", description: "Frontend development" }]);
+  }]), [{
+    name: "frontend-dev",
+    description: "Frontend development",
+    sha256: "a".repeat(64)
+  }]);
 });
 
 test("local MCP catalog and target switch actions stay behind mcpctl", async () => {
@@ -625,6 +630,7 @@ test("Skills dashboard and local switches use atomic target-scoped skillsctl com
         stdout: JSON.stringify([{
           name: "frontend-dev",
           description: "Frontend development",
+          sha256: "a".repeat(64),
           files: ["must-not-reach-tui"]
         }]),
         stderr: ""
@@ -682,7 +688,8 @@ test("Skills dashboard and local switches use atomic target-scoped skillsctl com
   const dashboard = await controller.localSkillsDashboard();
   assert.deepEqual(dashboard.catalog, [{
     name: "frontend-dev",
-    description: "Frontend development"
+    description: "Frontend development",
+    sha256: "a".repeat(64)
   }]);
   assert.deepEqual(dashboard.states.codex.skills, ["frontend-dev"]);
 
