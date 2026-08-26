@@ -1057,7 +1057,18 @@ export function createRemoteWorkspace({
     if (type === "skills") {
       const { snapshot } = await child("skills");
       const selection = skillSelection(snapshot, name, target);
-      return { type, name, target, packs: selection.packs, items: selection.skills, unit: "skills" };
+      return {
+        type,
+        name,
+        target,
+        packs: selection.packs,
+        items: selection.skills,
+        checksums: Object.fromEntries(selection.skills.map((skill) => [
+          skill,
+          snapshot.catalog.skills[skill].sha256
+        ])),
+        unit: "skills"
+      };
     }
     if (type === "prompts") {
       const selection = await promptSelection(name, target);

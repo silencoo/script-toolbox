@@ -366,6 +366,10 @@ test("plans stay read-only and apply materializes only selected dependencies", a
   assert.equal(plan.prompt.action, "create");
   await assert.rejects(readFile(join(root, "home", ".codex", "instructions", "personal.md")));
 
+  const skillPlan = await remote.componentPlan("skills", "frontend", "codex");
+  assert.deepEqual(skillPlan.checksums, { "cloud-skill": skillHash });
+  assert.equal(JSON.stringify(skillPlan).includes(skillContent), false);
+
   const selected = await remote.materializePreset("web", "codex");
   const catalog = JSON.parse(await readFile(join(selected.paths.mcp, "catalog.json"), "utf8"));
   assert.deepEqual(Object.keys(catalog.servers).sort(), ["browser", "github"]);

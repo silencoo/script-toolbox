@@ -119,7 +119,13 @@ Only the checksums enter the React view; Skill files remain in the controller
 and encrypted Store layers. When a Workspace Pack resolves to the same Skills
 as an existing local canonical Pack, apply reuses that local Pack so its managed
 links do not cross Store ownership boundaries; the content comparison therefore
-also makes any local-versus-backup difference visible before that action.
+also makes any local-versus-backup difference visible before that action. In the
+Workspace pane, `d` separately downloads the selected Pack's canonical files:
+same-name differences are replaced with explicit confirmation, Workspace-only
+Skills are added, and matching files are skipped. skillsctl keeps the previous
+same-name directories in Store backups. This file download does not change Pack
+definitions, target selections, managed links, unrelated Skills, or the
+encrypted Workspace; `a` remains the separate action for applying links.
 
 The Prompts view likewise shows both clients' local Promptctl bindings before
 the Workspace catalog: active profile, managed state, binding path,
@@ -209,6 +215,7 @@ the remote snapshot itself cannot be opened.
 | Skills: Space | Confirm one target-specific link toggle, or stage it in batch mode |
 | Skills: `m` / `a` / `c` | Enter batch mode / atomically apply staged links / clear staged changes |
 | Skills: `s` / `S` / `u` | Save the exact selection / update only this client override / back up the portable Skills Store |
+| Skills Workspace: `d` | Confirm download of the selected Pack's changed or missing canonical files into the local Store |
 | MCP / Skills: `f` | Confirm repair of the current named local profile or pack when Drift is reported |
 | Prompts: `v` / `V` | View the active local / selected Workspace Prompt on demand |
 | Snippets: `c` | Copy the selected local snippet without rendering it |

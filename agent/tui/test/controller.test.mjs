@@ -1133,6 +1133,76 @@ test("Workspace Skill apply reuses an identical local Pack without crossing stor
   assert.deepEqual(calls.at(-1).env, {});
 });
 
+test("Workspace Skill download replaces only changed canonical files", async () => {
+  const sameHash = "a".repeat(64);
+  const oldHash = "b".repeat(64);
+  const changedHash = "c".repeat(64);
+  const addedHash = "d".repeat(64);
+  const calls = [];
+  const runner = async (_executable, args, options = {}) => {
+    calls.push({ args, env: options.env || {} });
+    if (args.join(" ") === "list --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify([
+          { name: "same", description: "Same", sha256: sameHash },
+          { name: "changed", description: "Changed", sha256: oldHash },
+          { name: "unrelated", description: "Unrelated", sha256: "e".repeat(64) }
+        ]),
+        stderr: ""
+      };
+    }
+    if (args.join(" ") ===
+        "skill add /runtime/skills/skills/changed --name changed --force --yes") {
+      return { code: 0, stdout: "Added skill 'changed'\n", stderr: "" };
+    }
+    if (args.join(" ") ===
+        "skill add /runtime/skills/skills/new-skill --name new-skill --yes") {
+      return { code: 0, stdout: "Added skill 'new-skill'\n", stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${args.join(" ")}` };
+  };
+  const remoteWorkspace = {
+    componentPlan: async () => ({
+      type: "skills",
+      name: "frontend",
+      target: "codex",
+      items: ["same", "changed", "new-skill"],
+      checksums: {
+        same: sameHash,
+        changed: changedHash,
+        "new-skill": addedHash
+      },
+      unit: "skills"
+    }),
+    materializeComponent: async () => ({
+      name: "frontend",
+      target: "codex",
+      skills: ["same", "changed", "new-skill"],
+      store: "/runtime/skills"
+    })
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const downloaded = await controller.action("skills-download", {
+    selection: "frontend",
+    target: "codex"
+  });
+
+  assert.equal(downloaded.ok, true);
+  assert.deepEqual(downloaded.data.downloaded, ["changed", "new-skill"]);
+  assert.deepEqual(downloaded.data.replaced, ["changed"]);
+  assert.deepEqual(downloaded.data.added, ["new-skill"]);
+  assert.deepEqual(downloaded.data.unchanged, ["same"]);
+  assert.match(downloaded.detail, /Previous same-name files were kept in Skills Store backups/);
+  assert.match(downloaded.detail, /Pack definitions, target selections, and unrelated Skills were unchanged/);
+  assert.deepEqual(calls.map(({ args }) => args), [
+    ["list", "--json"],
+    ["skill", "add", "/runtime/skills/skills/changed", "--name", "changed", "--force", "--yes"],
+    ["skill", "add", "/runtime/skills/skills/new-skill", "--name", "new-skill", "--yes"]
+  ]);
+  assert.deepEqual(calls.every(({ env }) => Object.keys(env).length === 0), true);
+});
+
 test("Workspace Skill apply does not report success when the verified local Pack differs", async () => {
   const runner = async (_executable, args) => {
     if (args.join(" ") === "list --json") {

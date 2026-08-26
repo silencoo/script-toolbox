@@ -1052,6 +1052,102 @@ export function createController({
     };
   }
 
+  async function downloadWorkspaceSkills(pack, target) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("No valid Workspace Skill Pack is selected.");
+    }
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const localStore = await localComponentStoreStatus("skills");
+    if (!localStore.initialized) {
+      return {
+        ok: false,
+        data: localStore.driftSkill
+          ? withSkillsDrift({ pack, target }, localStore.detail, "local")
+          : { pack, target },
+        detail: localStore.missing
+          ? "The local skillsctl Store is not initialized. Restore it from Workspace before downloading individual Skill files."
+          : localStore.detail || "The local Skills Store is unavailable."
+      };
+    }
+    const localCatalogResult = parseJsonOutput(localStore.result, "Local Skills catalog");
+    if (!localCatalogResult.ok) {
+      return {
+        ok: false,
+        data: withSkillsDrift({ pack, target }, localCatalogResult.error || "", "local"),
+        detail: localCatalogResult.error || "The local Skills catalog is unavailable."
+      };
+    }
+    const plan = await remoteWorkspace.componentPlan("skills", pack, target);
+    const localCatalog = normalizeSkillsCatalog(localCatalogResult.data);
+    const localByName = new Map(localCatalog.map((skill) => [skill.name, skill]));
+    const remoteChecksums = plan.checksums && typeof plan.checksums === "object"
+      ? plan.checksums
+      : {};
+    const selected = Array.isArray(plan.items) ? plan.items : [];
+    if (selected.some((name) =>
+      typeof name !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) ||
+      !/^[a-f0-9]{64}$/.test(remoteChecksums[name] || "")
+    )) {
+      throw new Error(`Workspace Pack '${pack}' has invalid Skill checksum metadata.`);
+    }
+    const changed = selected.filter((name) =>
+      !localByName.has(name) || localByName.get(name).sha256 !== remoteChecksums[name]
+    );
+    if (changed.length === 0) {
+      return {
+        ok: true,
+        data: { pack, target, downloaded: [], replaced: [], added: [], unchanged: selected },
+        detail: `${pack} already matches the local canonical files for all ${selected.length} selected Skills.`
+      };
+    }
+
+    const materialized = await remoteWorkspace.materializeComponent("skills", pack, target);
+    const downloaded = [];
+    const replaced = [];
+    const added = [];
+    for (const name of changed) {
+      const existed = localByName.has(name);
+      const args = [
+        "skill", "add", join(materialized.store, "skills", name),
+        "--name", name
+      ];
+      if (existed) args.push("--force");
+      args.push("--yes");
+      const result = await runController(tools.skills, args);
+      if (result.code !== 0) {
+        const error = sanitizeOutput(result.stderr || result.stdout) ||
+          `Workspace Skill download failed with code ${result.code}`;
+        const detail = downloaded.length > 0
+          ? `${downloaded.length} Skill(s) were updated before '${name}' failed: ${error}`
+          : error;
+        return {
+          ok: false,
+          data: withSkillsDrift({ pack, target, downloaded, replaced, added, failed: name }, detail, "local"),
+          detail
+        };
+      }
+      downloaded.push(name);
+      (existed ? replaced : added).push(name);
+    }
+    return {
+      ok: true,
+      data: {
+        pack,
+        target,
+        downloaded,
+        replaced,
+        added,
+        unchanged: selected.filter((name) => !changed.includes(name))
+      },
+      detail: [
+        `Downloaded ${downloaded.length} Workspace Skill(s) from ${pack}.`,
+        replaced.length > 0 ? `Replaced local files: ${replaced.join(", ")}.` : "",
+        added.length > 0 ? `Added locally: ${added.join(", ")}.` : "",
+        "Previous same-name files were kept in Skills Store backups; Pack definitions, target selections, and unrelated Skills were unchanged. Start new agent sessions to use the downloaded files."
+      ].filter(Boolean).join("\n")
+    };
+  }
+
   async function localComponentStoreStatus(type) {
     const args = type === "mcp" ? ["profile", "list"] : ["list", "--json"];
     const result = await runController(tools[type], args);
@@ -1060,7 +1156,8 @@ export function createController({
       initialized: result.code === 0,
       missing: result.code !== 0 && localComponentStoreMissing(type, detail),
       driftSkill: type === "skills" ? skillsCatalogDriftName(detail) : "",
-      detail
+      detail,
+      result
     };
   }
 
@@ -1360,6 +1457,7 @@ export function createController({
       return localSkillsSave(selection, target, actionName === "skills-pack-update" || replace);
     }
     if (actionName === "skills-pack-upload") return localSkillsBackup(selection);
+    if (actionName === "skills-download") return downloadWorkspaceSkills(selection, target);
     if (actionName === "skills-repair") return localSkillsRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
@@ -1453,7 +1551,7 @@ export function createController({
     const localDetail = sanitizeOutput(local.stderr || local.stdout);
     if (skillsCatalogDriftName(localDetail) === name) return "local";
 
-    const workspaceAction = actionName === "skills-apply" ||
+    const workspaceAction = actionName === "skills-apply" || actionName === "skills-download" ||
       (options?.source === "cloud" && ["plan", "apply"].includes(actionName));
     if (workspaceAction && typeof remoteWorkspace.runtimeEnvironment === "function") {
       try {

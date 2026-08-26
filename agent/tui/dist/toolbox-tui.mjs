@@ -25206,7 +25206,18 @@ function createRemoteWorkspace({
     if (type === "skills") {
       const { snapshot } = await child("skills");
       const selection = skillSelection(snapshot, name, target);
-      return { type, name, target, packs: selection.packs, items: selection.skills, unit: "skills" };
+      return {
+        type,
+        name,
+        target,
+        packs: selection.packs,
+        items: selection.skills,
+        checksums: Object.fromEntries(selection.skills.map((skill) => [
+          skill,
+          snapshot.catalog.skills[skill].sha256
+        ])),
+        unit: "skills"
+      };
     }
     if (type === "prompts") {
       const selection = await promptSelection(name, target);
@@ -26194,6 +26205,93 @@ No remote catalog was written locally.`;
       detail: result.code === 0 ? `The Skills Store was backed up with Pack '${pack}' and its canonical Skill files.` : detail
     };
   }
+  async function downloadWorkspaceSkills(pack, target) {
+    if (!pack || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pack)) {
+      throw new Error("No valid Workspace Skill Pack is selected.");
+    }
+    if (!AGENT_CLIENTS.has(target)) throw new Error(`unsupported Skills target: ${target}`);
+    const localStore = await localComponentStoreStatus("skills");
+    if (!localStore.initialized) {
+      return {
+        ok: false,
+        data: localStore.driftSkill ? withSkillsDrift({ pack, target }, localStore.detail, "local") : { pack, target },
+        detail: localStore.missing ? "The local skillsctl Store is not initialized. Restore it from Workspace before downloading individual Skill files." : localStore.detail || "The local Skills Store is unavailable."
+      };
+    }
+    const localCatalogResult = parseJsonOutput(localStore.result, "Local Skills catalog");
+    if (!localCatalogResult.ok) {
+      return {
+        ok: false,
+        data: withSkillsDrift({ pack, target }, localCatalogResult.error || "", "local"),
+        detail: localCatalogResult.error || "The local Skills catalog is unavailable."
+      };
+    }
+    const plan = await remoteWorkspace.componentPlan("skills", pack, target);
+    const localCatalog = normalizeSkillsCatalog(localCatalogResult.data);
+    const localByName = new Map(localCatalog.map((skill) => [skill.name, skill]));
+    const remoteChecksums = plan.checksums && typeof plan.checksums === "object" ? plan.checksums : {};
+    const selected = Array.isArray(plan.items) ? plan.items : [];
+    if (selected.some(
+      (name) => typeof name !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || !/^[a-f0-9]{64}$/.test(remoteChecksums[name] || "")
+    )) {
+      throw new Error(`Workspace Pack '${pack}' has invalid Skill checksum metadata.`);
+    }
+    const changed = selected.filter(
+      (name) => !localByName.has(name) || localByName.get(name).sha256 !== remoteChecksums[name]
+    );
+    if (changed.length === 0) {
+      return {
+        ok: true,
+        data: { pack, target, downloaded: [], replaced: [], added: [], unchanged: selected },
+        detail: `${pack} already matches the local canonical files for all ${selected.length} selected Skills.`
+      };
+    }
+    const materialized = await remoteWorkspace.materializeComponent("skills", pack, target);
+    const downloaded = [];
+    const replaced = [];
+    const added = [];
+    for (const name of changed) {
+      const existed = localByName.has(name);
+      const args = [
+        "skill",
+        "add",
+        join4(materialized.store, "skills", name),
+        "--name",
+        name
+      ];
+      if (existed) args.push("--force");
+      args.push("--yes");
+      const result = await runController(tools.skills, args);
+      if (result.code !== 0) {
+        const error = sanitizeOutput(result.stderr || result.stdout) || `Workspace Skill download failed with code ${result.code}`;
+        const detail = downloaded.length > 0 ? `${downloaded.length} Skill(s) were updated before '${name}' failed: ${error}` : error;
+        return {
+          ok: false,
+          data: withSkillsDrift({ pack, target, downloaded, replaced, added, failed: name }, detail, "local"),
+          detail
+        };
+      }
+      downloaded.push(name);
+      (existed ? replaced : added).push(name);
+    }
+    return {
+      ok: true,
+      data: {
+        pack,
+        target,
+        downloaded,
+        replaced,
+        added,
+        unchanged: selected.filter((name) => !changed.includes(name))
+      },
+      detail: [
+        `Downloaded ${downloaded.length} Workspace Skill(s) from ${pack}.`,
+        replaced.length > 0 ? `Replaced local files: ${replaced.join(", ")}.` : "",
+        added.length > 0 ? `Added locally: ${added.join(", ")}.` : "",
+        "Previous same-name files were kept in Skills Store backups; Pack definitions, target selections, and unrelated Skills were unchanged. Start new agent sessions to use the downloaded files."
+      ].filter(Boolean).join("\n")
+    };
+  }
   async function localComponentStoreStatus(type) {
     const args = type === "mcp" ? ["profile", "list"] : ["list", "--json"];
     const result = await runController(tools[type], args);
@@ -26202,7 +26300,8 @@ No remote catalog was written locally.`;
       initialized: result.code === 0,
       missing: result.code !== 0 && localComponentStoreMissing(type, detail),
       driftSkill: type === "skills" ? skillsCatalogDriftName(detail) : "",
-      detail
+      detail,
+      result
     };
   }
   async function initializeLocalComponentStore(type) {
@@ -26481,6 +26580,7 @@ No remote catalog was written locally.`;
       return localSkillsSave(selection, target, actionName === "skills-pack-update" || replace);
     }
     if (actionName === "skills-pack-upload") return localSkillsBackup(selection);
+    if (actionName === "skills-download") return downloadWorkspaceSkills(selection, target);
     if (actionName === "skills-repair") return localSkillsRepair(selection, target);
     if (actionName === "account-use" || actionName === "account-delete") {
       if (!selection) throw new Error("No Codex account is selected.");
@@ -26562,7 +26662,7 @@ No remote catalog was written locally.`;
     const local = await runController(tools.skills, ["list", "--json"]);
     const localDetail = sanitizeOutput(local.stderr || local.stdout);
     if (skillsCatalogDriftName(localDetail) === name) return "local";
-    const workspaceAction = actionName === "skills-apply" || options2?.source === "cloud" && ["plan", "apply"].includes(actionName);
+    const workspaceAction = actionName === "skills-apply" || actionName === "skills-download" || options2?.source === "cloud" && ["plan", "apply"].includes(actionName);
     if (workspaceAction && typeof remoteWorkspace.runtimeEnvironment === "function") {
       try {
         const env3 = await remoteWorkspace.runtimeEnvironment();
@@ -27173,6 +27273,7 @@ function actionForKey(section, input) {
   if (section === "mcp" && input === "f") return "mcp-repair";
   if (section === "mcp" && input === " ") return "mcp-toggle";
   if (section === "skills" && input === "f") return "skills-repair";
+  if (section === "skills" && input === "d") return "skills-download";
   if (section === "skills" && input === " ") return "skills-toggle";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
@@ -27185,7 +27286,7 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "provider-sync-push" || action === "provider-sync-pull" || action === "proxy-start" || action === "proxy-stop" || action === "proxy-attach" || action === "proxy-detach" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "skills-download" || action === "provider-sync-push" || action === "provider-sync-pull" || action === "proxy-start" || action === "proxy-stop" || action === "proxy-attach" || action === "proxy-detach" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
@@ -27245,6 +27346,9 @@ function actionLabel(action, selection, target) {
   }
   if (action === "skills-pack-upload") {
     return `Back up Skills Store containing ${selection || "the selected Pack"}`;
+  }
+  if (action === "skills-download") {
+    return `Replace local Skill files from Workspace Pack ${selection || "selection"}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;
@@ -27448,6 +27552,7 @@ Keys:
   Providers (Codex): S observer start/stop \xB7 A attach/detach
   MCP: l/w panes \xB7 / search \xB7 e/x filters \xB7 m batch \xB7 Space toggle
   Skills: l/w panes \xB7 / search \xB7 e enabled \xB7 m batch \xB7 Space toggle
+  Skills Workspace: d download/replace local canonical files
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -27812,7 +27917,7 @@ function CloudCatalog({
       value: contentSummary,
       kind: contentDiff.different.length > 0 ? "bad" : contentDiff.workspaceOnly.length > 0 || contentDiff.unchecked.length > 0 ? "selected" : "good"
     }
-  ), contentDiff.different.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Different", items: contentDiff.different, kind: "bad" }), contentDiff.workspaceOnly.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Workspace only", items: contentDiff.workspaceOnly, kind: "selected" }), contentDiff.unchecked.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Unchecked", items: contentDiff.unchecked, kind: "selected" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Checksums only; Skill files stay outside the view.")))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " apply to ", targetLabel(target), " only"));
+  ), contentDiff.different.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Different", items: contentDiff.different, kind: "bad" }), contentDiff.workspaceOnly.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Workspace only", items: contentDiff.workspaceOnly, kind: "selected" }), contentDiff.unchecked.length > 0 && /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Unchecked", items: contentDiff.unchecked, kind: "selected" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Checksums only; Skill files stay outside the view.")))), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "\u2191/\u2193 select \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "p"), " inspect plan \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, "a"), " ", component === "skills" ? "apply links" : "apply", " \xB7 ", component === "skills" ? /* @__PURE__ */ import_react34.default.createElement(import_react34.default.Fragment, null, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "blue", bold: true }, "d"), " download files \xB7 ") : null, targetLabel(target), " only"));
 }
 function LocalMcpCatalog({
   target,
@@ -28082,7 +28187,7 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible \xB7 v next view"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible \xB7 v next view"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills Workspace: d download selected Pack files into the local canonical Store"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -28962,7 +29067,7 @@ Review its current files before continuing. [y] keeps those files, updates only 
     if (section === "skills" && (input === "l" || input === "w")) {
       const nextFocus = input === "l" ? "local" : "workspace";
       setSkillsFocus(nextFocus);
-      setMessage(nextFocus === "local" ? "Local Skill switches focused; Space changes only the highlighted client." : "Workspace Skill Packs focused; p inspects and a applies the selected Pack.");
+      setMessage(nextFocus === "local" ? "Local Skill switches focused; Space changes only the highlighted client." : "Workspace Skill Packs focused; p plans, a applies links, and d downloads canonical files.");
       return;
     }
     if (section === "skills" && skillsFocus === "local" && input === "/") {
@@ -29203,6 +29308,41 @@ Review its current files before continuing. [y] keeps those files, updates only 
         changes,
         label: actionLabel("skills-batch", "", skillsTarget),
         detail: `${changes.length} managed Skill link change(s) will be applied in one target transaction.`
+      });
+      return;
+    }
+    if (action === "skills-download") {
+      if (skillsFocus !== "workspace") {
+        setMessage("Press w to focus Workspace Skill Packs before downloading files.");
+        return;
+      }
+      if (!selectedRemote) {
+        setMessage("No Workspace Skill Pack is selected.");
+        return;
+      }
+      const item = catalogs.skills.items[componentSelected.skills];
+      const content2 = skillContentDiff(
+        localSkillsDashboard.catalog,
+        item?.items,
+        item?.checksums
+      );
+      const replacements = [...content2.different, ...content2.unchecked];
+      const additions = content2.workspaceOnly;
+      if (replacements.length === 0 && additions.length === 0) {
+        setMessage(`${selectedRemote} already matches every local canonical Skill file.`);
+        return;
+      }
+      setConfirm({
+        action,
+        selection: selectedRemote,
+        target: skillsTarget,
+        warning: replacements.length > 0,
+        label: actionLabel(action, selectedRemote, skillsTarget),
+        detail: [
+          replacements.length > 0 ? `Replace local files: ${replacements.join(", ")}.` : "",
+          additions.length > 0 ? `Add Workspace-only Skills: ${additions.join(", ")}.` : "",
+          "Previous same-name files are backed up. Local Pack definitions, target selections, managed links, unrelated Skills, and the encrypted Workspace remain unchanged."
+        ].filter(Boolean).join("\n")
       });
       return;
     }

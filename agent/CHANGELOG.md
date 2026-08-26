@@ -1,5 +1,13 @@
 # Changelog — agent/
 
+## 2026-08-26 — selective Workspace Skill download
+
+- Added a confirmed `d` action to the Skills Workspace pane. It downloads only
+  changed or missing canonical files from the selected Pack, backs up replaced
+  same-name directories through skillsctl, and leaves matching and unrelated
+  Skills, Pack definitions, target selections, managed links, and the encrypted
+  Workspace unchanged. Bumped `agentctl` to 0.17.8.
+
 ## 2026-08-26 — visible local/Workspace Skill content differences
 
 - Split the TUI Workspace Pack comparison into selection and canonical-file

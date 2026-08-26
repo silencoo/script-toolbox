@@ -684,6 +684,7 @@ export function actionForKey(section, input) {
   if (section === "mcp" && input === "f") return "mcp-repair";
   if (section === "mcp" && input === " ") return "mcp-toggle";
   if (section === "skills" && input === "f") return "skills-repair";
+  if (section === "skills" && input === "d") return "skills-download";
   if (section === "skills" && input === " ") return "skills-toggle";
   if (section === "prompts" && input === "v") return "prompt-view-local";
   if (section === "prompts" && input === "V") return "prompt-view-cloud";
@@ -705,6 +706,7 @@ export function actionNeedsConfirmation(action) {
     action === "skills-repair" || action === "skills-enable" || action === "skills-disable" ||
     action === "skills-batch" || action === "skills-pack-save" ||
     action === "skills-pack-update" || action === "skills-pack-upload" ||
+    action === "skills-download" ||
     action === "provider-sync-push" || action === "provider-sync-pull" ||
     action === "proxy-start" || action === "proxy-stop" ||
     action === "proxy-attach" || action === "proxy-detach" ||
@@ -769,6 +771,9 @@ export function actionLabel(action, selection, target) {
   }
   if (action === "skills-pack-upload") {
     return `Back up Skills Store containing ${selection || "the selected Pack"}`;
+  }
+  if (action === "skills-download") {
+    return `Replace local Skill files from Workspace Pack ${selection || "selection"}`;
   }
   if (action === "snippet-copy") return `Copy Snippet ${selection || "selection"}`;
   if (action === "prompt-view-local") return `View local Prompt ${selection || "selection"} for ${target}`;

@@ -97,6 +97,7 @@ Keys:
   Providers (Codex): S observer start/stop · A attach/detach
   MCP: l/w panes · / search · e/x filters · m batch · Space toggle
   Skills: l/w panes · / search · e enabled · m batch · Space toggle
+  Skills Workspace: d download/replace local canonical files
   ?                                 Toggle help
   q                                 Quit
 `);
@@ -836,7 +837,7 @@ function CloudCatalog({
         </Box>
       </Box>
       <Text color="gray">
-        ↑/↓ select · <Text color="cyan" bold>p</Text> inspect plan · <Text color="magenta" bold>a</Text> apply to {targetLabel(target)} only
+        ↑/↓ select · <Text color="cyan" bold>p</Text> inspect plan · <Text color="magenta" bold>a</Text> {component === "skills" ? "apply links" : "apply"} · {component === "skills" ? <><Text color="blue" bold>d</Text> download files · </> : null}{targetLabel(target)} only
       </Text>
     </Box>
   );
@@ -1497,6 +1498,7 @@ function Help() {
       <Text>MCP: Space toggle · m batch · a apply staged · c clear · s save · S update · u backup</Text>
       <Text>Skills: l local · w Workspace · / search · e enabled · Space toggle · m batch</Text>
       <Text>Skills: a apply staged · c clear · s save · S update · u backup</Text>
+      <Text>Skills Workspace: d download selected Pack files into the local canonical Store</Text>
       <Text>MCP / Skills / Prompts: p inspect plan · a apply selected Workspace item</Text>
       <Text>MCP / Skills: f repair the current named local selection when Drift is reported</Text>
       <Text>Prompts: v view active local · V view selected Workspace · ↑/↓ scroll preview</Text>
@@ -2458,7 +2460,7 @@ function App({ initialSection, controller, onLaunch }) {
       setSkillsFocus(nextFocus);
       setMessage(nextFocus === "local"
         ? "Local Skill switches focused; Space changes only the highlighted client."
-        : "Workspace Skill Packs focused; p inspects and a applies the selected Pack.");
+        : "Workspace Skill Packs focused; p plans, a applies links, and d downloads canonical files.");
       return;
     }
     if (section === "skills" && skillsFocus === "local" && input === "/") {
@@ -2707,6 +2709,43 @@ function App({ initialSection, controller, onLaunch }) {
         changes,
         label: actionLabel("skills-batch", "", skillsTarget),
         detail: `${changes.length} managed Skill link change(s) will be applied in one target transaction.`
+      });
+      return;
+    }
+    if (action === "skills-download") {
+      if (skillsFocus !== "workspace") {
+        setMessage("Press w to focus Workspace Skill Packs before downloading files.");
+        return;
+      }
+      if (!selectedRemote) {
+        setMessage("No Workspace Skill Pack is selected.");
+        return;
+      }
+      const item = catalogs.skills.items[componentSelected.skills];
+      const content = skillContentDiff(
+        localSkillsDashboard.catalog,
+        item?.items,
+        item?.checksums
+      );
+      const replacements = [...content.different, ...content.unchecked];
+      const additions = content.workspaceOnly;
+      if (replacements.length === 0 && additions.length === 0) {
+        setMessage(`${selectedRemote} already matches every local canonical Skill file.`);
+        return;
+      }
+      setConfirm({
+        action,
+        selection: selectedRemote,
+        target: skillsTarget,
+        warning: replacements.length > 0,
+        label: actionLabel(action, selectedRemote, skillsTarget),
+        detail: [
+          replacements.length > 0
+            ? `Replace local files: ${replacements.join(", ")}.`
+            : "",
+          additions.length > 0 ? `Add Workspace-only Skills: ${additions.join(", ")}.` : "",
+          "Previous same-name files are backed up. Local Pack definitions, target selections, managed links, unrelated Skills, and the encrypted Workspace remain unchanged."
+        ].filter(Boolean).join("\n")
       });
       return;
     }
