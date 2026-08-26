@@ -1138,6 +1138,8 @@ test("Workspace Skill download replaces only changed canonical files", async () 
   const oldHash = "b".repeat(64);
   const changedHash = "c".repeat(64);
   const addedHash = "d".repeat(64);
+  const changedSource = join("/runtime/skills", "skills", "changed");
+  const addedSource = join("/runtime/skills", "skills", "new-skill");
   const calls = [];
   const runner = async (_executable, args, options = {}) => {
     calls.push({ args, env: options.env || {} });
@@ -1153,11 +1155,11 @@ test("Workspace Skill download replaces only changed canonical files", async () 
       };
     }
     if (args.join(" ") ===
-        "skill add /runtime/skills/skills/changed --name changed --force --yes") {
+        `skill add ${changedSource} --name changed --force --yes`) {
       return { code: 0, stdout: "Added skill 'changed'\n", stderr: "" };
     }
     if (args.join(" ") ===
-        "skill add /runtime/skills/skills/new-skill --name new-skill --yes") {
+        `skill add ${addedSource} --name new-skill --yes`) {
       return { code: 0, stdout: "Added skill 'new-skill'\n", stderr: "" };
     }
     return { code: 1, stdout: "", stderr: `unexpected command: ${args.join(" ")}` };
@@ -1197,8 +1199,8 @@ test("Workspace Skill download replaces only changed canonical files", async () 
   assert.match(downloaded.detail, /Pack definitions, target selections, and unrelated Skills were unchanged/);
   assert.deepEqual(calls.map(({ args }) => args), [
     ["list", "--json"],
-    ["skill", "add", "/runtime/skills/skills/changed", "--name", "changed", "--force", "--yes"],
-    ["skill", "add", "/runtime/skills/skills/new-skill", "--name", "new-skill", "--yes"]
+    ["skill", "add", changedSource, "--name", "changed", "--force", "--yes"],
+    ["skill", "add", addedSource, "--name", "new-skill", "--yes"]
   ]);
   assert.deepEqual(calls.every(({ env }) => Object.keys(env).length === 0), true);
 });
