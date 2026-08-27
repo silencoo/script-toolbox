@@ -226,11 +226,46 @@ if [ -z "$SOURCE_ROOT" ]; then
     die "downloaded update does not contain the controller installer"
 fi
 
-"${SOURCE_ROOT}/agent/install-commands.sh" \
-  --standalone \
-  --prefix "$PREFIX" \
-  --runtime "$RUNTIME_DIR" \
-  --release-id "$RELEASE_ID" \
-  --yes
+update_platform="${SCRIPT_TOOLBOX_UPDATE_PLATFORM:-$(uname -s 2>/dev/null || true)}"
+powershell_manifest="${PREFIX}/.script-toolbox-agent-powershell.json"
+case "$update_platform" in
+  MINGW*|MSYS*|CYGWIN*|windows)
+    if [ -f "$powershell_manifest" ]; then
+      command -v cygpath >/dev/null 2>&1 ||
+        die "cygpath is required to update the Windows command shims"
+      command -v powershell.exe >/dev/null 2>&1 ||
+        die "Windows PowerShell is required to update the native command shims"
+      powershell_installer="${SOURCE_ROOT}/agent/install-commands.ps1"
+      [ -f "$powershell_installer" ] ||
+        die "downloaded update does not contain the Windows controller installer"
+      prefix_windows="$(cygpath -w "$PREFIX")"
+      runtime_windows="$(cygpath -w "$RUNTIME_DIR")"
+      installer_windows="$(cygpath -w "$powershell_installer")"
+      bash_windows="$(cygpath -w "$(command -v bash)")"
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
+        -File "$installer_windows" \
+        -Prefix "$prefix_windows" \
+        -Runtime "$runtime_windows" \
+        -BashPath "$bash_windows" \
+        -ReleaseId "$RELEASE_ID" \
+        --yes
+    else
+      "${SOURCE_ROOT}/agent/install-commands.sh" \
+        --standalone \
+        --prefix "$PREFIX" \
+        --runtime "$RUNTIME_DIR" \
+        --release-id "$RELEASE_ID" \
+        --yes
+    fi
+    ;;
+  *)
+    "${SOURCE_ROOT}/agent/install-commands.sh" \
+      --standalone \
+      --prefix "$PREFIX" \
+      --runtime "$RUNTIME_DIR" \
+      --release-id "$RELEASE_ID" \
+      --yes
+    ;;
+esac
 
 ok "updated agentctl, mcpctl, promptctl, and skillsctl to ${RELEASE_ID}"

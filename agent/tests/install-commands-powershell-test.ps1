@@ -70,9 +70,61 @@ try {
             "shared Windows install omitted the Git Bash $name launcher"
     }
 
-    $version = (& (Join-Path $Prefix 'agentctl.cmd') --version | Out-String).Trim()
-    Assert-True ($LASTEXITCODE -eq 0) 'agentctl.cmd returned a non-zero exit code'
-    Assert-True ($version -eq 'agentctl 0.17.8') "agentctl.cmd returned an unexpected version: $version"
+    # Native PowerShell/cmd launches do not guarantee that Git's usr/bin is on
+    # PATH. Keep only the command shims, Windows system tools, PowerShell, and
+    # Node to reproduce that environment and exercise every affected entry.
+    $originalProcessPath = $env:Path
+    $powershellDirectory = Split-Path -Parent (Get-Command powershell.exe -ErrorAction Stop).Source
+    $nodeDirectory = Split-Path -Parent (Get-Command node.exe -ErrorAction Stop).Source
+    $systemDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::System)
+    try {
+        $env:Path = (@($Prefix, $powershellDirectory, $nodeDirectory, $systemDirectory) |
+            Select-Object -Unique) -join ';'
+
+        $versionOutput = & (Join-Path $Prefix 'agentctl.cmd') --version 2>&1
+        $versionExit = $LASTEXITCODE
+        $version = ($versionOutput | Out-String).Trim()
+        Assert-True ($versionExit -eq 0) 'agentctl.cmd returned a non-zero exit code without Git usr/bin on PATH'
+        Assert-True ($version -eq 'agentctl 0.17.8') "agentctl.cmd returned an unexpected version: $version"
+
+        $workspaceOutput = & (Join-Path $Prefix 'agentctl.cmd') workspace --help 2>&1
+        $workspaceExit = $LASTEXITCODE
+        $workspaceHelp = $workspaceOutput | Out-String
+        Assert-True ($workspaceExit -eq 0) 'agentctl workspace --help failed without Git usr/bin on PATH'
+        Assert-True ($workspaceHelp -match 'Usage:\s+agentctl workspace init') `
+            'agentctl workspace --help returned unexpected output'
+
+        $skillsOutput = & (Join-Path $Prefix 'skillsctl.cmd') --help 2>&1
+        $skillsExit = $LASTEXITCODE
+        $skillsHelp = $skillsOutput | Out-String
+        Assert-True ($skillsExit -eq 0) 'skillsctl.cmd --help failed without Git usr/bin on PATH'
+        Assert-True ($skillsHelp -match 'Usage:\s+skillsctl tui') 'skillsctl.cmd --help returned unexpected output'
+    } finally {
+        $env:Path = $originalProcessPath
+    }
+
+    # A Shell runtime update must also refresh the outer PowerShell launcher.
+    # Mark the currently managed launcher as v2 and update its manifest hash;
+    # a Bash-only update would leave this simulated old launcher untouched.
+    $launcherPath = Join-Path $Prefix '.script-toolbox-agent-launcher.ps1'
+    $launcherV2 = (Get-Content -LiteralPath $launcherPath -Raw).Replace(
+        'PowerShell launcher v3',
+        'PowerShell launcher v2'
+    )
+    [IO.File]::WriteAllText($launcherPath, $launcherV2, (New-Object System.Text.UTF8Encoding($true)))
+    $manifestPath = Join-Path $Prefix '.script-toolbox-agent-powershell.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $launcherEntry = @($manifest.files) | Where-Object {
+        [string]::Equals($_.path, $launcherPath, [StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
+    Assert-True ($null -ne $launcherEntry) 'PowerShell manifest omitted the shared launcher entry'
+    $launcherEntry.sha256 = (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestJson = $manifest | ConvertTo-Json -Depth 6
+    [IO.File]::WriteAllText(
+        $manifestPath,
+        $manifestJson + "`r`n",
+        (New-Object System.Text.UTF8Encoding($true))
+    )
 
     # The updater must leave its installed runtime before asking the shared
     # installer to rename it. Windows otherwise reports access denied while
@@ -87,12 +139,22 @@ try {
     Assert-True (-not [string]::IsNullOrWhiteSpace($Cygpath)) 'could not locate cygpath for update test'
     $RepoRoot = [IO.Path]::GetFullPath((Join-Path $AgentDir '..'))
     $RepoRootMsys = ([string](& $Cygpath -u -- $RepoRoot | Select-Object -Last 1)).Trim()
-    $updateOutput = & (Join-Path $Prefix 'agentctl.cmd') update --yes `
-        --source $RepoRootMsys --release-id powershell-test-v2 2>&1 | Out-String
-    Assert-True ($LASTEXITCODE -eq 0) "agentctl update failed on Windows: $updateOutput"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $updateOutput = & (Join-Path $Prefix 'agentctl.cmd') update --yes `
+            --source $RepoRootMsys --release-id powershell-test-v2 2>&1 | Out-String
+        $updateExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    Assert-True ($updateExit -eq 0) "agentctl update failed on Windows: $updateOutput"
     $runtimeMarker = Get-Content -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -Raw
     Assert-True ($runtimeMarker -match '(?m)^release_id=powershell-test-v2$') `
         'agentctl update did not replace the Windows runtime metadata'
+    $updatedLauncher = Get-Content -LiteralPath $launcherPath -Raw
+    Assert-True ($updatedLauncher -match '(?m)^# script-toolbox-agent PowerShell launcher v3$') `
+        'agentctl update did not migrate the managed PowerShell launcher'
 
     $agentctlShim = Join-Path $Prefix 'agentctl.cmd'
     $shimHashBefore = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash

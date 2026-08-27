@@ -34,6 +34,10 @@ $ErrorActionPreference = 'Stop'
 # binding `--yes` as the positional Prefix path. Unknown compatibility
 # arguments fail closed instead of becoming directories.
 foreach ($argument in @($CompatibilityArguments)) {
+    # Windows PowerShell 5.1 binds one empty remaining argument when this
+    # script is invoked by MSYS Bash with no real positional values. It is a
+    # native argument-marshalling artifact, not a user option.
+    if ([string]::IsNullOrEmpty($argument)) { continue }
     switch ($argument) {
         '--yes' { $Yes = $true }
         '--force' { $Force = $true }
@@ -156,7 +160,7 @@ function New-LauncherContent(
         "    $(Quote-PowerShellLiteral $name) = $(Quote-PowerShellLiteral $Targets[$name])"
     }
     return @"
-# script-toolbox-agent PowerShell launcher v2
+# script-toolbox-agent PowerShell launcher v3
 param(
     [Parameter(Mandatory = `$true, Position = 0)]
     [ValidateSet('agentctl', 'mcpctl', 'promptctl', 'skillsctl')]
@@ -171,7 +175,11 @@ param(
 $($targetLines -join "`r`n")
 }
 try {
-    & `$bash `$targets[`$Controller] @ControllerArgs
+    # Git for Windows does not add its POSIX tools when bash.exe inherits a
+    # native Windows PATH. Bootstrap /usr/bin before the controller evaluates
+    # dirname, readlink, and the shared shell library.
+    & `$bash -c 'PATH=/usr/bin`${PATH:+:`$PATH}; export PATH; exec /usr/bin/bash \"`$@\"' ``
+        -- `$targets[`$Controller] @ControllerArgs
     if (`$null -eq `$LASTEXITCODE) { exit 0 }
     exit `$LASTEXITCODE
 } catch {

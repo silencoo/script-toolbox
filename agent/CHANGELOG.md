@@ -1,5 +1,18 @@
 # Changelog — agent/
 
+## 2026-08-27 — Windows launcher Bash PATH bootstrap
+
+- Fixed the native `agentctl.cmd`, `mcpctl.cmd`, `promptctl.cmd`, and
+  `skillsctl.cmd` launcher on Windows hosts whose process PATH omits Git's
+  POSIX utilities. PowerShell launcher v3 now adds `/usr/bin` inside Bash
+  before controller startup, eliminating the `dirname: command not found`
+  failure and its misleading follow-on `ctl-lib.sh` error.
+- Added isolated-PATH coverage for `agentctl --version`, `agentctl workspace
+  --help`, and `skillsctl --help` through the installed `.cmd` shims.
+- Windows suite updates now route an existing native installation back through
+  its PowerShell installer, so a runtime update also migrates the shared
+  launcher and managed `.cmd`/`jq` files instead of leaving launcher v2 behind.
+
 ## 2026-08-26 — selective Workspace Skill download
 
 - Added a confirmed `d` action to the Skills Workspace pane. It downloads only

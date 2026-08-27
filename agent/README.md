@@ -102,8 +102,9 @@ arguments are rejected rather than being interpreted as an install path.
 
 The PowerShell installer also downloads the official Windows `jq` binary into
 the managed command directory and verifies its pinned SHA-256 checksum. The
-generated launcher prepends that directory to its child process `PATH`, so MCP
-and JSON commands do not depend on a separate system-wide `jq` installation.
+generated launcher prepends that directory to its child process `PATH` and
+bootstraps Git Bash's `/usr/bin`, so controllers retain their POSIX utilities
+and MCP/JSON commands do not depend on a separate system-wide `jq` installation.
 
 The Windows defaults are `%LOCALAPPDATA%\script-toolbox\agent` for the runtime
 and `%LOCALAPPDATA%\script-toolbox\bin` for commands. Git Bash users can keep
@@ -119,6 +120,9 @@ mcpctl update --yes
 promptctl update --yes
 skillsctl update --yes
 ```
+
+On a native Windows installation, the updater also refreshes the managed
+PowerShell launcher, `.cmd` shims, and pinned `jq` binary.
 
 The unified Provider catalog is target-aware. Built-ins are visible before any
 local initialization, and `use` installs/configures only the selected client:
