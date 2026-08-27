@@ -1,0 +1,169 @@
+name: Sync SingleFile MV3
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-singlefile-mv3
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPOSITORY: gildas-lormeau/SingleFile-MV3
+  UPSTREAM_BRANCH: main
+  TARGET_DIRECTORY: extensions/singlefile-mv3
+  SYNC_BRANCH: automation/sync-singlefile-mv3
+
+jobs:
+  validate:
+    name: Validate the upstream revision without write access
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      upstream_commit: ${{ steps.source.outputs.upstream_commit }}
+    steps:
+      - name: Check out the upstream revision
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone \
+            --depth 1 \
+            --branch "$UPSTREAM_BRANCH" \
+            "https://github.com/${UPSTREAM_REPOSITORY}.git" \
+            upstream
+          echo "upstream_commit=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: upstream/package-lock.json
+
+      - name: Run the upstream checks
+        working-directory: upstream
+        run: |
+          npm ci
+          npx eslint .
+          ./build-extension.sh
+          git diff --exit-code
+
+  mirror:
+    name: Propose the validated mirror update
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Mirror the validated upstream tree
+        id: sync
+        env:
+          UPSTREAM_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET_DIRECTORY" in
+            extensions/*) ;;
+            *)
+              echo "Refusing to replace unsafe target: $TARGET_DIRECTORY" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "$UPSTREAM_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid validated commit: $UPSTREAM_COMMIT" >&2
+            exit 1
+          fi
+
+          temporary_directory="$(mktemp -d)"
+          trap 'rm -rf "$temporary_directory"' EXIT
+          git -C "$temporary_directory" init --quiet upstream
+          git -C "$temporary_directory/upstream" remote add origin \
+            "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git -C "$temporary_directory/upstream" fetch \
+            --depth 1 origin "$UPSTREAM_COMMIT"
+          git -C "$temporary_directory/upstream" checkout --quiet --detach FETCH_HEAD
+
+          mirrored_commit="$(git -C "$temporary_directory/upstream" rev-parse HEAD)"
+          if [[ "$mirrored_commit" != "$UPSTREAM_COMMIT" ]]; then
+            echo "Fetched $mirrored_commit instead of validated commit $UPSTREAM_COMMIT" >&2
+            exit 1
+          fi
+
+          mkdir -p "$TARGET_DIRECTORY"
+          rsync -a --delete --exclude='.git/' \
+            "$temporary_directory/upstream/" \
+            "$TARGET_DIRECTORY/"
+          printf '%s\n' "$UPSTREAM_COMMIT" > "$TARGET_DIRECTORY/.upstream-commit"
+
+          if [[ -n "$(git status --porcelain -- "$TARGET_DIRECTORY")" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git add -- "$TARGET_DIRECTORY"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit the synchronized snapshot
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          UPSTREAM_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$SYNC_BRANCH"
+          git commit -m "chore(extensions): sync SingleFile MV3 ${UPSTREAM_COMMIT:0:12}"
+          git push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
+
+      - name: Open or refresh the update pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="chore(extensions): sync SingleFile MV3"
+          body="Automated mirror update from [${UPSTREAM_REPOSITORY}](https://github.com/${UPSTREAM_REPOSITORY}) at commit [\`${UPSTREAM_COMMIT}\`](https://github.com/${UPSTREAM_REPOSITORY}/commit/${UPSTREAM_COMMIT}).
+
+          A separate read-only job ran the upstream linter and extension build before this pull request was updated. Review upstream changes and licensing notices before merging."
+          pull_request_number="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$SYNC_BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+
+          if [[ -n "$pull_request_number" ]]; then
+            gh pr edit "$pull_request_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body "$body"
+          else
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$BASE_BRANCH" \
+              --head "$SYNC_BRANCH" \
+              --title "$title" \
+              --body "$body"
+          fi
+
+      - name: Report that the mirror is current
+        if: steps.sync.outputs.changed == 'false'
+        env:
+          UPSTREAM_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+        run: echo "SingleFile MV3 already matches upstream commit $UPSTREAM_COMMIT."

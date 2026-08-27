@@ -1,2 +1,5 @@
 # Docker copies these files into Linux sandboxes, where CRLF breaks zsh.
 docker-sandboxes/kits/zsh-shell/** text eol=lf
+
+# This directory is an automatically synchronized third-party source snapshot.
+extensions/singlefile-mv3/** -text linguist-vendored=true

@@ -13,6 +13,8 @@ documentation so scripts can evolve without crowding the repository root.
 | [`proxy-rules/`](./proxy-rules/) | Reusable Quantumult X profile plus generated AI and ad rules |
 | [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
 | [`extensions/cookie-exporter/`](./extensions/cookie-exporter/) | Per-site Chromium Cookie export in JSON, Netscape, request-header, and CSV formats |
+| [`extensions/user-agent-manager/`](./extensions/user-agent-manager/) | Chromium User-Agent and Client Hints switcher with custom profiles and per-site rules |
+| [`extensions/singlefile-mv3/`](./extensions/singlefile-mv3/) | Reviewed mirror of the upstream AGPL-licensed SingleFile Manifest V3 extension |
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |

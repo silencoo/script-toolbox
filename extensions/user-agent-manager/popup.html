@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>UA Switcher</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body class="popup-page">
+  <main class="popup-shell" aria-labelledby="popup-title">
+    <header class="popup-header">
+      <div class="brand-lockup">
+        <img class="brand-icon" src="/icons/icon-48.png" alt="" width="40" height="40" />
+        <div><h1 id="popup-title">UA Switcher</h1><p id="site-label" class="muted truncate">正在读取当前网站…</p></div>
+      </div>
+      <label class="switch" title="启用或暂停扩展">
+        <span class="sr-only">启用 UA 切换</span><input id="enabled-toggle" type="checkbox" /><span class="switch-track" aria-hidden="true"></span>
+      </label>
+    </header>
+
+    <section id="permission-notice" class="notice warning hidden" role="status">
+      <strong>页面脚本伪装尚未启用</strong>
+      <span>请求头切换仍有效。请在扩展详情中开启“允许用户脚本”，以同步 navigator.userAgent。</span>
+    </section>
+
+    <fieldset class="scope-control" aria-label="应用范围">
+      <legend class="sr-only">应用范围</legend>
+      <label><input type="radio" name="scope" value="site" checked /><span>当前网站</span></label>
+      <label><input type="radio" name="scope" value="global" /><span>所有网站</span></label>
+    </fieldset>
+
+    <div class="search-wrap">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+      <label class="sr-only" for="profile-search">搜索身份配置</label>
+      <input id="profile-search" type="search" placeholder="搜索浏览器或设备" autocomplete="off" />
+    </div>
+
+    <section class="profile-section" aria-labelledby="profile-heading">
+      <div class="section-heading-row"><h2 id="profile-heading">选择身份</h2><span id="active-summary" class="status-text">浏览器默认</span></div>
+      <div id="profile-list" class="profile-list" role="radiogroup" aria-label="User-Agent 配置"></div>
+      <p id="empty-search" class="empty-inline hidden">没有匹配的配置。</p>
+    </section>
+
+    <footer class="popup-actions">
+      <div id="popup-feedback" class="feedback" role="status" aria-live="polite"></div>
+      <div class="action-row">
+        <button id="open-manager" class="button secondary" type="button">管理配置</button>
+        <button id="apply-profile" class="button primary" type="button">应用并刷新</button>
+      </div>
+    </footer>
+  </main>
+  <script type="module" src="/src/popup.ts"></script>
+</body>
+</html>

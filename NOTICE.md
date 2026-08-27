@@ -65,6 +65,11 @@ third-party-derived files.
 - `agent/tui/dist/toolbox-tui.mjs` bundles Ink, React, Yoga, and their runtime
   dependencies. Their package names, versions, copyright notices, and license
   texts are retained in `agent/tui/dist/THIRD_PARTY_LICENSES.txt`.
+- Files under `extensions/singlefile-mv3/` are synchronized without local source
+  modifications from `gildas-lormeau/SingleFile-MV3`. They are copyright their
+  respective authors and distributed under AGPL-3.0-or-later as documented in
+  the bundled `extensions/singlefile-mv3/LICENSE`. The exact mirrored revision
+  is recorded in `extensions/singlefile-mv3/.upstream-commit`.
 
 External services queried by `workers/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those

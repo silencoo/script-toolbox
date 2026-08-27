@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>UA Switcher 管理器</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body class="manager-page">
+  <a class="skip-link" href="#manager-main">跳到主要内容</a>
+  <header class="manager-header">
+    <div class="manager-header-inner">
+      <div class="brand-lockup">
+        <img class="brand-icon" src="/icons/icon-48.png" alt="" width="44" height="44" />
+        <div><h1>UA Switcher & Manager</h1><p class="muted">管理浏览器身份、Client Hints 与网站规则</p></div>
+      </div>
+      <div class="header-actions"><span id="save-status" class="status-text" role="status" aria-live="polite">已保存</span><button id="theme-toggle" class="icon-button" type="button" aria-label="切换明暗主题"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.91-.1-1.35A7 7 0 0 1 12 3Z"/></svg></button></div>
+    </div>
+  </header>
+
+  <main id="manager-main" class="manager-shell">
+    <nav class="manager-tabs" aria-label="管理器页面">
+      <button type="button" role="tab" aria-selected="true" aria-controls="profiles-panel" id="profiles-tab" data-tab="profiles">身份配置</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="sites-panel" id="sites-tab" data-tab="sites">网站规则</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="settings-panel" id="settings-tab" data-tab="settings">设置与备份</button>
+    </nav>
+
+    <section id="profiles-panel" class="tab-panel" role="tabpanel" aria-labelledby="profiles-tab">
+      <div class="page-toolbar"><div><h2>身份配置</h2><p class="muted">内置配置保持只读；复制后可调整为自己的浏览器身份。</p></div><button id="new-profile" class="button primary" type="button">新建自定义配置</button></div>
+      <div id="manager-profile-list" class="manager-list"></div>
+    </section>
+
+    <section id="sites-panel" class="tab-panel hidden" role="tabpanel" aria-labelledby="sites-tab">
+      <div class="page-toolbar"><div><h2>网站规则</h2><p class="muted">域名规则同时覆盖其子域名；更具体的域名优先。</p></div></div>
+      <form id="site-rule-form" class="inline-form" novalidate>
+        <div class="field grow"><label for="site-hostname">域名</label><input id="site-hostname" name="hostname" type="text" inputmode="url" placeholder="example.com" autocomplete="off" aria-describedby="site-error" /><span id="site-error" class="field-error" role="alert"></span></div>
+        <div class="field grow"><label for="site-profile">身份配置</label><select id="site-profile" name="profileId"></select></div>
+        <button class="button primary align-field" type="submit">添加规则</button>
+      </form>
+      <div id="site-rule-list" class="manager-list compact"></div>
+      <p id="site-empty" class="empty-block">还没有网站规则。添加域名后，它会覆盖全局身份。</p>
+    </section>
+
+    <section id="settings-panel" class="tab-panel hidden" role="tabpanel" aria-labelledby="settings-tab">
+      <div class="page-toolbar"><div><h2>设置与备份</h2><p class="muted">请求头规则完全在浏览器本地执行，不会上传浏览数据。</p></div></div>
+      <div class="settings-stack">
+        <section class="settings-group" aria-labelledby="behavior-heading">
+          <h3 id="behavior-heading">切换行为</h3>
+          <label class="setting-row" for="global-profile"><span><strong>所有网站的默认身份</strong><small>网站规则会覆盖这里的选择。</small></span><select id="global-profile"></select></label>
+          <label class="setting-row" for="js-override"><span><strong>同步页面 JavaScript</strong><small>使用 MV3 User Scripts 同步 navigator.userAgent 与 userAgentData。</small></span><span class="switch"><input id="js-override" type="checkbox" /><span class="switch-track" aria-hidden="true"></span></span></label>
+          <div id="user-scripts-status" class="notice compact" role="status"></div>
+        </section>
+        <section class="settings-group" aria-labelledby="backup-heading">
+          <h3 id="backup-heading">备份</h3>
+          <div class="setting-row"><span><strong>导入与导出</strong><small>文件包含自定义身份、网站规则和全局设置，不含浏览记录。</small></span><div class="button-group"><button id="export-settings" class="button secondary" type="button">导出 JSON</button><label class="button secondary file-button" for="import-settings">导入 JSON</label><input id="import-settings" class="sr-only" type="file" accept="application/json,.json" /></div></div>
+        </section>
+        <section class="settings-group danger-zone" aria-labelledby="reset-heading">
+          <h3 id="reset-heading">重置</h3>
+          <div class="setting-row"><span><strong>恢复初始配置</strong><small>删除所有自定义身份与网站规则，并停用全局切换。</small></span><button id="reset-settings" class="button danger" type="button">重置全部</button></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="profile-dialog" class="dialog">
+    <form id="profile-form" method="dialog" novalidate>
+      <div class="dialog-header"><div><h2 id="profile-dialog-title">新建身份配置</h2><p>Client Hints 留空时会移除 Chromium 特征。</p></div><button class="icon-button" type="button" data-close-dialog="profile-dialog" aria-label="关闭"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <div id="profile-form-error" class="notice error hidden" role="alert"></div>
+      <input id="profile-id" name="id" type="hidden" />
+      <div class="form-grid">
+        <div class="field"><label for="profile-name">名称</label><input id="profile-name" name="name" maxlength="60" required /><span class="field-error" data-error-for="name"></span></div>
+        <div class="field"><label for="profile-platform">navigator.platform</label><input id="profile-platform" name="platform" placeholder="Win32" required /><span class="field-error" data-error-for="platform"></span></div>
+        <div class="field full"><label for="profile-ua">User-Agent</label><textarea id="profile-ua" name="userAgent" rows="4" required></textarea><span class="field-error" data-error-for="userAgent"></span></div>
+        <div class="field"><label for="profile-vendor">navigator.vendor</label><input id="profile-vendor" name="vendor" placeholder="Google Inc." /></div>
+        <div class="field"><label for="profile-category">分类</label><select id="profile-category" name="category"><option value="desktop">桌面</option><option value="mobile">移动设备</option><option value="bot">爬虫</option><option value="custom">其他</option></select></div>
+        <div class="field full"><label for="profile-brands">Client Hints 品牌（可选）</label><input id="profile-brands" name="brands" placeholder="Chromium=131, Google Chrome=131" aria-describedby="brands-help" /><small id="brands-help">格式：品牌=主版本，多个项目用逗号分隔。</small><span class="field-error" data-error-for="brands"></span></div>
+        <label class="checkbox-row full"><input id="profile-mobile" name="mobile" type="checkbox" /><span>移动设备 Client Hint（?1）</span></label>
+      </div>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog="profile-dialog">取消</button><button class="button primary" type="submit" value="save">保存配置</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog dialog-small">
+    <div class="dialog-header"><div><h2 id="confirm-title">确认操作</h2><p id="confirm-description"></p></div></div>
+    <div class="dialog-actions"><button id="confirm-cancel" class="button secondary" type="button">取消</button><button id="confirm-action" class="button danger" type="button">确认</button></div>
+  </dialog>
+  <div id="manager-feedback" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/src/manager.ts"></script>
+</body>
+</html>
