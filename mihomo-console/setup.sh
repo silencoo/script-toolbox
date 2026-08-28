@@ -104,7 +104,7 @@ install_files() {
 }
 
 configure_systemd_sandbox() {
-  [[ -f "$MANAGER_CONFIG" ]] || return
+  [[ -f "$MANAGER_CONFIG" ]] || return 0
   "$MANAGER_BIN" configure-systemd-sandbox
 }
 
