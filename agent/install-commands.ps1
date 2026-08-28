@@ -388,9 +388,14 @@ function Invoke-ShellInstaller(
     # Windows command directory keeps that nested warning from contradicting
     # the single, actionable PowerShell warning printed after installation.
     $originalPath = $env:Path
+    $originalInstallKind = $env:SCRIPT_TOOLBOX_INSTALL_KIND
     if (-not (Test-PathEntry @(Split-UserPath $env:Path) $Prefix)) {
         $env:Path = "$Prefix;$env:Path"
     }
+    # Persist the native wrapper ownership in the standalone runtime marker.
+    # The updater can then select this installer without round-tripping a
+    # potentially non-ASCII Windows prefix through MSYS path handling.
+    $env:SCRIPT_TOOLBOX_INSTALL_KIND = 'powershell'
     try {
         & $Bash @arguments
         if ($LASTEXITCODE -ne 0) {
@@ -398,6 +403,7 @@ function Invoke-ShellInstaller(
         }
     } finally {
         $env:Path = $originalPath
+        $env:SCRIPT_TOOLBOX_INSTALL_KIND = $originalInstallKind
     }
 }
 

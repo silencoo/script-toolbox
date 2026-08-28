@@ -55,6 +55,9 @@ try {
     Invoke-Installer $common @('--yes')
     Assert-True (Test-Path -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -PathType Leaf) `
         'PowerShell install omitted the standalone runtime marker'
+    $runtimeMarker = Get-Content -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -Raw
+    Assert-True ($runtimeMarker -match '(?m)^install_kind=powershell$') `
+        'PowerShell install did not record its native wrapper ownership'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-powershell.json') -PathType Leaf) `
         'PowerShell install omitted its ownership manifest'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-launcher.ps1') -PathType Leaf) `

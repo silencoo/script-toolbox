@@ -443,6 +443,7 @@ stage_runtime() {
     printf 'prefix=%s\n' "$PREFIX"
     printf 'runtime=%s\n' "$RUNTIME_DIR"
     printf 'repository=%s\n' 'silencoo/script-toolbox'
+    printf 'install_kind=%s\n' "${SCRIPT_TOOLBOX_INSTALL_KIND:-shell}"
   } > "$marker_temp"
   chmod 600 "$marker_temp"
 

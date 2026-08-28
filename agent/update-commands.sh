@@ -76,6 +76,7 @@ marker_value() {
 
 installed_prefix="$(marker_value prefix)"
 installed_runtime="$(marker_value runtime)"
+installed_kind="$(marker_value install_kind)"
 current_release="$(marker_value release_id)"
 [ -z "$installed_prefix" ] || PREFIX="$installed_prefix"
 [ -z "$installed_runtime" ] || RUNTIME_DIR="$installed_runtime"
@@ -230,7 +231,9 @@ update_platform="${SCRIPT_TOOLBOX_UPDATE_PLATFORM:-$(uname -s 2>/dev/null || tru
 powershell_manifest="${PREFIX}/.script-toolbox-agent-powershell.json"
 case "$update_platform" in
   MINGW*|MSYS*|CYGWIN*|windows)
-    if [ "${SCRIPT_TOOLBOX_POWERSHELL_MANAGED:-0}" = 1 ] || [ -f "$powershell_manifest" ]; then
+    if [ "$installed_kind" = powershell ] ||
+      [ "${SCRIPT_TOOLBOX_POWERSHELL_MANAGED:-0}" = 1 ] ||
+      [ -f "$powershell_manifest" ]; then
       command -v cygpath >/dev/null 2>&1 ||
         die "cygpath is required to update the Windows command shims"
       command -v powershell.exe >/dev/null 2>&1 ||
