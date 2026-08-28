@@ -7,6 +7,8 @@
   uses those signals in addition to its manifest check, so Unicode command
   paths still refresh the PowerShell launcher, `.cmd` shims, and managed `jq`
   dependency.
+- The native update regression test now compares the launcher's first line
+  directly, avoiding a false failure when Windows emits CRLF line endings.
 
 ## 2026-08-27 — Windows launcher Bash PATH bootstrap
 

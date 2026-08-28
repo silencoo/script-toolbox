@@ -158,9 +158,9 @@ try {
     $runtimeMarker = Get-Content -LiteralPath (Join-Path $Runtime '.script-toolbox-agent-runtime') -Raw
     Assert-True ($runtimeMarker -match '(?m)^release_id=powershell-test-v2$') `
         'agentctl update did not replace the Windows runtime metadata'
-    $updatedLauncher = Get-Content -LiteralPath $launcherPath -Raw
-    Assert-True ($updatedLauncher -match '(?m)^# script-toolbox-agent PowerShell launcher v3$') `
-        'agentctl update did not migrate the managed PowerShell launcher'
+    $updatedLauncherVersion = Get-Content -LiteralPath $launcherPath -TotalCount 1
+    Assert-True ($updatedLauncherVersion -eq '# script-toolbox-agent PowerShell launcher v3') `
+        "agentctl update did not migrate the managed PowerShell launcher (found: $updatedLauncherVersion)"
 
     $agentctlShim = Join-Path $Prefix 'agentctl.cmd'
     $shimHashBefore = (Get-FileHash -LiteralPath $agentctlShim -Algorithm SHA256).Hash
