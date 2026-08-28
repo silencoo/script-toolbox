@@ -1,6 +1,6 @@
 [Unit]
-Description=Update the active Mihomo subscription profile
-Documentation=file:/usr/local/share/doc/mihomo-subscription-manager/README.md
+Description=Update the active Mihomo profile with Mihomo Console
+Documentation=file:/usr/local/share/doc/mihomo-console/README.md
 Wants=network-online.target
 After=network-online.target
 
@@ -8,7 +8,7 @@ After=network-online.target
 Type=oneshot
 User=root
 UMask=0077
-ExecStart=/usr/local/sbin/mihomo-subscription-manager update-active
+ExecStart=/usr/local/sbin/mihomo-console update-active
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectHome=read-only

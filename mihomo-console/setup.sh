@@ -4,13 +4,14 @@ set -Eeuo pipefail
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SCRIPT_PATH="${SOURCE_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
-MANAGER_SOURCE="${SOURCE_DIR}/mihomo_subscription_manager.py"
+MANAGER_SOURCE="${SOURCE_DIR}/mihomo_console.py"
 SERVICE_SOURCE="${SOURCE_DIR}/mihomo-subscription-update.service"
 TIMER_SOURCE="${SOURCE_DIR}/mihomo-subscription-update.timer"
 README_SOURCE="${SOURCE_DIR}/README.md"
 
-MANAGER_BIN="/usr/local/sbin/mihomo-subscription-manager"
-DOC_DIR="/usr/local/share/doc/mihomo-subscription-manager"
+MANAGER_BIN="/usr/local/sbin/mihomo-console"
+LEGACY_MANAGER_BIN="/usr/local/sbin/mihomo-subscription-manager"
+DOC_DIR="/usr/local/share/doc/mihomo-console"
 SYSTEMD_DIR="/etc/systemd/system"
 MANAGER_CONFIG="/etc/mihomo/subscription-manager.json"
 
@@ -37,7 +38,7 @@ usage() {
   ./setup.sh --help          显示帮助
 
 脚本不会覆盖已有的 subscription-manager.json，也不会未经确认就应用
-订阅配置或启用定时更新。
+订阅配置或启用定时更新。安装后运行 sudo mihomo-console 进入 TUI。
 EOF
 }
 
@@ -91,14 +92,15 @@ ensure_python_yaml() {
 }
 
 install_files() {
-  say "正在安装 Mihomo 订阅管理器……"
+  say "正在安装 Mihomo Console……"
   install -m 0755 "$MANAGER_SOURCE" "$MANAGER_BIN"
+  ln -sfn "$MANAGER_BIN" "$LEGACY_MANAGER_BIN"
   install -d -m 0755 "$DOC_DIR"
   install -m 0644 "$README_SOURCE" "${DOC_DIR}/README.md"
   install -m 0644 "$SERVICE_SOURCE" "${SYSTEMD_DIR}/mihomo-subscription-update.service"
   install -m 0644 "$TIMER_SOURCE" "${SYSTEMD_DIR}/mihomo-subscription-update.timer"
   systemctl daemon-reload
-  say "程序和 systemd 单元安装完成。"
+  say "Mihomo Console 和 systemd 更新单元安装完成。"
 }
 
 configure_systemd_sandbox() {
@@ -142,7 +144,7 @@ run_setup_wizard() {
 
   if [[ -f "$MANAGER_CONFIG" ]]; then
     say "检测到已有 ${MANAGER_CONFIG}，将保留现有配置。"
-  elif confirm "现在初始化订阅管理器吗" yes; then
+  elif confirm "现在初始化 Mihomo Console 吗" yes; then
     "$MANAGER_BIN" init
     configure_systemd_sandbox
   else

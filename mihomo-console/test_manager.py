@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 
-MODULE_PATH = Path(__file__).with_name("mihomo_subscription_manager.py")
-SPEC = importlib.util.spec_from_file_location("mihomo_subscription_manager", MODULE_PATH)
+MODULE_PATH = Path(__file__).with_name("mihomo_console.py")
+SPEC = importlib.util.spec_from_file_location("mihomo_console", MODULE_PATH)
 assert SPEC and SPEC.loader
 manager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(manager)
@@ -96,6 +96,9 @@ secret: remote-secret
             self.assertTrue(changed)
             self.assertEqual(installed["secret"], "local-secret")
             self.assertIn("last_success", saved["subscriptions"]["primary"])
+            self.assertEqual(saved["history"][-1]["status"], "updated")
+            self.assertEqual(saved["history"][-1]["summary"]["proxies"], 1)
+            self.assertNotIn("example.invalid", str(saved["history"][-1]))
             self.assertEqual(len(list((root / "backups").iterdir())), 1)
 
     def test_failed_restart_rolls_back_old_profile(self):
@@ -139,8 +142,11 @@ proxies:
                     manager.update_profile(manager_config, registry, "primary")
 
             self.assertEqual(target.read_bytes(), old_data)
+            history = manager.load_registry(manager_config)["history"]
+            self.assertEqual(history[-1]["status"], "failed")
+            self.assertTrue(history[-1]["rolled_back"])
 
-    def test_dry_run_does_not_replace_or_record_profile(self):
+    def test_dry_run_does_not_replace_or_record_success(self):
         remote = b"""
 proxies:
   - name: node-a
@@ -176,6 +182,7 @@ proxies:
             self.assertFalse(changed)
             self.assertEqual(target.read_bytes(), old_data)
             self.assertNotIn("last_success", registry["subscriptions"]["primary"])
+            self.assertEqual(registry["history"][-1]["status"], "validated")
             restart.assert_not_called()
 
     def test_identical_profile_updates_active_subscription_without_restart(self):
@@ -339,6 +346,135 @@ proxies:
             self.assertEqual(dropin.stat().st_mode & 0o777, 0o644)
             self.assertEqual((root / "backups").stat().st_mode & 0o777, 0o700)
             command.assert_called_once_with(["systemctl", "daemon-reload"], timeout=60)
+
+    def test_history_is_bounded_and_updates_subscription_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager_config = Path(directory) / "manager.json"
+            registry = {
+                **manager.DEFAULTS,
+                "history_keep": 2,
+                "subscriptions": {"primary": {"url": "https://secret.invalid/token"}},
+            }
+            for index in range(3):
+                manager.append_history(
+                    manager_config,
+                    registry,
+                    {
+                        "kind": "update",
+                        "subscription": "primary",
+                        "status": "validated",
+                        "finished_at": f"2026-08-28T00:00:0{index}+00:00",
+                    },
+                )
+
+            saved = manager.load_registry(manager_config)
+            self.assertEqual(len(saved["history"]), 2)
+            self.assertEqual(saved["subscriptions"]["primary"]["last_result"], "validated")
+            self.assertNotIn("secret.invalid", str(saved["history"]))
+
+    def test_profile_summary_only_returns_counts(self):
+        summary = manager.profile_summary_from_bytes(
+            b"""
+proxies:
+  - {name: secret-node, type: ss, password: top-secret}
+proxy-providers:
+  remote: {url: https://secret.invalid/token}
+proxy-groups:
+  - {name: select, type: select}
+rules: [MATCH,DIRECT]
+"""
+        )
+        self.assertEqual(
+            summary,
+            {"proxies": 1, "providers": 1, "groups": 1, "rules": 2},
+        )
+        self.assertNotIn("secret", str(summary))
+
+    def test_history_error_redacts_subscription_urls_and_multiline_details(self):
+        registry = {
+            "subscriptions": {
+                "primary": {
+                    "url": "https://secret.invalid/sub?token=abc",
+                    "download_proxy": "http://127.0.0.1:7890",
+                }
+            }
+        }
+        sanitized = manager.sanitize_history_error(
+            registry,
+            "download failed at https://secret.invalid/sub?token=abc\n"
+            "retry via http://127.0.0.1:7890 failed",
+        )
+        self.assertNotIn("token=abc", sanitized)
+        self.assertNotIn("127.0.0.1", sanitized)
+        self.assertEqual(sanitized, "retry via <redacted-url> failed")
+
+    def test_display_helpers_handle_wide_characters(self):
+        self.assertEqual(manager.display_width("A中B"), 4)
+        self.assertEqual(manager.display_width(manager.fit_display("中", 4)), 4)
+        self.assertLessEqual(manager.display_width(manager.truncate_display("日本节点", 5)), 5)
+
+    def test_successful_manual_rollback_records_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "config.yaml"
+            target.write_bytes(b"proxies:\n  - name: current\n")
+            backup_dir = root / "backups"
+            backup_dir.mkdir()
+            selected = backup_dir / "config.yaml.20260828"
+            selected.write_bytes(b"proxies:\n  - name: restored\n")
+            manager_config = root / "manager.json"
+            registry = {
+                **manager.DEFAULTS,
+                "target_config": str(target),
+                "backup_dir": str(backup_dir),
+                "subscriptions": {},
+            }
+            manager.save_registry(manager_config, registry)
+
+            with (
+                mock.patch.object(manager, "validate_with_mihomo"),
+                mock.patch.object(manager, "restart_mihomo"),
+            ):
+                manager.rollback_backup(manager_config, registry, selected.name)
+
+            self.assertIn(b"restored", target.read_bytes())
+            self.assertEqual(manager.load_registry(manager_config)["history"][-1]["status"], "restored")
+
+    def test_failed_manual_rollback_restores_pre_rollback_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "config.yaml"
+            current = b"proxies:\n  - name: current\n"
+            target.write_bytes(current)
+            backup_dir = root / "backups"
+            backup_dir.mkdir()
+            selected = backup_dir / "config.yaml.old"
+            selected.write_bytes(b"proxies:\n  - name: broken-at-runtime\n")
+            manager_config = root / "manager.json"
+            registry = {
+                **manager.DEFAULTS,
+                "target_config": str(target),
+                "backup_dir": str(backup_dir),
+                "subscriptions": {},
+            }
+            manager.save_registry(manager_config, registry)
+            restart_results = [manager.ManagerError("failed"), None]
+
+            def fake_restart(_registry):
+                result = restart_results.pop(0)
+                if result:
+                    raise result
+
+            with (
+                mock.patch.object(manager, "validate_with_mihomo"),
+                mock.patch.object(manager, "restart_mihomo", side_effect=fake_restart),
+            ):
+                with self.assertRaisesRegex(manager.ManagerError, "已恢复回滚前配置"):
+                    manager.rollback_backup(manager_config, registry, selected.name)
+
+            self.assertEqual(target.read_bytes(), current)
+            history = manager.load_registry(manager_config)["history"]
+            self.assertEqual(history[-1]["status"], "failed")
 
 
 if __name__ == "__main__":

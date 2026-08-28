@@ -47,9 +47,9 @@ jobs:
         working-directory: proxy-rules
         run: npm run check
       - name: Check Bash syntax
-        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-subscription-manager/setup.sh sing-box/install-node.sh
-      - name: Test Mihomo subscription manager
-        run: python mihomo-subscription-manager/test_manager.py
+        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
+      - name: Test Mihomo Console
+        run: python mihomo-console/test_manager.py
       - name: Test sing-box toolkit
         run: python -m unittest discover -s sing-box/tests -v
       - name: Test Linux server toolkit safety
