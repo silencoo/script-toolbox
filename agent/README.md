@@ -77,6 +77,12 @@ standalone installer:
 ./install-commands.sh --prefix "$HOME/.local/bin" --yes
 ```
 
+An applied install initializes missing local Provider, Failover, Pricing, MCP,
+and Skills Stores. TUI startup performs the same idempotent bootstrap for repository-backed or
+manually linked commands; `agentctl bootstrap --yes` is the explicit form.
+Bootstrap does not change Agent selections, managed links, Secret values, or
+remote Workspace state, and uninstall preserves these local user Stores.
+
 It copies a minimal runtime—not the repository—to
 `~/.local/share/script-toolbox/agent`, then creates reversible commands.
 The checkout can be removed afterward. `--link` retains the old

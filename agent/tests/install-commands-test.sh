@@ -8,6 +8,16 @@ AGENT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${AGENT_DIR}/.." && pwd)"
 INSTALLER="${AGENT_DIR}/install-commands.sh"
 TEST_ROOT="$(mktemp -d)"
+export HOME="${TEST_ROOT}/home"
+export XDG_CONFIG_HOME="${TEST_ROOT}/config"
+export XDG_STATE_HOME="${TEST_ROOT}/state"
+export AGENTCTL_PROVIDER_STORE="${XDG_CONFIG_HOME}/agentctl/providers.json"
+export AGENTCTL_PROVIDER_SECRETS="${XDG_CONFIG_HOME}/agentctl/provider-secrets.json"
+export AGENTCTL_FAILOVER_STORE="${XDG_CONFIG_HOME}/agentctl/failover.json"
+export AGENTCTL_PRICING_CATALOG="${XDG_CONFIG_HOME}/agentctl/pricing.json"
+export MCPCTL_STORE="${XDG_CONFIG_HOME}/mcpctl/store"
+export SKILLSCTL_STORE="${XDG_CONFIG_HOME}/skillsctl/store"
+mkdir -p "$HOME"
 
 cleanup() { rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
@@ -28,6 +38,7 @@ RUNTIME="${TEST_ROOT}/runtime"
   >"$TEST_ROOT/preview.out"
 [ ! -e "$PREFIX" ] || fail "install preview created the prefix"
 [ ! -e "$RUNTIME" ] || fail "install preview created the runtime"
+[ ! -e "$XDG_CONFIG_HOME" ] || fail "install preview initialized local Stores"
 grep -q '\[preview\] no files or links were changed' "$TEST_ROOT/preview.out" ||
   fail "install preview did not explain how to apply"
 if "$INSTALLER" --prefix "$TEST_ROOT/unsafe/bin" --runtime "$TEST_ROOT" --yes \
@@ -111,6 +122,14 @@ done
   fail "runtime marker is not mode 600"
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
+[ -f "$AGENTCTL_PROVIDER_STORE" ] || fail "installer did not bootstrap the Provider Store"
+[ -f "$AGENTCTL_PROVIDER_SECRETS" ] || fail "installer did not bootstrap Provider Secrets"
+[ -f "$AGENTCTL_FAILOVER_STORE" ] || fail "installer did not bootstrap the Failover Store"
+[ -f "$AGENTCTL_PRICING_CATALOG" ] || fail "installer did not bootstrap the Pricing Store"
+[ -f "$MCPCTL_STORE/catalog.json" ] || fail "installer did not bootstrap the MCP Store"
+[ -f "$SKILLSCTL_STORE/catalog.json" ] || fail "installer did not bootstrap the Skills Store"
+grep -q 'local Provider, Failover, Pricing, MCP, and Skills Stores are ready' "$TEST_ROOT/install.out" ||
+  fail "installer did not report successful local Store bootstrap"
 
 [ "$("$PREFIX/agentctl" --version)" = "agentctl 0.17.8" ] ||
   fail "agentctl did not work through its standalone link"
@@ -130,6 +149,10 @@ done
   fail "standalone runtime omitted failover/circuit modules"
 [ -f "$RUNTIME/proxy/agentproxyd.mjs" ] ||
   fail "standalone runtime omitted the proxy daemon"
+[ -f "$RUNTIME/proxy/admission.mjs" ] &&
+[ -f "$RUNTIME/proxy/http-headers.mjs" ] &&
+[ -f "$RUNTIME/proxy/schema.mjs" ] ||
+  fail "standalone runtime omitted proxy runtime dependencies"
 [ -f "$RUNTIME/agentctl/pricing-client.mjs" ] &&
 [ -f "$RUNTIME/pricing/pricing.mjs" ] &&
 [ -f "$RUNTIME/pricing/openai-gpt-5.6-2026-08-14.json" ] &&
@@ -142,9 +165,21 @@ done
   fail "standalone failover command failed"
 "$PREFIX/agentctl" account --help >/dev/null ||
   fail "standalone Codex account command failed"
+"$PREFIX/agentctl" proxy status --json >"$TEST_ROOT/proxy-status.json" ||
+  fail "standalone proxy status command failed"
+grep -q '"status": "stopped"' "$TEST_ROOT/proxy-status.json" ||
+  fail "standalone proxy status did not return structured state"
+"$PREFIX/agentctl" proxy usage --summary --json >"$TEST_ROOT/proxy-usage.json" ||
+  fail "standalone proxy usage command failed"
+grep -q '"kind": "agentctl-proxy-usage-summary"' "$TEST_ROOT/proxy-usage.json" ||
+  fail "standalone proxy usage did not return a structured summary"
 "$PREFIX/mcpctl" --help >/dev/null || fail "mcpctl standalone command failed"
 "$PREFIX/promptctl" --help >/dev/null || fail "promptctl standalone command failed"
 "$PREFIX/skillsctl" --help >/dev/null || fail "skillsctl standalone command failed"
+"$PREFIX/agentctl" bootstrap --yes >"$TEST_ROOT/bootstrap-again.out" 2>&1 ||
+  fail "local Store bootstrap was not idempotent"
+grep -q 'MCP store already initialized' "$TEST_ROOT/bootstrap-again.out" ||
+  fail "repeated bootstrap did not preserve the MCP Store"
 
 # Every public controller exposes its own update entrypoint. They all inspect
 # and replace the shared suite, avoiding mixed controller/runtime revisions.

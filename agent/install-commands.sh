@@ -428,9 +428,12 @@ stage_runtime() {
   copy_runtime_file pi/setup.sh
   copy_runtime_file pricing/pricing.mjs
   copy_runtime_file pricing/openai-gpt-5.6-2026-08-14.json
+  copy_runtime_file proxy/admission.mjs
   copy_runtime_file proxy/agentproxyd.mjs
   copy_runtime_file proxy/circuit-breaker.mjs
+  copy_runtime_file proxy/http-headers.mjs
   copy_runtime_file proxy/model-mapper.mjs
+  copy_runtime_file proxy/schema.mjs
   copy_runtime_file proxy/usage.mjs
 
   copy_runtime_file tui/package.json
@@ -870,6 +873,9 @@ install_commands() {
   finish_command_install
   ok "installed agentctl, mcpctl, promptctl, and skillsctl in $PREFIX"
   [ "$INSTALL_MODE" != "standalone" ] || ok "standalone runtime: $RUNTIME_DIR"
+  if ! "${COMMAND_TARGETS[0]}" bootstrap --yes; then
+    warn "commands are installed, but local Store bootstrap did not finish; run: agentctl bootstrap --yes"
+  fi
   case ":${PATH}:" in *":${PREFIX}:"*) ;; *) warn "$PREFIX is not currently on PATH; add it in your shell startup file" ;; esac
 }
 

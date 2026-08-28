@@ -196,6 +196,7 @@ test("Skill entries expose four-client local state and keep enabled items first"
     codex: {
       target: "codex",
       selection_mode: "manual",
+      source: "workspace",
       base_pack: "base",
       base_skills: ["shared"],
       skills: ["codex-only", "shared"],
@@ -208,6 +209,7 @@ test("Skill entries expose four-client local state and keep enabled items first"
   };
   assert.deepEqual(SKILL_TARGETS, ["codex", "claude", "opencode", "pi"]);
   assert.equal(skillTargetState(states, "codex").selection, "custom");
+  assert.equal(skillTargetState(states, "codex").source, "workspace");
   const entries = skillEntries([
     { name: "other", description: "Other client Skill" },
     { name: "inactive", description: "Inactive Skill" },
@@ -577,6 +579,16 @@ test("component summaries preserve useful state without raw secrets", () => {
     ok: true,
     data: { healthy: true, selection_mode: "profile", profile: "work", servers: ["github"] }
   }), { label: "Healthy", kind: "good", detail: "work · 1 server(s)" });
+  assert.deepEqual(componentSummary("skills", {
+    ok: true,
+    data: {
+      healthy: true,
+      selection_mode: "pack",
+      pack: "frontend",
+      skills: ["frontend-dev"],
+      source: "workspace"
+    }
+  }), { label: "Healthy", kind: "good", detail: "frontend · 1 skill(s) · Workspace" });
   assert.equal(componentSummary("provider", {
     ok: true,
     data: {

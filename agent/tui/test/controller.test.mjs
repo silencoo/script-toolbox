@@ -21,7 +21,8 @@ import {
 // the real win32 Bash argv boundary with actual controller processes.
 const createController = (options) => createControllerForPlatform({
   ...options,
-  platform: "linux"
+  platform: "linux",
+  bootstrapLocalStores: options?.bootstrapLocalStores ?? false
 });
 
 // node:path uses the host separator even when the mocked controller command is
@@ -398,6 +399,22 @@ test("JSON remains usable when doctor reports unhealthy exit status", () => {
   const result = parseJsonOutput({ code: 1, stdout: '{"healthy":false}', stderr: "" }, "doctor");
   assert.equal(result.ok, false);
   assert.deepEqual(result.data, { healthy: false });
+});
+
+test("missing installed ESM dependencies produce an actionable TUI diagnostic", () => {
+  const result = parseJsonOutput({
+    code: 1,
+    stdout: "",
+    stderr: [
+      "node:internal/modules/esm/resolve:271",
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/runtime/proxy/schema.mjs' imported from /runtime/agentctl/proxy-client.mjs"
+    ].join("\n")
+  }, "proxy status");
+  assert.equal(result.ok, false);
+  assert.equal(
+    result.error,
+    "Missing installed runtime module: /runtime/proxy/schema.mjs. Reinstall agentctl."
+  );
 });
 
 test("diagnostics remove control codes and common credential forms", () => {
@@ -968,6 +985,164 @@ test("Workspace hydration preserves active local Skills instead of runtime stagi
   assert.equal(hydrated.phase, "workspace");
   assert.equal(skills.pack, "frontend");
   assert.equal(skills.skills.length, 4);
+});
+
+test("Workspace hydration reports a verified applied Skills runtime when local state is unknown", async () => {
+  const calls = [];
+  const controller = createController({
+    agentRoot: "/agent",
+    runner: async (executable, args, options = {}) => {
+      calls.push({ executable, args, env: options.env || {} });
+      if (controllerExecutableIs(executable, "skillsctl") &&
+          args.join(" ") === "current --target codex --json" &&
+          options.env?.SKILLSCTL_STORE === "/runtime/skills") {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            schema: 1,
+            target: "codex",
+            selection_mode: "pack",
+            pack: "frontend",
+            base_pack: null,
+            base_skills: ["frontend-dev"],
+            skills: ["creative-frontend", "frontend-dev"],
+            drift: [],
+            healthy: true
+          }),
+          stderr: ""
+        };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected command" };
+    },
+    remoteWorkspace: {
+      index: async () => { throw new Error("remote Store is offline"); },
+      runtimeAvailability: async () => ({ skills: true }),
+      runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" })
+    }
+  });
+  const local = {
+    phase: "local",
+    doctor: {
+      healthy: true,
+      targets: [{
+        target: "codex",
+        provider: { ok: true, data: {} },
+        skills: {
+          ok: true,
+          data: {
+            target: "codex",
+            selection_mode: "unknown",
+            pack: null,
+            skills: [],
+            drift: [],
+            healthy: true
+          }
+        }
+      }]
+    },
+    doctorError: "",
+    accounts: { active: {} },
+    presets: {},
+    presetSource: "local",
+    workspaceConnection: { configured: true }
+  };
+
+  const hydrated = await controller.hydrateSnapshot(local);
+  const effective = hydrated.doctor.targets[0].skills.data;
+  assert.equal(effective.pack, "frontend");
+  assert.deepEqual(effective.skills, ["creative-frontend", "frontend-dev"]);
+  assert.equal(effective.source, "workspace");
+  assert.equal(hydrated.workspace, null);
+  assert.match(hydrated.workspaceError, /offline/);
+  assert.equal(hydrated.workspaceSkillsErrors.codex, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].env.SKILLSCTL_STORE, "/runtime/skills");
+});
+
+test("Skills dashboard keeps Local switches separate from effective Workspace state", async () => {
+  const runner = async (executable, args, options = {}) => {
+    const command = args.join(" ");
+    if (command === "list --json") {
+      return {
+        code: 0,
+        stdout: JSON.stringify([{ name: "frontend-dev", description: "Frontend", sha256: "a".repeat(64) }]),
+        stderr: ""
+      };
+    }
+    if (command.startsWith("current --target ")) {
+      const target = args[2];
+      const workspace = options.env?.SKILLSCTL_STORE === "/runtime/skills";
+      return {
+        code: 0,
+        stdout: JSON.stringify(workspace && target === "codex" ? {
+          target,
+          selection_mode: "pack",
+          pack: "frontend",
+          skills: ["frontend-dev"],
+          drift: [],
+          healthy: true
+        } : {
+          target,
+          selection_mode: "unknown",
+          pack: null,
+          skills: [],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+  };
+  const controller = createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {
+      runtimeAvailability: async () => ({ skills: true }),
+      runtimeEnvironment: async () => ({ SKILLSCTL_STORE: "/runtime/skills" })
+    }
+  });
+
+  const dashboard = await controller.localSkillsDashboard();
+  assert.equal(dashboard.states.codex.selection_mode, "unknown");
+  assert.equal(dashboard.effectiveStates.codex.pack, "frontend");
+  assert.equal(dashboard.effectiveStates.codex.source, "workspace");
+  assert.deepEqual(dashboard.effectiveStates.codex.skills, ["frontend-dev"]);
+});
+
+test("Skills dashboard falls back to Local state when Workspace runtime inspection fails", async () => {
+  const runner = async (_executable, args) => {
+    if (args.join(" ") === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
+    if (args[0] === "current") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: args[2],
+          selection_mode: "unknown",
+          pack: null,
+          skills: [],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+  const controller = createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {
+      runtimeAvailability: async () => ({ skills: true }),
+      runtimeEnvironment: async () => { throw new Error("runtime metadata unavailable"); }
+    }
+  });
+
+  const dashboard = await controller.localSkillsDashboard();
+  assert.equal(dashboard.effectiveStates.codex.selection_mode, "unknown");
+  assert.match(dashboard.effectiveErrors.codex, /runtime metadata unavailable/);
 });
 
 test("remote actions plan without writes and apply through the selected runtime", async () => {

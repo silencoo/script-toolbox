@@ -65,7 +65,14 @@ export function parseJsonOutput(result, label) {
     }
   }
   const detail = sanitizeOutput(result.stderr || result.stdout) || `${label} exited with code ${result.code}`;
-  return { ok: false, data: null, error: detail.split("\n").slice(0, 8).join("\n") };
+  const missingModule = /Error \[ERR_MODULE_NOT_FOUND\]: Cannot find module '([^']+)'/.exec(detail);
+  return {
+    ok: false,
+    data: null,
+    error: missingModule
+      ? `Missing installed runtime module: ${missingModule[1]}. Reinstall agentctl.`
+      : detail.split("\n").slice(0, 8).join("\n")
+  };
 }
 
 export function normalizeSnippetMetadata(value) {
@@ -257,7 +264,8 @@ export function createController({
   agentRoot = defaultAgentRoot,
   runner,
   remoteWorkspace = createRemoteWorkspace(),
-  platform = process.platform
+  platform = process.platform,
+  bootstrapLocalStores = true
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
   const orchestrator = join(agentRoot, "agentctl", "orchestrator-client.mjs");
@@ -422,6 +430,10 @@ export function createController({
   }
 
   async function localSnapshot({ signal } = {}) {
+    const bootstrapResult = bootstrapLocalStores
+      ? await runController(agentctl, ["bootstrap", "--yes"])
+      : { code: 0, stdout: "Local Store bootstrap skipped by controller configuration.", stderr: "" };
+    const bootstrapDetail = sanitizeOutput(bootstrapResult.stderr || bootstrapResult.stdout);
     const connectionPromise = typeof remoteWorkspace.connection === "function"
       ? remoteWorkspace.connection()
           .then((data) => ({ data, error: "" }))
@@ -487,6 +499,11 @@ export function createController({
     return {
       updatedAt: new Date().toISOString(),
       phase: "local",
+      bootstrap: {
+        ok: bootstrapResult.code === 0,
+        skipped: !bootstrapLocalStores,
+        detail: bootstrapDetail
+      },
       doctor,
       doctorError: doctorResult.error,
       agents,
@@ -528,15 +545,31 @@ export function createController({
         fresh: false
       }));
     const remote = await remoteResult;
-    // Overview and all local-health surfaces must keep reporting the device's
-    // active configuration after Workspace hydration. A materialized Workspace
-    // runtime is only a staging area for catalog plan/apply actions; its empty
-    // or target-scoped current state must never replace the local doctor result.
+    // A materialized Workspace runtime is normally staging, but an applied
+    // Skills Pack leaves a verified target state and live managed links there.
+    // Fill only an unknown local state from a healthy, named Workspace state;
+    // an existing local selection or local drift remains authoritative.
     const doctorResult = { data: structuredClone(local.doctor), error: local.doctorError };
     const activeAccount = local.accounts?.active?.saved_as;
     const hydratedCodex = doctorResult.data?.targets?.find((report) => report.target === "codex");
     if (hydratedCodex?.provider?.data?.identity && activeAccount) {
       hydratedCodex.provider.data.identity.account = activeAccount;
+    }
+    const skillReports = Array.isArray(doctorResult.data?.targets)
+      ? doctorResult.data.targets.filter((report) => report?.skills?.ok)
+      : [];
+    const unknownSkillTargets = skillReports
+      .filter((report) => !skillsStateKnown(report.skills.data))
+      .map((report) => report.target);
+    // The applied runtime is device-local and remains inspectable when the
+    // encrypted remote Store is temporarily unreachable.
+    const workspaceSkills = await workspaceSkillsStates(unknownSkillTargets);
+    for (const report of skillReports) {
+      const effective = effectiveSkillsState(
+        report.skills.data,
+        workspaceSkills.states[report.target]
+      );
+      if (effective?.source === "workspace") report.skills.data = effective;
     }
     if (remote.fresh) {
       cachedWorkspace = structuredClone(remote.data);
@@ -563,7 +596,8 @@ export function createController({
       workspaceError: remote.error,
       workspaceStale: Boolean(remote.data && !remote.fresh),
       workspaceLastConnectedAt,
-      workspaceFailureCount
+      workspaceFailureCount,
+      workspaceSkillsErrors: workspaceSkills.errors
     };
   }
 
@@ -926,6 +960,77 @@ export function createController({
     return result.data;
   }
 
+  function skillsStateKnown(state) {
+    return state?.selection_mode === "manual" ||
+      (state?.selection_mode === "pack" && typeof state.pack === "string" && state.pack.length > 0);
+  }
+
+  async function workspaceSkillsStates(targets) {
+    const requested = [...new Set(targets)].filter((target) => AGENT_CLIENTS.has(target));
+    if (requested.length === 0 ||
+        typeof remoteWorkspace.runtimeAvailability !== "function" ||
+        typeof remoteWorkspace.runtimeEnvironment !== "function") {
+      return { states: {}, errors: {} };
+    }
+    let availability;
+    try {
+      availability = await remoteWorkspace.runtimeAvailability();
+    } catch (error) {
+      return {
+        states: {},
+        errors: Object.fromEntries(requested.map((target) => [
+          target,
+          `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+        ]))
+      };
+    }
+    if (!availability?.skills) return { states: {}, errors: {} };
+    let env;
+    try {
+      env = await remoteWorkspace.runtimeEnvironment();
+    } catch (error) {
+      return {
+        states: {},
+        errors: Object.fromEntries(requested.map((target) => [
+          target,
+          `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+        ]))
+      };
+    }
+    const results = await Promise.all(requested.map(async (target) => {
+      let result;
+      try {
+        result = await runControllerJson(
+          tools.skills,
+          ["current", "--target", target, "--json"],
+          `Workspace ${target} Skills state`,
+          env
+        );
+      } catch (error) {
+        return [target, null, sanitizeOutput(error?.message || error)];
+      }
+      if (!result.ok || !result.data || result.data.target !== target) {
+        return [target, null, result.error || `Workspace ${target} Skills state is unavailable.`];
+      }
+      if (!skillsStateKnown(result.data)) return [target, null, ""];
+      const state = { ...result.data, source: "workspace" };
+      const error = state.healthy === true
+        ? ""
+        : `Workspace Skills state has drift${Array.isArray(state.drift) && state.drift.length > 0 ? `: ${state.drift.join(", ")}` : "."}`;
+      return [target, state, error];
+    }));
+    return {
+      states: Object.fromEntries(results.filter(([, state]) => state).map(([target, state]) => [target, state])),
+      errors: Object.fromEntries(results.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+    };
+  }
+
+  function effectiveSkillsState(localState, workspaceState) {
+    if (skillsStateKnown(localState)) return { ...localState, source: localState.source || "local" };
+    if (skillsStateKnown(workspaceState) && workspaceState.healthy === true) return workspaceState;
+    return localState;
+  }
+
   async function localSkillsDashboard() {
     const catalogPromise = runControllerJson(
       tools.skills,
@@ -944,10 +1049,18 @@ export function createController({
       Promise.all(statePromises)
     ]);
     if (!catalog.ok) throw new Error(catalog.error || "Local Skills catalog is unavailable.");
+    const states = Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state]));
+    const candidates = [...AGENT_CLIENTS].filter((target) => !skillsStateKnown(states[target]));
+    const workspace = await workspaceSkillsStates(candidates);
     return {
       catalog: normalizeSkillsCatalog(catalog.data),
-      states: Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state])),
-      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+      states,
+      effectiveStates: Object.fromEntries([...AGENT_CLIENTS].map((target) => [
+        target,
+        effectiveSkillsState(states[target], workspace.states[target])
+      ])),
+      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error])),
+      effectiveErrors: workspace.errors
     };
   }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -53,6 +53,15 @@ test("real controller entrypoints stay inside an isolated cross-platform home", 
     assert.equal(snapshot.agentsError, "");
     assert.equal(typeof snapshot.doctor, "object");
     assert.equal(typeof snapshot.accounts, "object");
+    assert.equal(snapshot.bootstrap.ok, true, snapshot.bootstrap.detail);
+    await Promise.all([
+      access(join(config, "agentctl", "providers.json")),
+      access(join(config, "agentctl", "provider-secrets.json")),
+      access(join(config, "agentctl", "failover.json")),
+      access(join(config, "agentctl", "pricing.json")),
+      access(join(config, "mcpctl", "store", "catalog.json")),
+      access(join(config, "skillsctl", "store", "catalog.json"))
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -221,6 +221,24 @@ async function fixture() {
   return { remote, root, downloads };
 }
 
+test("device-local Workspace runtime paths remain available while the remote Store is offline", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-runtime-offline-"));
+  let remoteReads = 0;
+  const remote = createRemoteWorkspace({
+    workspaceConfig: join(root, "workspace.json"),
+    runtimeRoot: join(root, "runtime"),
+    readConfigFn: async () => masterConfig,
+    loadWorkspaceFn: async () => {
+      remoteReads += 1;
+      throw new Error("offline");
+    }
+  });
+
+  const paths = await remote.runtimePaths();
+  assert.equal(paths.skills, join(root, "runtime", masterConfig.store_id, "skills"));
+  assert.equal(remoteReads, 0);
+});
+
 test("successful local child restore installs only that child capability", async () => {
   const { remote, root } = await fixture();
   const result = await remote.withLocalChildCapability("skills", async ({ remoteConfig }) => {

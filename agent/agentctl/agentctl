@@ -25,6 +25,8 @@ FAILOVER_CLIENT="${SCRIPT_DIR}/failover-client.mjs"
 PRICING_CLIENT="${SCRIPT_DIR}/pricing-client.mjs"
 PROXY_CLIENT="${SCRIPT_DIR}/proxy-client.mjs"
 TUI_CLIENT="${SCRIPT_DIR}/../tui/dist/toolbox-tui.mjs"
+MCPCTL_CLIENT="${SCRIPT_DIR}/../mcpctl/mcpctl"
+SKILLSCTL_CLIENT="${SCRIPT_DIR}/../skillsctl/skillsctl.mjs"
 
 # shellcheck source=../ctl-lib.sh
 . "${SCRIPT_DIR}/../ctl-lib.sh"
@@ -38,6 +40,7 @@ Usage:
   agentctl tui
   agentctl interactive
   agentctl update [--check|--yes]
+  agentctl bootstrap [--yes]
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl statusline <install|status|uninstall> [options]
   agentctl provider <command> [options]
@@ -51,6 +54,8 @@ Usage:
   agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Commands:
+  bootstrap   Initialize the local Provider, Failover, Pricing, MCP, and Skills
+              Stores. Idempotent; does not configure a client or Workspace.
   status      Read CLI/provider configuration source and credential metadata,
               including external Claude config and official Codex login.
               Secret values are never emitted.
@@ -91,6 +96,56 @@ Run "agentctl proxy --help" for the optional local proxy lifecycle.
 Run "agentctl preset --help" for development-preset commands.
 Run "agentctl statusline --help" for Claude status-line commands.
 EOF
+}
+
+run_bootstrap() {
+  local apply=0 argument failed=0
+  for argument in "$@"; do
+    case "$argument" in
+      --yes|-y) apply=1 ;;
+      -h|--help)
+        cat <<'EOF'
+agentctl bootstrap — initialize local controller Stores
+
+Usage:
+  agentctl bootstrap [--yes]
+
+Creates missing Provider, MCP, and Skills Stores. Existing valid Stores are
+kept. The empty Failover Store and bundled versioned Pricing catalog are also
+prepared. No client selection, managed link, Secret value, remote Store, or
+Workspace is created. Without --yes, only the plan is shown.
+EOF
+        return 0
+        ;;
+      *) die "unknown bootstrap option '$argument'; use --help" ;;
+    esac
+  done
+
+  log "Local Store bootstrap"
+  log "  Provider  portable catalog and owner-only Secret Store"
+  log "  Failover  empty portable route catalog"
+  log "  Pricing   bundled versioned OpenAI catalog"
+  log "  MCP       bundled server catalog and task Profiles"
+  log "  Skills    empty catalog and starter Packs"
+  log "  unchanged client configuration, remote Stores, and Workspace"
+  if [ "$apply" -ne 1 ]; then
+    log "[preview] no Store was changed; re-run with --yes to apply"
+    return 0
+  fi
+
+  require_node22 "agentctl bootstrap"
+  [ -r "$PROVIDER_CLIENT" ] || die "Provider Store client not found: $PROVIDER_CLIENT"
+  [ -r "$FAILOVER_CLIENT" ] || die "Failover Store client not found: $FAILOVER_CLIENT"
+  [ -r "$PRICING_CLIENT" ] || die "Pricing Store client not found: $PRICING_CLIENT"
+  [ -x "$MCPCTL_CLIENT" ] || die "MCP Store client not found: $MCPCTL_CLIENT"
+  [ -r "$SKILLSCTL_CLIENT" ] || die "Skills Store client not found: $SKILLSCTL_CLIENT"
+  node "$PROVIDER_CLIENT" init --yes || failed=1
+  node "$FAILOVER_CLIENT" init --yes || failed=1
+  node "$PRICING_CLIENT" init --preset openai-gpt-5.6 --yes || failed=1
+  "$MCPCTL_CLIENT" init || failed=1
+  node "$SKILLSCTL_CLIENT" init --yes || failed=1
+  [ "$failed" -eq 0 ] || die "one or more local Stores could not be initialized; existing Stores were preserved"
+  ok "local Provider, Failover, Pricing, MCP, and Skills Stores are ready"
 }
 
 run_workspace() {
@@ -948,6 +1003,10 @@ case "${1:-}" in
   update)
     shift
     run_ctl_update "${SCRIPT_DIR}/../update-commands.sh" agentctl "$@"
+    ;;
+  bootstrap)
+    shift
+    run_bootstrap "$@"
     ;;
   status)
     shift

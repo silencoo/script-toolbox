@@ -771,11 +771,14 @@ decrypts a child Store only when its section is opened. Plans remain in memory;
 an apply writes only the chosen selection and its dependencies to
 `~/.local/share/agentctl/workspaces/<workspace-store-id>/` (or the platform data
 directory on Windows), then invokes the existing controller transaction.
-If the selected MCP or Skills component has no initialized local Store, the TUI
-offers an explicit first-adoption choice: restore the full attached child Store
-and its recovery capability locally so Local Switches work, continue with the
-selected-only isolated runtime, or cancel. It never overwrites an existing
-local Store through this shortcut.
+If an MCP or Skills Store is still unavailable because bootstrap could not
+complete, the TUI offers an explicit first-adoption choice: restore the full
+attached child Store and its recovery capability locally so Local Switches
+work, continue with the selected-only isolated runtime, or cancel. It never
+overwrites an existing local Store through this shortcut. A normal install has
+already created local starter Stores; replacing one with a complete encrypted
+backup remains an explicit `mcpctl restore --force` or
+`skillsctl restore --force --yes` operation.
 If skillsctl reports that a named Skill changed outside its catalog, the TUI
 offers a separate confirmation to keep those current files, refresh only that
 Skill's checksum, and retry the original local or Workspace action. Multiple
@@ -809,6 +812,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\install-commands
 
 agentctl status all
 ```
+
+The applied installer creates missing local Provider, Failover, Pricing, MCP,
+and Skills Stores after the command/runtime transaction commits. TUI startup also repairs a
+missing Store layout automatically, and `agentctl bootstrap --yes` exposes the
+same idempotent operation for scripts. It never selects a catalog entry,
+changes an Agent client, stores a Secret value, or initializes Workspace.
 
 The PowerShell installer requires Git for Windows or MSYS2 Bash. Its defaults
 are `%LOCALAPPDATA%\script-toolbox\agent` and

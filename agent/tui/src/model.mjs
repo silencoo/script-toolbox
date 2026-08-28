@@ -379,6 +379,7 @@ export function skillTargetState(states, target) {
     skills: Array.isArray(data.skills) ? [...data.skills] : [],
     drift: Array.isArray(data.drift) ? [...data.drift] : [],
     healthy: data.healthy === true,
+    source: data.source === "workspace" ? "workspace" : data.source === "local" ? "local" : "",
     data
   };
 }
@@ -523,10 +524,11 @@ export function componentSummary(component, check) {
   }
   if (component === "skills") {
     const selection = data.selection_mode === "manual" ? "custom" : data.pack || "none";
+    const source = data.source === "workspace" ? " · Workspace" : "";
     return {
       label: data.healthy === false ? "Drift" : "Healthy",
       kind: data.healthy === false ? "bad" : "good",
-      detail: `${selection} · ${(data.skills || []).length} skill(s)`
+      detail: `${selection} · ${(data.skills || []).length} skill(s)${source}`
     };
   }
   const promptData = Array.isArray(data) ? data[0] || {} : data;

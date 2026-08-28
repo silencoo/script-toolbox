@@ -277,8 +277,8 @@ function LoadingView() {
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Loading local state…</Text>
-      <Text color="white">Reading local agent, account, Provider, MCP, Skills, Prompt, and Preset metadata.</Text>
-      <Text color="gray">No local or remote configuration is being changed.</Text>
+      <Text color="white">Preparing local controller Stores, then reading Agent, MCP, Skills, and Prompt metadata.</Text>
+      <Text color="gray">Agent selections, managed links, Secret values, and remote Workspace state are not changed.</Text>
     </Box>
   );
 }
@@ -289,6 +289,11 @@ function Overview({ snapshot, target }) {
   const connection = workspace || snapshot.workspaceConnection;
   const cloud = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
   const accounts = accountSummary(snapshot);
+  const skillsData = report?.skills?.data || {};
+  const skillsSummary = snapshot.workspaceLoading &&
+      skillsData.selection_mode !== "manual" && !skillsData.pack
+    ? { label: "Checking", kind: "warn", detail: "Local none · checking Workspace runtime" }
+    : componentSummary("skills", report?.skills);
   if (!report) {
     return (
       <Box flexDirection="column">
@@ -300,6 +305,12 @@ function Overview({ snapshot, target }) {
   }
   return (
     <Box flexDirection="column">
+      <Row
+        label="Local Stores"
+        value={snapshot.bootstrap?.ok ? "ready" : "bootstrap incomplete"}
+        kind={snapshot.bootstrap?.ok ? "good" : "bad"}
+      />
+      {!snapshot.bootstrap?.ok && <ErrorText value={snapshot.bootstrap?.detail || "Local Store bootstrap failed."} />}
       {target === "codex" && (
         <SummaryRow name="Identity" summary={componentSummary("identity", report.provider)} />
       )}
@@ -308,7 +319,7 @@ function Overview({ snapshot, target }) {
       )}
       <SummaryRow name="Inference" summary={componentSummary("inference", report.provider)} />
       <SummaryRow name="MCP" summary={componentSummary("mcp", report.mcp)} />
-      <SummaryRow name="Skills" summary={componentSummary("skills", report.skills)} />
+      <SummaryRow name="Skills" summary={skillsSummary} />
       <SummaryRow name="Prompts" summary={componentSummary("prompts", report.prompt)} />
       <Row label="Snippets" value={`${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local`} />
       <Row label="Preset" value={`${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`} kind={report.preset?.drift ? "bad" : "muted"} />
@@ -329,6 +340,7 @@ function Overview({ snapshot, target }) {
         kind={workspace.agent?.synced ? "cloud" : "muted"}
       />}
       {connection?.endpoint && <Row label="Endpoint" value={connection.endpoint} />}
+      <ErrorText value={snapshot.workspaceSkillsErrors?.[target] || ""} />
     </Box>
   );
 }
@@ -1161,25 +1173,28 @@ function SkillsView({
   enabledOnly,
   searching
 }) {
-  const active = skillTargetState(dashboard.states, target);
-  const baseSkills = new Set(active.baseSkills);
-  const currentSkills = new Set(active.skills);
+  const effectiveStates = dashboard.effectiveStates || dashboard.states;
+  const active = skillTargetState(effectiveStates, target);
+  const localActive = skillTargetState(dashboard.states, target);
+  const baseSkills = new Set(localActive.baseSkills);
+  const currentSkills = new Set(localActive.skills);
   const customAdded = [...currentSkills].filter((name) => !baseSkills.has(name));
   const customDisabled = [...baseSkills].filter((name) => !currentSkills.has(name));
-  const repairable = active.drift.length > 0 && active.selectionMode !== "manual" &&
-    active.selection !== "none";
+  const repairable = localActive.drift.length > 0 && localActive.selectionMode !== "manual" &&
+    localActive.selection !== "none";
   return (
     <Box flexDirection="column">
-      <Text color="gray">Each client receives its own local Skill links; the canonical Store remains shared.</Text>
+      <Text color="gray">Effective Skill links may come from the Local Store or an applied Workspace runtime.</Text>
       <Box gap={1} flexWrap="wrap">
         {SKILL_TARGETS.map((client) => {
-          const state = skillTargetState(dashboard.states, client);
+          const state = skillTargetState(effectiveStates, client);
+          const source = state.source === "workspace" ? "Workspace" : state.source === "local" ? "Local" : "";
           return (
             <Box key={client} gap={1}>
               <TargetBadge target={client} selected={client === target} />
               <Text color={state.healthy ? "green" : state.data.target ? "red" : "gray"}>
                 {state.data.target
-                  ? `${state.selection} · ${state.skills.length}`
+                  ? `${state.selection} · ${state.skills.length}${source ? ` · ${source}` : ""}`
                   : dashboard.loading ? "loading…" : "unavailable"}
               </Text>
             </Box>
@@ -1194,7 +1209,7 @@ function SkillsView({
           {" w WORKSPACE PACKS "}
         </Text>
       </Box>
-      {active.selectionMode === "manual" && (
+      {localActive.selectionMode === "manual" && (
         <Box flexDirection="column">
           <ItemGroup label="Custom added" items={customAdded} kind="good" />
           <ItemGroup label="Custom disabled" items={customDisabled} kind="bad" />
@@ -1204,12 +1219,15 @@ function SkillsView({
       {Object.entries(dashboard.errors || {}).map(([client, error]) => (
         <ErrorText key={`${client}-skills-error`} value={`${targetLabel(client)}: ${error}`} />
       ))}
+      {Object.entries(dashboard.effectiveErrors || {}).map(([client, error]) => (
+        <ErrorText key={`${client}-workspace-skills-error`} value={`${targetLabel(client)} Workspace: ${error}`} />
+      ))}
       {repairable && (
         <Text color="yellow">
-          <Text bold>f</Text> repair current local pack {active.selection} for {targetLabel(target)} · restores managed links only
+          <Text bold>f</Text> repair current local pack {localActive.selection} for {targetLabel(target)} · restores managed links only
         </Text>
       )}
-      {active.drift.length > 0 && !repairable && (
+      {localActive.drift.length > 0 && !repairable && (
         <Text color="yellow">Current Skills selection uses manual state; save it as a Pack before automatic repair.</Text>
       )}
       {focus === "local"

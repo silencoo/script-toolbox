@@ -41,7 +41,9 @@ required Secrets are missing, the guide can accept them without echo for that
 process only, open the encrypted SOPS editor, or cancel without writing client
 configuration.
 
-For automation, initialize a personal store explicitly:
+The standard controller installer and shared TUI initialize the default Store
+automatically. For a custom path or standalone automation, initialize it
+explicitly; repeating `init` validates and preserves an existing Store:
 
 ```bash
 ./agent/mcpctl/mcpctl init

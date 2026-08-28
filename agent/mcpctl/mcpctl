@@ -1432,13 +1432,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-require_jq
-enable_windows_jq_lf
-
 DEFAULT_CONFIG_HOME="$(platform_config_home)"
 DEFAULT_STATE_HOME="$(platform_state_home)"
 PREFERENCES_FILE="${MCPCTL_PREFERENCES:-${DEFAULT_CONFIG_HOME}/mcpctl/preferences.json}"
-load_preferences "$PREFERENCES_FILE"
+# A fresh local Store can be initialized before jq is installed (notably while
+# the Windows installer is still provisioning its pinned jq.exe). Existing
+# preferences still require their normal strict jq validation.
+if [ "$COMMAND" = "init" ] && [ ! -e "$PREFERENCES_FILE" ]; then
+  PREFERENCE_STORE=""
+  PREFERENCE_SECRETS_FILE=""
+  PREFERENCE_REMOTE_CONFIG=""
+else
+  require_jq
+  enable_windows_jq_lf
+  load_preferences "$PREFERENCES_FILE"
+fi
 STORE_DIR="${STORE_ARG:-${MCPCTL_STORE:-${PREFERENCE_STORE:-${DEFAULT_CONFIG_HOME}/mcpctl/store}}}"
 SECRETS_FILE="${SECRETS_ARG:-${MCPCTL_SECRETS_FILE:-$(preferred_secrets_for_store "$STORE_DIR")}}"
 REMOTE_CONFIG_FILE="${REMOTE_CONFIG_ARG:-${MCPCTL_REMOTE_CONFIG:-${PREFERENCE_REMOTE_CONFIG:-${DEFAULT_CONFIG_HOME}/mcpctl/remote.json}}}"
@@ -1568,17 +1576,41 @@ esac
 
 if [ "$COMMAND" = "init" ]; then
   [ "$STORE_DIR" != "/" ] || die "refusing to initialize the filesystem root"
-  [ ! -e "$STORE_DIR" ] ||
-    die "$STORE_DIR already exists; choose another --store or move it first"
+  if [ -f "$CATALOG_FILE" ]; then
+    require_jq
+    enable_windows_jq_lf
+    jq -e '
+      type == "object"
+      and .schema == 1
+      and (.servers | type == "object")
+    ' "$CATALOG_FILE" >/dev/null 2>&1 ||
+      die "$CATALOG_FILE is not a valid schema-1 MCP catalog"
+    ok "MCP store already initialized: $STORE_DIR"
+    exit 0
+  fi
+  if [ -e "$STORE_DIR" ]; then
+    [ -d "$STORE_DIR" ] && [ ! -L "$STORE_DIR" ] ||
+      die "store path must be a real directory: $STORE_DIR"
+    [ -z "$(find "$STORE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+      die "refusing to initialize non-empty directory: $STORE_DIR"
+  fi
   mkdir -p "$(dirname "$STORE_DIR")"
-  cp -R "$TEMPLATE_STORE" "$STORE_DIR"
+  if [ -d "$STORE_DIR" ]; then
+    cp -R "$TEMPLATE_STORE"/. "$STORE_DIR"/
+  else
+    cp -R "$TEMPLATE_STORE" "$STORE_DIR"
+  fi
   chmod 700 "$STORE_DIR" "$STORE_DIR/profiles"
   chmod 600 "$STORE_DIR/catalog.json" "$STORE_DIR/profiles/"*.json
   ok "initialized MCP store at $STORE_DIR"
   log "Next: edit catalog.json and profiles/, then run:"
-  log "  mcpctl plan --target claude --profile daily --store $(json_quote "$STORE_DIR")"
+  printf -v STORE_DISPLAY '%q' "$STORE_DIR"
+  log "  mcpctl plan --target claude --profile daily --store $STORE_DISPLAY"
   exit 0
 fi
+
+require_jq
+enable_windows_jq_lf
 
 [ -f "$CATALOG_FILE" ] ||
   die "store not initialized: missing $CATALOG_FILE (run mcpctl init)"

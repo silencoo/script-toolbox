@@ -294,6 +294,7 @@ async function main(argv) {
 
 async function initializeStore(options) {
   if (await pathExists(join(options.store, "catalog.json"))) {
+    await loadStore(options.store, { skipSkillValidation: true });
     process.stdout.write(`Store already initialized: ${options.store}\n`);
     return;
   }

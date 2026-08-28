@@ -24925,7 +24925,7 @@ function createRemoteWorkspace({
     }
   }
   async function runtimePaths() {
-    if (!masterConfig) await index();
+    if (!masterConfig) masterConfig = await readConfigFn(workspaceConfig);
     const root = join3(runtimeRoot, masterConfig.store_id);
     return {
       root,
@@ -25321,7 +25321,12 @@ function parseJsonOutput(result, label) {
     }
   }
   const detail = sanitizeOutput(result.stderr || result.stdout) || `${label} exited with code ${result.code}`;
-  return { ok: false, data: null, error: detail.split("\n").slice(0, 8).join("\n") };
+  const missingModule = /Error \[ERR_MODULE_NOT_FOUND\]: Cannot find module '([^']+)'/.exec(detail);
+  return {
+    ok: false,
+    data: null,
+    error: missingModule ? `Missing installed runtime module: ${missingModule[1]}. Reinstall agentctl.` : detail.split("\n").slice(0, 8).join("\n")
+  };
 }
 function normalizeSnippetMetadata(value) {
   if (!Array.isArray(value)) return [];
@@ -25495,7 +25500,8 @@ function createController({
   agentRoot = defaultAgentRoot,
   runner,
   remoteWorkspace = createRemoteWorkspace(),
-  platform: platform2 = process.platform
+  platform: platform2 = process.platform,
+  bootstrapLocalStores = true
 } = {}) {
   const run = runner || createProcessRunner({ cwd: agentRoot });
   const orchestrator = join4(agentRoot, "agentctl", "orchestrator-client.mjs");
@@ -25638,6 +25644,8 @@ function createController({
     };
   }
   async function localSnapshot({ signal } = {}) {
+    const bootstrapResult = bootstrapLocalStores ? await runController(agentctl, ["bootstrap", "--yes"]) : { code: 0, stdout: "Local Store bootstrap skipped by controller configuration.", stderr: "" };
+    const bootstrapDetail = sanitizeOutput(bootstrapResult.stderr || bootstrapResult.stdout);
     const connectionPromise = typeof remoteWorkspace.connection === "function" ? remoteWorkspace.connection().then((data) => ({ data, error: "" })).catch((error) => ({ data: null, error: sanitizeOutput(error?.message || error) })) : Promise.resolve({ data: null, error: "remote configuration not found" });
     const [doctorResult, presetsResult, snippetsResult, accountsResult, connectionResult] = await Promise.all([
       runJson(
@@ -25703,6 +25711,11 @@ function createController({
     return {
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       phase: "local",
+      bootstrap: {
+        ok: bootstrapResult.code === 0,
+        skipped: !bootstrapLocalStores,
+        detail: bootstrapDetail
+      },
       doctor,
       doctorError: doctorResult.error,
       agents,
@@ -25747,6 +25760,16 @@ function createController({
     if (hydratedCodex?.provider?.data?.identity && activeAccount) {
       hydratedCodex.provider.data.identity.account = activeAccount;
     }
+    const skillReports = Array.isArray(doctorResult.data?.targets) ? doctorResult.data.targets.filter((report) => report?.skills?.ok) : [];
+    const unknownSkillTargets = skillReports.filter((report) => !skillsStateKnown(report.skills.data)).map((report) => report.target);
+    const workspaceSkills = await workspaceSkillsStates(unknownSkillTargets);
+    for (const report of skillReports) {
+      const effective = effectiveSkillsState(
+        report.skills.data,
+        workspaceSkills.states[report.target]
+      );
+      if (effective?.source === "workspace") report.skills.data = effective;
+    }
     if (remote.fresh) {
       cachedWorkspace = structuredClone(remote.data);
       workspaceLastConnectedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -25772,7 +25795,8 @@ function createController({
       workspaceError: remote.error,
       workspaceStale: Boolean(remote.data && !remote.fresh),
       workspaceLastConnectedAt,
-      workspaceFailureCount
+      workspaceFailureCount,
+      workspaceSkillsErrors: workspaceSkills.errors
     };
   }
   async function snapshot(options2 = {}) {
@@ -26097,6 +26121,69 @@ No remote catalog was written locally.`;
     }
     return result.data;
   }
+  function skillsStateKnown(state) {
+    return state?.selection_mode === "manual" || state?.selection_mode === "pack" && typeof state.pack === "string" && state.pack.length > 0;
+  }
+  async function workspaceSkillsStates(targets) {
+    const requested = [...new Set(targets)].filter((target) => AGENT_CLIENTS.has(target));
+    if (requested.length === 0 || typeof remoteWorkspace.runtimeAvailability !== "function" || typeof remoteWorkspace.runtimeEnvironment !== "function") {
+      return { states: {}, errors: {} };
+    }
+    let availability;
+    try {
+      availability = await remoteWorkspace.runtimeAvailability();
+    } catch (error) {
+      return {
+        states: {},
+        errors: Object.fromEntries(requested.map((target) => [
+          target,
+          `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+        ]))
+      };
+    }
+    if (!availability?.skills) return { states: {}, errors: {} };
+    let env3;
+    try {
+      env3 = await remoteWorkspace.runtimeEnvironment();
+    } catch (error) {
+      return {
+        states: {},
+        errors: Object.fromEntries(requested.map((target) => [
+          target,
+          `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+        ]))
+      };
+    }
+    const results = await Promise.all(requested.map(async (target) => {
+      let result;
+      try {
+        result = await runControllerJson(
+          tools.skills,
+          ["current", "--target", target, "--json"],
+          `Workspace ${target} Skills state`,
+          env3
+        );
+      } catch (error2) {
+        return [target, null, sanitizeOutput(error2?.message || error2)];
+      }
+      if (!result.ok || !result.data || result.data.target !== target) {
+        return [target, null, result.error || `Workspace ${target} Skills state is unavailable.`];
+      }
+      if (!skillsStateKnown(result.data)) return [target, null, ""];
+      const state = { ...result.data, source: "workspace" };
+      const error = state.healthy === true ? "" : `Workspace Skills state has drift${Array.isArray(state.drift) && state.drift.length > 0 ? `: ${state.drift.join(", ")}` : "."}`;
+      return [target, state, error];
+    }));
+    return {
+      states: Object.fromEntries(results.filter(([, state]) => state).map(([target, state]) => [target, state])),
+      errors: Object.fromEntries(results.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+    };
+  }
+  function effectiveSkillsState(localState, workspaceState) {
+    if (skillsStateKnown(localState)) return { ...localState, source: localState.source || "local" };
+    if (skillsStateKnown(workspaceState) && workspaceState.healthy === true) return workspaceState;
+    return localState;
+  }
   async function localSkillsDashboard() {
     const catalogPromise = runControllerJson(
       tools.skills,
@@ -26115,10 +26202,18 @@ No remote catalog was written locally.`;
       Promise.all(statePromises)
     ]);
     if (!catalog.ok) throw new Error(catalog.error || "Local Skills catalog is unavailable.");
+    const states = Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state]));
+    const candidates = [...AGENT_CLIENTS].filter((target) => !skillsStateKnown(states[target]));
+    const workspace = await workspaceSkillsStates(candidates);
     return {
       catalog: normalizeSkillsCatalog(catalog.data),
-      states: Object.fromEntries(stateResults.filter(([, state]) => state).map(([target, state]) => [target, state])),
-      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error]))
+      states,
+      effectiveStates: Object.fromEntries([...AGENT_CLIENTS].map((target) => [
+        target,
+        effectiveSkillsState(states[target], workspace.states[target])
+      ])),
+      errors: Object.fromEntries(stateResults.filter(([, , error]) => error).map(([target, , error]) => [target, error])),
+      effectiveErrors: workspace.errors
     };
   }
   async function localSkillsBatch(changes, target) {
@@ -27025,6 +27120,7 @@ function skillTargetState(states, target) {
     skills: Array.isArray(data.skills) ? [...data.skills] : [],
     drift: Array.isArray(data.drift) ? [...data.drift] : [],
     healthy: data.healthy === true,
+    source: data.source === "workspace" ? "workspace" : data.source === "local" ? "local" : "",
     data
   };
 }
@@ -27139,10 +27235,11 @@ function componentSummary(component, check2) {
   }
   if (component === "skills") {
     const selection = data.selection_mode === "manual" ? "custom" : data.pack || "none";
+    const source = data.source === "workspace" ? " \xB7 Workspace" : "";
     return {
       label: data.healthy === false ? "Drift" : "Healthy",
       kind: data.healthy === false ? "bad" : "good",
-      detail: `${selection} \xB7 ${(data.skills || []).length} skill(s)`
+      detail: `${selection} \xB7 ${(data.skills || []).length} skill(s)${source}`
     };
   }
   const promptData = Array.isArray(data) ? data[0] || {} : data;
@@ -27665,7 +27762,7 @@ function WorkspaceCatalogFallback({ snapshot }) {
   return snapshot.workspaceLoading ? /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Workspace is connecting in the background; local state is already available.") : /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Connect a Workspace to browse remote selections.");
 }
 function LoadingView() {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Loading local state\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, "Reading local agent, account, Provider, MCP, Skills, Prompt, and Preset metadata."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "No local or remote configuration is being changed."));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "cyan" }, "Loading local state\u2026"), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, "Preparing local controller Stores, then reading Agent, MCP, Skills, and Prompt metadata."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Agent selections, managed links, Secret values, and remote Workspace state are not changed."));
 }
 function Overview({ snapshot, target }) {
   const report = targetReport(snapshot, target);
@@ -27673,10 +27770,19 @@ function Overview({ snapshot, target }) {
   const connection = workspace || snapshot.workspaceConnection;
   const cloud = workspacePresentation(workspace, snapshot.workspaceError, snapshot.workspaceLoading);
   const accounts = accountSummary(snapshot);
+  const skillsData = report?.skills?.data || {};
+  const skillsSummary = snapshot.workspaceLoading && skillsData.selection_mode !== "manual" && !skillsData.pack ? { label: "Checking", kind: "warn", detail: "Local none \xB7 checking Workspace runtime" } : componentSummary("skills", report?.skills);
   if (!report) {
     return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot?.doctorError || "Diagnostics unavailable" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Workspace", value: cloud.status, kind: cloud.kind }), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
   }
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", report.provider) }), target === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: componentSummary("skills", report.skills) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(
+    Row,
+    {
+      label: "Local Stores",
+      value: snapshot.bootstrap?.ok ? "ready" : "bootstrap incomplete",
+      kind: snapshot.bootstrap?.ok ? "good" : "bad"
+    }
+  ), !snapshot.bootstrap?.ok && /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.bootstrap?.detail || "Local Store bootstrap failed." }), target === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", report.provider) }), target === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", report.provider) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "MCP", summary: componentSummary("mcp", report.mcp) }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Skills", summary: skillsSummary }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Prompts", summary: componentSummary("prompts", report.prompt) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Snippets", value: `${Array.isArray(snapshot.snippets) ? snapshot.snippets.length : 0} local` }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: `${report.preset?.name || "none"}${report.preset?.drift ? " (drift)" : ""}`, kind: report.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Secrets", value: snapshot.doctor?.secrets?.ok ? "available" : "missing or incomplete", kind: snapshot.doctor?.secrets?.ok ? "good" : "bad" }), /* @__PURE__ */ import_react34.default.createElement(
     Row,
     {
       label: "Remotes",
@@ -27690,7 +27796,7 @@ function Overview({ snapshot, target }) {
       value: workspace.agent?.synced ? `${workspace.agent.profiles || 0} profile(s) \xB7 ${workspace.agent.secrets || 0} hidden Secret value(s)` : "not backed up",
       kind: workspace.agent?.synced ? "cloud" : "muted"
     }
-  ), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }));
+  ), connection?.endpoint && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Endpoint", value: connection.endpoint }), /* @__PURE__ */ import_react34.default.createElement(ErrorText, { value: snapshot.workspaceSkillsErrors?.[target] || "" }));
 }
 function Agents({ snapshot, selected }) {
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
@@ -28086,16 +28192,19 @@ function SkillsView({
   enabledOnly,
   searching
 }) {
-  const active = skillTargetState(dashboard.states, target);
-  const baseSkills = new Set(active.baseSkills);
-  const currentSkills = new Set(active.skills);
+  const effectiveStates = dashboard.effectiveStates || dashboard.states;
+  const active = skillTargetState(effectiveStates, target);
+  const localActive = skillTargetState(dashboard.states, target);
+  const baseSkills = new Set(localActive.baseSkills);
+  const currentSkills = new Set(localActive.skills);
   const customAdded = [...currentSkills].filter((name) => !baseSkills.has(name));
   const customDisabled = [...baseSkills].filter((name) => !currentSkills.has(name));
-  const repairable = active.drift.length > 0 && active.selectionMode !== "manual" && active.selection !== "none";
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Each client receives its own local Skill links; the canonical Store remains shared."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, SKILL_TARGETS.map((client) => {
-    const state = skillTargetState(dashboard.states, client);
-    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: client, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: client, selected: client === target }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.healthy ? "green" : state.data.target ? "red" : "gray" }, state.data.target ? `${state.selection} \xB7 ${state.skills.length}` : dashboard.loading ? "loading\u2026" : "unavailable"));
-  })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "local" ? "black" : "green", backgroundColor: focus === "local" ? "green" : void 0, bold: true }, " l LOCAL SWITCHES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "workspace" ? "black" : "blue", backgroundColor: focus === "workspace" ? "blue" : void 0, bold: true }, " w WORKSPACE PACKS ")), active.selectionMode === "manual" && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom added", items: customAdded, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom disabled", items: customDisabled, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s"), " save new \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "S"), " update base for this target \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "u"), " encrypted Store backup after saving")), Object.entries(dashboard.errors || {}).map(([client, error]) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: `${client}-skills-error`, value: `${targetLabel(client)}: ${error}` })), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local pack ", active.selection, " for ", targetLabel(target), " \xB7 restores managed links only"), active.drift.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current Skills selection uses manual state; save it as a Pack before automatic repair."), focus === "local" ? /* @__PURE__ */ import_react34.default.createElement(
+  const repairable = localActive.drift.length > 0 && localActive.selectionMode !== "manual" && localActive.selection !== "none";
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Effective Skill links may come from the Local Store or an applied Workspace runtime."), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, flexWrap: "wrap" }, SKILL_TARGETS.map((client) => {
+    const state = skillTargetState(effectiveStates, client);
+    const source = state.source === "workspace" ? "Workspace" : state.source === "local" ? "Local" : "";
+    return /* @__PURE__ */ import_react34.default.createElement(Box_default, { key: client, gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(TargetBadge, { target: client, selected: client === target }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: state.healthy ? "green" : state.data.target ? "red" : "gray" }, state.data.target ? `${state.selection} \xB7 ${state.skills.length}${source ? ` \xB7 ${source}` : ""}` : dashboard.loading ? "loading\u2026" : "unavailable"));
+  })), /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1, marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "local" ? "black" : "green", backgroundColor: focus === "local" ? "green" : void 0, bold: true }, " l LOCAL SWITCHES "), /* @__PURE__ */ import_react34.default.createElement(Text, { color: focus === "workspace" ? "black" : "blue", backgroundColor: focus === "workspace" ? "blue" : void 0, bold: true }, " w WORKSPACE PACKS ")), localActive.selectionMode === "manual" && /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom added", items: customAdded, kind: "good" }), /* @__PURE__ */ import_react34.default.createElement(ItemGroup, { label: "Custom disabled", items: customDisabled, kind: "bad" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "s"), " save new \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "S"), " update base for this target \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "u"), " encrypted Store backup after saving")), Object.entries(dashboard.errors || {}).map(([client, error]) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: `${client}-skills-error`, value: `${targetLabel(client)}: ${error}` })), Object.entries(dashboard.effectiveErrors || {}).map(([client, error]) => /* @__PURE__ */ import_react34.default.createElement(ErrorText, { key: `${client}-workspace-skills-error`, value: `${targetLabel(client)} Workspace: ${error}` })), repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, "f"), " repair current local pack ", localActive.selection, " for ", targetLabel(target), " \xB7 restores managed links only"), localActive.drift.length > 0 && !repairable && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow" }, "Current Skills selection uses manual state; save it as a Pack before automatic repair."), focus === "local" ? /* @__PURE__ */ import_react34.default.createElement(
     LocalSkillsCatalog,
     {
       target,

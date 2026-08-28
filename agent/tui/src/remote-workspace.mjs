@@ -764,7 +764,9 @@ export function createRemoteWorkspace({
   }
 
   async function runtimePaths() {
-    if (!masterConfig) await index();
+    // Runtime identity comes from the local recovery configuration. Reading
+    // device-local applied state must not depend on reaching the remote Store.
+    if (!masterConfig) masterConfig = await readConfigFn(workspaceConfig);
     const root = join(runtimeRoot, masterConfig.store_id);
     return {
       root,

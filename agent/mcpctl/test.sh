@@ -66,9 +66,13 @@ mkdir -p "$TEST_HOME" "$FAKE_BIN"
 HOME="$TEST_HOME" "$MCPCTL" init --store "$STORE" >/dev/null
 [ -f "$STORE/catalog.json" ] || fail "init did not create catalog.json"
 [ -f "$STORE/profiles/daily.json" ] || fail "init did not create profiles"
-if HOME="$TEST_HOME" "$MCPCTL" init --store "$STORE" >/dev/null 2>&1; then
-  fail "init overwrote an existing store"
-fi
+cp "$STORE/catalog.json" "$TEST_ROOT/catalog-before.json"
+HOME="$TEST_HOME" "$MCPCTL" init --store "$STORE" >"$TEST_ROOT/init-again.out" 2>&1 ||
+  fail "init was not idempotent for an existing valid store"
+grep -q 'MCP store already initialized' "$TEST_ROOT/init-again.out" ||
+  fail "repeated init did not report the existing store"
+cmp -s "$STORE/catalog.json" "$TEST_ROOT/catalog-before.json" ||
+  fail "repeated init changed the existing store"
 
 profile_list="$(HOME="$TEST_HOME" "$MCPCTL" profile list --store "$STORE")"
 printf '%s' "$profile_list" | grep -q '^daily' ||

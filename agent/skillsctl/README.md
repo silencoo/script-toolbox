@@ -18,6 +18,10 @@ four controllers atomically.
 
 ## Quick start
 
+The standard controller installer and shared TUI create the default Store and
+starter Packs automatically. `init --yes` remains useful for a custom Store
+path and is safe to repeat.
+
 ```bash
 skillsctl init --yes
 skillsctl skill add /path/to/frontend-dev --yes

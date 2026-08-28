@@ -92,6 +92,13 @@ agentctl status all
 agentctl workspace status
 ```
 
+Applying the installer also initializes the private local Provider, Failover,
+Pricing, MCP, and Skills Stores. The same idempotent setup runs when the TUI
+starts, or can be requested explicitly with `agentctl bootstrap --yes`. It
+does not select a Provider, enable MCP/Skills, write Agent configuration, or
+create a remote Workspace; local Store data is retained if the commands are
+uninstalled.
+
 Windows PowerShell users can install the same standalone controller runtime
 with native `.cmd` shims (Git for Windows/MSYS2 Bash remains the execution
 backend). The installer provisions its own checksum-verified `jq.exe`:

@@ -78,6 +78,7 @@ function usage() {
   process.stdout.write(`agentctl provider — one catalog for built-ins, local profiles, and Workspace restore
 
 Usage:
+  agentctl provider init [--yes]
   agentctl provider status [--json]
   agentctl provider list --target <target> [--platform <platform>] [--json]
   agentctl provider show <profile> [--json]
