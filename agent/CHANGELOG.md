@@ -1,5 +1,12 @@
 # Changelog — agent/
 
+## 2026-08-28 — reliable native Windows update detection
+
+- PowerShell-managed launchers now explicitly identify their child controller
+  process as a native Windows installation. The shared Bash updater uses this
+  marker in addition to its manifest check, so Unicode command paths still
+  refresh the PowerShell launcher, `.cmd` shims, and managed `jq` dependency.
+
 ## 2026-08-27 — Windows launcher Bash PATH bootstrap
 
 - Fixed the native `agentctl.cmd`, `mcpctl.cmd`, `promptctl.cmd`, and

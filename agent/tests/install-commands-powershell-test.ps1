@@ -59,6 +59,9 @@ try {
         'PowerShell install omitted its ownership manifest'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-launcher.ps1') -PathType Leaf) `
         'PowerShell install omitted the shared launcher'
+    $launcherContent = Get-Content -LiteralPath (Join-Path $Prefix '.script-toolbox-agent-launcher.ps1') -Raw
+    Assert-True ($launcherContent -match 'SCRIPT_TOOLBOX_POWERSHELL_MANAGED') `
+        'PowerShell launcher omitted its managed-install update marker'
     Assert-True (Test-Path -LiteralPath (Join-Path $Prefix 'jq.exe') -PathType Leaf) `
         'PowerShell install omitted the managed jq dependency'
     $jqVersion = (& (Join-Path $Prefix 'jq.exe') --version | Out-String).Trim()

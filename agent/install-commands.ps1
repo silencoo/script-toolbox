@@ -171,6 +171,11 @@ param(
 `$ErrorActionPreference = 'Stop'
 `$bash = $(Quote-PowerShellLiteral $Bash)
 `$env:Path = $(Quote-PowerShellLiteral ($CommandDirectory + ';')) + `$env:Path
+# Tell the shared Bash updater that this process belongs to a native
+# PowerShell-managed install. Relying only on an MSYS `-f` check for the
+# manifest is fragile for Windows paths containing non-ASCII characters.
+`$env:SCRIPT_TOOLBOX_POWERSHELL_MANAGED = '1'
+`$env:SCRIPT_TOOLBOX_UPDATE_PLATFORM = 'windows'
 `$targets = @{
 $($targetLines -join "`r`n")
 }
