@@ -14,7 +14,7 @@ sudo apt install ffmpeg libavcodec-extra imagemagick chafa -y
 sudo apt install p7zip-full unrar-free unzip zip bzip2 p7zip-rar -y
 
 # networking
-sudo apt install axel wget mtr-tiny iperf3 dnsutils net-tools tcpdump -y
+sudo apt install axel curl wget mtr-tiny iperf3 dnsutils net-tools tcpdump -y
 
 # system internals
 sudo apt install lsof strace sysstat iotop rsync -y
@@ -22,6 +22,13 @@ sudo apt install lsof strace sysstat iotop rsync -y
 # install ca
 sudo apt install --reinstall ca-certificates
 sudo update-ca-certificates
+
+# Yazi official APT repository (Debian does not currently package Yazi)
+curl -fsSL https://yazi-rs.github.io/builds/yazi-keyring.gpg | \
+  sudo tee /usr/share/keyrings/yazi-keyring.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/yazi-keyring.gpg] https://yazi-rs.github.io/builds/ stable main' | \
+  sudo tee /etc/apt/sources.list.d/yazi.list >/dev/null
+sudo apt update
 
 # install utils
 sudo apt install fzf yazi procs btop bat fastfetch zoxide neovim duf ncdu gping ripgrep btm eza fd tealdeer lazygit jq httpie nvtop aria2 neovim tmux trash-cli -y

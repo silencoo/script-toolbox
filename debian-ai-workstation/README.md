@@ -2,6 +2,8 @@
 
 用于配置 Debian 13 GPU 开发与 AI 工作站的一体化安装脚本，包括常用工具（含 yt-dlp 和 gallery-dl）、Docker、语言环境、NVIDIA/CUDA、Zsh 和 ComfyUI。它不是通用 VPS 初始化入口；服务器请使用 [`linux-server-toolkit`](../linux-server-toolkit/)。
 
+常用终端工具包含 Yazi；脚本会添加 Yazi 官方 stable APT 仓库，以便在 Debian 13 上安装并通过 APT 更新。
+
 > 脚本会修改 APT 软件源、安装系统软件、修改 `~/.zshrc` 并安装 NVIDIA/CUDA。请先阅读脚本，并仅在新系统或可恢复环境中运行。
 
 ## 使用方法
