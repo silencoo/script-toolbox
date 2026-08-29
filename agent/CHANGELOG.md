@@ -1,5 +1,17 @@
 # Changelog — agent/
 
+## 2026-08-29 — Workspace-to-local Skill ownership handoff
+
+- Fixed Workspace Skill Pack apply after a full local Store restore. When the
+  selected Workspace Pack resolves to the local Pack and the active links still
+  belong to the healthy isolated runtime, agentctl now releases the Workspace
+  links, applies and verifies the local Pack, and restores the prior Workspace
+  Pack if local apply or verification fails.
+- Known Workspace ownership is now surfaced as Workspace-managed during this
+  handoff instead of as an unowned conflict. Truly external target paths remain
+  protected by skillsctl's existing fail-closed unowned-link guard. Bumped
+  `agentctl` to 0.17.9; `skillsctl` remains 0.4.5.
+
 ## 2026-08-28 — reliable native Windows update detection
 
 - PowerShell-managed installs now record their ownership both in the launcher

@@ -117,10 +117,14 @@ the canonical local and Workspace file checksums, naming same-name Skills whose
 contents differ, Workspace-only Skills, and entries that could not be checked.
 Only the checksums enter the React view; Skill files remain in the controller
 and encrypted Store layers. When a Workspace Pack resolves to the same Skills
-as an existing local canonical Pack, apply reuses that local Pack so its managed
-links do not cross Store ownership boundaries; the content comparison therefore
-also makes any local-versus-backup difference visible before that action. In the
-Workspace pane, `d` separately downloads the selected Pack's canonical files:
+as an existing local canonical Pack, apply reuses that local Pack. If the live
+links are still owned by the isolated Workspace runtime, agentctl first verifies
+that ownership is healthy, releases those links through the Workspace Store,
+applies and verifies the local Pack, and restores the previous Workspace Pack if
+the handoff fails. A known Workspace owner is reported as Workspace-managed;
+`unowned` remains reserved for paths outside both controller Stores. The content
+comparison makes any local-versus-backup difference visible before that action.
+In the Workspace pane, `d` separately downloads the selected Pack's canonical files:
 same-name differences are replaced with explicit confirmation, Workspace-only
 Skills are added, and matching files are skipped. skillsctl keeps the previous
 same-name directories in Store backups. This file download does not change Pack

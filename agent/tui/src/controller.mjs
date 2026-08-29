@@ -1286,15 +1286,114 @@ export function createController({
     });
   }
 
-  async function releaseWorkspaceSkillLinks(selection, target, env) {
-    if (!Array.isArray(selection.skills) || selection.skills.length === 0) {
+  async function setManagedSkillLinks(skills, target, enabled, env = {}) {
+    if (!Array.isArray(skills) || skills.length === 0) {
       return { code: 0, stdout: "", stderr: "" };
     }
     const args = ["skill", "set", "--target", target];
-    for (const skill of selection.skills) args.push("--disable", skill);
+    for (const skill of skills) args.push(enabled ? "--enable" : "--disable", skill);
     args.push("--yes");
-    const result = await runController(tools.skills, args, env);
-    return result;
+    return runController(tools.skills, args, env);
+  }
+
+  async function releaseWorkspaceSkillLinks(selection, target, env) {
+    return setManagedSkillLinks(selection.skills, target, false, env);
+  }
+
+  async function inspectWorkspaceSkillOwnership(target) {
+    if (typeof remoteWorkspace.runtimeAvailability !== "function" ||
+        typeof remoteWorkspace.runtimeEnvironment !== "function") {
+      return { available: false, state: null, env: null, error: "" };
+    }
+    let availability;
+    try {
+      availability = await remoteWorkspace.runtimeAvailability();
+    } catch (error) {
+      return {
+        available: null,
+        state: null,
+        env: null,
+        error: `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+      };
+    }
+    if (!availability?.skills) {
+      return { available: false, state: null, env: null, error: "" };
+    }
+    let env;
+    try {
+      env = await remoteWorkspace.runtimeEnvironment();
+    } catch (error) {
+      return {
+        available: true,
+        state: null,
+        env: null,
+        error: `Workspace Skills runtime: ${sanitizeOutput(error?.message || error)}`
+      };
+    }
+    let result;
+    try {
+      result = await runControllerJson(
+        tools.skills,
+        ["current", "--target", target, "--json"],
+        `Workspace ${target} Skills ownership`,
+        env
+      );
+    } catch (error) {
+      return {
+        available: true,
+        state: null,
+        env,
+        error: sanitizeOutput(error?.message || error)
+      };
+    }
+    if (!result.ok || !result.data || result.data.target !== target) {
+      return {
+        available: true,
+        state: null,
+        env,
+        error: result.error || `Workspace ${target} Skills ownership is unavailable.`
+      };
+    }
+    return {
+      available: true,
+      state: skillsStateKnown(result.data)
+        ? { ...result.data, source: "workspace" }
+        : null,
+      env,
+      error: ""
+    };
+  }
+
+  async function restoreWorkspaceSkillOwnership(state, target, env) {
+    if (state?.selection_mode === "pack" && state.pack) {
+      return runController(tools.skills, [
+        "apply", "--target", target, "--pack", state.pack, "--yes"
+      ], env);
+    }
+    return setManagedSkillLinks(state?.skills, target, true, env);
+  }
+
+  async function rollbackWorkspaceSkillHandoff({
+    state,
+    target,
+    env,
+    localSkills = []
+  }) {
+    if (localSkills.length > 0) {
+      const releasedLocal = await setManagedSkillLinks(localSkills, target, false);
+      if (!releasedLocal || releasedLocal.code !== 0) {
+        const detail = sanitizeOutput(releasedLocal?.stderr || releasedLocal?.stdout) ||
+          "the locally managed links could not be released";
+        return { ok: false, detail: `local release failed: ${detail}` };
+      }
+    }
+    const restored = await restoreWorkspaceSkillOwnership(state, target, env);
+    if (!restored || restored.code !== 0) {
+      const detail = sanitizeOutput(restored?.stderr || restored?.stdout) ||
+        "the previous Workspace selection could not be reapplied";
+      return { ok: false, detail: `Workspace restore failed: ${detail}` };
+    }
+    return { ok: true, detail: "previous Workspace ownership was restored" };
   }
 
   async function remoteComponentAction(actionName, type, name, target, {
@@ -1409,17 +1508,101 @@ export function createController({
         ? [...remotePlan.items].sort()
         : [];
       if (localItems && JSON.stringify(localItems) === JSON.stringify(remoteItems)) {
+        const ownership = await inspectWorkspaceSkillOwnership(target);
+        if (ownership.error) {
+          return {
+            ok: false,
+            data: withSkillsDrift({
+              type,
+              name,
+              target,
+              matchedLocalPack: true,
+              workspaceOwnershipCheckFailed: true
+            }, ownership.error, "workspace"),
+            detail: `The local Pack matches '${name}', but agentctl could not verify whether the active ${target} links are Workspace-managed. No ownership changes were made: ${ownership.error}`
+          };
+        }
+        const workspaceState = ownership.state;
+        const workspaceSkills = Array.isArray(workspaceState?.skills)
+          ? [...workspaceState.skills].sort()
+          : [];
+        const workspaceManaged = workspaceSkills.length > 0;
+        if (workspaceManaged && workspaceState.healthy !== true) {
+          const drift = Array.isArray(workspaceState.drift) && workspaceState.drift.length > 0
+            ? ` (${workspaceState.drift.join(", ")})`
+            : "";
+          return {
+            ok: false,
+            data: {
+              type,
+              name,
+              target,
+              matchedLocalPack: true,
+              workspaceManaged: true,
+              workspaceOwner: workspaceState.pack || "custom",
+              workspaceOwnershipDrift: true
+            },
+            detail: `The active ${target} Skill links are Workspace-managed but that ownership has drift${drift}. Repair the Workspace selection before transferring it to the local Store.`
+          };
+        }
+        if (workspaceManaged) {
+          const released = await setManagedSkillLinks(
+            workspaceSkills,
+            target,
+            false,
+            ownership.env
+          );
+          if (!released || released.code !== 0) {
+            const failure = sanitizeOutput(released?.stderr || released?.stdout) ||
+              "the Workspace-managed links could not be released";
+            const ownershipFailure = /\bunowned conflict\(s\)/i.test(failure)
+              ? "the Workspace ownership record changed before it could be released safely"
+              : failure;
+            const detail = `The active ${target} Skill links are Workspace-managed, but agentctl could not release them for the local Store. No local ownership was taken: ${ownershipFailure}`;
+            return {
+              ok: false,
+              data: withSkillsDrift({
+                type,
+                name,
+                target,
+                matchedLocalPack: true,
+                workspaceManaged: true,
+                workspaceOwner: workspaceState.pack || "custom",
+                ownershipTransferRequired: true
+              }, failure, "workspace"),
+              detail
+            };
+          }
+        }
         const result = await runController(tools.skills, [
           "apply", "--target", target, "--pack", name, "--yes"
         ]);
         if (result.code !== 0) {
-          const detail = sanitizeOutput(result.stderr || result.stdout) ||
+          const failure = sanitizeOutput(result.stderr || result.stdout) ||
             `Action failed with code ${result.code}`;
+          const rollback = workspaceManaged
+            ? await rollbackWorkspaceSkillHandoff({
+                state: workspaceState,
+                target,
+                env: ownership.env
+              })
+            : null;
+          const detail = rollback
+            ? `${failure}\nOwnership handoff failed; ${rollback.detail}.`
+            : failure;
           return {
             ok: false,
             data: withSkillsDrift(
-              { type, name, target, matchedLocalPack: true },
-              detail,
+              {
+                type,
+                name,
+                target,
+                matchedLocalPack: true,
+                workspaceManaged,
+                ownershipTransferred: false,
+                ownershipRollback: rollback?.ok ? "restored" : rollback ? "failed" : "not-needed"
+              },
+              failure,
               "local"
             ),
             detail
@@ -1429,21 +1612,57 @@ export function createController({
         try {
           state = await localSkillsState(target);
         } catch (error) {
+          const failure = sanitizeOutput(error?.message || error);
+          const rollback = workspaceManaged
+            ? await rollbackWorkspaceSkillHandoff({
+                state: workspaceState,
+                target,
+                env: ownership.env,
+                localSkills: remoteItems
+              })
+            : null;
           return {
             ok: false,
-            data: { type, name, target, matchedLocalPack: true },
-            detail: `${name} finished applying, but the resulting local Skills state could not be verified: ${sanitizeOutput(error?.message || error)}`
+            data: {
+              type,
+              name,
+              target,
+              matchedLocalPack: true,
+              workspaceManaged,
+              ownershipTransferred: false,
+              ownershipRollback: rollback?.ok ? "restored" : rollback ? "failed" : "not-needed"
+            },
+            detail: `${name} finished applying, but the resulting local Skills state could not be verified: ${failure}${rollback ? `\nOwnership verification failed; ${rollback.detail}.` : ""}`
           };
         }
         const actualItems = Array.isArray(state.skills) ? [...state.skills].sort() : [];
         const verified = state.selection_mode === "pack" && state.pack === name &&
           state.healthy === true && JSON.stringify(actualItems) === JSON.stringify(remoteItems);
+        let rollback = null;
+        if (!verified && workspaceManaged) {
+          rollback = await rollbackWorkspaceSkillHandoff({
+            state: workspaceState,
+            target,
+            env: ownership.env,
+            localSkills: actualItems.length > 0 ? actualItems : remoteItems
+          });
+        }
         return {
           ok: verified,
-          data: { type, name, target, matchedLocalPack: true, state },
+          data: {
+            type,
+            name,
+            target,
+            matchedLocalPack: true,
+            workspaceManaged,
+            ownershipTransferred: verified && workspaceManaged,
+            ownershipRollback: rollback?.ok ? "restored" : rollback ? "failed" : "not-needed",
+            activeOwner: verified ? "local" : rollback?.ok ? "workspace" : null,
+            state
+          },
           detail: verified
-            ? `${name} matched the local canonical Pack and is verified active with ${actualItems.length} Skills; start a new ${target} session`
-            : `${name} finished applying, but verification returned ${state.pack || state.selection_mode || "an unknown selection"} with ${actualItems.length} Skills instead of the selected ${remoteItems.length}.`
+            ? `${name} matched the local canonical Pack and is verified active with ${actualItems.length} Skills${workspaceManaged ? "; ownership moved from Workspace to the local Store" : ""}; start a new ${target} session`
+            : `${name} finished applying, but verification returned ${state.pack || state.selection_mode || "an unknown selection"} with ${actualItems.length} Skills instead of the selected ${remoteItems.length}.${rollback ? ` Ownership verification failed; ${rollback.detail}.` : ""}`
         };
       }
     }

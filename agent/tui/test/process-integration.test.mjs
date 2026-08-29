@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -128,6 +128,105 @@ test("real Git Bash-style controller turns Skills checksum drift into an accept-
     });
     assert.equal(retried.ok, true, retried.detail);
     assert.equal((await runSkill(["status"])).code, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("real Skills controllers hand Workspace-owned links to the restored local Store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "toolbox-tui-skill-handoff-"));
+  const home = join(root, "home");
+  const config = join(root, "config");
+  const data = join(root, "data");
+  const localStore = join(root, "stores", "local");
+  const workspaceStore = join(root, "stores", "workspace");
+  const target = join(root, "targets", "codex");
+  const source = join(root, "source", "frontend-dev");
+  const skillsScript = join(defaultAgentRoot, "skillsctl", "skillsctl");
+  try {
+    await Promise.all([home, config, data, source].map((path) =>
+      mkdir(path, { recursive: true })
+    ));
+    await writeFile(
+      join(source, "SKILL.md"),
+      "---\nname: frontend-dev\ndescription: Frontend integration fixture\n---\n\n# Frontend\n"
+    );
+    const environment = {
+      ...process.env,
+      HOME: process.platform === "win32" ? home.replaceAll("\\", "/") : home,
+      ...(process.platform === "win32"
+        ? { USERPROFILE: home, APPDATA: config, LOCALAPPDATA: data }
+        : { XDG_CONFIG_HOME: config, XDG_DATA_HOME: data }),
+      SKILLSCTL_STORE: localStore,
+      SKILLSCTL_CODEX_DIR: target,
+      NO_COLOR: "1"
+    };
+    const runner = createProcessRunner({ cwd: defaultAgentRoot, environment });
+    const runSkill = async (args, env = {}) => {
+      const command = bashScriptCommand(skillsScript, args, { platform: "linux" });
+      return runner(command.executable, command.args, { env });
+    };
+    for (const store of [localStore, workspaceStore]) {
+      const env = { SKILLSCTL_STORE: store };
+      assert.equal((await runSkill(["init", "--yes"], env)).code, 0);
+      assert.equal((await runSkill(["skill", "add", source, "--yes"], env)).code, 0);
+      assert.equal((await runSkill([
+        "pack", "add", "frontend", "frontend-dev", "--yes"
+      ], env)).code, 0);
+    }
+    assert.equal((await runSkill([
+      "apply", "--target", "codex", "--pack", "frontend", "--yes"
+    ], { SKILLSCTL_STORE: workspaceStore })).code, 0);
+    assert.equal(
+      await readlink(join(target, "frontend-dev")),
+      join(workspaceStore, "skills", "frontend-dev")
+    );
+
+    const directLocal = await runSkill([
+      "apply", "--target", "codex", "--pack", "frontend", "--yes"
+    ]);
+    assert.notEqual(directLocal.code, 0);
+    assert.match(directLocal.stderr, /unowned conflict/);
+
+    const controller = createController({
+      agentRoot: defaultAgentRoot,
+      runner,
+      platform: "linux",
+      bootstrapLocalStores: false,
+      remoteWorkspace: {
+        componentPlan: async () => ({
+          type: "skills",
+          name: "frontend",
+          target: "codex",
+          items: ["frontend-dev"],
+          unit: "skills"
+        }),
+        runtimeAvailability: async () => ({ skills: true }),
+        runtimeEnvironment: async () => ({ SKILLSCTL_STORE: workspaceStore })
+      }
+    });
+    const applied = await controller.action("skills-apply", {
+      selection: "frontend",
+      target: "codex"
+    });
+    assert.equal(applied.ok, true, applied.detail);
+    assert.equal(applied.data.ownershipTransferred, true);
+    assert.equal(
+      await readlink(join(target, "frontend-dev")),
+      join(localStore, "skills", "frontend-dev")
+    );
+
+    const localState = JSON.parse((await runSkill([
+      "current", "--target", "codex", "--json"
+    ])).stdout);
+    const workspaceState = JSON.parse((await runSkill([
+      "current", "--target", "codex", "--json"
+    ], { SKILLSCTL_STORE: workspaceStore })).stdout);
+    assert.equal(localState.pack, "frontend");
+    assert.equal(localState.healthy, true);
+    assert.deepEqual(localState.skills, ["frontend-dev"]);
+    assert.equal(workspaceState.selection_mode, "manual");
+    assert.deepEqual(workspaceState.skills, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

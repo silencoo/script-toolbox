@@ -1308,6 +1308,224 @@ test("Workspace Skill apply reuses an identical local Pack without crossing stor
   assert.deepEqual(calls.at(-1).env, {});
 });
 
+test("Workspace Skill apply hands healthy runtime ownership to an identical local Pack", async () => {
+  const calls = [];
+  const runtimeEnv = { SKILLSCTL_STORE: "/runtime/skills" };
+  const selected = ["creative-frontend", "frontend-dev"];
+  const runner = async (_executable, args, options = {}) => {
+    const env = options.env || {};
+    calls.push({ args, env });
+    const command = args.join(" ");
+    if (command === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
+    if (command === "pack show frontend --target codex") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({ resolved: selected }),
+        stderr: ""
+      };
+    }
+    if (command === "current --target codex --json" && env.SKILLSCTL_STORE) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "frontend",
+          skills: selected,
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "skill set --target codex --disable creative-frontend --disable frontend-dev --yes" &&
+        env.SKILLSCTL_STORE) {
+      return { code: 0, stdout: "released Workspace links\n", stderr: "" };
+    }
+    if (command === "apply --target codex --pack frontend --yes" && !env.SKILLSCTL_STORE) {
+      return { code: 0, stdout: "Applied codex skill links\n", stderr: "" };
+    }
+    if (command === "current --target codex --json" && !env.SKILLSCTL_STORE) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "frontend",
+          base_skills: selected,
+          skills: selected,
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+  };
+  const remoteWorkspace = {
+    componentPlan: async () => ({
+      type: "skills",
+      name: "frontend",
+      target: "codex",
+      items: [...selected].reverse(),
+      unit: "skills"
+    }),
+    runtimeAvailability: async () => ({ skills: true }),
+    runtimeEnvironment: async () => runtimeEnv,
+    materializeComponent: async () => {
+      throw new Error("an identical local Pack must not rematerialize the Workspace runtime");
+    }
+  };
+  const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex"
+  });
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.data.workspaceManaged, true);
+  assert.equal(applied.data.ownershipTransferred, true);
+  assert.equal(applied.data.activeOwner, "local");
+  assert.match(applied.detail, /ownership moved from Workspace to the local Store/);
+  assert.deepEqual(calls.map(({ args, env }) => ({
+    args,
+    store: env.SKILLSCTL_STORE || "local"
+  })), [
+    { args: ["list", "--json"], store: "local" },
+    { args: ["pack", "show", "frontend", "--target", "codex"], store: "local" },
+    { args: ["current", "--target", "codex", "--json"], store: "/runtime/skills" },
+    {
+      args: ["skill", "set", "--target", "codex", "--disable", "creative-frontend", "--disable", "frontend-dev", "--yes"],
+      store: "/runtime/skills"
+    },
+    { args: ["apply", "--target", "codex", "--pack", "frontend", "--yes"], store: "local" },
+    { args: ["current", "--target", "codex", "--json"], store: "local" }
+  ]);
+});
+
+test("Workspace Skill ownership handoff restores Workspace links when local apply fails", async () => {
+  const calls = [];
+  const runtimeEnv = { SKILLSCTL_STORE: "/runtime/skills" };
+  const runner = async (_executable, args, options = {}) => {
+    const env = options.env || {};
+    calls.push({ args, env });
+    const command = args.join(" ");
+    if (command === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
+    if (command === "pack show frontend --target codex") {
+      return { code: 0, stdout: JSON.stringify({ resolved: ["frontend-dev"] }), stderr: "" };
+    }
+    if (command === "current --target codex --json" && env.SKILLSCTL_STORE) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "frontend",
+          skills: ["frontend-dev"],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "skill set --target codex --disable frontend-dev --yes" &&
+        env.SKILLSCTL_STORE) {
+      return { code: 0, stdout: "released\n", stderr: "" };
+    }
+    if (command === "apply --target codex --pack frontend --yes" && !env.SKILLSCTL_STORE) {
+      return { code: 1, stdout: "", stderr: "local apply failed" };
+    }
+    if (command === "apply --target codex --pack frontend --yes" && env.SKILLSCTL_STORE) {
+      return { code: 0, stdout: "restored\n", stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+  };
+  const controller = createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {
+      componentPlan: async () => ({ items: ["frontend-dev"] }),
+      runtimeAvailability: async () => ({ skills: true }),
+      runtimeEnvironment: async () => runtimeEnv
+    }
+  });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex"
+  });
+
+  assert.equal(applied.ok, false);
+  assert.equal(applied.data.ownershipTransferred, false);
+  assert.equal(applied.data.ownershipRollback, "restored");
+  assert.match(applied.detail, /previous Workspace ownership was restored/);
+  assert.deepEqual(calls.slice(-3).map(({ args, env }) => ({
+    args,
+    store: env.SKILLSCTL_STORE || "local"
+  })), [
+    {
+      args: ["skill", "set", "--target", "codex", "--disable", "frontend-dev", "--yes"],
+      store: "/runtime/skills"
+    },
+    { args: ["apply", "--target", "codex", "--pack", "frontend", "--yes"], store: "local" },
+    { args: ["apply", "--target", "codex", "--pack", "frontend", "--yes"], store: "/runtime/skills" }
+  ]);
+});
+
+test("Workspace-owned Skill conflicts are not reported as unowned", async () => {
+  const runtimeEnv = { SKILLSCTL_STORE: "/runtime/skills" };
+  const runner = async (_executable, args, options = {}) => {
+    const command = args.join(" ");
+    if (command === "list --json") {
+      return { code: 0, stdout: "[]", stderr: "" };
+    }
+    if (command === "pack show frontend --target codex") {
+      return { code: 0, stdout: JSON.stringify({ resolved: ["frontend-dev"] }), stderr: "" };
+    }
+    if (command === "current --target codex --json" && options.env?.SKILLSCTL_STORE) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          target: "codex",
+          selection_mode: "pack",
+          pack: "frontend",
+          skills: ["frontend-dev"],
+          drift: [],
+          healthy: true
+        }),
+        stderr: ""
+      };
+    }
+    if (command === "skill set --target codex --disable frontend-dev --yes") {
+      return { code: 1, stdout: "", stderr: "codex has 1 unowned conflict(s)" };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+  };
+  const controller = createController({
+    agentRoot: "/agent",
+    runner,
+    remoteWorkspace: {
+      componentPlan: async () => ({ items: ["frontend-dev"] }),
+      runtimeAvailability: async () => ({ skills: true }),
+      runtimeEnvironment: async () => runtimeEnv
+    }
+  });
+  const applied = await controller.action("skills-apply", {
+    selection: "frontend",
+    target: "codex"
+  });
+
+  assert.equal(applied.ok, false);
+  assert.equal(applied.data.workspaceManaged, true);
+  assert.equal(applied.data.ownershipTransferRequired, true);
+  assert.match(applied.detail, /active codex Skill links are Workspace-managed/);
+  assert.match(applied.detail, /No local ownership was taken/);
+  assert.doesNotMatch(applied.detail, /unowned/i);
+});
+
 test("Workspace Skill download replaces only changed canonical files", async () => {
   const sameHash = "a".repeat(64);
   const oldHash = "b".repeat(64);

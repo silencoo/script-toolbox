@@ -91,7 +91,7 @@ try {
         $versionExit = $LASTEXITCODE
         $version = ($versionOutput | Out-String).Trim()
         Assert-True ($versionExit -eq 0) 'agentctl.cmd returned a non-zero exit code without Git usr/bin on PATH'
-        Assert-True ($version -eq 'agentctl 0.17.8') "agentctl.cmd returned an unexpected version: $version"
+        Assert-True ($version -eq 'agentctl 0.17.9') "agentctl.cmd returned an unexpected version: $version"
 
         $workspaceOutput = & (Join-Path $Prefix 'agentctl.cmd') workspace --help 2>&1
         $workspaceExit = $LASTEXITCODE
