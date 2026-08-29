@@ -1,0 +1,55 @@
+name: Publish Mihomo Console image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mihomo-console/Dockerfile"
+      - "mihomo-console/.dockerignore"
+      - "mihomo-console/requirements.txt"
+      - "mihomo-console/mihomo_console.py"
+      - "mihomo-console/container_runtime.py"
+      - ".github/workflows/mihomo-console-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Test container-aware manager
+        run: |
+          python -m pip install -r mihomo-console/requirements.txt
+          python mihomo-console/test_manager.py
+          python -m py_compile mihomo-console/container_runtime.py
+          NAS_IP=192.0.2.10 docker compose -f mihomo-console/compose.yaml config --quiet
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/mihomo-console
+          tags: |
+            type=raw,value=latest
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: mihomo-console
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

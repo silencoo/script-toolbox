@@ -1,0 +1,26 @@
+# 将示例 IP 和 tank 改为 TrueNAS 的实际局域网 IP 与存储池名称。
+services:
+  mihomo-console:
+    image: ghcr.io/silencoo/mihomo-console:latest
+    container_name: mihomo-console
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Tokyo"
+      MIHOMO_SECRET: ""
+      DASHBOARD_ORIGINS: "http://192.168.1.50:18080"
+      UPDATE_START_DELAY_SECONDS: "600"
+      UPDATE_INTERVAL_SECONDS: "3600"
+    ports:
+      - "17890:7890"
+      - "19090:9090"
+    volumes:
+      - "/mnt/tank/apps/mihomo-console:/data"
+
+  dashboard:
+    image: ghcr.io/metacubex/metacubexd:latest
+    container_name: mihomo-dashboard
+    restart: unless-stopped
+    environment:
+      DEFAULT_BACKEND_URL: "http://192.168.1.50:19090"
+    ports:
+      - "18080:80"

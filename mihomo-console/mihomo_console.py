@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,54 @@ except ImportError:
     raise SystemExit(2)
 
 
-DEFAULT_MANAGER_CONFIG = Path("/etc/mihomo/subscription-manager.json")
+class MihomoSafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that preserves numeric-looking REALITY short IDs."""
+
+
+def _construct_mihomo_mapping(
+    loader: MihomoSafeLoader,
+    node: yaml.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    mapping = yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if (
+            key == "short-id"
+            and isinstance(value_node, yaml.ScalarNode)
+            and value_node.tag == "tag:yaml.org,2002:int"
+        ):
+            mapping[key] = value_node.value
+    return mapping
+
+
+MihomoSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mihomo_mapping,
+)
+
+
+class _QuotedString(str):
+    """A string that must remain a YAML string for Mihomo's Go YAML parser."""
+
+
+class MihomoSafeDumper(yaml.SafeDumper):
+    pass
+
+
+MihomoSafeDumper.add_representer(
+    _QuotedString,
+    lambda dumper, value: dumper.represent_scalar(
+        "tag:yaml.org,2002:str",
+        str(value),
+        style='"',
+    ),
+)
+
+
+DEFAULT_MANAGER_CONFIG = Path(
+    os.environ.get("MIHOMO_MANAGER_CONFIG", "/etc/mihomo/subscription-manager.json")
+)
 DEFAULT_UPDATER_SERVICE = "mihomo-subscription-update.service"
 DEFAULT_UPDATER_TIMER = "mihomo-subscription-update.timer"
 DEFAULT_SYSTEMD_DROPIN = (
@@ -52,7 +100,10 @@ DEFAULTS: dict[str, Any] = {
     "target_config": "/etc/mihomo/config.yaml",
     "mihomo_home": "/etc/mihomo",
     "mihomo_binary": "/usr/local/bin/mihomo",
+    "service_backend": "systemd",
     "systemd_service": "mihomo.service",
+    "runtime_file": "/run/mihomo-console/runtime.json",
+    "container_log_dir": "/data/logs",
     "overlay_file": "/etc/mihomo/local-overrides.yaml",
     "backup_dir": "/etc/mihomo/backups",
     "backup_keep": 8,
@@ -109,7 +160,7 @@ def read_yaml_mapping(path: Path, *, missing_ok: bool = False) -> dict[str, Any]
         return {}
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return ensure_mapping(yaml.safe_load(handle), str(path))
+            return ensure_mapping(yaml.load(handle, Loader=MihomoSafeLoader), str(path))
     except OSError as exc:
         raise ManagerError(f"无法读取 {path}: {exc.strerror or exc}") from exc
     except yaml.YAMLError as exc:
@@ -127,6 +178,42 @@ def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def normalize_mihomo_compatibility(profile: dict[str, Any]) -> None:
+    """Apply lossless compatibility fixes required by current Mihomo releases."""
+
+    legacy_fingerprint = profile.pop("global-client-fingerprint", None)
+    proxies = profile.get("proxies")
+    if not isinstance(proxies, list):
+        return
+
+    fingerprint_proxy_types = {"vmess", "vless", "trojan", "anytls"}
+    for proxy in proxies:
+        if not isinstance(proxy, dict):
+            continue
+
+        proxy_type = str(proxy.get("type", "")).lower()
+        reality_options = proxy.get("reality-opts")
+        uses_tls = (
+            proxy.get("tls") is True
+            or proxy_type in {"trojan", "anytls"}
+            or isinstance(reality_options, dict)
+        )
+        if (
+            isinstance(legacy_fingerprint, str)
+            and legacy_fingerprint
+            and proxy_type in fingerprint_proxy_types
+            and uses_tls
+            and "client-fingerprint" not in proxy
+            and not isinstance(proxy.get("ech-opts"), dict)
+        ):
+            proxy["client-fingerprint"] = legacy_fingerprint
+
+        if isinstance(reality_options, dict):
+            short_id = reality_options.get("short-id")
+            if isinstance(short_id, str):
+                reality_options["short-id"] = _QuotedString(short_id)
+
+
 def render_profile(remote_bytes: bytes, overlay: dict[str, Any]) -> bytes:
     try:
         remote_text = remote_bytes.decode("utf-8-sig")
@@ -134,7 +221,10 @@ def render_profile(remote_bytes: bytes, overlay: dict[str, Any]) -> bytes:
         raise ManagerError("订阅返回内容不是 UTF-8 文本") from exc
 
     try:
-        remote = ensure_mapping(yaml.safe_load(remote_text), "订阅配置")
+        remote = ensure_mapping(
+            yaml.load(remote_text, Loader=MihomoSafeLoader),
+            "订阅配置",
+        )
     except yaml.YAMLError as exc:
         raise ManagerError(f"订阅返回内容不是有效 YAML: {exc}") from exc
 
@@ -146,8 +236,10 @@ def render_profile(remote_bytes: bytes, overlay: dict[str, Any]) -> bytes:
         raise ManagerError("订阅配置既没有非空 proxies，也没有 proxy-providers；拒绝覆盖")
 
     merged = deep_merge(remote, overlay)
-    rendered = yaml.safe_dump(
+    normalize_mihomo_compatibility(merged)
+    rendered = yaml.dump(
         merged,
+        Dumper=MihomoSafeDumper,
         allow_unicode=True,
         default_flow_style=False,
         sort_keys=False,
@@ -376,6 +468,10 @@ def validate_with_mihomo(registry: dict[str, Any], candidate: Path) -> None:
 
 
 def restart_mihomo(registry: dict[str, Any]) -> None:
+    if str(registry.get("service_backend") or "systemd") == "container":
+        restart_container_mihomo(registry)
+        return
+
     service = str(registry["systemd_service"])
     result = command_output(["systemctl", "restart", service], timeout=60)
     if result.returncode != 0:
@@ -399,6 +495,75 @@ def restart_mihomo(registry: dict[str, Any]) -> None:
         time.sleep(SERVICE_POLL_INTERVAL_SECONDS)
     raise ManagerError(
         f"{service} 重启后未能连续 {SERVICE_STABILITY_SECONDS:g} 秒保持 active 状态"
+    )
+
+
+def process_is_alive(pid: object) -> bool:
+    try:
+        value = int(pid)
+        if value <= 0:
+            return False
+        os.kill(value, 0)
+        return True
+    except (TypeError, ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
+def read_container_runtime(registry: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(registry.get("runtime_file") or DEFAULTS["runtime_file"]))
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return ensure_mapping(json.load(handle), str(path))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, ManagerError):
+        return {}
+
+
+def container_mihomo_is_active(registry: dict[str, Any]) -> bool:
+    runtime = read_container_runtime(registry)
+    return runtime.get("mihomo_state") == "running" and process_is_alive(
+        runtime.get("mihomo_pid")
+    )
+
+
+def restart_container_mihomo(registry: dict[str, Any]) -> None:
+    runtime = read_container_runtime(registry)
+    supervisor_pid = runtime.get("supervisor_pid")
+    if not process_is_alive(supervisor_pid):
+        raise ManagerError("容器监督进程未运行，无法重启 Mihomo")
+
+    previous_generation = int(runtime.get("generation") or 0)
+    try:
+        os.kill(int(supervisor_pid), signal.SIGUSR1)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ManagerError(f"无法通知容器监督进程重启 Mihomo：{exc}") from exc
+
+    deadline = time.monotonic() + SERVICE_START_TIMEOUT_SECONDS
+    stable_since: float | None = None
+    stable_generation: int | None = None
+    while True:
+        current = read_container_runtime(registry)
+        checked_at = time.monotonic()
+        current_generation = int(current.get("generation") or 0)
+        restarted = current_generation > previous_generation
+        active = current.get("mihomo_state") == "running" and process_is_alive(
+            current.get("mihomo_pid")
+        )
+        if restarted and active:
+            if stable_since is None or stable_generation != current_generation:
+                stable_since = checked_at
+                stable_generation = current_generation
+            if checked_at - stable_since >= SERVICE_STABILITY_SECONDS:
+                return
+        else:
+            stable_since = None
+            stable_generation = None
+
+        if checked_at >= deadline:
+            break
+        time.sleep(SERVICE_POLL_INTERVAL_SECONDS)
+    raise ManagerError(
+        "容器内 Mihomo 重启后未能连续 "
+        f"{SERVICE_STABILITY_SECONDS:g} 秒保持运行状态"
     )
 
 
@@ -817,15 +982,38 @@ def collect_status(manager_config: Path, registry: dict[str, Any]) -> dict[str, 
         pass
     active_name = registry.get("active")
     active_details = registry.get("subscriptions", {}).get(active_name, {})
-    timer_next = command_text(
-        [
-            "systemctl",
-            "show",
-            DEFAULT_UPDATER_TIMER,
-            "--property=NextElapseUSecRealtime",
-            "--value",
-        ]
-    )
+    container_backend = str(registry.get("service_backend") or "systemd") == "container"
+    if container_backend:
+        runtime = read_container_runtime(registry)
+        mihomo_service = (
+            "active"
+            if runtime.get("mihomo_state") == "running"
+            and process_is_alive(runtime.get("mihomo_pid"))
+            else str(runtime.get("mihomo_state") or "unknown")
+        )
+        timer_enabled = "enabled" if runtime.get("updater_enabled") else "disabled"
+        if not runtime.get("updater_enabled"):
+            timer_active = "inactive"
+        else:
+            timer_active = "active" if runtime.get("updater_running") else "waiting"
+        timer_next = str(runtime.get("next_update") or "未知")
+    else:
+        timer_next = command_text(
+            [
+                "systemctl",
+                "show",
+                DEFAULT_UPDATER_TIMER,
+                "--property=NextElapseUSecRealtime",
+                "--value",
+            ]
+        )
+        mihomo_service = command_text(
+            ["systemctl", "is-active", str(registry["systemd_service"])]
+        )
+        timer_enabled = command_text(
+            ["systemctl", "is-enabled", DEFAULT_UPDATER_TIMER]
+        )
+        timer_active = command_text(["systemctl", "is-active", DEFAULT_UPDATER_TIMER])
     return {
         "manager_config": str(manager_config),
         "target_config": str(target),
@@ -833,13 +1021,9 @@ def collect_status(manager_config: Path, registry: dict[str, Any]) -> dict[str, 
         "last_success": active_details.get("last_success") or "从未",
         "last_result": active_details.get("last_result") or "无记录",
         "last_error": active_details.get("last_error"),
-        "mihomo_service": command_text(
-            ["systemctl", "is-active", str(registry["systemd_service"])]
-        ),
-        "timer_enabled": command_text(
-            ["systemctl", "is-enabled", DEFAULT_UPDATER_TIMER]
-        ),
-        "timer_active": command_text(["systemctl", "is-active", DEFAULT_UPDATER_TIMER]),
+        "mihomo_service": mihomo_service,
+        "timer_enabled": timer_enabled,
+        "timer_active": timer_active,
         "timer_next": timer_next if timer_next not in {"", "unknown", "n/a"} else "未知",
         "config_exists": bool(config_data),
         "config_sha256": hashlib.sha256(config_data).hexdigest() if config_data else None,
@@ -902,7 +1086,25 @@ def print_backups(registry: dict[str, Any]) -> None:
         )
 
 
-def fetch_journal(unit: str, *, lines: int = 200) -> list[str]:
+def fetch_journal(
+    unit: str, *, registry: dict[str, Any] | None = None, lines: int = 200
+) -> list[str]:
+    if registry and str(registry.get("service_backend") or "systemd") == "container":
+        log_name = (
+            "updater.log" if unit == DEFAULT_UPDATER_SERVICE else "mihomo.log"
+        )
+        path = Path(
+            str(registry.get("container_log_dir") or DEFAULTS["container_log_dir"])
+        ) / log_name
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                output = handle.readlines()[-max(1, lines) :]
+        except FileNotFoundError:
+            return ["暂无日志。"]
+        except OSError as exc:
+            return [f"无法读取日志：{exc}"]
+        return [item.rstrip("\n") for item in output] or ["暂无日志。"]
+
     try:
         result = command_output(
             [
@@ -952,7 +1154,7 @@ def configure_overlay(registry: dict[str, Any], *, initial: bool = False) -> str
     if isinstance(existing_cors, dict) and isinstance(existing_cors.get("allow-origins"), list):
         existing_origins = [str(item) for item in existing_cors["allow-origins"]]
     origins_text = ask(
-        "允许的 Zashboard Origin（逗号分隔；例如 http://192.168.1.10:3000）",
+        "允许的 Dashboard Origin（逗号分隔；例如 http://192.168.1.10:3000）",
         ",".join(existing_origins),
     )
     origins = [item.strip() for item in origins_text.split(",") if item.strip()]
@@ -1159,7 +1361,7 @@ class ConsoleTUI:
         self.registry = load_registry(self.manager_config)
         self.status = collect_status(self.manager_config, self.registry)
         self.backups = backup_rows(self.registry)
-        self.logs = fetch_journal(self.log_unit)
+        self.logs = fetch_journal(self.log_unit, registry=self.registry)
         self.subscription_index = min(
             self.subscription_index,
             max(0, len(self.registry.get("subscriptions", {})) - 1),
@@ -1458,7 +1660,7 @@ class ConsoleTUI:
                     else DEFAULT_UPDATER_SERVICE
                 )
                 self.log_scroll = 0
-                self.logs = fetch_journal(self.log_unit)
+                self.logs = fetch_journal(self.log_unit, registry=self.registry)
             return True
         return True
 

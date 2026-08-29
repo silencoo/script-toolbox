@@ -52,6 +52,117 @@ timer 前也会分别确认。
 sudo mihomo-console
 ```
 
+## Docker 部署
+
+Docker 版本把 Mihomo 内核、Console 和自动更新循环放在同一容器中，并可选启动
+MetaCubeXD Dashboard。它不在容器中模拟 systemd：PID 1 监督 Mihomo，Console
+通过容器运行时安全重启内核，原有的校验、原子替换和失败回滚流程保持不变。
+
+镜像支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`：
+
+```text
+ghcr.io/silencoo/mihomo-console:latest
+```
+
+### Docker Compose
+
+复制环境变量模板并至少设置 NAS 的固定局域网 IP：
+
+```bash
+cd mihomo-console
+cp .env.example .env
+# 编辑 .env：设置 NAS_IP，以及需要时设置 DATA_PATH 和 MIHOMO_SECRET
+docker compose up -d
+```
+
+默认端口：
+
+- `18080`：MetaCubeXD Dashboard。
+- `19090`：Mihomo Controller API。
+- `17890`：HTTP/SOCKS mixed proxy。
+
+如果 `MIHOMO_SECRET` 留空，首次启动会生成 64 位随机 Secret，并只写入持久化
+目录。查看它并在 Dashboard 中填写：
+
+```bash
+docker compose exec mihomo-console mihomo-console show-secret
+```
+
+添加订阅、校验并首次应用：
+
+```bash
+docker compose exec mihomo-console mihomo-console add
+docker compose exec mihomo-console mihomo-console update-active --dry-run
+docker compose exec mihomo-console mihomo-console update-active
+```
+
+更新时会自动处理新版 Mihomo 的两项兼容变化：把已移除的
+`global-client-fingerprint` 迁移到适用的内联代理，并强制把 REALITY
+`short-id` 输出为带引号的字符串，避免纯数字或科学计数法外观的 ID 被 YAML
+解析器误判类型。订阅源本身不合法的节点仍会被 Mihomo 校验拒绝。
+
+进入完整 TUI：
+
+```bash
+docker compose exec mihomo-console mihomo-console
+```
+
+查看运行状态与日志：
+
+```bash
+docker compose ps
+docker compose logs -f mihomo-console
+docker compose exec mihomo-console mihomo-console status
+```
+
+`UPDATE_START_DELAY_SECONDS` 默认为 `600`，`UPDATE_INTERVAL_SECONDS` 默认为
+`3600`；后者设为 `0` 可禁用容器内自动更新。镜像更新方式：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### QNAP Container Station
+
+1. 在 QNAP 中选择或创建一个用于持久化的共享文件夹及子目录。
+2. 打开 Container Station 3，进入“应用程序 → 创建”。
+3. 复制 `deploy/qnap.compose.yaml`，把示例 IP `192.168.1.50` 改成 NAS
+   的固定局域网 IP，并把 `/replace_me` 改成实际目录，例如
+   `/share/docker-data/mihomo-console`。
+4. 创建应用，待两个容器健康后访问 `http://NAS_IP:18080`。
+5. 从 Container Station 的终端进入 `mihomo-console` 容器，或通过 SSH 执行上面的
+   `docker exec -it mihomo-console mihomo-console` 完成订阅初始化。
+
+QNAP 管理界面经常占用 `8080`，因此示例默认使用 `18080`。如果其他端口也有
+冲突，只修改 Compose 端口映射左侧的主机端口。
+
+### TrueNAS
+
+适用于使用 Docker Apps 后端的 TrueNAS 24.10+；TrueNAS CORE 需要改用 Linux
+虚拟机。先创建例如 `tank/apps/mihomo-console` 的 Dataset，然后：
+
+1. 进入“Apps → Discover Apps → ⋮ → Install via YAML”。
+2. 应用名称填写 `mihomo-console`。
+3. 粘贴 `deploy/truenas.compose.yaml`，将其中的 `tank` 和示例 IP 替换为实际
+   存储池名称与固定局域网 IP。
+4. 确认 Dataset 允许容器写入，然后保存部署。
+
+TrueNAS 的 YAML 编辑器不读取仓库旁的 `.env` 文件，因此专用模板没有使用
+Compose 环境变量插值。
+
+### 持久化和安全边界
+
+容器只需要一个可写的 `/data`：
+
+- `/data/manager/`：订阅注册表、本地覆盖和配置备份。
+- `/data/mihomo/`：当前配置、Geo 数据和 Mihomo 缓存。
+- `/data/logs/`：轮换后的 Mihomo 与自动更新日志。
+
+不需要 `privileged`、host network、`NET_ADMIN` 或 `/dev/net/tun`。此方案提供显式
+HTTP/SOCKS 代理，不是透明网关。Dashboard、Controller 和 mixed proxy 只应开放
+给可信局域网或 VPN；不要直接转发到公网。
+
 首次启动会进入 TUI。安装器还会创建旧命令
 `mihomo-subscription-manager` 的兼容符号链接；管理配置、备份目录和 systemd
 单元名称保持兼容，不要求现有用户迁移数据。

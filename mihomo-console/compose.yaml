@@ -1,0 +1,25 @@
+services:
+  mihomo-console:
+    image: ghcr.io/silencoo/mihomo-console:latest
+    container_name: mihomo-console
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Asia/Tokyo}"
+      MIHOMO_SECRET: "${MIHOMO_SECRET:-}"
+      DASHBOARD_ORIGINS: "http://${NAS_IP:-127.0.0.1}:${DASHBOARD_PORT:-18080}"
+      UPDATE_START_DELAY_SECONDS: "${UPDATE_START_DELAY_SECONDS:-600}"
+      UPDATE_INTERVAL_SECONDS: "${UPDATE_INTERVAL_SECONDS:-3600}"
+    ports:
+      - "${MIXED_HOST_PORT:-17890}:7890"
+      - "${CONTROLLER_HOST_PORT:-19090}:9090"
+    volumes:
+      - "${DATA_PATH:-./data}:/data"
+
+  dashboard:
+    image: ghcr.io/metacubex/metacubexd:latest
+    container_name: mihomo-dashboard
+    restart: unless-stopped
+    environment:
+      DEFAULT_BACKEND_URL: "http://${NAS_IP:-127.0.0.1}:${CONTROLLER_HOST_PORT:-19090}"
+    ports:
+      - "${DASHBOARD_PORT:-18080}:80"

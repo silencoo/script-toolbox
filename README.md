@@ -32,7 +32,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
 | [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
 | [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
-| [`mihomo-console/`](./mihomo-console/) | TUI, diagnostics, backups, and safe automatic updates for complete Mihomo profiles |
+| [`mihomo-console/`](./mihomo-console/) | TUI, diagnostics, backups, safe automatic updates, and Docker/NAS deployment for complete Mihomo profiles |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap a Windows 10/11 development workstation and manage WSL 2 |

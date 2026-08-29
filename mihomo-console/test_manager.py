@@ -49,6 +49,66 @@ dns:
         with self.assertRaises(manager.ManagerError):
             manager.render_profile(b"message: subscription expired\n", {})
 
+    def test_migrates_removed_global_client_fingerprint(self):
+        remote = b"""
+global-client-fingerprint: chrome
+proxies:
+  - name: vless-tls
+    type: vless
+    tls: true
+    server: example.invalid
+    port: 443
+  - name: existing
+    type: trojan
+    client-fingerprint: safari
+    server: example.invalid
+    port: 443
+  - name: shadowsocks
+    type: ss
+    server: example.invalid
+    port: 443
+"""
+        rendered = manager.yaml.safe_load(manager.render_profile(remote, {}))
+
+        self.assertNotIn("global-client-fingerprint", rendered)
+        self.assertEqual(rendered["proxies"][0]["client-fingerprint"], "chrome")
+        self.assertEqual(rendered["proxies"][1]["client-fingerprint"], "safari")
+        self.assertNotIn("client-fingerprint", rendered["proxies"][2])
+
+    def test_quotes_scientific_looking_reality_short_id(self):
+        remote = b"""
+proxies:
+  - name: reality
+    type: vless
+    server: example.invalid
+    port: 443
+    reality-opts:
+      public-key: public-key
+      short-id: 28e12345
+"""
+        rendered = manager.render_profile(remote, {}).decode("utf-8")
+
+        self.assertIn('short-id: "28e12345"', rendered)
+        self.assertEqual(
+            manager.yaml.safe_load(rendered)["proxies"][0]["reality-opts"]["short-id"],
+            "28e12345",
+        )
+
+    def test_preserves_unquoted_numeric_reality_short_id(self):
+        remote = b"""
+proxies:
+  - name: reality
+    type: vless
+    server: example.invalid
+    port: 443
+    reality-opts:
+      public-key: public-key
+      short-id: 00112233
+"""
+        rendered = manager.render_profile(remote, {}).decode("utf-8")
+
+        self.assertIn('short-id: "00112233"', rendered)
+
     def test_secure_atomic_write_replaces_and_sets_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
@@ -254,6 +314,58 @@ proxies:
         ):
             with self.assertRaisesRegex(manager.ManagerError, "连续 3 秒"):
                 manager.restart_mihomo({"systemd_service": "mihomo.service"})
+
+    def test_container_restart_notifies_supervisor_and_waits_for_generation(self):
+        states = [
+            {"supervisor_pid": 7, "generation": 1, "mihomo_state": "running"},
+            {
+                "supervisor_pid": 7,
+                "generation": 2,
+                "mihomo_state": "running",
+                "mihomo_pid": 8,
+            },
+        ]
+        with (
+            mock.patch.object(manager, "read_container_runtime", side_effect=states),
+            mock.patch.object(manager, "process_is_alive", return_value=True),
+            mock.patch.object(manager.os, "kill") as kill,
+            mock.patch.object(manager.time, "monotonic", side_effect=[0, 1]),
+            mock.patch.object(manager, "SERVICE_STABILITY_SECONDS", 0),
+        ):
+            manager.restart_mihomo({"service_backend": "container"})
+
+        kill.assert_called_once_with(7, manager.signal.SIGUSR1)
+
+    def test_container_status_does_not_call_systemctl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "config.yaml"
+            target.write_text("proxies: []\nrules: [MATCH,DIRECT]\n", encoding="utf-8")
+            registry = {
+                **manager.DEFAULTS,
+                "service_backend": "container",
+                "target_config": str(target),
+                "backup_dir": str(root / "backups"),
+                "subscriptions": {},
+            }
+            runtime = {
+                "mihomo_state": "running",
+                "mihomo_pid": 42,
+                "updater_enabled": True,
+                "updater_running": False,
+                "next_update": "2026-08-30T12:00:00+09:00",
+            }
+            with (
+                mock.patch.object(manager, "read_container_runtime", return_value=runtime),
+                mock.patch.object(manager, "process_is_alive", return_value=True),
+                mock.patch.object(manager, "command_output") as command,
+            ):
+                status = manager.collect_status(root / "manager.json", registry)
+
+            self.assertEqual(status["mihomo_service"], "active")
+            self.assertEqual(status["timer_enabled"], "enabled")
+            self.assertEqual(status["timer_active"], "waiting")
+            command.assert_not_called()
 
     def test_prune_backups_keeps_newest_files(self):
         with tempfile.TemporaryDirectory() as directory:

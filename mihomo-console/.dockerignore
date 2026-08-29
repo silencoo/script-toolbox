@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.env
+.git/
+data/
+test_manager.py
+setup.sh
+mihomo-subscription-update.service
+mihomo-subscription-update.timer

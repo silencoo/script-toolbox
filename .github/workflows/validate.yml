@@ -50,6 +50,12 @@ jobs:
         run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
       - name: Test Mihomo Console
         run: python mihomo-console/test_manager.py
+      - name: Validate Mihomo Console container files
+        run: |
+          python -m py_compile mihomo-console/container_runtime.py
+          NAS_IP=192.0.2.10 docker compose -f mihomo-console/compose.yaml config --quiet
+          docker compose -f mihomo-console/deploy/qnap.compose.yaml config --quiet
+          docker compose -f mihomo-console/deploy/truenas.compose.yaml config --quiet
       - name: Test sing-box toolkit
         run: python -m unittest discover -s sing-box/tests -v
       - name: Test Linux server toolkit safety
