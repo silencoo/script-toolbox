@@ -37,7 +37,7 @@ const FS_SIZE = 100 * 1024 * 1024;
 const SHADOWROOT_ATTRIBUTE_NAME = "shadowrootmode";
 const INFOBAR_TAGNAME = "single-file-infobar";
 
-const editorElement = document.querySelector(".editor");
+let editorElement = document.querySelector(".editor");
 const toolbarElement = document.querySelector(".toolbar");
 const highlightYellowButton = document.querySelector(".highlight-yellow-button");
 const highlightPinkButton = document.querySelector(".highlight-pink-button");
@@ -63,6 +63,7 @@ const printPageButton = document.querySelector(".print-page-button");
 const importMhtButton = document.querySelector(".import-mht-button");
 const lastButton = toolbarElement.querySelector(".buttons:last-of-type [type=button]:last-of-type");
 const archiveButtonsElement = document.querySelector(".archive-buttons");
+const editButtonsElements = document.querySelectorAll(".edit-buttons");
 const archiveTocButton = document.querySelector(".archive-toc-button");
 const archivePageTitleElement = document.querySelector(".archive-page-title");
 
@@ -427,17 +428,20 @@ addEventListener("message", async event => {
 		document.title = "[SingleFile] " + archivePageTitleElement.textContent;
 		tabData.options.disableFormatPage = !message.formatPageEnabled;
 		formatPageButton.hidden = !message.formatPageEnabled;
+		editButtonsElements.forEach(element => element.hidden = false);
 		tabData.docSaved = !message.modified;
 	}
 	if (message.method == "onArchiveTocDisplayed") {
 		archivePageTitleElement.textContent = ARCHIVE_TOC_MESSAGE;
 		archivePageTitleElement.title = "";
 		formatPageButton.hidden = true;
+		editButtonsElements.forEach(element => element.hidden = true);
 		tabData.docSaved = !message.modified;
 	}
 	if (message.method == "onInit") {
 		archivePages = undefined;
 		archiveButtonsElement.hidden = true;
+		editButtonsElements.forEach(element => element.hidden = false);
 		if (location.hash) {
 			history.replaceState(null, "", location.pathname + location.search);
 		}
@@ -504,7 +508,17 @@ browser.runtime.onMessage.addListener(message => {
 });
 
 addEventListener("load", () => {
-	browser.runtime.sendMessage({ method: "editor.getTabData" });
+	// when reloading the page, Firefox restores the frame from session history
+	// instead of parsing the srcdoc attribute and displays an error page if the
+	// frame document was rewritten with document.write(), so the frame is
+	// rebuilt before requesting the tab data
+	const previousEditorElement = editorElement;
+	editorElement = previousEditorElement.cloneNode(true);
+	editorElement.onload = () => {
+		editorElement.onload = null;
+		browser.runtime.sendMessage({ method: "editor.getTabData" });
+	};
+	previousEditorElement.replaceWith(editorElement);
 });
 
 async function saveArchive(message) {

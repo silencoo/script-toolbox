@@ -2,6 +2,7 @@
 /* global process, URL, setTimeout, TextDecoder */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -12,6 +13,7 @@ const FIXTURES_PATH = new URL("../node_modules/single-file-core/test/fixtures/",
 const FIXTURE_PATH = process.env.SF_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page.zip.html");
 const SINGLE_PAGE_FIXTURE_PATH = process.env.SF_SINGLE_PAGE_FIXTURE_PATH || join(FIXTURES_PATH, "single-page.zip.html");
 const DEDUP_FIXTURE_PATH = process.env.SF_DEDUP_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page-dedup.zip.html");
+const DIGEST_FIXTURE_PATH = process.env.SF_DIGEST_FIXTURE_PATH || join(FIXTURES_PATH, "classic-digest.html");
 const ZIP_MODULE_URL = new URL("../node_modules/single-file-core/vendor/zip/zip.js", import.meta.url).href;
 const FILENAME_CAPTURE_SCRIPT = "(() => {" +
 	"if (!window.__sendMessagePatched) {" +
@@ -167,7 +169,7 @@ async function run() {
 	}, "sender page ready");
 	const fixtureBase64 = readFileSync(FIXTURE_PATH).toString("base64");
 
-	async function openEditorArchive(base64Content, filename) {
+	async function openEditorArchive(base64Content, filename, compressContent = true) {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
 				await cdp.Runtime.evaluate({ expression: "window.__fixtureBase64 = \"\"; window.__editorOpenPending = true" }, sessionId);
@@ -177,7 +179,9 @@ async function run() {
 				await cdp.Runtime.evaluate({
 					expression: "(() => {" +
 						"const bytes = Uint8Array.from(atob(window.__fixtureBase64), character => character.charCodeAt(0));" +
-						"chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });" +
+						(compressContent
+							? "chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });"
+							: "chrome.runtime.sendMessage({ method: \"editor.open\", content: new TextDecoder().decode(bytes), compressContent: false, filename: " + JSON.stringify(filename) + " });") +
 						"})()"
 				}, sessionId);
 				// eslint-disable-next-line no-unused-vars
@@ -269,11 +273,16 @@ async function run() {
 	await assertEquals("cluster label says TOC", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Table of contents");
 	await assertEquals("save button stays visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
 	await assertEquals("import button hidden", () => evalInPage("document.querySelector('.import-mht-button').hidden"), true);
+	await assertEquals("edit tools hidden on the TOC", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => element.hidden)"), true);
+	await evalInPage("document.querySelector('.editor').contentWindow.postMessage(JSON.stringify({ method: 'addNote', color: 'note-yellow' }), '*')");
+	await new Promise(resolve => setTimeout(resolve, 500));
+	await assertEquals("addNote ignored on the TOC", () => evalInFrame("document.querySelectorAll('single-file-note').length"), 0);
 
 	await evalInFrame("document.querySelector(\"a[href='pages/2/index.html']\").click()");
 	await waitFor(() => evalInPage("location.hash == '#sfz/pages/2/' || undefined"), "route follows TOC click");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Alpha' || undefined"), "alpha page displayed");
 	await assertEquals("cluster shows page title", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Alpha page");
+	await assertEquals("edit tools visible on a page", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden)"), true);
 
 	await evalInFrame("document.body.dataset.testMarker = 'stashed'");
 	await evalInFrame("document.querySelector(\"a[href^='http'][href$='beta.html']\").click()");
@@ -334,6 +343,7 @@ async function run() {
 	await assertEquals("single-page: no archive route", () => evalInPage("location.hash"), "");
 	await assertEquals("single-page: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("single-page: save button visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
+	await assertEquals("single-page: edit tools visible", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden)"), true);
 
 	const dedupBase64 = readFileSync(DEDUP_FIXTURE_PATH).toString("base64");
 	await openEditorArchive(dedupBase64, "multi-page-dedup.zip.html");
@@ -397,6 +407,18 @@ async function run() {
 	await assertEquals("plain drop on disk under the dropped filename", () => basename(savedPlainPath), "dropped-plain.html");
 	const savedPlainContent = readFileSync(savedPlainPath).toString();
 	await assertEquals("plain drop save is a plain page with the dropped content", async () => savedPlainContent.includes("Gamma") && !savedPlainContent.includes("data-sfz") && !savedPlainContent.includes("sfz-pages.json"), true);
+
+	const digestBase64 = readFileSync(DIGEST_FIXTURE_PATH).toString("base64");
+	await openEditorArchive(digestBase64, "classic-digest.html", false);
+	await waitFor(() => evalInFrame("(() => { const heading = document.querySelector('h1'); return heading && heading.textContent == 'Delta' || undefined; })()"), "classic page with template data displayed");
+	await evalInPage(FILENAME_CAPTURE_SCRIPT);
+	clearDownloadDir();
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const savedDigestPath = await waitForDownload("classic page with template data downloaded");
+	const savedDigestName = basename(savedDigestPath);
+	const savedDigestHash = createHash("sha256").update(readFileSync(savedDigestPath)).digest("hex");
+	await assertEquals("digest filename recomputed from the template data", () => /^Digest fixture_[0-9a-f]{64}\.html$/.test(savedDigestName), true);
+	await assertEquals("filename digest matches the saved bytes", () => savedDigestName.includes(savedDigestHash), true);
 
 
 
