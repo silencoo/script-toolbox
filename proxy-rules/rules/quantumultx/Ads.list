@@ -4,7 +4,7 @@
 # UPSTREAM-BLOCK: https://raw.githubusercontent.com/Cats-Team/AdRules/main/qx.conf
 # UPSTREAM-ALLOW: https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/allow.txt
 # LICENSE: generated data retains applicable upstream terms; see NOTICE.md
-# TOTAL: 211561
+# TOTAL: 211569
 # Allow rules must remain before block rules. Do not use force-policy.
 HOST-SUFFIX,acs.m.taobao.com,direct
 HOST-SUFFIX,ad.10010.com,direct
@@ -26323,6 +26323,7 @@ HOST-SUFFIX,bbrav96ax.com,Ad Blocking
 HOST-SUFFIX,bbrdbr.com,Ad Blocking
 HOST-SUFFIX,bbs.theacademyforconsciousleadership.com,Ad Blocking
 HOST-SUFFIX,bbs.ws,Ad Blocking
+HOST-SUFFIX,bbs.xhamster.com,Ad Blocking
 HOST-SUFFIX,bbssgjpbdrurh.space,Ad Blocking
 HOST-SUFFIX,bbtpl.finney-co.com,Ad Blocking
 HOST-SUFFIX,bbtuvgqhflajx.com,Ad Blocking
@@ -36627,6 +36628,7 @@ HOST-SUFFIX,clientlog.midomi.com,Ad Blocking
 HOST-SUFFIX,clientlog.music.163.com,Ad Blocking
 HOST-SUFFIX,clientlog.perfectworldgames.com,Ad Blocking
 HOST-SUFFIX,clientlog.pwsdk.com,Ad Blocking
+HOST-SUFFIX,clientlog.wanmei.com,Ad Blocking
 HOST-SUFFIX,clientlog3.music.163.com,Ad Blocking
 HOST-SUFFIX,clientlogdep.music.163.com,Ad Blocking
 HOST-SUFFIX,clientlogger.marketplace.aws.a2z.com,Ad Blocking
@@ -38889,6 +38891,7 @@ HOST-SUFFIX,consumable.com,Ad Blocking
 HOST-SUFFIX,consumeairlinercalligraphy.com,Ad Blocking
 HOST-SUFFIX,consumer.equifax.com,Ad Blocking
 HOST-SUFFIX,consumer.inform.equifax.com,Ad Blocking
+HOST-SUFFIX,consumerdebtnegotiation.com,Ad Blocking
 HOST-SUFFIX,consumeririssalary.com,Ad Blocking
 HOST-SUFFIX,consumerknowhow.com,Ad Blocking
 HOST-SUFFIX,consumerpilot.mektri.com,Ad Blocking
@@ -89049,6 +89052,7 @@ HOST-SUFFIX,jnros.fresh.com,Ad Blocking
 HOST-SUFFIX,jnrtavp2x66u.com,Ad Blocking
 HOST-SUFFIX,jnsol.sokolovelaw.com,Ad Blocking
 HOST-SUFFIX,jnsoxa.fcmm.kr,Ad Blocking
+HOST-SUFFIX,jnt.welt.de,Ad Blocking
 HOST-SUFFIX,jntmwrm.com,Ad Blocking
 HOST-SUFFIX,jnunn.alppouch.com,Ad Blocking
 HOST-SUFFIX,jnvfm.blackmagic.com,Ad Blocking
@@ -93268,7 +93272,6 @@ HOST-SUFFIX,lahscedteo.in,Ad Blocking
 HOST-SUFFIX,lahsxicxicuvp.store,Ad Blocking
 HOST-SUFFIX,lahwsusoarmbk.site,Ad Blocking
 HOST-SUFFIX,laiberation.fr,Ad Blocking
-HOST-SUFFIX,laichegloavy.com,Ad Blocking
 HOST-SUFFIX,laidback.laidbacklondon.com,Ad Blocking
 HOST-SUFFIX,laidgreens.com,Ad Blocking
 HOST-SUFFIX,laihtsfmbrmog.site,Ad Blocking
@@ -134636,6 +134639,7 @@ HOST-SUFFIX,rentamotorcycle.fr,Ad Blocking
 HOST-SUFFIX,renteostend.com,Ad Blocking
 HOST-SUFFIX,rentfavourablecashmere.com,Ad Blocking
 HOST-SUFFIX,rentinfinity.com,Ad Blocking
+HOST-SUFFIX,rentinfrared.com,Ad Blocking
 HOST-SUFFIX,renting.aldautomotive.es,Ad Blocking
 HOST-SUFFIX,rentpenny.com,Ad Blocking
 HOST-SUFFIX,renzhen8.cn,Ad Blocking
@@ -134803,6 +134807,7 @@ HOST-SUFFIX,reptile.o-lit.fr,Ad Blocking
 HOST-SUFFIX,reptilecategory.com,Ad Blocking
 HOST-SUFFIX,reptiledoodle.com,Ad Blocking
 HOST-SUFFIX,republica.cursodetti.com.br,Ad Blocking
+HOST-SUFFIX,republicfarm.net,Ad Blocking
 HOST-SUFFIX,republika.onet.pl,Ad Blocking
 HOST-SUFFIX,repulsiveformerlydevaluation.com,Ad Blocking
 HOST-SUFFIX,repuremucro.qpon,Ad Blocking
@@ -135157,6 +135162,7 @@ HOST-SUFFIX,retrievemint.com,Ad Blocking
 HOST-SUFFIX,retro.geeklife.fr,Ad Blocking
 HOST-SUFFIX,retrocrypt.com,Ad Blocking
 HOST-SUFFIX,retrofuture.fr,Ad Blocking
+HOST-SUFFIX,retrorays.com,Ad Blocking
 HOST-SUFFIX,retrudewomprewires.qpon,Ad Blocking
 HOST-SUFFIX,retruseairshedpurples.qpon,Ad Blocking
 HOST-SUFFIX,retscopperchorook.cyou,Ad Blocking
@@ -202710,6 +202716,7 @@ HOST-SUFFIX,www.jhsmiami.com,Ad Blocking
 HOST-SUFFIX,www.jianpian.vip,Ad Blocking
 HOST-SUFFIX,www.jipinyouwu.com,Ad Blocking
 HOST-SUFFIX,www.jipmer.goasrv.com,Ad Blocking
+HOST-SUFFIX,www.jjbenefitsguide.com,Ad Blocking
 HOST-SUFFIX,www.jjps.goaserv.com,Ad Blocking
 HOST-SUFFIX,www.jkn.goaserv.com,Ad Blocking
 HOST-SUFFIX,www.jmacct.goasrv.com,Ad Blocking
@@ -203234,6 +203241,7 @@ HOST-SUFFIX,www.poukladanyswiat.com,Ad Blocking
 HOST-SUFFIX,www.ppslsa.com,Ad Blocking
 HOST-SUFFIX,www.prabvisa.com,Ad Blocking
 HOST-SUFFIX,www.praha.goaserv.com,Ad Blocking
+HOST-SUFFIX,www.premiercountrymeats.com,Ad Blocking
 HOST-SUFFIX,www.premiumbrandszonalibre.com,Ad Blocking
 HOST-SUFFIX,www.preservenet.goaserv.com,Ad Blocking
 HOST-SUFFIX,www.presidency.site,Ad Blocking
