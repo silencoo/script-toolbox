@@ -739,7 +739,7 @@ const countriesMeta = {
   },
   Taiwan: {
     pattern:
-      "(?i)(台湾|新北|彰化|🇹🇼|(?:^|[^a-z])(?:TW|Taiwan)(?=$|[^a-z]))",
+      "(?i)(台湾|台灣|臺灣|台北|新北|台中|臺中|高雄|彰化|🇹🇼|(?:^|[^a-z])(?:TW|Taiwan)(?=$|[^a-z]))",
     icon: zIcon("flag/108/Taiwan.png"),
   },
   Singapore: {
@@ -782,6 +782,29 @@ function getCountryRegex(country) {
 function matchesCountry(name, country) {
   const regex = getCountryRegex(country);
   return regex ? regex.test(name) : false;
+}
+
+const COUNTRY_FLAG_PATTERN = /(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
+
+function normalizeTaiwanProxyFlag(proxy) {
+  if (!proxy || typeof proxy !== "object") return proxy;
+
+  const name = String(proxy.name == null ? "" : proxy.name).trim();
+  if (!name || !matchesCountry(name, "Taiwan")) return proxy;
+
+  const normalizedName = name
+    .replace(COUNTRY_FLAG_PATTERN, "")
+    .split("🌐")
+    .join("")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const nameWithTaiwanFlag = normalizedName
+    ? `🇹🇼 ${normalizedName}`
+    : "🇹🇼";
+
+  return nameWithTaiwanFlag === proxy.name
+    ? proxy
+    : Object.assign({}, proxy, { name: nameWithTaiwanFlag });
 }
 
 function buildHealthCheckedGroup({
@@ -1075,7 +1098,7 @@ function deduplicateProxies(proxies) {
 
 function main(e) {
   setProfileSubscriptionInfo();
-  let proxies = e.proxies || [];
+  let proxies = (e.proxies || []).map(normalizeTaiwanProxyFlag);
 
   // 去重处理：重复节点 name 自动加序号
   proxies = deduplicateProxies(proxies);

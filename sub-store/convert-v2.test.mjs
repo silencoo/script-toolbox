@@ -237,9 +237,37 @@ test("recognizes standalone country codes in common node-name formats", async ()
 
   assert.deepEqual(Array.from(groups.get("United States").proxies), ["US-01"]);
   assert.deepEqual(Array.from(groups.get("Japan").proxies), ["JP_01"]);
-  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["TW01"]);
+  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["🇹🇼 TW01"]);
   assert.deepEqual(Array.from(groups.get("Singapore").proxies), ["SG 01"]);
   assert.deepEqual(Array.from(groups.get("Hong Kong").proxies), ["HK-01"]);
+});
+
+test("normalizes recognized Taiwan nodes to the Taiwan flag", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "🇨🇳 台湾 01", type: "ss" },
+      { name: "🇯🇵 台灣 02", type: "ss" },
+      { name: "🌐 TW-03", type: "ss" },
+      { name: "🇹🇼 🇹🇼 Taiwan 04", type: "ss" },
+      { name: "🇨🇳 台北 05", type: "ss" },
+      { name: "🇨🇳 China 06", type: "ss" },
+    ],
+  });
+  const names = Array.from(profile.proxies, (proxy) => proxy.name);
+  const taiwan = profile["proxy-groups"].find(
+    (group) => group.name === "Taiwan",
+  );
+
+  assert.deepEqual(names, [
+    "🇹🇼 台湾 01",
+    "🇹🇼 台灣 02",
+    "🇹🇼 TW-03",
+    "🇹🇼 Taiwan 04",
+    "🇹🇼 台北 05",
+    "🇨🇳 China 06",
+  ]);
+  assert.deepEqual(Array.from(taiwan.proxies), names.slice(0, 5));
 });
 
 test("recognizes pro nodes after a leading country or location icon", async () => {
