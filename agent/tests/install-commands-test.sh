@@ -122,7 +122,13 @@ done
   fail "runtime marker is not mode 600"
 [ ! -e "$RUNTIME/tui/node_modules" ] || fail "standalone runtime copied node_modules"
 [ ! -e "$RUNTIME/tests" ] || fail "standalone runtime copied development tests"
-[ -f "$AGENTCTL_PROVIDER_STORE" ] || fail "installer did not bootstrap the Provider Store"
+if [ ! -f "$AGENTCTL_PROVIDER_STORE" ]; then
+  printf '%s\n' 'installer bootstrap output:' >&2
+  sed 's/^/  /' "$TEST_ROOT/install.out" >&2
+  printf '%s\n' 'files left in the isolated test root:' >&2
+  find "$TEST_ROOT" -maxdepth 5 -type f -print >&2
+  fail "installer did not bootstrap the Provider Store"
+fi
 [ -f "$AGENTCTL_PROVIDER_SECRETS" ] || fail "installer did not bootstrap Provider Secrets"
 [ -f "$AGENTCTL_FAILOVER_STORE" ] || fail "installer did not bootstrap the Failover Store"
 [ -f "$AGENTCTL_PRICING_CATALOG" ] || fail "installer did not bootstrap the Pricing Store"

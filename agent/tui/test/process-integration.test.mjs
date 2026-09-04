@@ -163,16 +163,19 @@ test("real Skills controllers hand Workspace-owned links to the restored local S
     };
     const runner = createProcessRunner({ cwd: defaultAgentRoot, environment });
     const runSkill = async (args, env = {}) => {
-      const command = bashScriptCommand(skillsScript, args, { platform: "linux" });
+      const command = bashScriptCommand(skillsScript, args);
       return runner(command.executable, command.args, { env });
     };
     for (const store of [localStore, workspaceStore]) {
       const env = { SKILLSCTL_STORE: store };
-      assert.equal((await runSkill(["init", "--yes"], env)).code, 0);
-      assert.equal((await runSkill(["skill", "add", source, "--yes"], env)).code, 0);
-      assert.equal((await runSkill([
+      const initialized = await runSkill(["init", "--yes"], env);
+      assert.equal(initialized.code, 0, initialized.stderr || initialized.stdout);
+      const added = await runSkill(["skill", "add", source, "--yes"], env);
+      assert.equal(added.code, 0, added.stderr || added.stdout);
+      const packed = await runSkill([
         "pack", "add", "frontend", "frontend-dev", "--yes"
-      ], env)).code, 0);
+      ], env);
+      assert.equal(packed.code, 0, packed.stderr || packed.stdout);
     }
     assert.equal((await runSkill([
       "apply", "--target", "codex", "--pack", "frontend", "--yes"
@@ -191,7 +194,7 @@ test("real Skills controllers hand Workspace-owned links to the restored local S
     const controller = createController({
       agentRoot: defaultAgentRoot,
       runner,
-      platform: "linux",
+      platform: process.platform,
       bootstrapLocalStores: false,
       remoteWorkspace: {
         componentPlan: async () => ({
