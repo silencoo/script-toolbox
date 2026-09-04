@@ -43,6 +43,51 @@ jobs:
         working-directory: userscripts/sht-helper
       - name: Test Sub-Store profile conversion
         run: node --test sub-store/*.test.mjs
+      - name: Install latest stable Mihomo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mihomo_asset="$(
+            curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              https://api.github.com/repos/MetaCubeX/mihomo/releases/latest |
+              jq -r '
+                [
+                  .assets[]
+                  | select(
+                      .name
+                      | test("^mihomo-linux-amd64-v[0-9]+\\.[0-9]+\\.[0-9]+\\.gz$")
+                    )
+                ][0]
+                | [.browser_download_url, .digest]
+                | @tsv
+              '
+          )"
+          IFS=$'\t' read -r mihomo_url mihomo_digest <<< "${mihomo_asset}"
+          test -n "${mihomo_url}" && test "${mihomo_url}" != "null"
+          test -n "${mihomo_digest}" && test "${mihomo_digest}" != "null"
+          curl -fsSL "${mihomo_url}" -o "${RUNNER_TEMP}/mihomo.gz"
+          printf '%s  %s\n' \
+            "${mihomo_digest#sha256:}" \
+            "${RUNNER_TEMP}/mihomo.gz" |
+            sha256sum --check -
+          gzip -dc "${RUNNER_TEMP}/mihomo.gz" > "${RUNNER_TEMP}/mihomo"
+          chmod +x "${RUNNER_TEMP}/mihomo"
+          "${RUNNER_TEMP}/mihomo" -v
+      - name: Validate generated configs with Mihomo
+        timeout-minutes: 5
+        run: |
+          mkdir -p "${RUNNER_TEMP}/mihomo-home"
+          node sub-store/generate-mihomo-fixture.mjs \
+            > "${RUNNER_TEMP}/convert-v2-default.json"
+          node sub-store/generate-mihomo-fixture.mjs loadbalance=true \
+            > "${RUNNER_TEMP}/convert-v2-load-balance.json"
+          "${RUNNER_TEMP}/mihomo" -t \
+            -d "${RUNNER_TEMP}/mihomo-home" \
+            -f "${RUNNER_TEMP}/convert-v2-default.json"
+          "${RUNNER_TEMP}/mihomo" -t \
+            -d "${RUNNER_TEMP}/mihomo-home" \
+            -f "${RUNNER_TEMP}/convert-v2-load-balance.json"
       - name: Validate generated proxy rules
         working-directory: proxy-rules
         run: npm run check

@@ -220,6 +220,43 @@ test("does not treat country-code substrings as country nodes", async () => {
   assert.deepEqual(Array.from(groups.get("Auto").proxies), names);
 });
 
+test("keeps proxy names unique and clear of generated group names", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "A", type: "ss" },
+      { name: "A", type: "ss" },
+      { name: "A-2", type: "ss" },
+      { name: "Japan", type: "ss" },
+      { name: "Auto", type: "ss" },
+      { name: "DIRECT", type: "ss" },
+      { name: "Chained", type: "ss", "dialer-proxy": "Japan" },
+    ],
+  });
+  const proxyNames = Array.from(profile.proxies, (proxy) => proxy.name);
+  const groupNames = new Set(
+    profile["proxy-groups"].map((group) => group.name),
+  );
+
+  assert.deepEqual(proxyNames, [
+    "A",
+    "A-3",
+    "A-2",
+    "Japan-2",
+    "Auto-2",
+    "DIRECT-2",
+    "Chained",
+  ]);
+  assert.equal(new Set(proxyNames).size, proxyNames.length);
+  assert.ok(proxyNames.every((name) => !groupNames.has(name)));
+  assert.equal(profile.proxies.at(-1)["dialer-proxy"], "Japan-2");
+
+  const japan = profile["proxy-groups"].find(
+    (group) => group.name === "Japan",
+  );
+  assert.deepEqual(Array.from(japan.proxies), ["Japan-2"]);
+});
+
 test("recognizes standalone country codes in common node-name formats", async () => {
   const convert = await loadConverter();
   const profile = convert({
@@ -240,6 +277,22 @@ test("recognizes standalone country codes in common node-name formats", async ()
   assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["🇹🇼 TW01"]);
   assert.deepEqual(Array.from(groups.get("Singapore").proxies), ["SG 01"]);
   assert.deepEqual(Array.from(groups.get("Hong Kong").proxies), ["HK-01"]);
+});
+
+test("assigns a multi-region node to only its highest-priority country", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "US to Japan", type: "ss" },
+      { name: "US-01", type: "ss" },
+    ],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  assert.deepEqual(Array.from(groups.get("Japan").proxies), ["US to Japan"]);
+  assert.deepEqual(Array.from(groups.get("United States").proxies), ["US-01"]);
 });
 
 test("normalizes recognized Taiwan nodes to the Taiwan flag", async () => {
@@ -329,12 +382,16 @@ test("emits the documented Mihomo fake-IP DNS fields", async () => {
   assert.equal(profile.dns["fake-ip-range"], "198.18.0.1/16");
   assert.equal(profile.dns["fake-ip-range6"], "fdfe:dcba:9876::1/64");
   assert.equal(profile.dns["fake-ip"], undefined);
+  assert.equal(profile.dns.listen, "127.0.0.1:1053");
+  assert.ok(profile.dns["fake-ip-filter"].includes("+.lan"));
+  assert.ok(!profile.dns["fake-ip-filter"].includes("*.lan"));
 
   const redirHostConvert = await loadConverter({ fakeip: "false" });
   const redirHostProfile = redirHostConvert({
     proxies: [{ name: "Japan Node", type: "ss" }],
   });
   assert.equal(redirHostProfile.dns["enhanced-mode"], "redir-host");
+  assert.equal(redirHostProfile.profile["store-fake-ip"], false);
 });
 
 test("uses the provider DNS only for matching proxy server domains", async () => {
@@ -356,23 +413,35 @@ test("uses the provider DNS only for matching proxy server domains", async () =>
     ],
   });
 
-  const expectedPolicy = {
+  const directDns = [
+    "https://dns.alidns.com/dns-query",
+    "https://doh.pub/dns-query",
+  ];
+  const proxyDns = [
+    "https://1.1.1.1/dns-query#Proxies",
+    "https://8.8.8.8/dns-query#Proxies",
+  ];
+  const expectedProviderPolicy = {
     "+.placudoshai.fun": "https://jeeyio.com/api/dns-query",
   };
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(profile.dns["nameserver-policy"])),
-    expectedPolicy,
+  const nameserverPolicy = JSON.parse(
+    JSON.stringify(profile.dns["nameserver-policy"]),
+  );
+  assert.equal(nameserverPolicy["geosite:private"], "system");
+  assert.deepEqual(nameserverPolicy["geosite:cn"], directDns);
+  assert.deepEqual(nameserverPolicy["geosite:gfw"], proxyDns);
+  assert.equal(
+    nameserverPolicy["+.placudoshai.fun"],
+    expectedProviderPolicy["+.placudoshai.fun"],
   );
   assert.deepEqual(
     JSON.parse(
       JSON.stringify(profile.dns["proxy-server-nameserver-policy"]),
     ),
-    expectedPolicy,
+    expectedProviderPolicy,
   );
-  assert.deepEqual(
-    Array.from(profile.dns["proxy-server-nameserver"]),
-    Array.from(profile.dns.nameserver),
-  );
+  assert.deepEqual(Array.from(profile.dns["proxy-server-nameserver"]), directDns);
+  assert.deepEqual(Array.from(profile.dns.nameserver), proxyDns);
   assert.ok(
     !profile.dns["proxy-server-nameserver"].includes(
       "https://jeeyio.com/api/dns-query",
@@ -380,7 +449,7 @@ test("uses the provider DNS only for matching proxy server domains", async () =>
   );
 });
 
-test("omits provider DNS overrides for unrelated subscriptions", async () => {
+test("keeps split DNS without provider overrides for unrelated subscriptions", async () => {
   const convert = await loadConverter();
   const profile = convert({
     proxies: [
@@ -393,8 +462,14 @@ test("omits provider DNS overrides for unrelated subscriptions", async () => {
     ],
   });
 
-  assert.equal(profile.dns["nameserver-policy"], undefined);
-  assert.equal(profile.dns["proxy-server-nameserver"], undefined);
+  assert.deepEqual(
+    Array.from(profile.dns["nameserver-policy"]["geosite:cn"]),
+    ["https://dns.alidns.com/dns-query", "https://doh.pub/dns-query"],
+  );
+  assert.deepEqual(Array.from(profile.dns["proxy-server-nameserver"]), [
+    "https://dns.alidns.com/dns-query",
+    "https://doh.pub/dns-query",
+  ]);
   assert.equal(profile.dns["proxy-server-nameserver-policy"], undefined);
 });
 
@@ -453,6 +528,34 @@ test("turns account information nodes into zero-proxy-traffic delay targets", as
   );
 });
 
+test("does not turn ordinary GB or Standard nodes into direct outbounds", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "GB-London", type: "ss", server: "gb.example", port: 443 },
+      {
+        name: "Standard HK 01",
+        type: "ss",
+        server: "hk.example",
+        port: 443,
+      },
+      {
+        name: "Traffic: 100 GB",
+        type: "ss",
+        server: "subscription.invalid",
+        port: 443,
+      },
+    ],
+  });
+
+  assert.equal(profile.proxies[0].type, "ss");
+  assert.equal(profile.proxies[1].type, "ss");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(profile.proxies[2])),
+    { name: "Traffic: 100 GB", type: "direct", udp: true },
+  );
+});
+
 test("keeps account delay tests independent from the controller port", async () => {
   const convert = await loadConverter({ full: "true" });
   const profile = convert({
@@ -462,8 +565,46 @@ test("keeps account delay tests independent from the controller port", async () 
     (group) => group.name === "Account Info",
   );
 
-  assert.equal(profile["external-controller"], ":9999");
+  assert.equal(profile["external-controller"], "127.0.0.1:9999");
   assert.equal(account.url, "http://wifi.vivo.com.cn/generate_204");
+});
+
+test("keeps controller access local unless a remote listener has a secret", async () => {
+  const localConvert = await loadConverter({ controllerhost: "0.0.0.0" });
+  const localProfile = localConvert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  assert.equal(localProfile["external-controller"], "127.0.0.1:9090");
+  assert.equal(localProfile.secret, undefined);
+
+  const remoteConvert = await loadConverter({
+    controllerhost: "0.0.0.0",
+    controllerport: "19090",
+    controllersecret: "test-secret",
+    dnslisten: "0.0.0.0:53",
+  });
+  const remoteProfile = remoteConvert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+  assert.equal(remoteProfile["external-controller"], "0.0.0.0:19090");
+  assert.equal(remoteProfile.secret, "test-secret");
+  assert.equal(remoteProfile.dns.listen, "0.0.0.0:53");
+});
+
+test("uses current Mihomo profile and sniffer fields", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [{ name: "Japan Node", type: "ss" }],
+  });
+
+  assert.equal(profile["global-client-fingerprint"], undefined);
+  assert.equal(profile.experimental, undefined);
+  assert.equal(profile["clash-for-android"], undefined);
+  assert.equal(profile["external-controller"], "127.0.0.1:9090");
+  assert.equal(profile.profile["store-selected"], true);
+  assert.equal(profile.profile["store-fake-ip"], true);
+  assert.equal(profile.sniffer.enable, true);
+  assert.deepEqual(Array.from(profile.sniffer.sniff.TLS.ports), [443, 8443]);
 });
 
 test("allows each URL-test group class to use its own interval", async () => {
@@ -482,6 +623,32 @@ test("allows each URL-test group class to use its own interval", async () => {
   assert.equal(groups.get("Auto").interval, 2400);
   assert.equal(groups.get("Japan").interval, 900);
   assert.equal(groups.get("Fallback").interval, 600);
+});
+
+test("health-checks load-balanced country groups with an explicit strategy", async () => {
+  const convert = await loadConverter({
+    loadbalance: "true",
+    loadbalancestrategy: "round-robin",
+    countrytestinterval: "900",
+  });
+  const profile = convert({
+    proxies: [
+      { name: "Japan Node 01", type: "ss" },
+      { name: "Japan Node 02", type: "ss" },
+    ],
+  });
+  const japan = profile["proxy-groups"].find(
+    (group) => group.name === "Japan",
+  );
+
+  assert.equal(japan.type, "load-balance");
+  assert.equal(japan.strategy, "round-robin");
+  assert.equal(japan.url, "https://www.gstatic.com/generate_204");
+  assert.equal(japan.interval, 900);
+  assert.equal(japan.lazy, true);
+  assert.equal(japan.timeout, 5000);
+  assert.equal(japan["max-failed-times"], 3);
+  assert.equal(japan["expected-status"], 204);
 });
 
 test("routes speed tests through a dedicated proxy-first policy", async () => {

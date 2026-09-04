@@ -5,13 +5,18 @@
 // URL-test args: autotestinterval=1800, countrytestinterval=600,
 // fallbacktestinterval=300, urltesttolerance=100, urltestlazy=true.
 // urltestinterval overrides all three intervals; 0 disables periodic tests.
-const NODE_SUFFIX = "";
+// Controller args: controllerhost=127.0.0.1, controllerport=9090,
+// controllersecret=. Non-loopback controller hosts require a secret.
+// DNS args: dnslisten=127.0.0.1:1053.
+// Load-balance args: loadbalancestrategy=consistent-hashing.
 const PROFILE_FAKE_TOTAL_BYTES = 10 * 1024 * 1024;
 const PROFILE_FAKE_EXPIRE_TIMESTAMP = 915148800;
 const URL_TEST_URL = "https://www.gstatic.com/generate_204";
 const ACCOUNT_INFO_TEST_URL = "http://wifi.vivo.com.cn/generate_204";
 const DEFAULT_CONTROLLER_PORT = 9090;
 const FULL_CONFIG_CONTROLLER_PORT = 9999;
+const DEFAULT_CONTROLLER_HOST = "127.0.0.1";
+const DEFAULT_DNS_LISTEN = "127.0.0.1:1053";
 const DEFAULT_AUTO_TEST_INTERVAL = 1800;
 const DEFAULT_COUNTRY_TEST_INTERVAL = 600;
 const DEFAULT_FALLBACK_TEST_INTERVAL = 300;
@@ -19,6 +24,20 @@ const MIN_URL_TEST_INTERVAL = 300;
 const DEFAULT_URL_TEST_TOLERANCE = 100;
 const Z_ICON_BASE =
   "https://raw.githubusercontent.com/silencoo/z-icon/main/icon/";
+const DIRECT_DNS_SERVERS = [
+  "https://dns.alidns.com/dns-query",
+  "https://doh.pub/dns-query",
+];
+const PROXY_DNS_SERVERS = [
+  "https://1.1.1.1/dns-query#Proxies",
+  "https://8.8.8.8/dns-query#Proxies",
+];
+const DEFAULT_DNS_SERVERS = ["223.5.5.5", "119.29.29.29"];
+const LOAD_BALANCE_STRATEGIES = new Set([
+  "consistent-hashing",
+  "round-robin",
+  "sticky-sessions",
+]);
 const PROVIDER_DNS_RULES = [
   {
     domainSuffix: "placudoshai.fun",
@@ -58,6 +77,46 @@ function parseNumber(e, t = 0) {
   return isNaN(o) ? t : o;
 }
 
+function parseString(value, fallback = "") {
+  if (null == value) return fallback;
+  const parsed = String(value).trim();
+  return parsed || fallback;
+}
+
+function parsePort(value, fallback) {
+  const port = parseNumber(value, fallback);
+  return port >= 1 && port <= 65535 ? port : fallback;
+}
+
+function isLoopbackHost(host) {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(
+    String(host).toLowerCase(),
+  );
+}
+
+function parseControllerHost(value, secret) {
+  const requestedHost = parseString(value, DEFAULT_CONTROLLER_HOST);
+  return isLoopbackHost(requestedHost) || secret
+    ? requestedHost
+    : DEFAULT_CONTROLLER_HOST;
+}
+
+function formatHostPort(host, port) {
+  const normalizedHost = String(host);
+  const formattedHost =
+    normalizedHost.includes(":") && !normalizedHost.startsWith("[")
+      ? `[${normalizedHost}]`
+      : normalizedHost;
+  return `${formattedHost}:${port}`;
+}
+
+function parseLoadBalanceStrategy(value) {
+  const strategy = parseString(value, "consistent-hashing").toLowerCase();
+  return LOAD_BALANCE_STRATEGIES.has(strategy)
+    ? strategy
+    : "consistent-hashing";
+}
+
 function parseUrlTestInterval(value, fallback) {
   const interval = parseNumber(value, fallback);
   return interval === 0 ? 0 : Math.max(MIN_URL_TEST_INTERVAL, interval);
@@ -92,6 +151,17 @@ function buildFeatureFlags(e) {
     parseNumber(e.urltesttolerance, DEFAULT_URL_TEST_TOLERANCE),
   );
   t.urlTestLazy = "urltestlazy" in e ? parseBool(e.urltestlazy) : true;
+  t.controllerSecret = parseString(e.controllersecret);
+  t.controllerHost = parseControllerHost(
+    e.controllerhost,
+    t.controllerSecret,
+  );
+  t.controllerPort = parsePort(
+    e.controllerport,
+    t.fullConfig ? FULL_CONFIG_CONTROLLER_PORT : DEFAULT_CONTROLLER_PORT,
+  );
+  t.dnsListen = parseString(e.dnslisten, DEFAULT_DNS_LISTEN);
+  t.loadBalanceStrategy = parseLoadBalanceStrategy(e.loadbalancestrategy);
   return t;
 }
 
@@ -109,6 +179,11 @@ const rawArgs = "undefined" != typeof $arguments ? $arguments : {},
     fallbackTestInterval: fallbackTestInterval,
     urlTestTolerance: urlTestTolerance,
     urlTestLazy: urlTestLazy,
+    controllerSecret: controllerSecret,
+    controllerHost: controllerHost,
+    controllerPort: controllerPort,
+    dnsListen: dnsListen,
+    loadBalanceStrategy: loadBalanceStrategy,
   } = buildFeatureFlags(rawArgs);
 function getCountryGroupNames(e, t) {
   return e.filter((e) => e.count >= t).map((e) => e.country);
@@ -123,15 +198,21 @@ const PROXY_GROUPS = {
   CDN: "CDN",
 };
 
-// 流量信息关键词：增加 “防丢”、“官方网站”
-const TRAFFIC_KEYWORDS =
-  /(建议|重置|官方网站|官网|套餐|流量|剩余|到期|防丢|GB|导航|更新|Expire|Usage|Traffic|Standard|Used|Total)/i;
+const TRAFFIC_INFO_PATTERNS = [
+  /(建议|重置|官方网站|官网|套餐|流量|剩余|到期|防丢|导航|更新)/i,
+  /\b(?:expire|expiry|traffic|usage)\b/i,
+  /\b(?:used|total|remaining|reset)\b(?=\s*[:：=]?\s*(?:\d|never|unlimited))/i,
+  /(?:^|[\s:：=])\d+(?:\.\d+)?\s*(?:KB|MB|GB|TB)\b/i,
+];
 // 白名单：包含以下字符的依然视为普通节点
 const WHITELIST_KEYWORDS = /(赞助|Node|节点)/i;
 
 function isTrafficInfoProxy(proxy) {
   const name = String(proxy?.name || "");
-  return TRAFFIC_KEYWORDS.test(name) && !WHITELIST_KEYWORDS.test(name);
+  return (
+    TRAFFIC_INFO_PATTERNS.some((pattern) => pattern.test(name)) &&
+    !WHITELIST_KEYWORDS.test(name)
+  );
 }
 
 function buildTrafficInfoProxy(proxy) {
@@ -142,26 +223,8 @@ function buildTrafficInfoProxy(proxy) {
   };
 }
 
-const AI_TAGS = [
-  "ai",
-  "openai",
-  "chatgpt",
-  "claude",
-  "gemini",
-  "copilot",
-  "perplexity",
-  "grok",
-  "xai",
-];
-const PREMIUM_TAGS = ["pro"];
-const RESIDENTIAL_TAGS = ["res", "home", "isp", "residential", "家宽"];
 const LEADING_LOCATION_ICON_PATTERN =
   /^(?:(?:(?:[\uD83C][\uDDE6-\uDDFF]){2}|🌐)\s*)*/;
-
-const AI_NODE_KEYWORDS =
-  /\b(AI|OpenAI|ChatGPT|Claude|Gemini|Copilot|Perplexity|Grok|xAI)\b|人工智能|智算/i;
-const RESIDENTIAL_NODE_KEYWORDS =
-  /(家宽|家庭宽带|住宅|原生|Residential|Resident|ISP|Home)/i;
 
 function uniqueList(items) {
   return [...new Set(items.filter(Boolean))];
@@ -190,17 +253,6 @@ function buildProviderDnsPolicy(proxies) {
   );
 }
 
-function getNodeTags(name) {
-  return Array.from(String(name).matchAll(/\[([^\]]+)\]/g), (match) =>
-    match[1].trim().toLowerCase(),
-  ).filter(Boolean);
-}
-
-function hasNodeTag(name, tags) {
-  const tagSet = new Set(getNodeTags(name));
-  return tags.some((tag) => tagSet.has(tag.toLowerCase()));
-}
-
 function isProProxyName(name) {
   const nameWithoutLocationIcon = String(name).replace(
     LEADING_LOCATION_ICON_PATTERN,
@@ -209,35 +261,12 @@ function isProProxyName(name) {
   return /^\[pro\]/i.test(nameWithoutLocationIcon);
 }
 
-function isAIProxyName(name) {
-  return isProProxyName(name);
-  // Previous tag/keyword recognition (kept for optional fallback):
-  // return hasNodeTag(name, AI_TAGS) || AI_NODE_KEYWORDS.test(name);
-}
-
-function isPremiumProxyName(name) {
-  return isProProxyName(name);
-  // Previous tag recognition (kept for optional fallback):
-  // return hasNodeTag(name, PREMIUM_TAGS);
-}
-
 function isResidentialProxyName(name) {
   return isProProxyName(name);
-  // Previous tag/keyword recognition (kept for optional fallback):
-  // return (
-  //   hasNodeTag(name, RESIDENTIAL_TAGS) || RESIDENTIAL_NODE_KEYWORDS.test(name)
-  // );
 }
 
 function isStandardProxyName(name) {
   return !isProProxyName(name);
-  // Previous tag/keyword exclusion (kept for optional fallback):
-  // return (
-  //   !isProProxyName(name) &&
-  //   !isAIProxyName(name) &&
-  //   !isPremiumProxyName(name) &&
-  //   !isResidentialProxyName(name)
-  // );
 }
 
 function buildBaseLists({
@@ -754,34 +783,79 @@ const countriesMeta = {
   },
 };
 
-function parseCountries(realProxyNames) {
-  const r = Object.create(null);
-  const countryOrder = COUNTRY_PRIORITY;
-  const n = {};
-  for (const e of countryOrder) n[e] = getCountryRegex(e);
+const GENERATED_PROXY_GROUP_NAMES = uniqueList([
+  ...Object.values(PROXY_GROUPS),
+  ...COUNTRY_PRIORITY,
+  "AI",
+  "Gemini",
+  "Telegram",
+  "Google",
+  "YouTube",
+  "Speedtest",
+  "AI Models",
+  "GitHub",
+  "Docker",
+  "Bilibili",
+  "Netflix",
+  "Spotify",
+  "Steam",
+  "TikTok",
+  "PikPak",
+  "Crypto",
+  "SSH(port 22)",
+  "AdBlock",
+  "GLOBAL",
+]);
+const RESERVED_OUTBOUND_NAMES = new Set([
+  ...GENERATED_PROXY_GROUP_NAMES,
+  "DIRECT",
+  "REJECT",
+  "REJECT-DROP",
+  "PASS",
+  "PASS-RULE",
+  "COMPATIBLE",
+]);
 
-  for (const t of realProxyNames) {
-    for (const e of countryOrder) {
-      if (n[e].test(t)) {
-        r[e] = (r[e] || 0) + 1;
-        break;
-      }
-    }
-  }
-  return countryOrder
-    .filter((country) => r[country])
-    .map((country) => ({ country: country, count: r[country] }));
-}
+const COUNTRY_REGEXES = Object.fromEntries(
+  COUNTRY_PRIORITY.map((country) => [
+    country,
+    new RegExp(countriesMeta[country].pattern.replace(/^\(\?i\)/, ""), "i"),
+  ]),
+);
 
 function getCountryRegex(country) {
-  const meta = countriesMeta[country];
-  if (!meta) return null;
-  return new RegExp(meta.pattern.replace(/^\(\?i\)/, ""), "i");
+  return COUNTRY_REGEXES[country] || null;
 }
 
 function matchesCountry(name, country) {
   const regex = getCountryRegex(country);
   return regex ? regex.test(name) : false;
+}
+
+function classifyCountry(name) {
+  return (
+    COUNTRY_PRIORITY.find((country) => matchesCountry(name, country)) || null
+  );
+}
+
+function classifyCountryProxies(proxyNames) {
+  const proxiesByCountry = Object.fromEntries(
+    COUNTRY_PRIORITY.map((country) => [country, []]),
+  );
+
+  for (const name of proxyNames) {
+    const country = classifyCountry(name);
+    if (country) proxiesByCountry[country].push(name);
+  }
+
+  return proxiesByCountry;
+}
+
+function parseCountries(proxiesByCountry) {
+  return COUNTRY_PRIORITY.map((country) => ({
+    country: country,
+    count: proxiesByCountry[country].length,
+  })).filter(({ count }) => count > 0);
 }
 
 const COUNTRY_FLAG_PATTERN = /(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
@@ -830,38 +904,31 @@ function buildHealthCheckedGroup({
 }
 
 function buildCountryProxyGroups({
-  countries: e,
-  loadBalance: o,
-  standardProxyNames: standardProxyNames,
+  countries: countries,
+  loadBalance: loadBalance,
+  loadBalanceStrategy: loadBalanceStrategy,
+  proxiesByCountry: proxiesByCountry,
 }) {
-  const r = [],
-    s = o ? "load-balance" : "url-test";
-  for (const l of e) {
-    const e = countriesMeta[l];
-    if (!e) continue;
-    const countryProxies = standardProxyNames.filter((name) =>
-      matchesCountry(name, l),
-    );
+  const groups = [];
+  const type = loadBalance ? "load-balance" : "url-test";
+
+  for (const country of countries) {
+    const meta = countriesMeta[country];
+    if (!meta) continue;
+    const countryProxies = proxiesByCountry[country] || [];
     if (countryProxies.length <= 0) continue;
-    const i = {
-      name: l,
-      icon: e.icon,
+
+    const group = buildHealthCheckedGroup({
+      name: country,
+      icon: meta.icon,
+      type: type,
       proxies: countryProxies,
-      type: s,
-    };
-    o ||
-      Object.assign(i, {
-        url: URL_TEST_URL,
-        interval: countryTestInterval,
-        tolerance: urlTestTolerance,
-        lazy: urlTestLazy,
-        timeout: 5000,
-        "max-failed-times": 3,
-        "expected-status": 204,
-      });
-    r.push(i);
+      interval: countryTestInterval,
+    });
+    if (loadBalance) group.strategy = loadBalanceStrategy;
+    groups.push(group);
   }
-  return r;
+  return groups;
 }
 
 function buildProxyGroups({
@@ -872,7 +939,6 @@ function buildProxyGroups({
   defaultServiceProxies: serviceProxies,
   defaultFallback: i,
   trafficNodes: trafficNodes,
-  realProxyNames: realProxyNames,
   standardProxyNames: standardProxyNames = [],
   nodePools: nodePools = {},
 }) {
@@ -1076,23 +1142,51 @@ function buildProxyGroups({
 }
 
 /**
- * 去重函数：重复节点 name 自动加序号
+ * 保证节点名称唯一，并避开 Mihomo 内置出站及本脚本生成的策略组名称。
  */
 function deduplicateProxies(proxies) {
-  const nameCount = new Map();
+  const originalNames = proxies.map((proxy) => {
+    const name = String(proxy?.name == null ? "" : proxy.name).trim();
+    return name || "Proxy";
+  });
+  const occupiedOriginalNames = new Set(originalNames);
+  const usedNames = new Set(RESERVED_OUTBOUND_NAMES);
+  const nextSuffix = new Map();
+  const firstResolvedName = new Map();
 
-  return proxies.map((proxy) => {
-    const name = proxy.name;
+  const renamed = proxies.map((proxy, index) => {
+    if (!proxy || typeof proxy !== "object") return proxy;
 
-    if (nameCount.has(name)) {
-      const count = nameCount.get(name) + 1;
-      nameCount.set(name, count);
-      proxy.name = `${name}-${count}`;
-    } else {
-      nameCount.set(name, 1);
+    const originalName = originalNames[index];
+    let resolvedName = originalName;
+    if (usedNames.has(resolvedName)) {
+      let suffix = nextSuffix.get(originalName) || 2;
+      do {
+        resolvedName = `${originalName}-${suffix}`;
+        suffix += 1;
+      } while (
+        usedNames.has(resolvedName) || occupiedOriginalNames.has(resolvedName)
+      );
+      nextSuffix.set(originalName, suffix);
     }
 
-    return proxy;
+    usedNames.add(resolvedName);
+    if (!firstResolvedName.has(originalName)) {
+      firstResolvedName.set(originalName, resolvedName);
+    }
+    return resolvedName === proxy.name
+      ? proxy
+      : Object.assign({}, proxy, { name: resolvedName });
+  });
+
+  return renamed.map((proxy) => {
+    if (!proxy || typeof proxy !== "object" || !proxy["dialer-proxy"]) {
+      return proxy;
+    }
+    const resolvedDialer = firstResolvedName.get(String(proxy["dialer-proxy"]));
+    return resolvedDialer && resolvedDialer !== proxy["dialer-proxy"]
+      ? Object.assign({}, proxy, { "dialer-proxy": resolvedDialer })
+      : proxy;
   });
 }
 
@@ -1119,19 +1213,15 @@ function main(e) {
 
   const nodePools = {
     // AI follows the Residential pool, matching the Quantumult X template.
-    ai: [],
     residential: realProxyNames.filter(isResidentialProxyName),
-    // Previous independent AI tag/keyword pool (kept for optional fallback):
-    // ai: realProxyNames.filter(
-    //   (name) => isAIProxyName(name) || isPremiumProxyName(name),
-    // ),
   };
 
   // 地区自动组只使用普通节点，避免 [pro] 专用节点被自动选中。
   const standardProxyNames = realProxyNames.filter(isStandardProxyName);
+  const proxiesByCountry = classifyCountryProxies(standardProxyNames);
 
   const t = { proxies: proxies };
-  const o = parseCountries(standardProxyNames);
+  const o = parseCountries(proxiesByCountry);
   const n = getCountryGroupNames(o, countryThreshold);
 
   const {
@@ -1147,7 +1237,8 @@ function main(e) {
   const p = buildCountryProxyGroups({
     countries: n,
     loadBalance: loadBalance,
-    standardProxyNames: standardProxyNames,
+    loadBalanceStrategy: loadBalanceStrategy,
+    proxiesByCountry: proxiesByCountry,
   });
   const u = buildProxyGroups({
     countries: n,
@@ -1157,7 +1248,6 @@ function main(e) {
     defaultServiceProxies: serviceProxies,
     defaultFallback: c,
     trafficNodes: trafficNodes,
-    realProxyNames: realProxyNames,
     standardProxyNames: standardProxyNames,
     nodePools: nodePools,
   });
@@ -1172,6 +1262,8 @@ function main(e) {
   });
 
   const g = buildRules({ quicEnabled: quicEnabled, countries: n });
+  const enhancedMode =
+    "fakeip" in rawArgs && !fakeIPEnabled ? "redir-host" : "fake-ip";
 
   // 基础配置始终包含
   Object.assign(t, {
@@ -1184,19 +1276,30 @@ function main(e) {
     mode: "rule",
     "log-level": "info",
     ipv6: ipv6Enabled,
-    "external-controller": `0.0.0.0:${DEFAULT_CONTROLLER_PORT}`,
-    "clash-for-android": {
-      "append-system-dns": false,
-    },
+    "external-controller": formatHostPort(controllerHost, controllerPort),
     profile: {
-      tracing: true,
+      "store-selected": true,
+      "store-fake-ip": enhancedMode === "fake-ip",
     },
-    experimental: {
-      "sniff-tls-sni": true,
+    sniffer: {
+      enable: true,
+      "force-dns-mapping": true,
+      "parse-pure-ip": true,
+      "override-destination": false,
+      sniff: {
+        HTTP: {
+          ports: [80, "8080-8880"],
+          "override-destination": true,
+        },
+        TLS: { ports: [443, 8443] },
+        QUIC: { ports: [443, 8443] },
+      },
+      "skip-domain": ["Mijia Cloud", "+.push.apple.com"],
     },
     "tcp-concurrent": true,
-    "global-client-fingerprint": "chrome",
   });
+
+  if (controllerSecret) t.secret = controllerSecret;
 
   if ("keepalive" in rawArgs) {
     if (keepAliveEnabled) {
@@ -1210,49 +1313,44 @@ function main(e) {
     }
   }
 
-  if (fullConfig) {
-    Object.assign(t, {
-      "external-controller": `:${FULL_CONFIG_CONTROLLER_PORT}`,
-      profile: Object.assign(t.profile || {}, { "store-selected": true }),
-    });
-  }
-
   // DNS 配置
-  const nameservers = [
-    "119.29.29.29",
-    "223.5.5.5",
-    "tls://223.5.5.5:853",
-    "tls://223.6.6.6:853",
-    "tls://120.53.53.53",
-    "tls://1.12.12.12",
-  ];
+  const nameserverPolicy = Object.assign(
+    {
+      "geosite:private": "system",
+      "geosite:cn": DIRECT_DNS_SERVERS,
+      "geosite:gfw": PROXY_DNS_SERVERS,
+    },
+    providerDnsPolicy,
+  );
   const dnsConfig = {
     enable: true,
     ipv6: ipv6Enabled,
-    listen: "0.0.0.0:53",
-    "enhanced-mode":
-      "fakeip" in rawArgs && !fakeIPEnabled ? "redir-host" : "fake-ip",
+    listen: dnsListen,
+    "enhanced-mode": enhancedMode,
     "fake-ip-range": "198.18.0.1/16",
     "fake-ip-range6": "fdfe:dcba:9876::1/64",
     "fake-ip-filter": [
-      "*.lan",
-      "*.srv.nintendo.net",
-      "*.stun.playstation.net",
+      "+.lan",
+      "+.srv.nintendo.net",
+      "+.stun.playstation.net",
       "xbox.*.microsoft.com",
-      "*.xboxlive.com",
-      "*.teafone.com",
-      "*.sktswe.net",
+      "+.xboxlive.com",
+      "+.teafone.com",
+      "+.sktswe.net",
       "rtc.goodfone.co.kr",
-      "*.chattti.com",
+      "+.chattti.com",
     ],
-    nameserver: nameservers,
+    "default-nameserver": DEFAULT_DNS_SERVERS,
+    nameserver: PROXY_DNS_SERVERS,
+    "nameserver-policy": nameserverPolicy,
+    "proxy-server-nameserver": DIRECT_DNS_SERVERS,
+    "direct-nameserver": DIRECT_DNS_SERVERS,
+    "direct-nameserver-follow-policy": true,
   };
 
   if (Object.keys(providerDnsPolicy).length > 0) {
     // 仅在订阅确实包含对应节点域名时启用机场专用 DNS。
     // 其他节点仍使用默认解析器，避免将所有机场域名暴露给单一服务商。
-    dnsConfig["nameserver-policy"] = providerDnsPolicy;
-    dnsConfig["proxy-server-nameserver"] = [...nameservers];
     dnsConfig["proxy-server-nameserver-policy"] = providerDnsPolicy;
   }
 

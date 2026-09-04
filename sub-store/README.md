@@ -18,7 +18,31 @@ endpoint (`http://wifi.vivo.com.cn/generate_204`), which returns an empty 204
 response without consuming proxy subscription traffic.
 
 The generated DNS block uses Mihomo's `enhanced-mode` setting. Fake IP mode is
-enabled by default; pass `fakeip=false` to switch it to `redir-host`.
+enabled by default; pass `fakeip=false` to switch it to `redir-host`. Private
+names use the system resolver, domestic names use mainland encrypted resolvers,
+and other names use encrypted resolvers through the `Proxies` policy. The DNS
+listener defaults to `127.0.0.1:1053`; use `dnslisten=<address>:<port>` only
+when another device must query this Mihomo instance.
+
+The REST controller listens on `127.0.0.1:9090` by default (`127.0.0.1:9999`
+with `full=true`). `controllerhost`, `controllerport`, and `controllersecret`
+can override it. A non-loopback `controllerhost` is accepted only when
+`controllersecret` is non-empty.
+
+Country groups use URL tests by default. Pass `loadbalance=true` to use
+health-checked load balancing and optionally set `loadbalancestrategy` to
+`consistent-hashing`, `round-robin`, or `sticky-sessions`. URL-test intervals
+can be controlled with `autotestinterval`, `countrytestinterval`, and
+`fallbacktestinterval`, or together with `urltestinterval`; zero disables
+periodic checks.
+
+Generated node names are made unique and kept distinct from policy-group and
+Mihomo built-in outbound names. Each ordinary node is assigned to at most one
+country group. Recognized Taiwan nodes are normalized to a single `🇹🇼` flag,
+including nodes whose provider supplied another country flag.
+
+Repository validation generates both URL-test and load-balance fixtures and
+checks them with the latest stable official Mihomo binary.
 
 When a subscription contains a node server under `placudoshai.fun`, the script
 automatically adds a domain-scoped Mihomo DNS policy using the provider's
