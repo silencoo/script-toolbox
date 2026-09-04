@@ -385,6 +385,7 @@ stage_runtime() {
   copy_runtime_file ctl-lib.sh
   copy_runtime_file setup-lib.sh
   copy_runtime_file remote-store.mjs
+  copy_runtime_file module-entry.mjs
   copy_runtime_file platform-command.mjs
   copy_runtime_file platform-paths.mjs
   copy_runtime_file install-commands.sh

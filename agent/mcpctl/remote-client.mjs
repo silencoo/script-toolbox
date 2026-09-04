@@ -20,7 +20,8 @@ import {
   rm
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isMainModule } from "../module-entry.mjs";
 
 import {
   MCP_REMOTE_PROTOCOL,
@@ -1512,8 +1513,7 @@ export {
   validateRemoteConfig
 };
 
-if (process.argv[1] &&
-    import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     const message = error instanceof RemoteError || error instanceof RemoteStoreError
       ? error.message

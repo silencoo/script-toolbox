@@ -12,7 +12,7 @@ import {
   rm,
   unlink
 } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "../module-entry.mjs";
 import { platformConfigHome } from "../platform-paths.mjs";
 import {
   MCP_REMOTE_PROTOCOL,
@@ -1346,7 +1346,7 @@ async function main() {
   throw new WorkspaceError("invalid Workspace command; use agentctl workspace --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof WorkspaceError || error instanceof RemoteStoreError ||
       error instanceof ProviderClientError || error instanceof ProviderSchemaError ||

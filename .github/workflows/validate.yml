@@ -172,6 +172,7 @@ jobs:
         shell: bash
         run: |
           node --test \
+            agent/module-entry.test.mjs \
             agent/platform-command.test.mjs \
             agent/platform-paths.test.mjs \
             agent/remote-store.test.mjs \

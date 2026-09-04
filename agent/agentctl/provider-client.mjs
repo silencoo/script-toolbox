@@ -15,8 +15,8 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { bashScriptCommand } from "../platform-command.mjs";
+import { isMainModule } from "../module-entry.mjs";
 import { platformConfigHome, platformStateHome } from "../platform-paths.mjs";
 import {
   CURRENT_PROVIDER_SCHEMA,
@@ -1980,7 +1980,7 @@ export async function main(argv = process.argv.slice(2)) {
   throw new ProviderClientError("invalid provider command; use agentctl provider --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof ProviderClientError ||
       error instanceof ProviderSchemaError || error instanceof ProviderRendererError

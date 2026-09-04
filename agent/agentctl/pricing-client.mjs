@@ -12,8 +12,9 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
+import { isMainModule } from "../module-entry.mjs";
 import { validateModelId, validateProfileName } from "./provider-schema.mjs";
 import {
   PricingError,
@@ -468,7 +469,7 @@ export async function main(argv = process.argv.slice(2)) {
   throw new PricingClientError("invalid pricing command; use agentctl pricing --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof PricingClientError || error instanceof PricingError
       ? error.message

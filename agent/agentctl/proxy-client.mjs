@@ -16,8 +16,9 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
+import { isMainModule } from "../module-entry.mjs";
 import {
   ProviderSchemaError,
   effectiveProviderCompaction,
@@ -2572,7 +2573,7 @@ export async function main(argv = process.argv.slice(2)) {
   throw new ProxyClientError("invalid proxy command; use agentctl proxy --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof ProxyClientError || error instanceof ProviderSchemaError ||
       error instanceof ProviderRendererError || error instanceof ProxySchemaError ||

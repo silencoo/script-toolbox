@@ -16,8 +16,9 @@ import {
   writeFile
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import * as zlib from "node:zlib";
+
+import { isMainModule } from "../module-entry.mjs";
 
 import {
   ProviderSchemaError,
@@ -2460,7 +2461,7 @@ export async function main(argv = process.argv.slice(2)) {
   return run(parseArguments([...argv]));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof ProxyDaemonError || error instanceof ProxySchemaError ||
       error instanceof ProviderSchemaError

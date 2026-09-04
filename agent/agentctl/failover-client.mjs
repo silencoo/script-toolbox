@@ -12,7 +12,8 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isMainModule } from "../module-entry.mjs";
 
 import {
   FailoverSchemaError,
@@ -464,7 +465,7 @@ export async function main(argv = process.argv.slice(2)) {
   throw new FailoverClientError("invalid failover command; use agentctl failover --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof FailoverClientError || error instanceof FailoverSchemaError ||
       error instanceof ProviderSchemaError

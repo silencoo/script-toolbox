@@ -13,7 +13,8 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isMainModule } from "../module-entry.mjs";
 
 import {
   encryptValue,
@@ -1487,8 +1488,7 @@ export {
   stableValue
 };
 
-if (process.argv[1] &&
-    import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     const message = error instanceof ImportError
       ? error.message

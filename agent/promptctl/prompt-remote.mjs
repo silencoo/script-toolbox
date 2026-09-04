@@ -13,7 +13,7 @@ import {
   rm
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "../module-entry.mjs";
 import { platformConfigHome } from "../platform-paths.mjs";
 import {
   PROMPT_REMOTE_PROTOCOL,
@@ -653,7 +653,7 @@ async function main() {
   throw new PromptRemoteError("invalid remote command; use promptctl remote --help");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const safe = error instanceof PromptRemoteError || error instanceof RemoteStoreError
       ? error.message

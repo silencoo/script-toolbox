@@ -750,6 +750,7 @@ else
 fi
 
 if node --test \
+  "$SCRIPT_DIR/module-entry.test.mjs" \
   "$SCRIPT_DIR/platform-command.test.mjs" \
   "$SCRIPT_DIR/platform-paths.test.mjs"; then
   :
