@@ -729,23 +729,27 @@ const COUNTRY_PRIORITY = [
 
 const countriesMeta = {
   Japan: {
-    pattern: "(?i)(日本|JP|Japan|东京|大阪|埼玉|🇯🇵)",
+    pattern: "(?i)(日本|东京|大阪|埼玉|🇯🇵|(?:^|[^a-z])(?:JP|Japan)(?=$|[^a-z]))",
     icon: zIcon("flag/108/Japan.png"),
   },
   "United States": {
-    pattern: "(?i)(美国|US|United States|USA|🇺🇸|圣何塞|洛杉矶|阿什本)",
+    pattern:
+      "(?i)(美国|🇺🇸|圣何塞|洛杉矶|阿什本|(?:^|[^a-z])(?:US|USA|United[\\s_-]*States)(?=$|[^a-z]))",
     icon: zIcon("flag/108/UnitedStatesofAmerica.png"),
   },
   Taiwan: {
-    pattern: "(?i)(台湾|TW|Taiwan|新北|彰化|🇹🇼)",
+    pattern:
+      "(?i)(台湾|新北|彰化|🇹🇼|(?:^|[^a-z])(?:TW|Taiwan)(?=$|[^a-z]))",
     icon: zIcon("flag/108/Taiwan.png"),
   },
   Singapore: {
-    pattern: "(?i)(新加坡|SG|Singapore|狮城|🇸🇬)",
+    pattern:
+      "(?i)(新加坡|狮城|🇸🇬|(?:^|[^a-z])(?:SG|Singapore)(?=$|[^a-z]))",
     icon: zIcon("flag/108/Singapore.png"),
   },
   "Hong Kong": {
-    pattern: "(?i)(香港|HK|Hong Kong|HongKong|hongkong|🇭🇰)",
+    pattern:
+      "(?i)(香港|🇭🇰|(?:^|[^a-z])(?:HK|Hong[\\s_-]*Kong)(?=$|[^a-z]))",
     icon: zIcon("flag/108/HongKong.png"),
   },
 };

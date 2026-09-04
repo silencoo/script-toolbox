@@ -191,6 +191,57 @@ test("defaults AI traffic to Proxies when no dedicated AI node exists", async ()
   assert.deepEqual(Array.from(ai.proxies), ["Proxies", "Fallback", "Direct"]);
 });
 
+test("does not treat country-code substrings as country nodes", async () => {
+  const convert = await loadConverter();
+  const names = [
+    "Plus",
+    "Music Server",
+    "JPGateway",
+    "Network Premium",
+    "Design Group",
+    "ThinkHub",
+  ];
+  const profile = convert({
+    proxies: names.map((name) => ({ name, type: "ss" })),
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  for (const country of [
+    "Japan",
+    "United States",
+    "Taiwan",
+    "Singapore",
+    "Hong Kong",
+  ]) {
+    assert.ok(!groups.has(country));
+  }
+  assert.deepEqual(Array.from(groups.get("Auto").proxies), names);
+});
+
+test("recognizes standalone country codes in common node-name formats", async () => {
+  const convert = await loadConverter();
+  const profile = convert({
+    proxies: [
+      { name: "US-01", type: "ss" },
+      { name: "JP_01", type: "ss" },
+      { name: "TW01", type: "ss" },
+      { name: "SG 01", type: "ss" },
+      { name: "HK-01", type: "ss" },
+    ],
+  });
+  const groups = new Map(
+    profile["proxy-groups"].map((group) => [group.name, group]),
+  );
+
+  assert.deepEqual(Array.from(groups.get("United States").proxies), ["US-01"]);
+  assert.deepEqual(Array.from(groups.get("Japan").proxies), ["JP_01"]);
+  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["TW01"]);
+  assert.deepEqual(Array.from(groups.get("Singapore").proxies), ["SG 01"]);
+  assert.deepEqual(Array.from(groups.get("Hong Kong").proxies), ["HK-01"]);
+});
+
 test("recognizes pro nodes after a leading country or location icon", async () => {
   const convert = await loadConverter();
   const profile = convert({
