@@ -40,6 +40,10 @@ third-party-derived files.
 - Files under `userscripts/123pan-fastlink/` were imported from a local mirror
   of Bao-qing's `123FastLink`. The userscript retains its original author
   attribution, and its GreasyFork distribution identifies it as MIT licensed.
+- `userscripts/chatgpt-checker-next/` is derived from zetaloop/chatgpt-checker-next
+  v4.3.4 at commit `6c153995ae03073c90f090ea8f5a8aa41b65762d`, with local
+  compatibility fixes. It retains AGPLv3 licensing and its upstream attribution;
+  the full license is included in that directory.
 - Files under `userscripts/sht-helper/` were imported from
   `silencoo/sht-helper`. The upstream documentation identifies the userscript
   as MIT licensed.

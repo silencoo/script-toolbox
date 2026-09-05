@@ -1,5 +1,10 @@
 # Codex Quota Compass
 
+Its data features are now integrated into [ChatGPT Checker Next](../chatgpt-checker-next/)
+v4.5.0, including cycle/history tables, USD estimates, and configurable rates and history days.
+After updating Checker, disable this standalone script and use Checker's **积分分析** entry
+to keep a single panel and avoid duplicate requests. This directory remains the standalone source.
+
 A Tampermonkey or Violentmonkey userscript that adds an on-page quota dashboard to the ChatGPT Codex analytics settings page.
 
 ## Features

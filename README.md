@@ -18,7 +18,8 @@ documentation so scripts can evolve without crowding the repository root.
 | [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
 | [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
-| [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Visual Codex quota, credit, value, turn, and daily usage dashboard |
+| [`userscripts/chatgpt-checker-next/`](./userscripts/chatgpt-checker-next/) | All-in-one ChatGPT/Codex information panel with themes, display settings, quota estimates, credit values, and cycle/history analytics |
+| [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Standalone Codex analytics; its data features are integrated into ChatGPT Checker Next |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/gemini-toolkit/`](./userscripts/gemini-toolkit/) | Keep Gemini defaults, concurrently download/export full-size images, and safely manage conversations |
 | [`userscripts/linux-do/`](./userscripts/linux-do/) | Archive Linux.do topics locally or publish them to WordPress |
