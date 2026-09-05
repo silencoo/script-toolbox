@@ -637,6 +637,9 @@ function websocketDeflateDecoder(maxMessageBytes, onJson, options, onIssue) {
         });
     },
     disable,
+    flush() {
+      return queue;
+    },
     async close() {
       accepting = false;
       await queue;
@@ -647,7 +650,8 @@ function websocketDeflateDecoder(maxMessageBytes, onJson, options, onIssue) {
 }
 
 function websocketObserver(maxMessageBytes, onJson, {
-  perMessageDeflate = null
+  perMessageDeflate = null,
+  beforeJson = null
 } = {}) {
   let pending = Buffer.alloc(0);
   let skip = 0;
@@ -656,10 +660,21 @@ function websocketObserver(maxMessageBytes, onJson, {
   let fragmentOpcode = null;
   let fragmentCompressed = false;
   let closed = false;
+  let deliveries = Promise.resolve();
   const issues = new Set();
   const reportIssue = (reason) => issues.add(reason);
+  const deliverJson = (payload) => {
+    if (!beforeJson) return onJson(payload);
+    // Capture the peer's pending work now, then preserve response order while
+    // waiting for its metadata. Frame forwarding never waits for this queue.
+    const ready = beforeJson();
+    deliveries = deliveries
+      .then(() => ready)
+      .then(() => onJson(payload))
+      .catch(() => reportIssue("observer_callback_error"));
+  };
   const deflate = perMessageDeflate
-    ? websocketDeflateDecoder(maxMessageBytes, onJson, perMessageDeflate, reportIssue)
+    ? websocketDeflateDecoder(maxMessageBytes, deliverJson, perMessageDeflate, reportIssue)
     : null;
 
   const resetFragments = () => {
@@ -673,7 +688,7 @@ function websocketObserver(maxMessageBytes, onJson, {
     try {
       const value = JSON.parse(payload.toString("utf8"));
       try {
-        onJson(value);
+        deliverJson(value);
       } catch {
         reportIssue("observer_callback_error");
       }
@@ -810,6 +825,10 @@ function websocketObserver(maxMessageBytes, onJson, {
       acceptFrame(fin, rsv1, rsvInvalid, opcode, frame);
     }
   };
+  observe.flush = async () => {
+    await deflate?.flush();
+    await deliveries;
+  };
   observe.close = async () => {
     if (closed) return;
     closed = true;
@@ -820,6 +839,7 @@ function websocketObserver(maxMessageBytes, onJson, {
     pending = Buffer.alloc(0);
     resetFragments();
     await deflate?.close();
+    await deliveries;
   };
   observe.summary = () => ({
     status: issues.size ? "degraded" : "complete",
@@ -1550,7 +1570,10 @@ function proxyWebSocket(request, socket, head, context) {
       perMessageDeflate: negotiatedCompression?.client || null
     });
     observeServer = websocketObserver(config.limits.usage_capture_bytes, observeServerPayload, {
-      perMessageDeflate: negotiatedCompression?.server || null
+      perMessageDeflate: negotiatedCompression?.server || null,
+      // The two directions inflate independently. A fast response must not be
+      // paired until the already-received request frames have been inspected.
+      beforeJson: () => observeClient.flush()
     });
     rawUpgradeResponse(socket, response);
     if (head.length) {

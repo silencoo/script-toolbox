@@ -385,6 +385,49 @@ test("WebSocket observer side-decompresses fragmented permessage-deflate with co
   assert.deepEqual(observe.summary(), { status: "complete", reasons: [] });
 });
 
+test("WebSocket usage waits for compressed request metadata before pairing responses", async () => {
+  const turns = [];
+  const usage = [];
+  const client = websocketObserver(4096, (payload) => turns.push(payload.response), {
+    perMessageDeflate: { no_context_takeover: true, window_bits: 15 }
+  });
+  const server = websocketObserver(4096, (payload) => {
+    usage.push({ request: turns.shift() || null, response: payload.response });
+  }, { beforeJson: () => client.flush() });
+  const requests = [
+    { model: "first-model", service_tier: "fast" },
+    { model: "second-model", service_tier: "default" }
+  ];
+  const responses = requests.map((_, index) => ({
+    id: `response-${index}`,
+    usage: { input_tokens: index + 10, output_tokens: 2 }
+  }));
+  const frames = requests.map((response) => websocketDataFrame(
+    perMessageDeflatePayload({ type: "response.create", response }),
+    { masked: true, rsv1: true }
+  ));
+  const originals = frames.map((frame) => Buffer.from(frame));
+  try {
+    // Plain response frames parse synchronously while request inflation is still
+    // queued. Close immediately as well, without relying on network timing.
+    for (const [index, frame] of frames.entries()) {
+      client(frame);
+      server(websocketFrame({ type: "response.completed", response: responses[index] }));
+    }
+    assert.equal(turns.length, 0);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+  }
+  assert.deepEqual(usage, requests.map((request, index) => ({
+    request,
+    response: responses[index]
+  })));
+  assert.equal(turns.length, 0);
+  assert.deepEqual(frames, originals);
+  assert.deepEqual(client.summary(), { status: "complete", reasons: [] });
+  assert.deepEqual(server.summary(), { status: "complete", reasons: [] });
+});
+
 test("WebSocket observer reports degradation without interrupting frame handling", async () => {
   const payloads = [];
   const observe = websocketObserver(4096, (payload) => payloads.push(payload), {
