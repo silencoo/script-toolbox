@@ -39,6 +39,12 @@ expensive residential node.
 - GitHub and Docker use small local generated lists and independent proxy-first
   policies. Their client-neutral sources are also consumed directly by
   `convert-v2.js`, avoiding duplicated Clash rule definitions.
+- APNs uses an independent proxy-first policy and a generated `APNs.list`,
+  placed before generic direct exceptions and the broad Apple resource. Its
+  source contains push-specific domains and Apple's documented APNs IPv4/IPv6
+  ranges (https://support.apple.com/en-us/102266). Other Apple services retain
+  the direct-first `Apple` policy; the APNs list does not include all of
+  `17.0.0.0/8` or `akadns.net`.
 - Exact hosts are preferred for shared Google infrastructure.
 - Broad shared suffixes such as `google.com`, `googleapis.com`,
   `googleusercontent.com`, `gstatic.com`, `amazonaws.com`, and `cloudflare.com`

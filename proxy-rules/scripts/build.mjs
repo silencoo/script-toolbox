@@ -6,6 +6,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
 
 const ruleSets = [
+  {
+    source: "apns.rules",
+    name: "APNs",
+    policy: "APNs",
+    notices: [
+      "# SOURCE: https://support.apple.com/en-us/102266",
+      "# CURATED: dedicated Apple Push Notification Service routing",
+    ],
+  },
   { source: "gemini.rules", name: "Gemini", file: "gemini", policy: "Gemini" },
   { source: "openai.rules", name: "OpenAI", policy: "AI" },
   { source: "claude.rules", name: "Claude", policy: "AI" },
