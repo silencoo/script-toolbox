@@ -17,6 +17,11 @@ SPEC.loader.exec_module(manager)
 
 
 class ManagerTests(unittest.TestCase):
+    def setUp(self):
+        language = mock.patch.object(manager, "LANGUAGE", "zh_CN")
+        language.start()
+        self.addCleanup(language.stop)
+
     @staticmethod
     def command_result(returncode=0, stdout=""):
         return subprocess.CompletedProcess([], returncode, stdout=stdout)

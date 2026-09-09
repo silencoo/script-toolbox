@@ -198,15 +198,49 @@ sudo mihomo-console
 
 主要页面和快捷键：
 
-- `1` 概览：`u` 更新，`d` dry-run。
+- `1` 概览：`u` 更新，`d` 仅校验。
 - `2` 订阅：方向键选择，`Enter` 激活，`a` 添加，`x` 删除。
 - `3` 历史：查看脱敏的更新和回滚结果。
 - `4` 备份：选择后按 `Enter` 校验并恢复。
 - `5` 日志：`t` 切换更新服务/Mihomo 日志，方向键滚动。
-- 全局：`Tab` 切页，`r` 刷新，`?` 帮助，`q` 退出。
+- 全局：`Tab` 切页，`r` 刷新，`l` 切换中英文，`?` 帮助，`q` 退出。
 
 TUI 中需要输入 URL、确认危险操作或等待更新时，会临时返回普通终端；操作
 结束后按 Enter 回到控制台。TUI 至少需要 70×18 的终端。
+
+### 界面语言
+
+TUI、CLI 状态、帮助以及添加订阅、校验、更新和回滚的交互提示支持简体中文
+和英文。中文界面会把内部状态显示为“运行中”“已禁用”“校验通过”等，
+并使用“仅校验”“节点提供器”等统一术语。
+
+用全局参数 `--lang` 指定语言，放在子命令之前：
+
+```bash
+sudo mihomo-console --lang zh_CN
+sudo mihomo-console --lang en_US
+sudo mihomo-console --lang zh_CN update-active --dry-run
+sudo mihomo-console --lang en_US status
+```
+
+默认 `--lang auto`，依次读取 `MIHOMO_CONSOLE_LANG`、`LC_ALL`、`LC_MESSAGES`、
+`LANG`。`en`/`en_*` 使用英文，中文环境使用简体中文；`C`、`POSIX`、未设置或
+不支持的语言回退到中文。应用环境变量可设为 `zh_CN`、`en_US` 或 `auto`，例如：
+
+```bash
+sudo env MIHOMO_CONSOLE_LANG=zh_CN mihomo-console
+```
+
+TUI 中按 `l` 可即时切换语言，只对当前会话生效。订阅名称、文件路径、历史中
+已保存的错误详情，以及 Mihomo/systemd 原始日志保留原文；内部状态码与配置
+文件内容不受显示语言影响。
+
+从旧版升级后需退出并重新打开 TUI，正在运行的旧进程不会自动加载新代码：
+
+```bash
+./setup.sh --install-only
+sudo mihomo-console --lang zh_CN
+```
 
 ## CLI 与诊断
 
