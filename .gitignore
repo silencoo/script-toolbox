@@ -8,6 +8,8 @@ node_modules/
 .DS_Store
 __pycache__/
 *.py[cod]
+# Mihomo runtime data includes subscription URLs, controller secrets and backups.
+/mihomo-console/data/
 # Local JPopSuki data contains account-bound URL credentials and user choices.
 jpopsuki-rss-autobrr/data/subscriptions.json
 

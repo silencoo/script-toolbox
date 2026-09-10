@@ -544,6 +544,7 @@ rules: [MATCH,DIRECT]
                 **manager.DEFAULTS,
                 "target_config": str(target),
                 "backup_dir": str(backup_dir),
+                "lock_file": str(root / "lock"),
                 "subscriptions": {},
             }
             manager.save_registry(manager_config, registry)
@@ -572,6 +573,7 @@ rules: [MATCH,DIRECT]
                 **manager.DEFAULTS,
                 "target_config": str(target),
                 "backup_dir": str(backup_dir),
+                "lock_file": str(root / "lock"),
                 "subscriptions": {},
             }
             manager.save_registry(manager_config, registry)

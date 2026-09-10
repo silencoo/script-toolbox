@@ -320,27 +320,37 @@ class ContainerRuntime:
             )
 
     def update_loop(self) -> None:
-        if self.update_interval == 0:
-            self.write_state(
-                updater_enabled=False, updater_running=False, next_update=None
-            )
-            return
-
-        delay = self.update_start_delay
-        self.write_state(
-            updater_enabled=True,
-            updater_running=False,
-            next_update=future_time(delay),
-        )
-        while not self.stop_event.wait(delay):
-            self.write_state(updater_running=True, next_update=None)
-            self.run_update()
-            delay = self.update_interval
-            self.write_state(
-                updater_running=False,
-                next_update=future_time(delay),
-                last_update_finished=utc_now(),
-            )
+        settings: tuple[int, bool] | None = None
+        deadline: float | None = None
+        last_error: str | None = None
+        while not self.stop_event.is_set():
+            try:
+                registry = manager.load_registry(MANAGER_CONFIG)
+                requested = manager.update_schedule_settings(registry, self.update_interval)
+                last_error = None
+            except (manager.ManagerError, OSError) as exc:
+                # Keep the last working schedule if a file temporarily cannot be
+                # read. Changes are picked up without restarting the container.
+                requested = settings or (self.update_interval or 3600, self.update_interval > 0)
+                if last_error != str(exc):
+                    append_log(LOG_DIR / "updater.log", f"{utc_now()} 无法读取自动更新设置：{type(exc).__name__}。\n", self.log_lock)
+                    last_error = str(exc)
+            if requested != settings:
+                interval, enabled = requested
+                delay = self.update_start_delay if settings is None else interval
+                deadline = time.monotonic() + delay if enabled else None
+                settings = requested
+                self.write_state(updater_enabled=enabled, updater_running=False,
+                                 update_interval_seconds=interval,
+                                 next_update=future_time(delay) if enabled else None)
+            if deadline is not None and time.monotonic() >= deadline:
+                self.write_state(updater_running=True, next_update=None)
+                self.run_update()
+                deadline = time.monotonic() + settings[0]
+                self.write_state(updater_running=False, next_update=future_time(settings[0]),
+                                 last_update_finished=utc_now())
+            delay = max(0, deadline - time.monotonic()) if deadline is not None else 1
+            self.stop_event.wait(min(1, delay))
 
     def run(self) -> int:
         ensure_layout()

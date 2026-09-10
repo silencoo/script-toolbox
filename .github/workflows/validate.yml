@@ -94,7 +94,9 @@ jobs:
       - name: Check Bash syntax
         run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
       - name: Test Mihomo Console
-        run: python mihomo-console/test_manager.py
+        env:
+          MIHOMO_TEST_BINARY: ${{ runner.temp }}/mihomo
+        run: python -m unittest discover -s mihomo-console -v
       - name: Validate Mihomo Console container files
         run: |
           python -m py_compile mihomo-console/container_runtime.py

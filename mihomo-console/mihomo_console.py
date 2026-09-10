@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import argparse
 import copy
+import contextlib
+import io
+import platform
+import queue
 import datetime as dt
 import fcntl
 import getpass
@@ -25,8 +29,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -197,7 +203,7 @@ EN_MESSAGES: dict[str, str] = {
     "\n错误：{exc}": "\nError: {exc}",
     "\n已取消。": "\nCancelled.",
     "\n按 Enter 返回 Mihomo Console……": "\nPress Enter to return to Mihomo Console…",
-    "全局：1-5 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。": "Global: 1-5 select pages, Tab/Shift-Tab cycle pages, r refreshes, l switches language, q quits.\nOverview: u updates the active subscription; d downloads and validates only.\nProfiles: arrows select, Enter activates, u updates, d validates, a adds, x deletes.\nBackups: arrows select; Enter validates and restores, with automatic recovery on failure.\nLogs: arrows scroll; t switches between updater and Mihomo service logs.\n\nThe TUI does not display subscription URLs, secrets or proxy credentials.",
+    "全局：1-7 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。": "Global: 1-7 select pages, Tab/Shift-Tab cycle pages, r refreshes, l switches language, q quits.\nOverview: u updates the active subscription; d downloads and validates only.\nProfiles: arrows select, Enter activates, u updates, d validates, a adds, x deletes.\nBackups: arrows select; Enter validates and restores, with automatic recovery on failure.\nLogs: arrows scroll; t switches between updater and Mihomo service logs.\n\nThe TUI does not display subscription URLs, secrets or proxy credentials.",
     "快捷键": "Keyboard shortcuts",
     "尚未设置当前订阅。": "No active subscription is set.",
     "校验当前订阅": "Validate active subscription",
@@ -269,6 +275,141 @@ EN_MESSAGES: dict[str, str] = {
 }
 
 
+EN_MESSAGES.update({
+    "内核：i 安装，u 升级，b 回退，s/x/k 启动/停止/重启，e 开机启动，t 自动刷新。": "Core: i installs, u upgrades, b rolls back, s/x/k start/stop/restart, e toggles autostart, t toggles the timer.",
+    "节点：Enter 打开组或使用节点，Esc 返回，d 测试延迟，m 保存运行模式。": "Proxies: Enter opens a group or selects a proxy, Esc goes back, d tests latency, m saves the mode.",
+    "e 切换开机启动 · t 切换订阅自动刷新": "e Toggle autostart · t Toggle subscription timer",
+    "i 安装/修复 · u 升级内核 · b 回退内核": "i Install/repair · u Upgrade core · b Roll back",
+    "r 重试 · 6 内核与服务 · Tab 切换": "r Retry · 6 Core & service · Tab Pages",
+    "rule 规则模式 · global 全局代理 · direct 直连": "rule Rule mode · global Global proxy · direct Direct",
+    "s 启动 · x 停止 · k 重启": "s Start · x Stop · k Restart",
+    "↑↓ 选择 · Enter 打开/使用 · Esc 返回 · d 测速 · m 模式": "↑↓ Select · Enter Open/use · Esc Back · d Test · m Mode",
+    "上一版内核": "Previous core",
+    "不支持此服务操作。": "Unsupported service action.",
+    "主服务": "Main service",
+    "保留已安装内核：{version}": "Keeping installed core: {version}",
+    "保留现有主服务：{service}": "Keeping existing main service: {service}",
+    "内核": "Core",
+    "内核 SHA-256 校验失败，未修改已安装版本。": "Core SHA-256 verification failed; the installed version was not changed.",
+    "内核下载超时或超过大小限制。": "Core download timed out or exceeded the size limit.",
+    "内核与服务": "Core & service",
+    "内核升级失败，已恢复旧内核及服务：{error}": "Core upgrade failed; the old core and service were restored: {error}",
+    "内核升级失败，旧内核已恢复但服务启动失败：{error}": "Core upgrade failed; the old core was restored but the service failed to start: {error}",
+    "内核压缩包无效。": "Invalid core archive.",
+    "内核发布包不是有效的 Linux 可执行文件。": "The core asset is not a valid Linux executable.",
+    "内核安装完成：{version}": "Core installation complete: {version}",
+    "内核已是所选版本，无需替换或重启。": "The selected core is already installed; no replacement or restart needed.",
+    "内核或备份路径是符号链接，请通过原安装方式管理。": "The core or backup path is a symlink; use the original installation method.",
+    "内核文件": "Core binary",
+    "内核版本": "Core version",
+    "内核版本与发布元数据不一致。": "Core version does not match the release metadata.",
+    "内核路径必须是绝对路径。": "The core path must be absolute.",
+    "内核随容器镜像更新；k 重启内核。": "Update the core via the container image; k restarts it.",
+    "准备安装 {version}：{asset}": "Preparing to install {version}: {asset}",
+    "创建主服务但不启动或设置开机启动": "Create the main service without starting or enabling it",
+    "升级内核": "Upgrade core",
+    "发布包下载地址不符合官方路径，已停止安装。": "The asset URL does not match the official release path; installation stopped.",
+    "只支持官方稳定版发布。": "Only official stable releases are supported.",
+    "可用稳定版：{version} · {asset}": "Available stable release: {version} · {asset}",
+    "启用自动刷新订阅并选择更新频率吗": "Enable automatic subscription refresh and choose an interval",
+    "更新频率": "Update interval",
+    "  更新频率:      {interval}": "  Update interval: {interval}",
+    "e 开机启动 · t 自动更新 · f 更新频率": "e Autostart · t Auto-update · f Interval",
+    "t 自动更新 · f 更新频率": "t Auto-update · f Interval",
+    "停用自动刷新订阅": "Disable automatic subscription refresh",
+    "启用自动刷新订阅": "Enable automatic subscription refresh",
+    "刷新失败（r 重试）：{error}": "Refresh failed (r retries): {error}",
+    "后台加载中，仍可切换页面或退出。": "Loading in background; tabs and quit remain available.",
+    "更新间隔须为 1 分钟至 30 天，例如 30m、6h、1d。": "Use an interval from 1 minute to 30 days, e.g. 30m, 6h or 1d.",
+    "更新间隔，例如 30m、6h、1d（1 分钟至 30 天）": "Update interval, e.g. 30m, 6h, 1d (1 minute to 30 days)",
+    "更新间隔：30m / 1h / 6h / 12h / 1d，或自定义 1m 至 30d。": "Interval: 30m / 1h / 6h / 12h / 1d, or a custom value from 1m to 30d.",
+    "更新频率保存失败，已恢复原设置：{error}": "Could not save the interval; previous settings restored: {error}",
+    "更新频率保存失败，恢复也失败：{error}；{recovery}": "Could not save or restore the interval: {error}; {recovery}",
+    "更新频率：内核页面按 f 设置，t 启用或停用自动刷新。": "Schedule: press f on the Core page to set the interval, t to toggle automatic refresh.",
+    "查看或设置订阅自动更新频率": "View or set the automatic subscription refresh interval",
+    "自动更新设置已保存。": "Automatic update settings saved.",
+    "自动更新设置无效。": "Invalid automatic update settings.",
+    "订阅定时器未安装，请先运行 setup.sh。": "Subscription timer is not installed; run setup.sh first.",
+    "回退内核": "Roll back core",
+    "安装内核、初始配置和 systemd 主服务": "Install the core, initial configuration and systemd main service",
+    "安装内核与主服务": "Install core and main service",
+    "安装后引导订阅设置并打开 TUI": "Guide subscription setup and open the TUI after installation",
+    "安装完成，可运行 mihomo-console 进入控制台。": "Installation complete. Run mihomo-console to open the console.",
+    "官方发布下载失败：HTTP {code}": "Official release download failed: HTTP {code}",
+    "官方发布下载失败：{reason}": "Official release download failed: {reason}",
+    "官方发布元数据无效。": "Invalid official release metadata.",
+    "官方发布缺少 SHA-256 校验值，已停止安装。": "The official release has no SHA-256 digest; installation stopped.",
+    "官方稳定版版本号，默认 latest": "Official stable release version (default: latest)",
+    "容器内核由镜像管理，请更新容器镜像；服务生命周期由容器管理器控制。": "Update the container image to upgrade its core; the container manager controls its lifecycle.",
+    "尚无策略组，请先添加并应用订阅。": "No proxy groups yet; add and apply a subscription first.",
+    "已切换并保存运行模式：{mode}": "Switched and saved proxy mode: {mode}",
+    "已创建主服务：{service}": "Created main service: {service}",
+    "已创建仅监听本机的初始直连配置；添加订阅后即可使用代理节点。": "Created an initial direct configuration listening only on localhost; add a subscription to use proxy nodes.",
+    "已恢复上一版内核。": "Restored the previous core.",
+    "已选择节点：{group} → {node}": "Selected proxy: {group} → {node}",
+    "开机启动": "Autostart",
+    "所选节点不在此策略组中。": "The selected proxy is not a member of this group.",
+    "控制器认证失败，请检查本地 Secret 与运行配置是否一致。": "Controller authentication failed; check that the local secret matches the running configuration.",
+    "控制器请求失败：HTTP {code}": "Controller request failed: HTTP {code}",
+    "控制器返回了无效响应。": "The controller returned an invalid response.",
+    "操作订阅刷新定时器": "Operate on the subscription refresh timer",
+    "无效的 systemd 服务名：{name}": "Invalid systemd service name: {name}",
+    "无法运行 Mihomo 内核：{path}": "Cannot run the Mihomo core: {path}",
+    "无法连接 Mihomo 控制器，请检查服务和监听地址。": "Cannot connect to the Mihomo controller; check the service and listen address.",
+    "无法连接 systemd：{details}": "Cannot connect to systemd: {details}",
+    "无法重新加载 systemd：{details}": "Cannot reload systemd: {details}",
+    "暂不支持自动安装此架构：{arch}": "Automatic installation does not support this architecture yet: {arch}",
+    "服务操作失败：{details}": "Service action failed: {details}",
+    "服务操作完成：{action}": "Service action complete: {action}",
+    "服务路径必须是无控制字符的绝对路径。": "Service paths must be absolute and contain no control characters.",
+    "未配置可用的 TCP 控制器，请先配置 external-controller。": "No usable TCP controller is configured; configure external-controller first.",
+    "查看、安装、升级或回退 Mihomo 内核": "Inspect, install, upgrade or roll back the Mihomo core",
+    "查看或保存运行模式": "Show or persist the proxy mode",
+    "查看策略组、选择节点或测试延迟": "List proxy groups, select a proxy or test latency",
+    "查看策略组及节点": "List proxy groups and their members",
+    "校验通过，现在应用订阅配置吗": "Validation passed; apply the subscription configuration now",
+    "模式必须为 rule、global 或 direct。": "Mode must be rule, global or direct.",
+    "正在下载并校验官方内核……": "Downloading and verifying the official core…",
+    "此操作需要 root 权限，请使用 sudo。": "This action requires root privileges; use sudo.",
+    "此稳定版没有适合本机架构的发布包。": "This stable release has no asset for the local architecture.",
+    "此策略组不是手动选择类型。": "This group is not a manual selector.",
+    "没有可用的上一版内核。": "No previous core is available.",
+    "测试节点延迟": "Test proxy latency",
+    "版本必须为 latest 或 v主版本.次版本.修订版本。": "Version must be latest or vMAJOR.MINOR.PATCH.",
+    "现在下载并校验当前订阅吗": "Download and validate the active subscription now",
+    "现在添加第一个订阅吗": "Add the first subscription now",
+    "现有服务使用的内核路径与管理配置不同；请先校正 mihomo_binary，现有服务已保留。": "The existing service uses a different core path; correct mihomo_binary first. The existing service was preserved.",
+    "确认升级内核（运行中的服务会短暂重启）吗": "Upgrade the core (a running service will briefly restart)",
+    "确认回退内核（运行中的服务会短暂重启）吗": "Roll back the core (a running service will briefly restart)",
+    "管理主服务": "Manage main service",
+    "管理主服务或订阅刷新定时器": "Manage the main service or subscription refresh timer",
+    "自动安装仅支持使用 systemd 的 Linux。": "Automatic installation supports Linux with systemd only.",
+    "节点与模式：{mode}": "Proxies & mode: {mode}",
+    "节点延迟测试未返回有效结果。": "The proxy latency test did not return a valid result.",
+    "节点延迟：{node} · {delay} ms": "Proxy latency: {node} · {delay} ms",
+    "运行模式": "Proxy mode",
+    "选择策略组后按 Enter 查看节点": "Select a group and press Enter to view its proxies",
+    "选择节点": "Select proxy",
+    "配置文件已还原，但无法确认运行模式；请刷新状态或重启服务。": "Configuration files were restored, but the live mode is uncertain; refresh status or restart the service.",
+    "未安装": "Not installed",
+    "可用": "Available",
+    "无": "None",
+    "规则模式": "Rule",
+    "全局代理": "Global",
+    "直连模式": "Direct",
+    "手动选择": "Selector",
+    "自动测速": "URL test",
+    "故障转移": "Fallback",
+    "负载均衡": "Load balance",
+    "启动": "Start",
+    "停止": "Stop",
+    "重启": "Restart",
+    "启用": "Enable",
+    "禁用": "Disable",
+    "首次运行，立即安装 Mihomo 内核与主服务吗": "First run: install the Mihomo core and main service now"
+})
+
+
 def resolve_language(requested: str = "auto", environ: dict[str, str] | None = None) -> str:
     """CLI > app environment > LC_ALL > LC_MESSAGES > LANG; C falls back to Chinese."""
     environment = os.environ if environ is None else environ
@@ -307,6 +448,10 @@ STATE_MESSAGES = {
     "indirect": "间接启用", "generated": "已生成", "failed": "失败",
     "updated": "已更新", "unchanged": "无变化", "validated": "校验通过",
     "restored": "已恢复", "no-record": "无记录", "unknown": "未知",
+    "not-installed": "未安装", "available": "可用", "none": "无",
+    "rule": "规则模式", "global": "全局代理", "direct": "直连模式",
+    "Selector": "手动选择", "URLTest": "自动测速", "Fallback": "故障转移", "LoadBalance": "负载均衡",
+    "start": "启动", "stop": "停止", "restart": "重启", "enable": "启用", "disable": "禁用",
 }
 
 
@@ -372,6 +517,7 @@ DEFAULT_MANAGER_CONFIG = Path(
 )
 DEFAULT_UPDATER_SERVICE = "mihomo-subscription-update.service"
 DEFAULT_UPDATER_TIMER = "mihomo-subscription-update.timer"
+DEFAULT_SCHEDULE_DROPIN = Path("/etc/systemd/system") / f"{DEFAULT_UPDATER_TIMER}.d" / "zz-mihomo-console.conf"
 DEFAULT_SYSTEMD_DROPIN = (
     Path("/etc/systemd/system") / f"{DEFAULT_UPDATER_SERVICE}.d" / "paths.conf"
 )
@@ -1170,7 +1316,7 @@ def backup_rows(registry: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def rollback_backup(
+def _rollback_backup_impl(
     manager_config: Path,
     registry: dict[str, Any],
     backup_name: str,
@@ -1244,6 +1390,11 @@ def rollback_backup(
     print(tr("已恢复备份 {value1}，Mihomo 运行正常。", value1=selected.name))
 
 
+def rollback_backup(manager_config: Path, registry: dict[str, Any], backup_name: str) -> None:
+    with operation_lock(registry):
+        _rollback_backup_impl(manager_config, registry, backup_name)
+
+
 def command_text(command: list[str], *, timeout: int = 10) -> str:
     try:
         result = command_output(command, timeout=timeout)
@@ -1308,6 +1459,7 @@ def collect_status(manager_config: Path, registry: dict[str, Any]) -> dict[str, 
         "timer_enabled": timer_enabled,
         "timer_active": timer_active,
         "timer_next": timer_next if timer_next not in {"", "unknown", "n/a"} else None,
+        "update_interval": format_update_interval(current_update_interval(registry)),
         "config_exists": bool(config_data),
         "config_sha256": hashlib.sha256(config_data).hexdigest() if config_data else None,
         "summary": profile_summary_from_bytes(config_data) if config_data else {},
@@ -1324,6 +1476,7 @@ def print_status(manager_config: Path, registry: dict[str, Any]) -> None:
     print(tr("  Mihomo 服务:   {value1}", value1=format_state(status['mihomo_service'])))
     print(tr("  更新定时器:    {value1} / {value2}", value1=format_state(status['timer_active']), value2=format_state(status['timer_enabled'])))
     print(tr("  下次更新:      {value1}", value1=status['timer_next'] or tr('未知')))
+    print(tr("  更新频率:      {interval}", interval=status['update_interval']))
     print(tr("  当前订阅:      {value1}", value1=status['active_subscription'] or tr('未设置')))
     print(tr("  上次结果:      {value1}", value1=format_state(status['last_result'])))
     print(tr("  上次成功:      {value1}", value1=status['last_success'] or tr('从未')))
@@ -1402,6 +1555,609 @@ def fetch_journal(
         return [tr("无法读取日志：{exc}", exc=exc)]
     output = result.stdout.strip()
     return output.splitlines() if output else [tr("暂无日志。")]
+
+
+# Native installation and core lifecycle. The updater timer never calls these.
+RELEASE_API = "https://api.github.com/repos/MetaCubeX/mihomo/releases"
+RELEASE_TAG_RE = re.compile(r"v\d+\.\d+\.\d+")
+MAX_CORE_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_CORE_BINARY_BYTES = 200 * 1024 * 1024
+
+
+@contextlib.contextmanager
+def operation_lock(registry: dict[str, Any]):
+    path = Path(str(registry["lock_file"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ConcurrentUpdateError(tr("另一个更新任务正在运行")) from exc
+        yield
+
+
+def require_native_root(registry: dict[str, Any]) -> None:
+    if registry.get("service_backend", "systemd") != "systemd":
+        raise ManagerError(tr("容器内核由镜像管理，请更新容器镜像；服务生命周期由容器管理器控制。"))
+    if platform.system() != "Linux":
+        raise ManagerError(tr("自动安装仅支持使用 systemd 的 Linux。"))
+    if os.geteuid() != 0:
+        raise ManagerError(tr("此操作需要 root 权限，请使用 sudo。"))
+
+
+def service_name(registry: dict[str, Any]) -> str:
+    name = str(registry["systemd_service"])
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@-]*\.service", name):
+        raise ManagerError(tr("无效的 systemd 服务名：{name}", name=name))
+    return name
+
+
+def service_properties(registry: dict[str, Any]) -> dict[str, str]:
+    result = command_output([
+        "systemctl", "show", service_name(registry),
+        "--property=LoadState,ActiveState,UnitFileState,FragmentPath,ExecStart",
+    ], timeout=10)
+    if result.returncode:
+        raise ManagerError(tr("无法连接 systemd：{details}", details=result.stdout.strip()[-1000:]))
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
+def core_version(binary: Path) -> str:
+    if not binary.is_file():
+        return "not-installed"
+    result = command_output([str(binary), "-v"], timeout=10)
+    match = re.search(r"Mihomo(?: Meta)? ([^\s]+)", result.stdout, re.I)
+    if result.returncode or not match:
+        raise ManagerError(tr("无法运行 Mihomo 内核：{path}", path=binary))
+    return match.group(1)
+
+
+def core_architecture(machine: str | None = None) -> list[str]:
+    machine = (machine or platform.machine()).lower()
+    choices = {
+        "x86_64": ["amd64-v1", "amd64-compatible"],
+        "amd64": ["amd64-v1", "amd64-compatible"],
+        "aarch64": ["arm64"], "arm64": ["arm64"],
+        "armv7l": ["armv7"], "armv6l": ["armv6"],
+        "i386": ["386"], "i686": ["386"],
+    }
+    if machine not in choices:
+        raise ManagerError(tr("暂不支持自动安装此架构：{arch}", arch=machine))
+    return choices[machine]
+
+
+def fetch_release_bytes(url: str, limit: int) -> bytes:
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "mihomo-console", "Accept": "application/vnd.github+json",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            chunks = []
+            size = 0
+            deadline = time.monotonic() + 180
+            while True:
+                chunk = response.read(min(1024 * 1024, limit - size + 1))
+                if not chunk:
+                    return b"".join(chunks)
+                size += len(chunk)
+                if size > limit or time.monotonic() > deadline:
+                    raise ManagerError(tr("内核下载超时或超过大小限制。"))
+                chunks.append(chunk)
+    except urllib.error.HTTPError as exc:
+        raise ManagerError(tr("官方发布下载失败：HTTP {code}", code=exc.code)) from exc
+    except (OSError, urllib.error.URLError) as exc:
+        raise ManagerError(tr("官方发布下载失败：{reason}", reason=type(exc).__name__)) from exc
+
+
+def select_release_asset(release: dict[str, Any], architectures: list[str]) -> dict[str, str]:
+    tag = str(release.get("tag_name", ""))
+    if not RELEASE_TAG_RE.fullmatch(tag) or release.get("draft") or release.get("prerelease"):
+        raise ManagerError(tr("只支持官方稳定版发布。"))
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise ManagerError(tr("官方发布元数据无效。"))
+    for architecture in architectures:
+        name = f"mihomo-linux-{architecture}-{tag}.gz"
+        for asset in assets:
+            if not isinstance(asset, dict) or asset.get("name") != name:
+                continue
+            digest = str(asset.get("digest") or "")
+            if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+                raise ManagerError(tr("官方发布缺少 SHA-256 校验值，已停止安装。"))
+            url = f"https://github.com/MetaCubeX/mihomo/releases/download/{tag}/{name}"
+            if asset.get("browser_download_url") != url:
+                raise ManagerError(tr("发布包下载地址不符合官方路径，已停止安装。"))
+            return {"version": tag, "name": name, "url": url, "sha256": digest[7:].lower()}
+    raise ManagerError(tr("此稳定版没有适合本机架构的发布包。"))
+
+
+def resolve_core_release(version: str = "latest") -> dict[str, str]:
+    if version != "latest" and not RELEASE_TAG_RE.fullmatch(version):
+        raise ManagerError(tr("版本必须为 latest 或 v主版本.次版本.修订版本。"))
+    path = "latest" if version == "latest" else f"tags/{version}"
+    try:
+        release = json.loads(fetch_release_bytes(f"{RELEASE_API}/{path}", 4 * 1024 * 1024))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ManagerError(tr("官方发布元数据无效。")) from exc
+    if not isinstance(release, dict):
+        raise ManagerError(tr("官方发布元数据无效。"))
+    if version != "latest" and release.get("tag_name") != version:
+        raise ManagerError(tr("官方发布元数据无效。"))
+    return select_release_asset(release, core_architecture())
+
+
+def unpack_core(archive: bytes, expected_sha256: str, destination: Path) -> None:
+    if hashlib.sha256(archive).hexdigest() != expected_sha256:
+        raise ManagerError(tr("内核 SHA-256 校验失败，未修改已安装版本。"))
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(archive)) as compressed:
+            data = compressed.read(MAX_CORE_BINARY_BYTES + 1)
+    except (OSError, EOFError, zlib.error) as exc:
+        raise ManagerError(tr("内核压缩包无效。")) from exc
+    if len(data) > MAX_CORE_BINARY_BYTES or not data.startswith(b"\x7fELF"):
+        raise ManagerError(tr("内核发布包不是有效的 Linux 可执行文件。"))
+    secure_atomic_write(destination, data, mode=0o755)
+
+
+def verify_service_binary(registry: dict[str, Any], properties: dict[str, str]) -> None:
+    if properties.get("LoadState") == "not-found":
+        return
+    match = re.search(r"(?:^|[ {])path=(.*?)\s*;", properties.get("ExecStart", ""))
+    configured = Path(str(registry["mihomo_binary"]))
+    if not match or Path(match.group(1)).resolve() != configured.resolve():
+        raise ManagerError(tr("现有服务使用的内核路径与管理配置不同；请先校正 mihomo_binary，现有服务已保留。"))
+
+
+def replace_core(registry: dict[str, Any], candidate: Path) -> None:
+    """Candidate is verified before replacement; preserve inactive service state."""
+    binary = Path(str(registry["mihomo_binary"]))
+    previous = binary.with_name(binary.name + ".previous")
+    if binary.is_symlink() or previous.is_symlink():
+        raise ManagerError(tr("内核或备份路径是符号链接，请通过原安装方式管理。"))
+    core_version(candidate)
+    target = Path(str(registry["target_config"]))
+    if target.is_file():
+        validate_with_mihomo({**registry, "mihomo_binary": str(candidate)}, target)
+    properties = service_properties(registry)
+    verify_service_binary(registry, properties)
+    was_running = properties.get("ActiveState") in {"active", "activating", "reloading"}
+    old = binary.read_bytes() if binary.is_file() else None
+    if old is not None:
+        secure_atomic_write(previous, old, mode=0o755)
+    os.replace(candidate, binary)
+    fsync_directory(binary.parent)
+    try:
+        if was_running:
+            restart_mihomo(registry)
+    except (ManagerError, OSError) as exc:
+        if old is None:
+            binary.unlink(missing_ok=True)
+            raise
+        secure_atomic_write(binary, old, mode=0o755)
+        try:
+            restart_mihomo(registry)
+        except (ManagerError, OSError) as recovery:
+            raise ManagerError(tr("内核升级失败，旧内核已恢复但服务启动失败：{error}", error=recovery)) from exc
+        raise ManagerError(tr("内核升级失败，已恢复旧内核及服务：{error}", error=exc)) from exc
+
+
+def install_core(registry: dict[str, Any], *, version: str = "latest", update: bool = False,
+                 yes: bool = False) -> None:
+    require_native_root(registry)
+    binary = Path(str(registry["mihomo_binary"]))
+    if not binary.is_absolute():
+        raise ManagerError(tr("内核路径必须是绝对路径。"))
+    with operation_lock(registry):
+        if binary.exists() and not update:
+            print(tr("保留已安装内核：{version}", version=core_version(binary)))
+            return
+        release = resolve_core_release(version)
+        print(tr("准备安装 {version}：{asset}", version=release["version"], asset=release["name"]))
+        if update and binary.exists() and not yes and not confirm(tr("确认升级内核（运行中的服务会短暂重启）吗")):
+            print(tr("已取消。"))
+            return
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".mihomo-core-", dir=binary.parent) as directory:
+            candidate = Path(directory) / "mihomo"
+            print(tr("正在下载并校验官方内核……"))
+            archive = fetch_release_bytes(release["url"], MAX_CORE_ARCHIVE_BYTES)
+            unpack_core(archive, release["sha256"], candidate)
+            if core_version(candidate) != release["version"]:
+                raise ManagerError(tr("内核版本与发布元数据不一致。"))
+            if binary.is_file() and binary.read_bytes() == candidate.read_bytes():
+                print(tr("内核已是所选版本，无需替换或重启。"))
+                return
+            replace_core(registry, candidate)
+        print(tr("内核安装完成：{version}", version=release["version"]))
+
+
+def rollback_core(registry: dict[str, Any]) -> None:
+    require_native_root(registry)
+    binary = Path(str(registry["mihomo_binary"]))
+    previous = binary.with_name(binary.name + ".previous")
+    with operation_lock(registry):
+        if not previous.is_file() or previous.is_symlink():
+            raise ManagerError(tr("没有可用的上一版内核。"))
+        with tempfile.TemporaryDirectory(prefix=".mihomo-core-", dir=binary.parent) as directory:
+            candidate = Path(directory) / "mihomo"
+            secure_atomic_write(candidate, previous.read_bytes(), mode=0o755)
+            replace_core(registry, candidate)
+        print(tr("已恢复上一版内核。"))
+
+
+def render_mihomo_service(registry: dict[str, Any]) -> bytes:
+    values = []
+    for key in ("mihomo_binary", "mihomo_home", "target_config"):
+        path = Path(str(registry[key]))
+        if not path.is_absolute() or any(ord(c) < 32 or ord(c) == 127 for c in str(path)):
+            raise ManagerError(tr("服务路径必须是无控制字符的绝对路径。"))
+        values.append(quote_systemd_path(path).replace("$", "$$"))
+    binary, home, config = values
+    return (
+        "# Managed by Mihomo Console\n[Unit]\nDescription=Mihomo Daemon\n"
+        "Wants=network-online.target\nAfter=network-online.target\n\n"
+        "[Service]\nType=simple\n"
+        f"ExecStart={binary} -d {home} -f {config}\n"
+        "Restart=on-failure\nRestartSec=5\nLimitNOFILE=65536\nUMask=0077\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    ).encode()
+
+
+def install_mihomo_service(registry: dict[str, Any], *, unit_dir: Path = Path("/etc/systemd/system")) -> bool:
+    require_native_root(registry)
+    properties = service_properties(registry)
+    unit = unit_dir / service_name(registry)
+    if properties.get("LoadState") != "not-found" or unit.exists() or unit.is_symlink():
+        verify_service_binary(registry, properties)
+        print(tr("保留现有主服务：{service}", service=service_name(registry)))
+        return False
+    secure_atomic_write(unit, render_mihomo_service(registry), mode=0o644)
+    result = command_output(["systemctl", "daemon-reload"])
+    if result.returncode:
+        raise ManagerError(tr("无法重新加载 systemd：{details}", details=result.stdout.strip()[-1000:]))
+    print(tr("已创建主服务：{service}", service=service_name(registry)))
+    return True
+
+
+def service_action(registry: dict[str, Any], action: str, *, timer: bool = False) -> None:
+    allowed = {"start", "stop", "restart", "enable", "disable"}
+    if action not in allowed:
+        raise ManagerError(tr("不支持此服务操作。"))
+    if registry.get("service_backend") == "container" and action == "restart" and not timer:
+        restart_mihomo(registry)
+        return
+    require_native_root(registry)
+    with (contextlib.nullcontext() if timer else operation_lock(registry)):
+        unit = DEFAULT_UPDATER_TIMER if timer else service_name(registry)
+        if timer and action in {"start", "restart", "enable"}:
+            if not registry.get("active") or registry["active"] not in registry.get("subscriptions", {}):
+                raise ManagerError(tr("尚未选择当前订阅"))
+        if not timer and action in {"start", "restart"}:
+            validate_with_mihomo(registry, Path(str(registry["target_config"])))
+            # restart_mihomo also starts an inactive unit and verifies stability.
+            if action == "restart" or service_properties(registry).get("ActiveState") != "active":
+                restart_mihomo(registry)
+        else:
+            command = ["systemctl", action]
+            if timer and action in {"enable", "disable"}:
+                command.append("--now")
+            result = command_output([*command, unit])
+            if result.returncode:
+                raise ManagerError(tr("服务操作失败：{details}", details=result.stdout.strip()[-1000:]))
+        print(tr("服务操作完成：{action}", action=format_state(action)))
+
+
+def parse_update_interval(value: str) -> int:
+    match = re.fullmatch(r"([1-9][0-9]{0,7})([mhd])", value.strip().lower())
+    seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 0
+    if not 60 <= seconds <= 30 * 86400:
+        raise ManagerError(tr("更新间隔须为 1 分钟至 30 天，例如 30m、6h、1d。"))
+    return seconds
+
+
+def format_update_interval(seconds: int) -> str:
+    for unit, scale in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds > 0 and seconds % scale == 0:
+            return f"{seconds // scale}{unit}"
+    return f"{seconds}s"
+
+
+def update_schedule_settings(registry: dict[str, Any], default_interval: int = 3600) -> tuple[int, bool]:
+    settings = ensure_mapping(registry.get("update_schedule", {}), "update_schedule")
+    interval = settings.get("interval_seconds", default_interval or 3600)
+    enabled = settings.get("enabled", default_interval > 0)
+    if (type(interval) is not int or interval <= 0 or type(enabled) is not bool):
+        raise ManagerError(tr("自动更新设置无效。"))
+    return interval, enabled
+
+
+def current_update_interval(registry: dict[str, Any]) -> int:
+    default = 3600
+    if registry.get("service_backend") == "container":
+        runtime = read_container_runtime(registry)
+        default = int(runtime.get("update_interval_seconds") or os.environ.get("UPDATE_INTERVAL_SECONDS", 3600))
+    return update_schedule_settings(registry, default)[0]
+
+
+def render_update_schedule(seconds: int) -> bytes:
+    # Reset every trigger before adding ours, including any older calendar rule.
+    return ("# Managed by Mihomo Console\n[Timer]\n"
+            "OnBootSec=\nOnStartupSec=\nOnActiveSec=\nOnUnitActiveSec=\n"
+            "OnUnitInactiveSec=\nOnCalendar=\n"
+            f"OnActiveSec={seconds}s\nOnUnitInactiveSec={seconds}s\n"
+            "RandomizedDelaySec=0\nAccuracySec=1s\n").encode()
+
+
+def configure_update_schedule(manager_config: Path, registry: dict[str, Any],
+                              interval: str | None = None, *, enabled: bool | None = None,
+                              dropin: Path = DEFAULT_SCHEDULE_DROPIN) -> None:
+    seconds = parse_update_interval(interval) if interval is not None else None
+    native = registry.get("service_backend", "systemd") == "systemd"
+    if native:
+        require_native_root(registry)
+    with operation_lock(registry):
+        latest = load_registry(manager_config)
+        if enabled and latest.get("active") not in latest.get("subscriptions", {}):
+            raise ManagerError(tr("尚未选择当前订阅"))
+        settings = ensure_mapping(latest.get("update_schedule", {}), "update_schedule").copy()
+        if seconds is not None:
+            settings["interval_seconds"] = seconds
+        if not native and enabled is not None:
+            settings["enabled"] = enabled
+        latest["update_schedule"] = settings
+        if native:
+            def systemctl(*arguments: str) -> str:
+                result = command_output(["systemctl", *arguments], timeout=20)
+                if result.returncode:
+                    raise ManagerError(tr("服务操作失败：{details}", details=result.stdout.strip()[-1000:]))
+                return result.stdout
+
+            output = systemctl("show", DEFAULT_UPDATER_TIMER, "--property=LoadState,ActiveState,UnitFileState")
+            properties = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+            if properties.get("LoadState") != "loaded":
+                raise ManagerError(tr("订阅定时器未安装，请先运行 setup.sh。"))
+            old_dropin = dropin.read_bytes() if dropin.exists() else None
+            old_registry = manager_config.read_bytes()
+            try:
+                if seconds is not None:
+                    secure_atomic_write(dropin, render_update_schedule(seconds), mode=0o644)
+                    systemctl("daemon-reload")
+                if enabled is not None:
+                    systemctl("enable" if enabled else "disable", "--now", DEFAULT_UPDATER_TIMER)
+                if seconds is not None and enabled is not False and properties.get("ActiveState") == "active":
+                    systemctl("restart", DEFAULT_UPDATER_TIMER)
+                save_registry(manager_config, latest)
+            except (OSError, ManagerError) as exc:
+                try:
+                    if seconds is not None:
+                        if old_dropin is None:
+                            dropin.unlink(missing_ok=True)
+                        else:
+                            secure_atomic_write(dropin, old_dropin, mode=0o644)
+                        systemctl("daemon-reload")
+                    secure_atomic_write(manager_config, old_registry)
+                    if enabled is not None:
+                        systemctl("enable" if properties.get("UnitFileState", "").startswith("enabled") else "disable", DEFAULT_UPDATER_TIMER)
+                    systemctl("restart" if properties.get("ActiveState") == "active" else "stop", DEFAULT_UPDATER_TIMER)
+                except (OSError, ManagerError) as recovery:
+                    raise ManagerError(tr("更新频率保存失败，恢复也失败：{error}；{recovery}", error=exc, recovery=recovery)) from exc
+                raise ManagerError(tr("更新频率保存失败，已恢复原设置：{error}", error=exc)) from exc
+        else:
+            save_registry(manager_config, latest)
+        registry.clear()
+        registry.update(latest)
+    print(tr("自动更新设置已保存。"))
+
+
+def choose_update_schedule(manager_config: Path, registry: dict[str, Any], *, enabled: bool | None = None) -> None:
+    print(tr("更新间隔：30m / 1h / 6h / 12h / 1d，或自定义 1m 至 30d。"))
+    interval = ask(tr("更新频率"), format_update_interval(current_update_interval(registry)))
+    configure_update_schedule(manager_config, registry, interval, enabled=enabled)
+
+
+def bootstrap_install(manager_config: Path, *, version: str = "latest", start: bool = True) -> None:
+    registry = load_registry(manager_config) if manager_config.exists() else copy.deepcopy(DEFAULTS)
+    require_native_root(registry)
+    service_properties(registry)  # Fail before writing files if systemd is unavailable.
+    for key in ("mihomo_home", "backup_dir"):
+        Path(str(registry[key])).mkdir(parents=True, exist_ok=True)
+    overlay_path = Path(str(registry["overlay_file"]))
+    if not overlay_path.exists():
+        overlay = {
+            "mixed-port": 7890, "allow-lan": False, "bind-address": "127.0.0.1",
+            "external-controller": "127.0.0.1:9090", "secret": secrets.token_hex(32),
+            "profile": {"store-selected": True},
+        }
+        existing = Path(str(registry["target_config"]))
+        if existing.is_file():
+            current = read_yaml_mapping(existing)
+            overlay.update({key: current[key] for key in overlay if key in current})
+        secure_atomic_write(overlay_path, yaml.safe_dump(overlay).encode(), mode=0o600)
+    if not manager_config.exists():
+        save_registry(manager_config, registry)
+    install_core(registry, version=version, yes=True)
+    target = Path(str(registry["target_config"]))
+    if not target.exists():
+        profile = deep_merge({"mode": "rule", "log-level": "info", "proxies": [],
+                              "rules": ["MATCH,DIRECT"]}, read_yaml_mapping(overlay_path))
+        secure_atomic_write(target, yaml.safe_dump(profile).encode(), mode=0o600)
+        print(tr("已创建仅监听本机的初始直连配置；添加订阅后即可使用代理节点。"))
+    created = install_mihomo_service(registry)
+    install_systemd_sandbox(manager_config, registry)
+    if created and start:
+        service_action(registry, "start")
+        service_action(registry, "enable")
+    print(tr("安装完成，可运行 mihomo-console 进入控制台。"))
+
+
+def onboard(manager_config: Path) -> None:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return
+    registry = load_registry(manager_config)
+    try:
+        if not registry["subscriptions"] and confirm(tr("现在添加第一个订阅吗"), True):
+            add_subscription(manager_config, registry)
+        if registry.get("active") and confirm(tr("现在下载并校验当前订阅吗"), True):
+            update_profile(manager_config, registry, str(registry["active"]), dry_run=True)
+            if confirm(tr("校验通过，现在应用订阅配置吗"), True):
+                update_profile(manager_config, registry, str(registry["active"]))
+                if confirm(tr("启用自动刷新订阅并选择更新频率吗"), True):
+                    choose_update_schedule(manager_config, registry, enabled=True)
+    except ManagerError as exc:
+        eprint(tr("错误：{exc}", exc=exc))
+        input(tr("\n按 Enter 返回 Mihomo Console……"))
+    launch_tui(manager_config)
+
+
+def collect_core_status(registry: dict[str, Any]) -> dict[str, str]:
+    binary = Path(str(registry["mihomo_binary"]))
+    result = {"binary": str(binary), "version": "unknown", "enabled": "unknown",
+              "backup": "available" if binary.with_name(binary.name + ".previous").is_file() else "none"}
+    try:
+        result["version"] = core_version(binary)
+        if registry.get("service_backend", "systemd") == "systemd":
+            properties = service_properties(registry)
+            result["enabled"] = properties.get("UnitFileState", "unknown")
+            result["unit"] = properties.get("FragmentPath", "")
+    except (ManagerError, OSError) as exc:
+        result["error"] = str(exc)
+    return result
+
+
+class NoControllerRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
+                         headers: Any, newurl: str) -> None:
+        return None  # Never forward the controller secret to a redirect target.
+
+
+def controller_endpoint(registry: dict[str, Any]) -> tuple[str, str]:
+    config = read_yaml_mapping(Path(str(registry["target_config"])))
+    address = str(config.get("external-controller") or "")
+    try:
+        parsed = urllib.parse.urlsplit("http://" + address)
+        host, port = parsed.hostname, parsed.port
+        if not host or not port or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+            raise ValueError("invalid address")
+    except ValueError as exc:
+        raise ManagerError(tr("未配置可用的 TCP 控制器，请先配置 external-controller。")) from exc
+    host = {"0.0.0.0": "127.0.0.1", "*": "127.0.0.1", "::": "::1"}.get(host, host)
+    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return f"http://{authority}", str(config.get("secret") or "")
+
+
+def controller_request(registry: dict[str, Any], path: str, *, method: str = "GET",
+                       payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    endpoint, secret = controller_endpoint(registry)
+    headers = {"Accept": "application/json"}
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    data = None
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode()
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(endpoint + path, data=data, headers=headers, method=method)
+    # Local controller traffic must not use HTTP(S)_PROXY from the shell.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoControllerRedirect())
+    try:
+        with opener.open(request, timeout=10) as response:
+            raw = response.read(8 * 1024 * 1024 + 1)
+            if len(raw) > 8 * 1024 * 1024:
+                raise ValueError("oversized response")
+            result = json.loads(raw) if raw else {}
+            if not isinstance(result, dict):
+                raise ValueError("invalid response")
+            return result
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise ManagerError(tr("控制器认证失败，请检查本地 Secret 与运行配置是否一致。")) from exc
+        raise ManagerError(tr("控制器请求失败：HTTP {code}", code=exc.code)) from exc
+    except (OSError, urllib.error.URLError) as exc:
+        raise ManagerError(tr("无法连接 Mihomo 控制器，请检查服务和监听地址。")) from exc
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ManagerError(tr("控制器返回了无效响应。")) from exc
+
+
+def proxy_groups(registry: dict[str, Any]) -> dict[str, Any]:
+    proxies = controller_request(registry, "/proxies").get("proxies", {})
+    if not isinstance(proxies, dict):
+        raise ManagerError(tr("控制器返回了无效响应。"))
+    groups = {
+        name: details for name, details in proxies.items()
+        if isinstance(details, dict) and isinstance(details.get("all"), list)
+    }
+    if any(not isinstance(node, str) for group in groups.values() for node in group["all"]):
+        raise ManagerError(tr("控制器返回了无效响应。"))
+    return groups
+
+
+def select_proxy(registry: dict[str, Any], group: str, node: str) -> None:
+    groups = proxy_groups(registry)
+    details = groups.get(group, {})
+    if details.get("type") != "Selector":
+        raise ManagerError(tr("此策略组不是手动选择类型。"))
+    if node not in details.get("all", []):
+        raise ManagerError(tr("所选节点不在此策略组中。"))
+    controller_request(registry, "/proxies/" + urllib.parse.quote(group, safe=""),
+                       method="PUT", payload={"name": node})
+    print(tr("已选择节点：{group} → {node}", group=group, node=node))
+
+
+def test_proxy_delay(registry: dict[str, Any], node: str) -> int:
+    query = urllib.parse.urlencode({"url": "https://www.gstatic.com/generate_204", "timeout": 5000})
+    result = controller_request(registry, "/proxies/" + urllib.parse.quote(node, safe="") + "/delay?" + query)
+    delay = result.get("delay")
+    if not isinstance(delay, int) or isinstance(delay, bool) or delay < 0:
+        raise ManagerError(tr("节点延迟测试未返回有效结果。"))
+    print(tr("节点延迟：{node} · {delay} ms", node=node, delay=delay))
+    return delay
+
+
+def set_proxy_mode(registry: dict[str, Any], mode: str) -> None:
+    if mode not in {"rule", "global", "direct"}:
+        raise ManagerError(tr("模式必须为 rule、global 或 direct。"))
+    with operation_lock(registry):
+        previous_mode = controller_request(registry, "/configs").get("mode")
+        if previous_mode not in {"rule", "global", "direct"}:
+            raise ManagerError(tr("控制器返回了无效响应。"))
+        target = Path(str(registry["target_config"]))
+        overlay_path = Path(str(registry["overlay_file"]))
+        before_config = target.read_bytes()
+        before_overlay = overlay_path.read_bytes() if overlay_path.exists() else None
+        profile = read_yaml_mapping(target)
+        overlay = read_yaml_mapping(overlay_path, missing_ok=True)
+        profile["mode"] = overlay["mode"] = mode
+        normalize_mihomo_compatibility(profile)
+        candidate_data = yaml.dump(profile, Dumper=MihomoSafeDumper, allow_unicode=True, sort_keys=False).encode()
+        with tempfile.TemporaryDirectory(prefix=".mihomo-mode-", dir=target.parent) as directory:
+            candidate = Path(directory) / "config.yaml"
+            secure_atomic_write(candidate, candidate_data, mode=0o600)
+            validate_with_mihomo(registry, candidate)
+        requested = False
+        try:
+            secure_atomic_write(overlay_path, yaml.safe_dump(overlay, allow_unicode=True).encode(), mode=0o600)
+            secure_atomic_write(target, candidate_data, mode=0o600, preserve_owner_from=target)
+            requested = True
+            controller_request(registry, "/configs", method="PATCH", payload={"mode": mode})
+        except (ManagerError, OSError) as exc:
+            secure_atomic_write(target, before_config, mode=0o600, preserve_owner_from=target)
+            if before_overlay is None:
+                overlay_path.unlink(missing_ok=True)
+            else:
+                secure_atomic_write(overlay_path, before_overlay, mode=0o600)
+            if requested:
+                try:
+                    controller_request(registry, "/configs", method="PATCH", payload={"mode": previous_mode})
+                except ManagerError as recovery:
+                    raise ManagerError(tr("配置文件已还原，但无法确认运行模式；请刷新状态或重启服务。")) from recovery
+            raise
+    print(tr("已切换并保存运行模式：{mode}", mode=format_state(mode)))
+
+
+def print_proxy_groups(registry: dict[str, Any]) -> None:
+    for name, group in proxy_groups(registry).items():
+        print(f"{name} [{format_state(group.get('type'))}] → {group.get('now', '-')}")
+        for node in group.get("all", []):
+            print(f"  {'*' if node == group.get('now') else ' '} {node}")
 
 
 def configure_overlay(registry: dict[str, Any], *, initial: bool = False) -> str | None:
@@ -1611,7 +2367,7 @@ def fit_display(value: str, width: int) -> str:
 class ConsoleTUI:
     """Small dependency-free curses dashboard for SSH administration."""
 
-    PAGES = ("概览", "订阅", "历史", "备份", "日志")
+    PAGES = ("概览", "订阅", "历史", "备份", "日志", "内核", "节点")
 
     def __init__(self, screen: Any, curses_module: Any, manager_config: Path):
         self.screen = screen
@@ -1627,18 +2383,116 @@ class ConsoleTUI:
         self.status: dict[str, Any] = {}
         self.backups: list[dict[str, Any]] = []
         self.logs: list[str] = []
+        self.core_status: dict[str, str] = {}
+        self.groups: dict[str, Any] = {}
+        self.live_config: dict[str, Any] = {}
+        self.controller_error: str | None = None
+        self.group_index = 0
+        self.node_index = 0
+        self.open_group: str | None = None
+        self._results: queue.Queue = queue.Queue()
+        self._pending: set[str] = set()
+        self._checked: dict[str, float] = {}
+        self._errors: dict[str, str] = {}
+        self._generation = 0
+        self._closed = False
 
-    def refresh(self) -> None:
-        self.registry = load_registry(self.manager_config)
-        self.status = collect_status(self.manager_config, self.registry)
-        self.backups = backup_rows(self.registry)
-        self.logs = fetch_journal(self.log_unit, registry=self.registry)
+    def page_source(self) -> str:
+        return {3: "backups", 4: "logs", 5: "core", 6: "proxies"}.get(self.page, "registry")
+
+    def invalidate(self) -> None:
+        # Old readers may still finish, but must never overwrite post-action data.
+        self._generation += 1
+        self._checked.clear()
+        self._errors.clear()
+
+    def request_read(self, source: str, action: Callable[[], Any]) -> None:
+        if self._closed or source in self._pending:
+            return
+        if time.monotonic() - self._checked.get(source, float("-inf")) < 5:
+            return
+        self._pending.add(source)
+        generation, log_unit = self._generation, self.log_unit
+
+        def read() -> None:
+            value, error = None, None
+            try:
+                value = action()
+            except Exception as exc:
+                error = str(exc)
+            self._results.put((source, generation, log_unit, value, error))
+
+        # At most one reader per source (six in total); slow I/O never holds the
+        # curses thread or delays exit. Workers only read independent snapshots.
+        threading.Thread(target=read, name=f"console-{source}", daemon=True).start()
+
+    def refresh(self, *, force: bool = True) -> None:
+        if force:
+            self.invalidate()
+        self.request_read("registry", lambda: load_registry(self.manager_config))
+        if not self.registry or "registry" not in self._checked:
+            return
+        registry = copy.deepcopy(self.registry)
+        self.request_read("status", lambda: collect_status(self.manager_config, registry))
+        source = self.page_source()
+        if source == "backups":
+            self.request_read(source, lambda: backup_rows(registry))
+        elif source == "logs":
+            unit = self.log_unit
+            self.request_read(source, lambda: fetch_journal(unit, registry=registry))
+        elif source == "core":
+            self.request_read(source, lambda: collect_core_status(registry))
+        elif source == "proxies":
+            self.request_read(source, lambda: (proxy_groups(registry), controller_request(registry, "/configs")))
+
+    def poll_refresh(self) -> bool:
+        changed = False
+        while not self._results.empty():
+            source, generation, unit, value, error = self._results.get_nowait()
+            self._pending.discard(source)
+            if generation != self._generation or (source == "logs" and unit != self.log_unit):
+                continue
+            changed = True
+            if source == "registry" and not error and self.registry != value:
+                self.invalidate()
+                self.registry = value
+            self._checked[source] = time.monotonic()
+            if error:
+                self._errors[source] = error
+                continue
+            self._errors.pop(source, None)
+            if source == "status":
+                self.status = value
+            elif source == "backups":
+                self.backups = value
+            elif source == "logs":
+                self.logs = value
+            elif source == "core":
+                self.core_status = value
+            elif source == "proxies":
+                self.groups, self.live_config = value
+                self.controller_error = None
+                self.group_index = min(self.group_index, max(0, len(self.groups) - 1))
+                if self.open_group not in self.groups:
+                    self.open_group = None
         self.subscription_index = min(
             self.subscription_index,
             max(0, len(self.registry.get("subscriptions", {})) - 1),
         )
         self.backup_index = min(self.backup_index, max(0, len(self.backups) - 1))
         self.log_scroll = min(self.log_scroll, max(0, len(self.logs) - 1))
+        self.controller_error = self._errors.get("proxies")
+        self.refresh(force=False)
+        return changed
+
+    def close(self) -> None:
+        self._closed = True
+        self.invalidate()
+
+    def change_page(self, index: int) -> None:
+        self.page = index % len(self.PAGES)
+        self.log_scroll = 0
+        self.refresh(force=False)
 
     def put(self, row: int, column: int, value: str, attr: int = 0) -> None:
         height, width = self.screen.getmaxyx()
@@ -1670,8 +2524,16 @@ class ConsoleTUI:
         self.put(1, 1, tr("l 中文 / English · ? 帮助 · q 退出"), self.curses.A_DIM)
 
         nav_column = 1
-        for index, name in enumerate(self.PAGES):
+        nav_width = sum(display_width(tr(name)) + 7 for name in self.PAGES)
+        first = max(0, self.page - 3) if nav_width >= width else 0
+        if first:
+            self.put(2, 0, "‹")
+        for index in range(first, len(self.PAGES)):
+            name = self.PAGES[index]
             item = f" {index + 1} {tr(name)} "
+            if nav_column + display_width(item) >= width - 2:
+                self.put(2, width - 2, "›")
+                break
             attr = self.curses.A_REVERSE | self.curses.A_BOLD if index == self.page else 0
             self.put(2, nav_column, item, attr)
             nav_column += display_width(item) + 2
@@ -1685,10 +2547,19 @@ class ConsoleTUI:
             self.draw_history(5)
         elif self.page == 3:
             self.draw_backups(5)
-        else:
+        elif self.page == 4:
             self.draw_logs(5)
+        elif self.page == 5:
+            self.draw_core(5)
+        else:
+            self.draw_proxies(5)
 
         self.put(height - 2, 0, "─" * max(1, width - 1), self.curses.color_pair(4))
+        error = next((self._errors[s] for s in ("registry", self.page_source(), "status") if s in self._errors), None)
+        if error:
+            self.message = tr("刷新失败（r 重试）：{error}", error=error)
+        elif self._pending & {"registry", "status", self.page_source()}:
+            self.message = tr("后台加载中，仍可切换页面或退出。")
         self.put(height - 1, 1, self.message, self.curses.A_DIM)
         self.screen.refresh()
 
@@ -1799,7 +2670,122 @@ class ConsoleTUI:
             return None
         return names[min(self.subscription_index, len(names) - 1)]
 
+    def draw_core(self, start: int) -> None:
+        self.put(start, 2, tr("内核与服务"), self.curses.A_BOLD)
+        rows = [
+            (tr("内核版本"), format_state(self.core_status.get("version"))),
+            (tr("主服务"), format_state(self.status.get("mihomo_service"))),
+            (tr("开机启动"), format_state(self.core_status.get("enabled"))),
+            (tr("自动更新"), format_state(self.status.get("timer_enabled"))),
+            (tr("更新频率"), self.status.get("update_interval", "-")),
+            (tr("内核文件"), self.core_status.get("binary", "-")),
+            (tr("上一版内核"), format_state(self.core_status.get("backup", "none"))),
+        ]
+        for offset, (label, value) in enumerate(rows, 1):
+            self.put(start + offset, 3, fit_display(label, 16) + "  " + value)
+        if self.registry.get("service_backend") == "container":
+            self.put(start + 8, 3, tr("内核随容器镜像更新；k 重启内核。"))
+            self.put(start + 9, 3, tr("t 自动更新 · f 更新频率"))
+        else:
+            self.put(start + 8, 3, tr("i 安装/修复 · u 升级内核 · b 回退内核"))
+            self.put(start + 9, 3, tr("s 启动 · x 停止 · k 重启"))
+            self.put(start + 10, 3, tr("e 开机启动 · t 自动更新 · f 更新频率"))
+        self.message = self.core_status.get("error") or tr("r 刷新 · Tab 切换 · q 退出")
+
+    def draw_proxies(self, start: int) -> None:
+        mode = format_state(self.live_config.get("mode"))
+        self.put(start, 2, tr("节点与模式：{mode}", mode=mode), self.curses.A_BOLD)
+        if self.controller_error:
+            self.put(start + 2, 3, self.controller_error, self.curses.color_pair(3))
+            self.message = tr("r 重试 · 6 内核与服务 · Tab 切换")
+            return
+        group = self.groups.get(self.open_group, {})
+        items = group.get("all", []) if self.open_group else list(self.groups)
+        if not items:
+            self.put(start + 2, 3, tr("尚无策略组，请先添加并应用订阅。"))
+        height, _ = self.screen.getmaxyx()
+        available = max(1, height - start - 4)
+        selected = self.node_index if self.open_group else self.group_index
+        selected = min(selected, max(0, len(items) - 1))
+        if self.open_group:
+            self.node_index = selected
+            self.put(start + 1, 3, str(self.open_group))
+        else:
+            self.group_index = selected
+            self.put(start + 1, 3, tr("选择策略组后按 Enter 查看节点"))
+        first = max(0, selected - available + 1)
+        for offset, name in enumerate(items[first:first + available]):
+            index = first + offset
+            if self.open_group:
+                text = f"{'*' if name == group.get('now') else ' '} {name}"
+            else:
+                details = self.groups[name]
+                text = f"{name} [{format_state(details.get('type'))}] → {details.get('now', '-')}"
+            self.put(start + 2 + offset, 3, text,
+                     self.curses.A_REVERSE if index == selected else 0)
+        self.message = tr("↑↓ 选择 · Enter 打开/使用 · Esc 返回 · d 测速 · m 模式")
+
+    def choose_mode(self) -> None:
+        print(tr("rule 规则模式 · global 全局代理 · direct 直连"))
+        mode = ask(tr("运行模式"), str(self.live_config.get("mode") or "rule"))
+        set_proxy_mode(self.registry, mode)
+
+    def handle_core_key(self, key: int) -> None:
+        if key == ord("i"):
+            self.run_external(tr("安装内核与主服务"), lambda: bootstrap_install(self.manager_config))
+        elif key == ord("u"):
+            self.run_external(tr("升级内核"), lambda: install_core(self.registry, update=True))
+        elif key == ord("b"):
+            def restore() -> None:
+                if confirm(tr("确认回退内核（运行中的服务会短暂重启）吗")):
+                    rollback_core(self.registry)
+            self.run_external(tr("回退内核"), restore)
+        elif key in (ord("s"), ord("x"), ord("k")):
+            action = {ord("s"): "start", ord("x"): "stop", ord("k"): "restart"}[key]
+            self.run_external(tr("管理主服务"), lambda: service_action(self.registry, action))
+        elif key == ord("e"):
+            if self.core_status.get("enabled", "unknown") == "unknown":
+                return
+            enabled = self.core_status.get("enabled", "").startswith("enabled")
+            self.run_external(tr("开机启动"), lambda: service_action(self.registry, "disable" if enabled else "enable"))
+        elif key == ord("t"):
+            if self.status.get("timer_enabled", "unknown") == "unknown":
+                return
+            enabled = str(self.status.get("timer_enabled", "")).startswith("enabled")
+            self.run_external(tr("自动更新"), lambda: configure_update_schedule(self.manager_config, self.registry, enabled=not enabled))
+        elif key == ord("f"):
+            self.run_external(tr("更新频率"), lambda: choose_update_schedule(self.manager_config, self.registry))
+
+    def handle_proxy_key(self, key: int) -> None:
+        if key in (27, 8, 127):
+            self.open_group = None
+            return
+        if key == ord("m"):
+            self.run_external(tr("运行模式"), self.choose_mode)
+            return
+        group = self.groups.get(self.open_group, {})
+        items = group.get("all", []) if self.open_group else list(self.groups)
+        if not items:
+            return
+        index = self.node_index if self.open_group else self.group_index
+        index = min(index, len(items) - 1)
+        if key in (self.curses.KEY_UP, self.curses.KEY_DOWN):
+            index = max(0, min(len(items) - 1, index + (1 if key == self.curses.KEY_DOWN else -1)))
+            if self.open_group:
+                self.node_index = index
+            else:
+                self.group_index = index
+        elif key in (10, 13, self.curses.KEY_ENTER):
+            if self.open_group:
+                self.run_external(tr("选择节点"), lambda: select_proxy(self.registry, str(self.open_group), items[index]))
+            else:
+                self.open_group = items[index]
+                self.node_index = 0
+        elif key == ord("d"):
+            self.run_external(tr("测试节点延迟"), lambda: test_proxy_delay(self.registry, items[index]))
+
     def run_external(self, title: str, action: Callable[[], None]) -> None:
+        self.invalidate()
         self.curses.def_prog_mode()
         self.curses.endwin()
         print(f"\n=== {title} ===\n")
@@ -1821,8 +2807,11 @@ class ConsoleTUI:
     def show_help(self) -> None:
         def help_text() -> None:
             print(
-                tr("全局：1-5 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。")
+                tr("全局：1-7 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。")
             )
+            print(tr("内核：i 安装，u 升级，b 回退，s/x/k 启动/停止/重启，e 开机启动，t 自动刷新。"))
+            print(tr("更新频率：内核页面按 f 设置，t 启用或停用自动刷新。"))
+            print(tr("节点：Enter 打开组或使用节点，Esc 返回，d 测试延迟，m 保存运行模式。"))
 
         self.run_external(tr("快捷键"), help_text)
 
@@ -1836,20 +2825,25 @@ class ConsoleTUI:
         if key == ord("?"):
             self.show_help()
             return True
-        if ord("1") <= key <= ord("5"):
-            self.page = key - ord("1")
-            self.log_scroll = 0
+        if ord("1") <= key < ord("1") + len(self.PAGES):
+            self.change_page(key - ord("1"))
             return True
         if key in (9, self.curses.KEY_RIGHT):
-            self.page = (self.page + 1) % len(self.PAGES)
-            self.log_scroll = 0
+            self.change_page(self.page + 1)
             return True
         if key in (self.curses.KEY_BTAB, self.curses.KEY_LEFT):
-            self.page = (self.page - 1) % len(self.PAGES)
-            self.log_scroll = 0
+            self.change_page(self.page - 1)
             return True
         if key in (ord("r"), ord("R")):
             self.refresh()
+            return True
+        if not self.registry:
+            return True
+        if self.page == 5:
+            self.handle_core_key(key)
+            return True
+        if self.page == 6:
+            self.handle_proxy_key(key)
             return True
 
         if self.page == 0 and key in (ord("u"), ord("d")):
@@ -1938,12 +2932,16 @@ class ConsoleTUI:
                     else DEFAULT_UPDATER_SERVICE
                 )
                 self.log_scroll = 0
-                self.logs = fetch_journal(self.log_unit, registry=self.registry)
+                self.logs = []
+                self._checked.pop("logs", None)
+                self._errors.pop("logs", None)
+                self.refresh(force=False)
             return True
         return True
 
     def run(self) -> None:
         self.screen.keypad(True)
+        self.screen.timeout(100)
         try:
             self.curses.curs_set(0)
         except self.curses.error:
@@ -1957,9 +2955,18 @@ class ConsoleTUI:
             self.curses.init_pair(4, self.curses.COLOR_BLUE, -1)
         self.refresh()
         running = True
-        while running:
-            self.draw()
-            running = self.handle_key(self.screen.getch())
+        dirty = True
+        try:
+            while running:
+                dirty = self.poll_refresh() or dirty
+                if dirty:
+                    self.draw()
+                key = self.screen.getch()
+                dirty = key != -1
+                if dirty:
+                    running = self.handle_key(key)
+        finally:
+            self.close()
 
 
 def launch_tui(manager_config: Path) -> None:
@@ -2018,6 +3025,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    install_parser = subparsers.add_parser("install", help=tr("安装内核、初始配置和 systemd 主服务"))
+    install_parser.add_argument("--version", default="latest", help=tr("官方稳定版版本号，默认 latest"))
+    install_parser.add_argument("--no-start", action="store_true", help=tr("创建主服务但不启动或设置开机启动"))
+    install_parser.add_argument("--interactive", action="store_true", help=tr("安装后引导订阅设置并打开 TUI"))
+    core_parser = subparsers.add_parser("core", help=tr("查看、安装、升级或回退 Mihomo 内核"))
+    core_parser.add_argument("action", choices=("status", "check", "install", "update", "rollback"), nargs="?", default="status")
+    core_parser.add_argument("--version", default="latest", help=tr("官方稳定版版本号，默认 latest"))
+    core_parser.add_argument("--yes", action="store_true", help=tr("跳过交互确认"))
+    service_parser = subparsers.add_parser("service", help=tr("管理主服务或订阅刷新定时器"))
+    service_parser.add_argument("action", choices=("status", "start", "stop", "restart", "enable", "disable"), nargs="?", default="status")
+    service_parser.add_argument("--timer", action="store_true", help=tr("操作订阅刷新定时器"))
+    schedule_parser = subparsers.add_parser("schedule", help=tr("查看或设置订阅自动更新频率"))
+    schedule_parser.add_argument("interval", nargs="?", help=tr("更新间隔，例如 30m、6h、1d（1 分钟至 30 天）"))
+    schedule_state = schedule_parser.add_mutually_exclusive_group()
+    schedule_state.add_argument("--enable", action="store_true", help=tr("启用自动刷新订阅"))
+    schedule_state.add_argument("--disable", action="store_true", help=tr("停用自动刷新订阅"))
+    proxies_parser = subparsers.add_parser("proxies", help=tr("查看策略组、选择节点或测试延迟"))
+    proxy_commands = proxies_parser.add_subparsers(dest="proxy_action")
+    proxy_commands.add_parser("list", help=tr("查看策略组及节点"))
+    select_parser = proxy_commands.add_parser("select", help=tr("选择节点"))
+    select_parser.add_argument("group")
+    select_parser.add_argument("node")
+    delay_parser = proxy_commands.add_parser("delay", help=tr("测试节点延迟"))
+    delay_parser.add_argument("node")
+    mode_parser = subparsers.add_parser("mode", help=tr("查看或保存运行模式"))
+    mode_parser.add_argument("mode", choices=("rule", "global", "direct"), nargs="?")
+
     init_parser = subparsers.add_parser("init", help=tr("初始化管理配置和本地覆盖"))
     init_parser.add_argument("--force", action="store_true", help=tr("覆盖已有管理配置"))
     subparsers.add_parser("tui", help=tr("进入终端控制台（默认）"))
@@ -2065,11 +3099,62 @@ def main() -> int:
     command = args.command or "tui"
 
     try:
+        if command == "install":
+            bootstrap_install(manager_config, version=args.version, start=not args.no_start)
+            if args.interactive:
+                onboard(manager_config)
+            return 0
         if command == "init":
             initialize(manager_config, force=args.force)
             return 0
+        if command == "tui" and not manager_config.exists() and sys.stdin.isatty() and sys.stdout.isatty():
+            if confirm(tr("首次运行，立即安装 Mihomo 内核与主服务吗"), True):
+                bootstrap_install(manager_config)
+                onboard(manager_config)
+            return 0
         registry = load_registry(manager_config)
-        if command == "tui":
+        if command == "core":
+            if args.action == "status":
+                info = collect_core_status(registry)
+                for label, key in ((tr("内核版本"), "version"), (tr("内核文件"), "binary"),
+                                   (tr("开机启动"), "enabled"), (tr("上一版内核"), "backup")):
+                    print(f"{label}: {format_state(info.get(key))}")
+                if info.get("error"):
+                    raise ManagerError(info["error"])
+            elif args.action == "check":
+                release = resolve_core_release(args.version)
+                print(tr("可用稳定版：{version} · {asset}", version=release["version"], asset=release["name"]))
+            elif args.action == "rollback":
+                if args.yes or confirm(tr("确认回退内核（运行中的服务会短暂重启）吗")):
+                    rollback_core(registry)
+            else:
+                install_core(registry, version=args.version, update=args.action == "update", yes=args.yes)
+        elif command == "service":
+            if args.action == "status":
+                print_status(manager_config, registry)
+            else:
+                if args.timer and args.action in {"enable", "disable"}:
+                    configure_update_schedule(manager_config, registry, enabled=args.action == "enable")
+                else:
+                    service_action(registry, args.action, timer=args.timer)
+        elif command == "schedule":
+            if args.interval is not None or args.enable or args.disable:
+                configure_update_schedule(manager_config, registry, args.interval,
+                                          enabled=True if args.enable else False if args.disable else None)
+            print_status(manager_config, registry)
+        elif command == "proxies":
+            if args.proxy_action == "select":
+                select_proxy(registry, args.group, args.node)
+            elif args.proxy_action == "delay":
+                test_proxy_delay(registry, args.node)
+            else:
+                print_proxy_groups(registry)
+        elif command == "mode":
+            if args.mode:
+                set_proxy_mode(registry, args.mode)
+            else:
+                print(format_state(controller_request(registry, "/configs").get("mode")))
+        elif command == "tui":
             launch_tui(manager_config)
         elif command == "menu":
             interactive_menu(manager_config)

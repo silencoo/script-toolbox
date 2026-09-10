@@ -1,13 +1,17 @@
 # Mihomo Console
 
-面向 Debian/Ubuntu 服务器的 Mihomo 完整订阅配置控制台。它把安全更新核心、
-systemd 定时任务、诊断命令和一个零额外依赖的 SSH TUI 放在同一个工具里。
+面向 Debian/Ubuntu 的终端代理管理应用，包含 Mihomo 内核安装与升级、systemd
+服务管理、完整订阅刷新、节点选择和运行模式切换，可直接通过 SSH 使用。
 
 适用场景是“订阅地址返回完整 Clash/Mihomo YAML”。多个订阅是多个可切换的
 完整配置，**不会合并为一份**；定时任务只更新当前选中的订阅。
 
 ## 能做什么
 
+- 在全新 Linux 主机上下载官方稳定版内核，校验 SHA-256，创建并启用主服务。
+- 保留已有内核、主服务和配置；显式升级内核前校验配置，启动失败恢复旧内核。
+- 在 TUI 中启动、停止、重启主服务，控制开机启动和订阅自动刷新的间隔。
+- 查看策略组、选择手动策略组的节点、测试延迟，保存规则/全局/直连模式。
 - TUI 概览 Mihomo 服务、更新 timer、当前订阅、配置摘要和最近错误。
 - 添加、切换、dry-run 和更新完整订阅，不显示订阅 URL。
 - 保存最近 50 次脱敏的更新/回滚历史。
@@ -35,12 +39,36 @@ systemd 定时任务、诊断命令和一个零额外依赖的 SSH TUI 放在同
 ./setup.sh
 ```
 
-安装脚本会在需要时请求 `sudo`，检查 Python/PyYAML，安装程序、文档和
-systemd 单元，然后引导初始化、添加订阅、dry-run、首次应用与启用 timer。
-已有 `/etc/mihomo/subscription-manager.json` 不会被覆盖，真正替换配置和启用
-timer 前也会分别确认。
+安装脚本会请求 `sudo`，检查 systemd、Python/PyYAML 和 CA 证书，然后：
 
-只安装文件、不初始化：
+1. 安装 Console、文档和订阅刷新单元。
+2. 内核缺失时从 `MetaCubeX/mihomo` 官方稳定版下载匹配架构的发布包，校验
+   GitHub 发布资产的 SHA-256，再验证内核版本；缺少校验值时停止安装。
+3. 创建缺失的管理配置、本地覆盖及初始直连配置。默认代理端口
+   `127.0.0.1:7890`，控制器 `127.0.0.1:9090`，自动生成控制器密钥。
+4. 创建缺失的 `mihomo.service`，验证配置、启动并设置开机启动。
+5. 在交互终端中引导添加订阅、校验和应用；成功应用后询问是否启用自动刷新，
+   并让用户选择更新间隔，最后打开 TUI。
+
+已有内核、主服务、管理配置、当前配置和本地覆盖不会被覆盖；已有服务的
+启停及开机启动状态保持原样。主服务使用的内核路径与 `mihomo_binary` 不一致
+时会停止并提示校正，不接管不匹配的服务。
+
+支持 x86-64、x86 32 位、ARM64、ARMv7 和 ARMv6。x86-64 优先选择 `amd64-v1`
+或兼容构建，避免较老 CPU 无法运行高指令集版本。
+
+可指定稳定版、语言，或暂不启动新建的主服务：
+
+```bash
+./setup.sh --core-version v1.19.30 --lang zh_CN
+./setup.sh --no-start
+```
+
+初始配置只提供本机直连代理；添加并应用订阅后才有代理节点。安装器不会修改
+桌面系统代理、启用 TUN 或更改路由。后续订阅更新会继续保留本地端口、控制器
+和模式覆盖。
+
+只更新 Console 文件及订阅刷新单元，不下载内核或初始化主配置：
 
 ```bash
 ./setup.sh --install-only
@@ -51,6 +79,61 @@ timer 前也会分别确认。
 ```bash
 sudo mihomo-console
 ```
+
+### 内核与服务管理
+
+安装 Console 后，也可直接完成本机安装或查看可用稳定版：
+
+```bash
+sudo mihomo-console install
+sudo mihomo-console core status
+sudo mihomo-console core check
+sudo mihomo-console core update
+sudo mihomo-console core update --version v1.19.30 --yes
+sudo mihomo-console core rollback --yes
+```
+
+内核更新与订阅刷新共用操作锁。新内核先通过版本检查和当前配置校验，再原子
+替换；旧内核保存在可执行文件旁的 `.previous`。原服务正在运行时会重启并检查
+稳定性，启动失败恢复旧内核并重新启动。原服务停止时，更新保持停止状态。
+`core rollback` 同样先校验再替换，并把替换下来的版本保留为 `.previous`。
+符号链接形式的内核不会被替换，应使用原安装方式管理。
+
+```bash
+sudo mihomo-console service status
+sudo mihomo-console service start
+sudo mihomo-console service stop
+sudo mihomo-console service restart
+sudo mihomo-console service enable
+sudo mihomo-console service disable
+sudo mihomo-console service enable --timer
+sudo mihomo-console service disable --timer
+```
+
+主服务的 `enable/disable` 只修改开机启动；定时器的 `enable/disable` 同时启动或
+停止定时器。自动刷新只更新订阅，**不会自动升级内核**。
+
+### 节点与运行模式
+
+```bash
+sudo mihomo-console proxies list
+sudo mihomo-console proxies select '策略组名称' '节点名称'
+sudo mihomo-console proxies delay '节点名称'
+sudo mihomo-console mode
+sudo mihomo-console mode rule
+sudo mihomo-console mode global
+sudo mihomo-console mode direct
+```
+
+节点列表来自正在运行的控制器，手动切换只允许 `Selector` 类型的组。初始本地
+覆盖启用 `profile.store-selected`，由 Mihomo 保存节点选择；已有配置是否保存
+选择取决于其设置。延迟测试通过所选节点访问
+`https://www.gstatic.com/generate_204`，超时为 5 秒。
+
+模式切换会验证候选配置，保存到当前配置和本地覆盖，再通过控制器应用；请求
+失败时恢复文件并尝试恢复原运行模式。这样重启及订阅刷新后仍保留所选模式。
+控制器请求绕过 shell 的代理环境变量，密钥只放在认证头中，并拒绝 HTTP 重定向。
+控制器未开启、认证失败或服务离线时，节点页面会提示原因。
 
 ## Docker 部署
 
@@ -116,7 +199,12 @@ docker compose exec mihomo-console mihomo-console status
 ```
 
 `UPDATE_START_DELAY_SECONDS` 默认为 `600`，`UPDATE_INTERVAL_SECONDS` 默认为
-`3600`；后者设为 `0` 可禁用容器内自动更新。镜像更新方式：
+`3600`；后者设为 `0` 可禁用容器内自动更新。也可在 TUI 的内核页按 `f` 修改
+间隔、`t` 启停，或使用 `mihomo-console schedule 6h --enable`。
+Console 保存的 `update_schedule` 优先于环境变量，随数据目录持久化；运行中
+约 1 秒内生效，无需重启容器。修改间隔会重新计时；正在进行的更新会先完成。
+首次启动仍使用 `UPDATE_START_DELAY_SECONDS`，之后在每次更新结束后等待所选间隔。
+镜像更新方式：
 
 ```bash
 docker compose pull
@@ -203,10 +291,20 @@ sudo mihomo-console
 - `3` 历史：查看脱敏的更新和回滚结果。
 - `4` 备份：选择后按 `Enter` 校验并恢复。
 - `5` 日志：`t` 切换更新服务/Mihomo 日志，方向键滚动。
+- `6` 内核：`i` 安装/修复，`u` 升级，`b` 回退，`s/x/k` 启动/停止/重启，
+  `e` 开机启动，`t` 自动刷新启停，`f` 设置更新频率。
+- `7` 节点：方向键选择，`Enter` 打开组或使用节点，`Esc` 返回组列表，
+  `d` 测试延迟，`m` 设置运行模式。
 - 全局：`Tab` 切页，`r` 刷新，`l` 切换中英文，`?` 帮助，`q` 退出。
 
 TUI 中需要输入 URL、确认危险操作或等待更新时，会临时返回普通终端；操作
 结束后按 Enter 回到控制台。TUI 至少需要 70×18 的终端。
+窄终端会显示当前页面附近的导航项，可用 `1`–`7` 或 `Tab` 切换全部页面。
+页面先显示缓存，后台每 5 秒刷新状态；备份、日志、内核和节点仅在进入对应
+页面后读取。切页不会等待 systemd、日志或控制器请求；`r` 强制重新读取，
+加载时仍可切页或退出。
+Docker 内可管理节点、模式、自动更新频率和重启内核；内核升级、容器启停及开机启动仍由
+镜像和容器管理器负责。
 
 ### 界面语言
 
@@ -275,21 +373,34 @@ systemctl list-timers mihomo-subscription-update.timer
 
 ## 定时更新
 
-默认启动 10 分钟后首次执行，之后约每小时更新一次，随机延迟最多 5 分钟：
+TUI 按 `6` 进入内核页，再按 `f` 设置间隔。可输入 `30m`、`1h`、`6h`、`12h`、
+`1d` 等，支持 **1 分钟至 30 天**的整数分钟、小时或天；按 `t` 启用或停用。
+命令行同样支持：
 
 ```bash
-sudo systemctl enable --now mihomo-subscription-update.timer
+sudo mihomo-console schedule                # 查看状态和间隔
+sudo mihomo-console schedule 6h             # 改为每 6 小时，保留启停状态
+sudo mihomo-console schedule 30m --enable   # 每 30 分钟，并启用
+sudo mihomo-console schedule 1d --enable    # 每 24 小时，并启用
+sudo mihomo-console schedule --disable      # 停用，保留所选间隔
+sudo mihomo-console schedule --enable       # 按上次设置重新启用
 ```
 
-可通过 `sudo systemctl edit mihomo-subscription-update.timer` 覆盖频率。例如每天：
+首次启用需要先选择当前订阅。只修改频率不会启用已停用的自动更新。
+`1d` 表示间隔 24 小时；这是间隔设置，不是每天某个固定时刻。
 
-```ini
-[Timer]
-OnBootSec=
-OnUnitActiveSec=
-OnCalendar=daily
-RandomizedDelaySec=30min
-```
+原生安装会保存管理设置并写入
+`/etc/systemd/system/mihomo-subscription-update.timer.d/zz-mihomo-console.conf`，
+重载 systemd；原定时器运行中时会重启定时器使新间隔生效。首次执行由定时器
+启用时间及上次更新完成时间决定；后续在每次更新结束后等待所选间隔，
+不附加旧版的 5 分钟随机延迟。
+文件写入或服务操作失败时会恢复原设置和定时器状态。
+
+Console 升级保留此 drop-in。未设置过间隔的旧安装沿用原默认：启动 10 分钟
+后首次执行，之后约每小时更新一次，随机延迟最多 5 分钟。曾手动设置 systemd
+日历规则的用户，可继续通过 `systemctl edit` 管理；使用 Console 设置间隔会
+清除在它之前加载的 timer 触发规则。不要同时在后加载的自定义 drop-in 中追加
+其他触发规则；Console 显示的间隔来自所保存的设置。
 
 修改 `target_config`、`mihomo_home`、`overlay_file`、`backup_dir` 或 `lock_file`
 后，重新运行 `sudo mihomo-console configure-systemd-sandbox`。它会按实际路径生成
@@ -315,7 +426,17 @@ systemd drop-in，避免 `ProtectSystem=strict` 阻止写入。
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m unittest -v
-python3 -m py_compile mihomo_console.py test_manager.py
+.venv/bin/python -m unittest discover -v
+python3 -m py_compile mihomo_console.py container_runtime.py test_*.py
 bash -n setup.sh
 ```
+
+可用实际 Mihomo 内核运行隔离集成测试。测试仅使用临时目录、随机本机端口和
+测试节点，不读取系统订阅，不修改现有服务：
+
+```bash
+MIHOMO_TEST_BINARY=/usr/local/bin/mihomo .venv/bin/python -m unittest test_integration -v
+```
+
+覆盖真实控制器节点选择、模式跨重启持久化、systemd 单元校验及 curses 终端
+交互；未设置 `MIHOMO_TEST_BINARY` 时跳过这组测试。CI 在下载官方内核后执行。

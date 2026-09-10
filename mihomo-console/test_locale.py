@@ -53,19 +53,19 @@ def make_console(height=24, width=80):
     screen = RecordingScreen(height, width)
     console = manager.ConsoleTUI(screen, curses, Path('/unused/manager.json'))
     console.registry = {
-        'active': 'premium',
-        'subscriptions': {'premium': {'last_result': 'validated'}},
-        'history': [{'kind': 'update', 'status': 'validated', 'subscription': 'premium',
-                     'finished_at': '2026-09-10T02:10:56+09:00'}],
+        'active': 'demo',
+        'subscriptions': {'demo': {'last_result': 'validated'}},
+        'history': [{'kind': 'update', 'status': 'validated', 'subscription': 'demo',
+                     'finished_at': '2024-01-02T03:04:05+00:00'}],
     }
     console.status = {
         'mihomo_service': 'active', 'timer_active': 'inactive', 'timer_enabled': 'disabled',
-        'last_result': 'validated', 'active_subscription': 'premium',
-        'summary': {'proxies': 431, 'providers': 2, 'groups': 10, 'rules': 500},
+        'last_result': 'validated', 'active_subscription': 'demo',
+        'summary': {'proxies': 120, 'providers': 2, 'groups': 10, 'rules': 500},
         'backups': 1, 'history': 1, 'target_config': '/etc/mihomo/config.yaml',
         'config_sha256': 'a' * 64,
     }
-    console.backups = [{'name': 'config.yaml.20260910', 'size': 300000, 'summary': {'proxies': 431}}]
+    console.backups = [{'name': 'config.yaml.20240102', 'size': 300000, 'summary': {'proxies': 120}}]
     console.logs = ['level=error msg="Original Mihomo diagnostic"']
     return console
 
@@ -162,7 +162,7 @@ class LocaleTests(unittest.TestCase):
             console.draw()
             self.assertIn('Profiles', console.screen.text)
             self.assertEqual(console.page, 1)
-            self.assertEqual(console.selected_subscription(), 'premium')
+            self.assertEqual(console.selected_subscription(), 'demo')
             self.assertTrue(console.handle_key(ord('L')))
             self.assertEqual(manager.LANGUAGE, 'zh_CN')
 
@@ -183,7 +183,7 @@ class LocaleTests(unittest.TestCase):
             registry = copy.deepcopy(manager.DEFAULTS)
             registry.update(target_config=str(root / 'config.yaml'), overlay_file=str(root / 'overlay.yaml'),
                             lock_file=str(root / 'lock'), backup_dir=str(root / 'backups'),
-                            active='premium', subscriptions={'premium': {'url': 'https://example.invalid'}})
+                            active='demo', subscriptions={'demo': {'url': 'https://example.invalid'}})
             path = root / 'manager.json'
             manager.save_registry(path, registry)
             output = io.StringIO()
@@ -191,7 +191,7 @@ class LocaleTests(unittest.TestCase):
                   mock.patch.object(manager, 'validate_with_mihomo'),
                   mock.patch.object(manager, 'restart_mihomo') as restart,
                   contextlib.redirect_stdout(output)):
-                manager.update_profile(path, registry, 'premium', dry_run=True)
+                manager.update_profile(path, registry, 'demo', dry_run=True)
             self.assertIn('Validation passed', output.getvalue())
             self.assertNotIn('正在', output.getvalue())
             self.assertEqual(json.loads(path.read_text())['history'][-1]['status'], 'validated')
@@ -204,12 +204,12 @@ class LocaleTests(unittest.TestCase):
                                 side_effect=manager.ConcurrentUpdateError(manager.tr('另一个更新任务正在运行'))),
               mock.patch.object(manager, 'load_registry') as load):
             with self.assertRaisesRegex(manager.ConcurrentUpdateError, 'Another update'):
-                manager.update_profile(Path('/unused'), {}, 'premium')
+                manager.update_profile(Path('/unused'), {}, 'demo')
             load.assert_not_called()
 
     def test_localized_error_preserves_original_mihomo_diagnostic(self):
         manager.set_language('en_US')
-        diagnostic = 'proxy 430: invalid REALITY short ID'
+        diagnostic = 'proxy 7: invalid REALITY short ID'
         result = subprocess.CompletedProcess([], 1, diagnostic)
         with mock.patch.object(manager, 'command_output', return_value=result):
             with self.assertRaises(manager.ManagerError) as error:
