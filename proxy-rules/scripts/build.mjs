@@ -77,7 +77,7 @@ const qxType = new Map([
   ["DOMAIN-SUFFIX", "HOST-SUFFIX"],
   ["DOMAIN-KEYWORD", "HOST-KEYWORD"],
   ["IP-CIDR", "IP-CIDR"],
-  ["IP-CIDR6", "IP-CIDR6"],
+  ["IP-CIDR6", "IP6-CIDR"],
   ["IP-ASN", "IP-ASN"],
   ["USER-AGENT", "USER-AGENT"],
 ]);

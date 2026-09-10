@@ -47,6 +47,8 @@ test("APNs rules cover push hosts and both IP families without broad Apple routi
   }
   assert.ok(rules.every((line) => line.endsWith(",APNs")));
   assert.equal(rules.filter((line) => line.startsWith("IP-CIDR,")).length, 5);
-  assert.equal(rules.filter((line) => line.startsWith("IP-CIDR6,")).length, 4);
+  assert.equal(rules.filter((line) => line.startsWith("IP6-CIDR,")).length, 4);
+  assert.ok(rules.includes("IP6-CIDR,2620:149:a44::/48,APNs"));
+  assert.ok(!rules.some((line) => line.startsWith("IP-CIDR6,")));
   assert.ok(!rules.includes("IP-CIDR,17.0.0.0/8,APNs"));
 });
