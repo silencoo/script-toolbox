@@ -42,6 +42,17 @@ sudo env TOOLKIT_LANG=auto ./server-toolkit.sh
 `TOOLKIT_LANG=en` 可显式固定英文。支持值为 `en`、`zh` 和 `auto`，无效值会在执行
 任何系统变更前被拒绝。
 
+### SSH 终端兼容
+
+启动时保留系统能够识别的 `TERM`。若精简服务器缺少 `xterm-kitty` 等终端描述，
+脚本会依次尝试已安装的 `xterm-256color`、`xterm`、`vt100`；均不可用时使用
+`dumb` 纯文本模式。清屏命令缺失或失败不会再使菜单退出，重定向输出时不清屏
+也不输出界面颜色；设置 `NO_COLOR=1` 可禁用颜色。
+
+此兼容处理只影响工具箱及其子进程，不下载终端文件、不安装软件，也不修改用户的
+Shell 配置。它不会修复当前 SSH 会话中其他程序的终端描述；其他程序需要完整
+Kitty 能力时，仍应安装对应 terminfo。
+
 ## 怎么选
 
 | 你的用途 | 建议入口 | 说明 |
@@ -255,6 +266,7 @@ QNAP、Nginx PWA 反向代理和 CloudDrive MITM 调试资料位于
 ```bash
 bash -n server-toolkit.sh
 for script in tools/*.sh; do bash -n "$script"; done
+python3 tests/test_terminal.py
 ./tests/test_init_safety.sh
 ./tests/cloudflare-ddns-test.sh
 ./tests/vnstat-traffic-firewall-test.sh

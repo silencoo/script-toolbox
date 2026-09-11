@@ -106,6 +106,52 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 BOLD='\033[1m'
 
+
+# Terminal capabilities are optional UI features, never prerequisites for actions.
+toolkit_terminal_supported() {
+    local terminal="${1:-}"
+    [[ "$terminal" =~ ^[a-zA-Z0-9][a-zA-Z0-9+_.-]*$ ]] || return 1
+    if command -v infocmp >/dev/null 2>&1; then
+        infocmp "$terminal" >/dev/null 2>&1
+    elif command -v tput >/dev/null 2>&1; then
+        TERM="$terminal" tput cols >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+initialize_terminal() {
+    local candidate colors=""
+    if [ -t 1 ] && [ "${TERM:-}" != dumb ]; then
+        if ! toolkit_terminal_supported "${TERM:-}"; then
+            # Set TERM only in this process and its children; never edit shell rc files.
+            TERM=dumb
+            for candidate in xterm-256color xterm vt100; do
+                if toolkit_terminal_supported "$candidate"; then
+                    TERM="$candidate"
+                    break
+                fi
+            done
+            export TERM
+        fi
+        if command -v tput >/dev/null 2>&1; then
+            colors="$(tput colors 2>/dev/null || true)"
+        fi
+    fi
+    if [ ! -t 1 ] || [ "${TERM:-dumb}" = dumb ] || [ -n "${NO_COLOR:-}" ] ||
+       ! [[ "$colors" =~ ^[0-9]+$ ]] || [ "${colors:-0}" -eq 0 ]; then
+        RED='' GREEN='' YELLOW='' BLUE='' CYAN='' PLAIN='' BOLD=''
+    fi
+    return 0
+}
+
+ui_clear_screen() {
+    if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ "$NON_INTERACTIVE" != 1 ]; then
+        command clear 2>/dev/null || true
+    fi
+    return 0
+}
+
 # --- User interface language ---
 # Keep language selection dependency-free: minimal server images may not have
 # generated locales or gettext installed. English strings are ASCII so menus
@@ -5292,7 +5338,7 @@ function show_dotnet_usage() {
 function action_install_runtime() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#            $(ui_text "Runtime Manager" "Runtime 安装管理器")                #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -5326,7 +5372,7 @@ function action_install_runtime() {
 
 # --- 批量安装 Runtime ---
 function install_runtime_batch() {
-    clear
+    ui_clear_screen
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${CYAN}#            $(ui_text "Batch Runtime Install" "批量安装 Runtime")                   #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -5892,7 +5938,7 @@ action_configure_ssh() {
 function action_run_test_scripts() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#           $(ui_text "Server Benchmark Scripts" "服务器测试脚本选择")                  #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -5966,7 +6012,7 @@ function action_run_test_scripts() {
 
 # --- 模块: DD 重装脚本 (新增) ---
 function action_dd_reinstall() {
-    clear
+    ui_clear_screen
     printf '%b\n' "${RED}################################################${PLAIN}"
     printf '%b\n' "${RED}#            $(ui_text "DANGER: DD SYSTEM REINSTALL" "⚠️  危险警告: DD 系统重装")            #${PLAIN}"
     printf '%b\n' "${RED}################################################${PLAIN}"
@@ -6323,7 +6369,7 @@ submenu_docker_container() {
     local -a ids docker_args
 
     while true; do
-        clear
+        ui_clear_screen
         echo "$(ui_text "Docker containers" "Docker 容器列表")"
         docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" || true
         echo ""
@@ -6426,7 +6472,7 @@ submenu_docker_image() {
     local sub_choice imagenames
     local -a ids
     while true; do
-        clear
+        ui_clear_screen
         echo "$(ui_text "Docker images" "Docker 镜像列表")"
         docker image ls || true
         echo ""
@@ -6469,7 +6515,7 @@ submenu_docker_image() {
 submenu_docker_network() {
     local sub_choice name net con
     while true; do
-        clear
+        ui_clear_screen
         echo "$(ui_text "Docker networks" "Docker 网络列表")"
         docker network ls || true
         echo ""
@@ -6514,7 +6560,7 @@ submenu_docker_network() {
 
 submenu_docker_manager() {
     while true; do
-      clear
+      ui_clear_screen
       printf '%b\n' "${CYAN}=================================================${PLAIN}"
       printf '%b\n' "${CYAN}           $(ui_text "Docker Manager" "Docker 管理器") (by kejilion.sh)${PLAIN}"
       printf '%b\n' "${CYAN}=================================================${PLAIN}"
@@ -6536,12 +6582,12 @@ submenu_docker_manager() {
 
       case $sub_choice in
           1)
-            clear
+            ui_clear_screen
             action_install_add_docker
             menu_pause
             ;;
           2)
-              clear
+              ui_clear_screen
               docker info
               menu_pause
               ;;
@@ -6560,7 +6606,7 @@ submenu_docker_manager() {
 
 submenu_app_market() {
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
         printf '%b\n' "${CYAN}           $(ui_text "Application Catalog" "应用市场 (精选)")                         ${PLAIN}"
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
@@ -6839,7 +6885,7 @@ function action_setup_cd2_native() {
 
 function action_setup_cd2() {
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
         printf '%b\n' "${CYAN}           CloudDrive2 (CD2) $(ui_text "Setup Wizard" "安装向导")            ${PLAIN}"
         printf '%b\n' "${CYAN}=================================================${PLAIN}"
@@ -6901,7 +6947,7 @@ EOF
 function action_toolbox() {
     local tool_choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "System Toolbox" "系统工具箱")                      #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -7502,7 +7548,7 @@ run_restic_restore_drill() {
 function action_backup_restore() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "Backup / Restore" "备份 / 恢复")                     #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -7666,7 +7712,7 @@ show_monitoring_status() {
 function action_monitoring_alerts() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "Monitoring / Alerts" "监控 / 告警基础")                 #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -7787,7 +7833,7 @@ EOF
 function action_reverse_proxy_cert() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "TLS / Reverse Proxy" "证书 / 反向代理")                 #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -7841,7 +7887,7 @@ run_debsums_audit() {
 function action_security_audit() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "Security Audit" "安全审计")                         #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -8201,7 +8247,7 @@ action_docker_image_update_check() {
 function action_docker_compose_backup() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#           Docker Compose $(ui_text "Project Backup" "项目备份")             #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -8255,7 +8301,7 @@ print_systemd_status() {
 }
 
 function action_module_status_overview() {
-    clear
+    ui_clear_screen
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${CYAN}#              $(ui_text "Module Status Overview" "模块状态总览")                    #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -8424,7 +8470,7 @@ run_safety_tests() {
 function action_script_quality() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "Script Checks / ShellCheck" "脚本自检 / ShellCheck")           #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -8777,7 +8823,7 @@ choose_profile_preset() {
 action_profile_plan_apply() {
     local choice output_file input_file custom_name custom_modules
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#           Profile / Plan / Apply             #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -9192,7 +9238,7 @@ EOF
 action_ops_enhancements() {
     local choice
     while true; do
-        clear
+        ui_clear_screen
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         printf '%b\n' "${CYAN}#              $(ui_text "Operations Enhancements" "运维增强中心")                    #${PLAIN}"
         printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -9349,7 +9395,7 @@ function task_init_with_mirror() {
 
 # --- 自定义初始化 (批量选择模块) ---
 function task_custom_init() {
-    clear
+    ui_clear_screen
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${CYAN}#           $(ui_text "Custom Initialization - Modules" "自定义初始化 - 选择模块")            #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -9428,7 +9474,7 @@ function task_custom_init() {
     fi
     
     # 显示确认
-    clear
+    ui_clear_screen
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     printf '%b\n' "${CYAN}#           $(ui_text "Confirm Selected Modules" "确认选择的模块")                      #${PLAIN}"
     printf '%b\n' "${CYAN}################################################${PLAIN}"
@@ -10009,7 +10055,7 @@ function action_install_network_http_tools() {
 menu_header() {
     local title="$1"
     local subtitle="${2:-}"
-    clear
+    ui_clear_screen
     printf '%b\n' "${CYAN}################################################${PLAIN}"
     if [ "$TOOLKIT_EFFECTIVE_LANG" = "zh" ]; then
         printf '%b\n' "${CYAN}#  Linux 运维一键脚本 v8.5                    #${PLAIN}"
@@ -10593,6 +10639,7 @@ handle_signal() {
 
 # --- 主程序 ---
 main() {
+    initialize_terminal
     case "${1:-}" in
         --network|network)
             NETWORK_DIAGNOSTIC_ONLY=1
