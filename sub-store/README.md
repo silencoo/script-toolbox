@@ -39,7 +39,8 @@ periodic checks.
 Generated node names are made unique and kept distinct from policy-group and
 Mihomo built-in outbound names. Each ordinary node is assigned to at most one
 country group. Recognized Taiwan nodes are normalized to a single `🇹🇼` flag,
-including nodes whose provider supplied another country flag.
+including nodes whose provider supplied another country flag. Leading bracketed
+tags stay before the flag, for example `[kitty]🇹🇼Taiwan 03`.
 
 Repository validation generates both URL-test and load-balance fixtures and
 checks them with the latest stable official Mihomo binary.
@@ -60,4 +61,6 @@ that needs renaming. It recognizes 30 common locations across Asia, Europe, the
 Americas, and Oceania from common Chinese names, English names, abbreviations,
 and major city names. Existing flags are normalized rather than duplicated, and
 unrecognized node names receive the neutral `🌐` icon. Existing flags for
-locations outside the built-in mapping are preserved.
+locations outside the built-in mapping are preserved. Leading bracketed tags
+stay before the icon, matching `convert-v2.js`; untagged names use `🇹🇼 Taiwan 03`.
+Both batch operators update `dialer-proxy` references when renaming their targets.

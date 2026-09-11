@@ -141,3 +141,27 @@ test("supports Sub-Store single-node shortcut-script mode", () => {
   loadOperator({ $server: server });
   assert.equal(server.name, "🇯🇵 日本 01");
 });
+
+test("places icons after tags consistently and preserves renamed dialer targets", () => {
+  const { operator } = loadOperator();
+  const cases = [
+    ["[kitty]🇭🇰Hong Kong 05", "[kitty]🇭🇰Hong Kong 05"],
+    ["[kitty]🇨🇳Taiwan 03", "[kitty]🇹🇼Taiwan 03"],
+    ["🇹🇼 [kitty]Taiwan 04", "[kitty]🇹🇼Taiwan 04"],
+    ["[kitty]🇩🇪Germany 01", "[kitty]🇩🇪Germany 01"],
+    ["[pro][kitty] Japan 01", "[pro][kitty]🇯🇵Japan 01"],
+    ["[kitty]🌐 Premium 01", "[kitty]🌐Premium 01"],
+    ["🌐 [kitty]🇹🇼 🇹🇼 Taiwan 06", "[kitty]🇹🇼Taiwan 06"],
+  ];
+  const input = cases.map(([name]) => ({ name, type: "ss" }));
+  input[0]["dialer-proxy"] = cases[1][0];
+  const once = operator(input);
+  const expected = cases.map(([, name]) => name);
+  assert.deepEqual(Array.from(once, (p) => p.name), expected);
+  assert.deepEqual(Array.from(operator(once), (p) => p.name), expected);
+  assert.equal(once[0]["dialer-proxy"], expected[1]);
+  assert.equal(input[0]["dialer-proxy"], cases[1][0]);
+  const server = { name: "[kitty]Taiwan 07" };
+  loadOperator({ $server: server });
+  assert.equal(server.name, "[kitty]🇹🇼Taiwan 07");
+});

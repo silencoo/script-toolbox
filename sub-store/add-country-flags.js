@@ -230,6 +230,25 @@ function findCountryFlag(name) {
   return existingRule ? existingRule.flag : null;
 }
 
+// Keep subscription/tier tags before the location icon, even when an earlier
+// operation placed the icon ahead of the tags. Scripts are standalone, so this
+// formatting helper is kept in both flag operators.
+function formatLocationName(name, icon) {
+  const normalizedName = name
+    .replace(COUNTRY_FLAG_PATTERN, "")
+    .split("🌐")
+    .join("")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const tags = normalizedName.match(/^(?:\[[^\]\r\n]+\]\s*)+/);
+  if (tags) {
+    const prefix = tags[0].trimEnd();
+    const label = normalizedName.slice(tags[0].length);
+    return `${prefix}${icon}${label}`;
+  }
+  return normalizedName ? `${icon} ${normalizedName}` : icon;
+}
+
 function addCountryFlagToName(value) {
   const name = String(value == null ? "" : value).trim();
   if (!name) return name;
@@ -237,14 +256,7 @@ function addCountryFlagToName(value) {
   const flag = findCountryFlag(name);
   if (!flag && HAS_COUNTRY_FLAG_PATTERN.test(name)) return name;
 
-  const normalizedName = name
-    .replace(COUNTRY_FLAG_PATTERN, "")
-    .split(DEFAULT_LOCATION_ICON)
-    .join("")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-  const icon = flag || DEFAULT_LOCATION_ICON;
-  return normalizedName ? `${icon} ${normalizedName}` : icon;
+  return formatLocationName(name, flag || DEFAULT_LOCATION_ICON);
 }
 
 function addCountryFlag(proxy) {
@@ -271,7 +283,16 @@ function operator(proxies = [], targetPlatform, context) {
       `Country flags: input=${input.length}, changed=${changed}, unchanged=${input.length - changed}`,
     );
   }
-  return output;
+  const renamedNodes = new Map(
+    input.map((proxy, index) => [proxy?.name, output[index]?.name]),
+  );
+  return output.map((proxy) => {
+    const dialer = proxy?.["dialer-proxy"];
+    const renamedDialer = renamedNodes.get(dialer);
+    return dialer && renamedDialer && renamedDialer !== dialer
+      ? Object.assign({}, proxy, { "dialer-proxy": renamedDialer })
+      : proxy;
+  });
 }
 
 // Also support Sub-Store's single-node shortcut-script execution mode.

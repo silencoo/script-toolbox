@@ -938,3 +938,30 @@ test("uses the self-hosted z-icon collection for every convert-v2 group", async 
     /Koolson\/Qure|powerfullz\/override-rules|WHATSINStash/,
   );
 });
+
+test("keeps Taiwan flags after subscription tags and updates dialer references", async () => {
+  const convert = await loadConverter();
+  const names = [
+    "[kitty]🇭🇰Hong Kong 05",
+    "[kitty]🇭🇰Hong Kong 06",
+    "[kitty]🇨🇳Taiwan 03",
+    "🇹🇼 [kitty]Taiwan 04",
+    "[kitty]🇩🇪Germany 01",
+    "[pro][kitty]Taiwan 05",
+  ];
+  const input = names.map((name) => ({ name, type: "ss" }));
+  input[0]["dialer-proxy"] = names[2];
+  const profile = convert({ proxies: input });
+  const expected = [
+    names[0], names[1], "[kitty]🇹🇼Taiwan 03", "[kitty]🇹🇼Taiwan 04",
+    names[4], "[pro][kitty]🇹🇼Taiwan 05",
+  ];
+  assert.deepEqual(Array.from(profile.proxies, (p) => p.name), expected);
+  assert.equal(profile.proxies[0]["dialer-proxy"], expected[2]);
+  assert.equal(input[0]["dialer-proxy"], names[2]);
+  assert.equal(input[2].name, names[2]);
+  const groups = new Map(profile["proxy-groups"].map((g) => [g.name, g]));
+  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), expected.slice(2, 4));
+  assert.ok(groups.get("AI").proxies.includes(expected[5]));
+  assert.deepEqual(Array.from(convert(profile).proxies, (p) => p.name), expected);
+});

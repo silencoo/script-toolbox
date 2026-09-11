@@ -860,21 +860,32 @@ function parseCountries(proxiesByCountry) {
 
 const COUNTRY_FLAG_PATTERN = /(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
 
-function normalizeTaiwanProxyFlag(proxy) {
-  if (!proxy || typeof proxy !== "object") return proxy;
-
-  const name = String(proxy.name == null ? "" : proxy.name).trim();
-  if (!name || !matchesCountry(name, "Taiwan")) return proxy;
-
+// Keep subscription/tier tags before the location icon, even when an earlier
+// operation placed the icon ahead of the tags. Scripts are standalone, so this
+// formatting helper is kept in both flag operators.
+function formatLocationName(name, icon) {
   const normalizedName = name
     .replace(COUNTRY_FLAG_PATTERN, "")
     .split("🌐")
     .join("")
     .replace(/\s{2,}/g, " ")
     .trim();
-  const nameWithTaiwanFlag = normalizedName
-    ? `🇹🇼 ${normalizedName}`
-    : "🇹🇼";
+  const tags = normalizedName.match(/^(?:\[[^\]\r\n]+\]\s*)+/);
+  if (tags) {
+    const prefix = tags[0].trimEnd();
+    const label = normalizedName.slice(tags[0].length);
+    return `${prefix}${icon}${label}`;
+  }
+  return normalizedName ? `${icon} ${normalizedName}` : icon;
+}
+
+function normalizeTaiwanProxyFlag(proxy) {
+  if (!proxy || typeof proxy !== "object") return proxy;
+
+  const name = String(proxy.name == null ? "" : proxy.name).trim();
+  if (!name || !matchesCountry(name, "Taiwan")) return proxy;
+
+  const nameWithTaiwanFlag = formatLocationName(name, "🇹🇼");
 
   return nameWithTaiwanFlag === proxy.name
     ? proxy
@@ -1192,7 +1203,18 @@ function deduplicateProxies(proxies) {
 
 function main(e) {
   setProfileSubscriptionInfo();
-  let proxies = (e.proxies || []).map(normalizeTaiwanProxyFlag);
+  const inputProxies = e.proxies || [];
+  let proxies = inputProxies.map(normalizeTaiwanProxyFlag);
+  const renamedNodes = new Map(
+    inputProxies.map((proxy, index) => [proxy?.name, proxies[index]?.name]),
+  );
+  proxies = proxies.map((proxy) => {
+    const dialer = proxy?.["dialer-proxy"];
+    const renamedDialer = renamedNodes.get(dialer);
+    return dialer && renamedDialer && renamedDialer !== dialer
+      ? Object.assign({}, proxy, { "dialer-proxy": renamedDialer })
+      : proxy;
+  });
 
   // 去重处理：重复节点 name 自动加序号
   proxies = deduplicateProxies(proxies);
