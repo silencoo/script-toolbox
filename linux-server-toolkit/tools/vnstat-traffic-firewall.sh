@@ -38,9 +38,11 @@ to_mib() {
   awk -v raw="$raw" 'BEGIN {
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", raw)
     split(raw, part, /[[:space:]]+/)
+    if (part[1] !~ /^[0-9]+([.][0-9]+)?$/) exit 2
     value = part[1] + 0
     unit = part[2]
-    if (unit == "KiB") value /= 1024
+    if (unit == "B") value /= 1024 * 1024
+    else if (unit == "KiB") value /= 1024
     else if (unit == "GiB") value *= 1024
     else if (unit == "TiB") value *= 1024 * 1024
     else if (unit != "MiB") exit 2
@@ -116,8 +118,9 @@ main() {
   local data current_date rx_raw tx_raw rx_mib tx_mib checked_mib limit_mib
   data=$(vnstat -i "$INTERFACE" --oneline)
   current_date=$(awk -F';' '{print $8}' <<<"$data")
-  rx_raw=$(awk -F';' '{print $13}' <<<"$data")
-  tx_raw=$(awk -F';' '{print $14}' <<<"$data")
+  # Fields 9/10 are this month; 13/14 contain lifetime totals.
+  rx_raw=$(awk -F';' '{print $9}' <<<"$data")
+  tx_raw=$(awk -F';' '{print $10}' <<<"$data")
   [[ -n "$rx_raw" && -n "$tx_raw" ]] || die 'vnstat returned an unsupported --oneline format'
   rx_mib=$(to_mib "$rx_raw") || die "unsupported receive unit: $rx_raw"
   tx_mib=$(to_mib "$tx_raw") || die "unsupported transmit unit: $tx_raw"
@@ -125,7 +128,7 @@ main() {
   case "$CHECK_TYPE" in
     rx) checked_mib="$rx_mib" ;;
     tx) checked_mib="$tx_mib" ;;
-    max) checked_mib=$(awk -v rx="$rx_mib" -v tx="$tx_mib" 'BEGIN {print rx > tx ? rx : tx}') ;;
+    max) checked_mib=$(awk -v rx="$rx_mib" -v tx="$tx_mib" 'BEGIN {print (rx > tx ? rx : tx)}') ;;
     sum) checked_mib=$(awk -v rx="$rx_mib" -v tx="$tx_mib" 'BEGIN {print rx + tx}') ;;
   esac
   limit_mib=$(awk -v gb="$LIMIT_GB" 'BEGIN {print gb * 1024}')

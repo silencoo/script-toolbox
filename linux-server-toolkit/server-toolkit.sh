@@ -2980,9 +2980,12 @@ function action_configure_firewall() {
     ui_log_info "Allowed SSH port: $ssh_port" "已允许 SSH 端口: $ssh_port"
     
     # 询问是否允许常用端口
-    ui_read allow_web \
-        "Allow HTTP (80) and HTTPS (443) ports? [y/N]: " \
-        "是否允许 HTTP(80) 和 HTTPS(443) 端口? [y/N]: "
+    allow_web=n
+    if [ "$NON_INTERACTIVE" != "1" ]; then
+        ui_read allow_web \
+            "Allow HTTP (80) and HTTPS (443) ports? [y/N]: " \
+            "是否允许 HTTP(80) 和 HTTPS(443) 端口? [y/N]: " || return 1
+    fi
     case "$allow_web" in
         y|Y|yes|YES)
             run_command "$(ui_text "Allow the HTTP port" "允许 HTTP 端口")" \
@@ -3043,6 +3046,29 @@ EOF
 }
 
 # --- 模块: 自动更新配置 (新增) ---
+security_update_origins() {
+    case "$1" in
+        debian)
+            cat <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+EOF
+            ;;
+        ubuntu)
+            cat <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+EOF
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 function action_configure_auto_updates() {
     ui_log_info "Configuring automatic security updates..." "配置自动安全更新..."
     
@@ -3060,14 +3086,12 @@ function action_configure_auto_updates() {
         return 0
     fi
     
+    local origins
+    origins="$(security_update_origins "$OS_ID")" || return 1
     write_file_atomic /etc/apt/apt.conf.d/50unattended-upgrades \
         "$(ui_text "unattended-upgrades security origins" "unattended-upgrades 安全来源")" \
-        644 0 0 << 'EOF' || return 1
-Unattended-Upgrade::Allowed-Origins {
-    "${distro_id}:${distro_codename}-security";
-    "${distro_id}ESMApps:${distro_codename}-apps-security";
-    "${distro_id}ESM:${distro_codename}-infra-security";
-};
+        644 0 0 << EOF || return 1
+$origins
 Unattended-Upgrade::AutoFixInterruptedDpkg "true";
 Unattended-Upgrade::MinimalSteps "true";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
@@ -5580,11 +5604,10 @@ validate_ssh_key_target_user() {
 
 user_has_sudo_access() {
     local target_user="$1"
-
-    if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qxE 'sudo|wheel'; then
-        return 0
-    fi
-    command -v sudo > /dev/null 2>&1 && sudo -n -l -U "$target_user" > /dev/null 2>&1
+    # Query policy for a root shell without executing it. Group membership or
+    # permission for an unrelated command does not prove administrative access.
+    command -v sudo > /dev/null 2>&1 &&
+        sudo -n -l -U "$target_user" -u root -- /bin/sh > /dev/null 2>&1
 }
 
 select_ssh_key_target() {
@@ -5672,33 +5695,57 @@ set_sshd_directive_in_file() {
     local config_file="$1" key="$2" value="$3" tmp
     tmp="$(mktemp "$(dirname "$config_file")/.sshd-edit.XXXXXX")" || return 1
     if ! awk -v key="$key" -v value="$value" '
-        BEGIN { done=0; in_match=0; key_l=tolower(key) }
+        # Global scalar settings must precede Include: sshd uses the first value.
+        BEGIN { print key " " value; in_match=0; key_l=tolower(key) }
         {
             probe=$0
             sub(/^[[:space:]]*/, "", probe)
             split(probe, fields, /[[:space:]]+/)
             token=fields[1]
-            sub(/^#/, "", token)
-            if (tolower(token) == "match" && !in_match) {
-                if (!done) print key " " value
-                done=1
-                in_match=1
-                print
-                next
-            }
+            if (tolower(token) == "match") in_match=1
             if (!in_match && tolower(token) == key_l) {
-                if (!done) print key " " value
-                done=1
                 next
             }
             print
         }
-        END { if (!done) print key " " value }
     ' "$config_file" > "$tmp"; then
         rm -f -- "$tmp"
         return 1
     fi
     mv -f -- "$tmp" "$config_file"
+}
+
+verify_sshd_settings() {
+    local config_file="$1" context="$2" effective setting key expected actual
+    shift 2
+    local -a args=(-T -f "$config_file")
+    [ -z "$context" ] || args+=(-C "$context")
+    effective="$(sshd "${args[@]}" 2>/dev/null)" || return 1
+    for setting in "$@"; do
+        key="${setting%%=*}"
+        expected="${setting#*=}"
+        actual="$(awk -v key="$key" '$1 == key { $1=""; sub(/^ /, ""); print }' <<< "$effective")"
+        # OpenSSH prints the historical spelling for prohibit-password.
+        [ "$actual" != without-password ] || actual=prohibit-password
+        if ! grep -Fxq -- "$expected" <<< "$actual"; then
+            ui_log_error "SSH setting did not take effect: $key (expected $expected, got $actual)" \
+                "SSH 配置未生效: $key（期望 $expected，实际 $actual）"
+            return 1
+        fi
+    done
+}
+
+verify_sshd_login_settings() {
+    local config_file="$1" selected_user="$2" user
+    local source_address="${SSH_CONNECTION:-127.0.0.1}"
+    source_address="${source_address%% *}"
+    shift 2
+    verify_sshd_settings "$config_file" "" "$@" || return 1
+    # Also detect Match overrides for root and the selected login account.
+    for user in root "$selected_user"; do
+        [ -n "$user" ] || continue
+        verify_sshd_settings "$config_file" "user=$user,host=localhost,addr=$source_address" "$@" || return 1
+    done
 }
 
 reload_ssh_service() {
@@ -5713,6 +5760,7 @@ reload_ssh_service() {
 function action_configure_ssh_transactional() {
     local config_file="/etc/ssh/sshd_config" candidate current_port ssh_port user_key
     local has_key=false target_has_sudo=false disable_password="n" root_login_change="none" port_changed=false
+    local -a expected_settings=()
 
     if [ "$DRY_RUN" = "1" ]; then
         dry_run_action_plan action_configure_ssh
@@ -5889,7 +5937,15 @@ function action_configure_ssh_transactional() {
         fi
     fi
 
-    if ! validate_sshd_candidate "$candidate" "$config_file"; then
+    expected_settings=("port=$ssh_port" permitemptypasswords=no x11forwarding=no maxauthtries=3)
+    [ "$has_key" != true ] || expected_settings+=(pubkeyauthentication=yes)
+    case "$root_login_change" in
+        disabled) expected_settings+=(permitrootlogin=no) ;;
+        prohibit-password) expected_settings+=(permitrootlogin=prohibit-password) ;;
+    esac
+    [ "$disable_password" != y ] || expected_settings+=(passwordauthentication=no kbdinteractiveauthentication=no)
+    if ! validate_sshd_candidate "$candidate" "$config_file" ||
+       ! verify_sshd_login_settings "$candidate" "$SSH_SELECTED_USER" "${expected_settings[@]}"; then
         sshd -t -f "$candidate" 2>&1 | head -n 10 >&2 || true
         rm -f -- "$candidate"
         return 1
@@ -5912,7 +5968,7 @@ function action_configure_ssh_transactional() {
         reload_ssh_service || true
         return 1
     fi
-    if ! sshd -T > /dev/null 2>&1; then
+    if ! verify_sshd_login_settings "$config_file" "$SSH_SELECTED_USER" "${expected_settings[@]}"; then
         ui_log_error \
             "The effective configuration check failed after SSH reload; restoring the previous configuration" \
             "SSH reload 后有效配置检查失败，正在恢复"
@@ -7926,8 +7982,53 @@ docker_compose_cmd() {
     fi
 }
 
+# Keep these helpers self-contained: the timer embeds the same implementation.
+docker_compose_volume_names() {
+    jq -er '
+        if type != "object" then error("invalid Compose model") else . end |
+        (if .volumes == null then {} else .volumes end) |
+        if type != "object" then error("invalid volumes model") else . end |
+        [.[] | .name | if type == "string" and test("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+            then . else error("missing or invalid resolved volume name") end] |
+        unique | join("\n")
+    ' "$1"
+}
+
+backup_compose_project() {
+    local project_dir="$1" backup_dir="$2" compose_cmd="$3" compose_file="$4" include_volumes="$5"
+    local volumes="" volume
+    local -a project_files=("$compose_file")
+    [ ! -f "$project_dir/.env" ] || project_files+=(.env)
+    mkdir -p "$backup_dir" || return 1
+    backup_dir="$(cd "$backup_dir" && pwd -P)" || return 1
+    (cd "$project_dir" && $compose_cmd config) > "$backup_dir/compose.resolved.yaml" || return 1
+    if [ "$include_volumes" = "1" ]; then
+        command -v jq > /dev/null 2>&1 || { echo "Compose volume backup requires jq" >&2; return 1; }
+        if ! (cd "$project_dir" && $compose_cmd config --format json) > "$backup_dir/compose.resolved.json"; then
+            echo "Volume backup requires a Compose version supporting config --format json" >&2
+            return 1
+        fi
+        volumes="$(docker_compose_volume_names "$backup_dir/compose.resolved.json")" || return 1
+        # Check every actual Engine name before docker run can create a missing volume.
+        while IFS= read -r volume; do
+            [ -n "$volume" ] || continue
+            docker volume inspect "$volume" > /dev/null || return 1
+        done <<< "$volumes"
+    fi
+    tar -C "$project_dir" -czf "$backup_dir/project-files.tar.gz" "${project_files[@]}" || return 1
+    if [ -n "$volumes" ]; then
+        mkdir -p "$backup_dir/volumes" || return 1
+        while IFS= read -r volume; do
+            [ -n "$volume" ] || continue
+            echo "Backing up volume: $volume"
+            docker run --rm -v "${volume}:/volume:ro" -v "$backup_dir/volumes:/backup" \
+                busybox tar -czf "/backup/${volume}.tar.gz" -C /volume . || return 1
+        done <<< "$volumes"
+    fi
+}
+
 run_docker_compose_backup_once() {
-    local project_dir backup_root compose_cmd timestamp project_name backup_dir compose_file volumes
+    local project_dir backup_root compose_cmd timestamp project_name backup_dir compose_file candidate include_volumes=0
     builtin read -r -p "$(ui_text "Compose project directory [default: current directory]: " "Compose 项目目录 [默认当前目录]: ")" project_dir
     project_dir="${project_dir:-$(pwd)}"
     builtin read -r -p "$(ui_text "Backup root directory [default: /var/backups/docker-compose]: " "备份根目录 [默认 /var/backups/docker-compose]: ")" backup_root
@@ -7963,26 +8064,14 @@ run_docker_compose_backup_once() {
         return 0
     fi
 
-    mkdir -p "$backup_dir"
-    tar -C "$project_dir" -czf "$backup_dir/project-files.tar.gz" \
-        "$compose_file" .env 2>/dev/null || tar -C "$project_dir" -czf "$backup_dir/project-files.tar.gz" "$compose_file"
-    (cd "$project_dir" && $compose_cmd config) > "$backup_dir/compose.resolved.yaml" 2>/dev/null || true
-
-    volumes="$(cd "$project_dir" && $compose_cmd config --volumes 2>/dev/null || true)"
-    if [ -n "$volumes" ]; then
-        mkdir -p "$backup_dir/volumes"
-        if confirm_action "$(ui_text "Back up named Compose volumes? (This may pull the busybox image.)" "是否备份 Compose 命名卷? (可能需要拉取 busybox 镜像)")" "y"; then
-            local volume
-            while IFS= read -r volume; do
-                [ -z "$volume" ] && continue
-                ui_log_info "Backing up volume: $volume" "备份 volume: $volume"
-                docker run --rm \
-                    -v "${volume}:/volume:ro" \
-                    -v "${backup_dir}/volumes:/backup" \
-                    busybox tar -czf "/backup/${volume}.tar.gz" -C /volume . >> "$LOG_FILE" 2>&1 || \
-                    ui_log_warning "Failed to back up volume: $volume" "volume 备份失败: $volume"
-            done <<< "$volumes"
-        fi
+    if confirm_action "$(ui_text "Back up named Compose volumes? (This may pull the busybox image.)" "是否备份 Compose 命名卷? (可能需要拉取 busybox 镜像)")" "y"; then
+        include_volumes=1
+    fi
+    ensure_log_file || return 1
+    if ! backup_compose_project "$project_dir" "$backup_dir" "$compose_cmd" "$compose_file" "$include_volumes" >> "$LOG_FILE" 2>&1; then
+        ui_log_error "Compose backup failed; see $LOG_FILE. Partial files may remain in $backup_dir" \
+            "Compose 备份失败，请查看 $LOG_FILE；$backup_dir 中可能保留不完整文件"
+        return 1
     fi
 
     ui_log_success "Docker Compose project backup completed: $backup_dir" "Docker Compose 项目备份完成: $backup_dir"
@@ -7990,7 +8079,7 @@ run_docker_compose_backup_once() {
 
 install_docker_compose_backup_timer() {
     local project_dir backup_root schedule include_volumes compose_cmd compose_file project_name timer_id
-    local script_path service_path timer_path
+    local script_path service_path timer_path candidate
 
     builtin read -r -p "$(ui_text "Compose project directory [default: current directory]: " "Compose 项目目录 [默认当前目录]: ")" project_dir
     project_dir="${project_dir:-$(pwd)}"
@@ -8029,6 +8118,11 @@ install_docker_compose_backup_timer() {
         return 1
     fi
 
+    project_dir="$(cd "$project_dir" && pwd -P)" || return 1
+    # systemd runs with a different working directory; resolve relative inputs now.
+    if [[ "$backup_root" != /* ]]; then
+        backup_root="$(pwd -P)/$backup_root"
+    fi
     project_name="$(basename "$project_dir")"
     timer_id="$(printf '%s' "$project_name" | tr -cd 'A-Za-z0-9_.-' | cut -c1-48)"
     [ -n "$timer_id" ] || timer_id="compose"
@@ -8052,27 +8146,15 @@ COMPOSE_FILE=$(printf '%q' "$compose_file")
 INCLUDE_VOLUMES=$(printf '%q' "$include_volumes")
 LOG_FILE="/var/log/init-compose-backup-${timer_id}.log"
 
+$(declare -f docker_compose_volume_names backup_compose_project)
+
 timestamp="\$(date +%Y%m%d_%H%M%S)"
 project_name="\$(basename "\$PROJECT_DIR")"
 backup_dir="\${BACKUP_ROOT}/\${project_name}_\${timestamp}"
 
-mkdir -p "\$backup_dir"
 {
     echo "===== \$(date '+%Y-%m-%d %H:%M:%S') compose backup start ====="
-    tar -C "\$PROJECT_DIR" -czf "\$backup_dir/project-files.tar.gz" "\$COMPOSE_FILE" .env 2>/dev/null || \
-        tar -C "\$PROJECT_DIR" -czf "\$backup_dir/project-files.tar.gz" "\$COMPOSE_FILE"
-    (cd "\$PROJECT_DIR" && \$COMPOSE_CMD config) > "\$backup_dir/compose.resolved.yaml" 2>/dev/null || true
-    if [ "\$INCLUDE_VOLUMES" = "1" ]; then
-        volumes="\$(cd "\$PROJECT_DIR" && \$COMPOSE_CMD config --volumes 2>/dev/null || true)"
-        if [ -n "\$volumes" ]; then
-            mkdir -p "\$backup_dir/volumes"
-            while IFS= read -r volume; do
-                [ -z "\$volume" ] && continue
-                docker run --rm -v "\${volume}:/volume:ro" -v "\$backup_dir/volumes:/backup" \
-                    busybox tar -czf "/backup/\${volume}.tar.gz" -C /volume . || true
-            done <<< "\$volumes"
-        fi
-    fi
+    backup_compose_project "\$PROJECT_DIR" "\$backup_dir" "\$COMPOSE_CMD" "\$COMPOSE_FILE" "\$INCLUDE_VOLUMES" || exit 1
     echo "backup_dir=\$backup_dir"
     echo "===== \$(date '+%Y-%m-%d %H:%M:%S') compose backup done ====="
 } >> "\$LOG_FILE" 2>&1
@@ -8464,7 +8546,9 @@ run_safety_tests() {
         ui_log_error "Safety regression test is missing or not executable: $test_script" "安全回归测试不存在或不可执行: $test_script"
         return 1
     fi
-    "$test_script"
+    "$test_script" || return 1
+    python3 "$SCRIPT_DIR/tests/test_bug_regressions.py" || return 1
+    bash "$SCRIPT_DIR/tests/vnstat-traffic-firewall-test.sh"
 }
 
 function action_script_quality() {
@@ -8659,10 +8743,13 @@ show_profile_plan() {
     for module in $modules; do
         printf "%2d. %-20s %s\n" "$idx" "$module" "$(profile_module_description "$module")"
         printf "    impact: %s\n" "$(profile_module_impact "$module")"
+        if [ "$NON_INTERACTIVE" = "1" ] && profile_module_requires_interaction "$module"; then
+            printf '    %s\n' "$(ui_text 'Skipped in non-interactive mode: parameters must be selected in the menu.' '非交互模式将跳过：需要在菜单中选择参数。')"
+        fi
         idx=$((idx + 1))
     done
     printf '%b\n' ""
-    printf '%b\n' "${YELLOW}$(ui_text "Note:" "提示:")${PLAIN} $(ui_text "If the plan includes interactive modules, the Apply phase will prompt for required parameters." "计划中包含交互式模块时，Apply 阶段会继续询问必要参数。")"
+    printf '%b\n' "${YELLOW}$(ui_text "Note:" "提示:")${PLAIN} $(ui_text "Interactive modules prompt for parameters; NON_INTERACTIVE=1 skips and reports those modules." "交互式模块会询问必要参数；NON_INTERACTIVE=1 会跳过并汇报这些模块。")"
 }
 
 write_profile_file() {
@@ -8768,10 +8855,18 @@ run_profile_module() {
     esac
 }
 
+profile_module_requires_interaction() {
+    case "$1" in
+        reverse_proxy|compose_backup|monitoring|backup_restore|security_audit|runtime|script_quality|restic_drill)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 apply_profile_modules() {
     local profile_name="$1"
     local modules="$2"
-    local module status=0
+    local module status=0 deferred=""
 
     validate_profile_modules "$modules" || return 1
     show_profile_plan "$profile_name" "$modules"
@@ -8786,14 +8881,25 @@ apply_profile_modules() {
         done
         return 0
     fi
-    if ! confirm_action "$(ui_text "Apply the profile according to the plan above?" "确认按上述计划执行 Profile?")" "n"; then
+    if [ "$NON_INTERACTIVE" != "1" ] && ! confirm_action "$(ui_text "Apply the profile according to the plan above?" "确认按上述计划执行 Profile?")" "n"; then
         ui_log_warning "Profile execution canceled" "已取消 Profile 执行"
         return 1
     fi
 
     for module in $modules; do
+        if [ "$NON_INTERACTIVE" = "1" ] && profile_module_requires_interaction "$module"; then
+            ui_log_warning "[non-interactive] Skipped $module: select its parameters from the interactive menu" \
+                "[非交互] 已跳过 $module：请在交互菜单中选择所需参数"
+            deferred+=" $module"
+            continue
+        fi
         ui_log_info "Starting profile module: $module - $(profile_module_description "$module")" "Profile 模块开始: $module - $(profile_module_description "$module")"
-        run_profile_module "$module" || status=$?
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            # Defaults must never consume an unattended caller's stdin.
+            run_profile_module "$module" < /dev/null || status=$?
+        else
+            run_profile_module "$module" || status=$?
+        fi
         if [ "$status" -ne 0 ]; then
             ui_log_warning "Profile module failed or was canceled: $module (status=$status)" "Profile 模块失败或被取消: $module (status=$status)"
             if ! confirm_action "$(ui_text "Continue with the remaining modules?" "是否继续执行后续模块?")" "n"; then
@@ -8802,7 +8908,12 @@ apply_profile_modules() {
             status=0
         fi
     done
-    ui_log_success "Profile execution completed: $profile_name" "Profile 执行完成: $profile_name"
+    if [ -n "$deferred" ]; then
+        ui_log_warning "Profile $profile_name finished with interactive modules skipped:$deferred" \
+            "Profile $profile_name 执行结束，以下交互模块已跳过:$deferred"
+    else
+        ui_log_success "Profile execution completed: $profile_name" "Profile 执行完成: $profile_name"
+    fi
 }
 
 choose_profile_preset() {
@@ -9272,6 +9383,8 @@ action_ops_enhancements() {
 
 # --- 模块: 用户管理 ---
 function action_user_manager() {
+    local new_user add_key pubkey target_home ssh_candidate source_address="${SSH_CONNECTION:-127.0.0.1}"
+    source_address="${source_address%% *}"
     ui_log_info "User management..." "用户管理..."
     builtin read -r -p "$(ui_text "New username: " "请输入新用户名: ")" new_user
     if [ -z "$new_user" ]; then
@@ -9289,13 +9402,14 @@ function action_user_manager() {
     fi
 
     adduser --disabled-password --gecos "" "$new_user" || return 1
+    target_home="$(get_user_home "$new_user")" || return 1
 
     builtin read -r -p "$(ui_text "Configure an SSH public key for this user? [y/n]: " "是否为该用户设置 SSH 公钥? [y/n]: ")" add_key
     case "$add_key" in
         y|Y|yes|YES)
             builtin read -r -p "$(ui_text "Public key: " "请输入公钥内容: ")" pubkey
             if [ -n "$pubkey" ]; then
-                install_authorized_key "$new_user" "/home/$new_user" "$pubkey" || return 1
+                install_authorized_key "$new_user" "$target_home" "$pubkey" || return 1
                 ui_log_success "Public key validated and added" "已验证并添加公钥"
             fi
             ;;
@@ -9311,14 +9425,28 @@ function action_user_manager() {
         fi
     fi
 
-    if confirm_action "$(ui_text "Disable root SSH login?" "是否禁用 root SSH 登录?")" "n"; then
-        local ssh_candidate
+    if ! validate_ssh_key_target_user "$new_user" true ||
+       ! authorized_keys_is_usable_for_user "$new_user" "$target_home" ||
+       ! user_has_sudo_access "$new_user"; then
+        ui_log_warning "Root SSH login was kept: $new_user needs a usable public key and sudo access first" \
+            "保留 root SSH 登录：$new_user 必须先具备可用公钥和 sudo 权限"
+        return 0
+    fi
+    if confirm_action "$(ui_text \
+        "Have you tested SSH login and sudo as $new_user in another session, and want to disable root SSH login?" \
+        "确认已在另一会话测试 $new_user 的 SSH 登录和 sudo，并禁用 root SSH 登录?")" "n"; then
         ssh_candidate="$(mktemp /etc/ssh/.sshd_config.user-manager.XXXXXX)" || return 1
-        cp /etc/ssh/sshd_config "$ssh_candidate" || return 1
-        set_sshd_directive_in_file "$ssh_candidate" PermitRootLogin no || return 1
+        if ! cp /etc/ssh/sshd_config "$ssh_candidate" ||
+           ! set_sshd_directive_in_file "$ssh_candidate" PermitRootLogin no ||
+           ! verify_sshd_settings "$ssh_candidate" "" permitrootlogin=no ||
+           ! verify_sshd_settings "$ssh_candidate" "user=root,host=localhost,addr=$source_address" permitrootlogin=no ||
+           ! verify_sshd_settings "$ssh_candidate" "user=$new_user,host=localhost,addr=$source_address" pubkeyauthentication=yes; then
+            rm -f -- "$ssh_candidate"
+            return 1
+        fi
         atomic_install_file /etc/ssh/sshd_config "$ssh_candidate" \
             "$(ui_text "disable root SSH login" "禁用 root SSH 登录")" preserve 0 0 validate_sshd_candidate || return 1
-        if ! reload_ssh_service; then
+        if ! reload_ssh_service || ! verify_sshd_settings /etc/ssh/sshd_config "" permitrootlogin=no; then
             rollback_last_operation || true
             reload_ssh_service || true
             return 1

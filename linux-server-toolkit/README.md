@@ -192,6 +192,7 @@ NETWORK_DIAGNOSTIC_HOST=example.com ./server-toolkit.sh --network
 ```bash
 sudo env \
   NON_INTERACTIVE=1 \
+  INIT_PROFILE=minimal \
   ALLOW_EXTERNAL=1 \
   ALLOW_REMOTE_EXEC=1 \
   ALLOW_DANGEROUS=1 \
@@ -215,6 +216,11 @@ sudo env \
 
 选择普通用户时，该账户必须已存在、具有可登录 Shell 和有效主目录。脚本只有在
 确认其公钥与 sudo 管理权限后，才会提供禁用 root 登录或所有 SSH 密码认证的选项。
+
+“用户管理”创建新账户时也会执行上述检查；禁用 root 前还需要确认已在另一 SSH
+会话中验证新账户登录和 sudo。sudo 检查会查询实际策略是否允许 root Shell，
+而非仅查看用户组。SSH 全局配置会写在 `Include` 前，并使用 `sshd -T`
+核对全局、root 和所选账户的生效值；发现冲突的 `Match` 配置时返回失败。
 
 远程脚本默认要求可信 SHA256。可通过 `REMOTE_SCRIPT_SHA256` 提供单次摘要，或使用仅 root 可写的校验文件：
 
@@ -251,6 +257,19 @@ sudo env INIT_PROFILE=secure-server ./server-toolkit.sh
 sudo env PROFILE_FILE=/root/init-profile-secure-server.env ./server-toolkit.sh
 ```
 
+`NON_INTERACTIVE=1` 下，显式选择的 Profile 会直接执行无需额外选择的模块，
+模块失败时停止；`minimal` 可完整执行。运行时选择、反向代理、Compose 备份、
+监控、备份恢复、安全审计菜单、脚本质量菜单和恢复演练需要交互参数，非交互模式
+会在计划和执行结果中明确列为跳过，可随后从交互菜单配置。
+
+自动安全更新按发行版生成规则：Debian 使用代号和 `Debian-Security` 标签匹配，
+Ubuntu 保留 security 与 ESM 来源规则。
+
+Compose 命名卷备份要求 `jq` 和支持 `config --format json` 的 Compose 版本。
+手动与定时备份均读取解析后的实际卷名（含项目名前缀、自定义名和外部卷名），
+并先检查卷是否存在；解析、归档或任一卷备份失败都会返回失败。
+已安装的定时备份脚本需要从菜单重新配置一次，才能使用更新后的实现。
+
 ## 配套工具与配方
 
 仓库还保留少量不进入交互菜单的独立工具：Cloudflare IPv4 DDNS、vnStat
@@ -267,9 +286,12 @@ QNAP、Nginx PWA 反向代理和 CloudDrive MITM 调试资料位于
 bash -n server-toolkit.sh
 for script in tools/*.sh; do bash -n "$script"; done
 python3 tests/test_terminal.py
+python3 tests/test_bug_regressions.py
 ./tests/test_init_safety.sh
 ./tests/cloudflare-ddns-test.sh
 ./tests/vnstat-traffic-firewall-test.sh
 ```
 
 脚本菜单中的“脚本与运维”还提供静态自检、ShellCheck、安全测试、外部资源信任清单和系统变更报告。
+新增回归测试使用临时文件和模拟系统命令；安装 `jq`、OpenSSH 服务端和客户端后，
+可运行全部卷备份与真实 `sshd -T` 检查。
