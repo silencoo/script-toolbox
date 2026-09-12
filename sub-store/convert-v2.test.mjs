@@ -845,7 +845,7 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
     .split(/\r?\n/)
     .filter((line) => line.startsWith("static="));
 
-  assert.equal(policyLines.length, 22);
+  assert.equal(policyLines.length, 23);
   for (const line of policyLines) {
     assert.match(
       line,
@@ -868,6 +868,10 @@ test("uses the self-hosted z-icon collection for every Quantumult X policy", asy
   assert.match(
     policyLines.join("\n"),
     /static=AI,.*\/icon\/apps-proxy\/chatgpt-v2\.png/,
+  );
+  assert.match(
+    policyLines.join("\n"),
+    /static=APNs,.*\/icon\/apps-cn\/apple-v2\.png/,
   );
   assert.match(
     policyLines.join("\n"),
