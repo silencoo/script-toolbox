@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const sources = Object.fromEntries(await Promise.all(
-  ["ios-adapter", "convert-v2"].map(async (name) => [name,
+  ["ios-adapter", "convert-v2", "sort-country"].map(async (name) => [name,
     await readFile(new URL(`./${name}.js`, import.meta.url), "utf8")]),
 ));
 const locations = [
@@ -44,7 +44,7 @@ function load(name, args) {
   const context = vm.createContext(args === undefined ? {} : { $arguments: args });
   vm.runInContext(sources[name], context);
   return {
-    run: (proxies) => name === "ios-adapter"
+    run: (proxies) => name !== "convert-v2"
       ? { proxies: context.operator(proxies) }
       : context.main({ proxies }),
     context,
@@ -57,8 +57,11 @@ const realNames = (profile) => names(profile.proxies).filter((name) =>
 const withoutFlags = (value) => value.replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "").trim();
 
 test("standalone scripts keep the same country ordering implementation", () => {
-  const block = (source) => source.match(/\/\/ BEGIN COUNTRY ORDER[\s\S]*?\/\/ END COUNTRY ORDER/)[0];
-  assert.equal(block(sources["ios-adapter"]), block(sources["convert-v2"]));
+  const block = (source) => source.replace(/\r\n/g, "\n")
+    .match(/\/\/ BEGIN COUNTRY ORDER[\s\S]*?\/\/ END COUNTRY ORDER/)[0];
+  for (const source of Object.values(sources)) {
+    assert.equal(block(source), block(sources["convert-v2"]));
+  }
 });
 
 for (const script of Object.keys(sources)) {
@@ -137,6 +140,23 @@ test("iOS keeps replacement account nodes last and subscription headers intact",
   assert.deepEqual(names(result.proxies), ["Germany 01", "Netherlands 01", "India 01",
     "剩余流量：10 MB", "到期时间：1999-01-01"]);
   assert.match(context.$options._res.headers["subscription-userinfo"], /total=10485760/);
+});
+
+test("single-subscription sorter only reorders the supplied nodes without changing metadata", () => {
+  const input = nodes(["Germany 01", "剩余流量：1 GB", "[pro] Japan 01", "Netherlands 01", "到期时间：2030-01-01"]);
+  input[0]["dialer-proxy"] = "Netherlands 01";
+  const snapshot = structuredClone(input);
+  const otherSubscription = nodes(["DE-02", "JP-02"]);
+  const { run, context } = load("sort-country", { countryorder: "jp,nl,de" });
+  context.$options = { _res: { headers: { "subscription-userinfo": "total=12345" } } };
+  const optionsSnapshot = structuredClone(context.$options);
+  const result = run(input).proxies;
+  assert.deepEqual(names(result), ["[pro] Japan 01", "Netherlands 01", "Germany 01", "剩余流量：1 GB", "到期时间：2030-01-01"]);
+  assert.deepEqual(input, snapshot);
+  for (const proxy of result) assert.ok(input.includes(proxy));
+  assert.deepEqual(context.$options, optionsSnapshot);
+  assert.deepEqual(names(otherSubscription), ["DE-02", "JP-02"]);
+  assert.deepEqual(names(run([]).proxies), []);
 });
 
 test("v2 preference changes preserve country membership and load-balance configuration", () => {

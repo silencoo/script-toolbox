@@ -840,7 +840,7 @@ function classifyCountry(name) {
   );
 }
 
-// BEGIN COUNTRY ORDER: keep this standalone block identical in both scripts.
+// BEGIN COUNTRY ORDER: keep this standalone block identical in all country-order scripts.
 // [ISO code, English name, aliases/cities, Chinese name/city pattern].
 // Sorting recognizes more locations than convert-v2's automatic country groups.
 const SORT_COUNTRIES = [

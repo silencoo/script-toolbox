@@ -7,6 +7,7 @@ Standalone scripts intended for use with Sub-Store.
 | [`convert-v2.js`](./convert-v2.js) | Tag-aware profile conversion | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/convert-v2.js) |
 | [`ios-adapter.js`](./ios-adapter.js) | iOS compatibility operator | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/ios-adapter.js) |
 | [`add-country-flags.js`](./add-country-flags.js) | Add or normalize flags on one subscription's nodes | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/add-country-flags.js) |
+| [`sort-country.js`](./sort-country.js) | Sort one subscription's nodes by country without changing node data | [raw](https://raw.githubusercontent.com/silencoo/script-toolbox/main/sub-store/sort-country.js) |
 
 Use the raw URL required by your Sub-Store configuration. Review each script's
 header and settings before enabling it.
@@ -67,6 +68,32 @@ unrecognized node names receive the neutral `🌐` icon. Existing flags for
 locations outside the built-in mapping are preserved. Leading bracketed tags
 stay before the icon, matching `convert-v2.js`; untagged names use `🇹🇼 Taiwan 03`.
 Both batch operators update `dialer-proxy` references when renaming their targets.
+
+## Sort one subscription only
+
+Edit the individual subscription in Sub-Store, add a **Script Operation** in
+link mode, and use this URL after the script is published to `main`:
+
+```text
+https://raw.githubusercontent.com/silencoo/script-toolbox/refs/heads/main/sub-store/sort-country.js#noCache&countryorder=jp,us,hk,sg,nl,de,in
+```
+
+Before publishing, paste `sort-country.js` into the inline script operation and
+set its arguments to `{"countryorder":"jp,us,hk,sg,nl,de,in"}`. If the editor
+does not expose an arguments field, prepend
+`$arguments = { countryorder: "jp,us,hk,sg,nl,de,in" };` to the inline script.
+
+Place this operation on the individual subscription, not on the collection or
+merged output. It only reorders the supplied nodes: names, connection settings,
+account-information entries, and subscription headers are preserved. It does
+not add fake account entries or create policy groups. It supports the same 60
+locations and ordering syntax documented below; omitted or `off` ordering
+preserves the input order.
+
+Remove `countryorder` from downstream `ios-adapter.js` / `convert-v2.js`
+operations if you want to retain the order from individual subscriptions.
+A later sorter on a collection or merged profile would sort across all of its
+input nodes again.
 
 ## Custom country ordering
 
