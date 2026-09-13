@@ -1,7 +1,9 @@
 /* eslint-disable no-console */
-/* global process, URL, setTimeout, TextDecoder */
+/* global process, URL, setTimeout, TextDecoder, Buffer */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -12,6 +14,7 @@ const FIXTURES_PATH = new URL("../node_modules/single-file-core/test/fixtures/",
 const FIXTURE_PATH = process.env.SF_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page.zip.html");
 const SINGLE_PAGE_FIXTURE_PATH = process.env.SF_SINGLE_PAGE_FIXTURE_PATH || join(FIXTURES_PATH, "single-page.zip.html");
 const DEDUP_FIXTURE_PATH = process.env.SF_DEDUP_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page-dedup.zip.html");
+const DIGEST_FIXTURE_PATH = process.env.SF_DIGEST_FIXTURE_PATH || join(FIXTURES_PATH, "classic-digest.html");
 const ZIP_MODULE_URL = new URL("../node_modules/single-file-core/vendor/zip/zip.js", import.meta.url).href;
 const FILENAME_CAPTURE_SCRIPT = "(() => {" +
 	"if (!window.__sendMessagePatched) {" +
@@ -128,6 +131,33 @@ try {
 console.log(failures ? "FAILED (" + failures + ")" : "PASSED");
 process.exit(failures ? 1 : 0);
 
+// answers the WebDAV client's HEAD probe with "not found" so it PUTs, and keeps each
+// uploaded body on disk for the archive checks
+function startWebDAVStub() {
+	const uploadDir = mkdtempSync(join(tmpdir(), "sf-e2e-webdav-"));
+	const uploads = new Map();
+	const server = createServer((request, response) => {
+		if (request.method == "PUT") {
+			const chunks = [];
+			request.on("data", chunk => chunks.push(chunk));
+			request.on("end", () => {
+				const filename = decodeURIComponent(request.url.substring(1));
+				const filePath = join(uploadDir, basename(filename));
+				writeFileSync(filePath, Buffer.concat(chunks));
+				uploads.set(filename, filePath);
+				response.writeHead(201).end();
+			});
+		} else {
+			response.writeHead(404).end();
+		}
+	});
+	return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve({
+		url: "http://127.0.0.1:" + server.address().port + "/",
+		uploads,
+		close: () => server.close()
+	})));
+}
+
 function clearDownloadDir() {
 	rmSync(downloadDir, { recursive: true, force: true });
 	mkdirSync(downloadDir, { recursive: true });
@@ -167,7 +197,7 @@ async function run() {
 	}, "sender page ready");
 	const fixtureBase64 = readFileSync(FIXTURE_PATH).toString("base64");
 
-	async function openEditorArchive(base64Content, filename) {
+	async function openEditorArchive(base64Content, filename, compressContent = true) {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
 				await cdp.Runtime.evaluate({ expression: "window.__fixtureBase64 = \"\"; window.__editorOpenPending = true" }, sessionId);
@@ -177,7 +207,9 @@ async function run() {
 				await cdp.Runtime.evaluate({
 					expression: "(() => {" +
 						"const bytes = Uint8Array.from(atob(window.__fixtureBase64), character => character.charCodeAt(0));" +
-						"chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });" +
+						(compressContent
+							? "chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });"
+							: "chrome.runtime.sendMessage({ method: \"editor.open\", content: new TextDecoder().decode(bytes), compressContent: false, filename: " + JSON.stringify(filename) + " });") +
 						"})()"
 				}, sessionId);
 				// eslint-disable-next-line no-unused-vars
@@ -269,11 +301,21 @@ async function run() {
 	await assertEquals("cluster label says TOC", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Table of contents");
 	await assertEquals("save button stays visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
 	await assertEquals("import button hidden", () => evalInPage("document.querySelector('.import-mht-button').hidden"), true);
+	await assertEquals("edit tools hidden on the TOC", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => element.hidden)"), true);
+	await evalInPage("document.querySelector('.editor').contentWindow.postMessage(JSON.stringify({ method: 'addNote', color: 'note-yellow' }), '*')");
+	await new Promise(resolve => setTimeout(resolve, 500));
+	await assertEquals("addNote ignored on the TOC", () => evalInFrame("document.querySelectorAll('single-file-note').length"), 0);
+
+	// the editor's profile switch reads its options through this message, which applies
+	// the same background-save clamp as a regular save
+	await assertEquals("profile options carry the profile name", () => evalInPage("chrome.runtime.sendMessage({ method: 'config.getProfileOptions', profileName: '__Default_Settings__' }).then(options => options.profileName + ':' + typeof options.backgroundSave)", true), "__Default_Settings__:boolean");
 
 	await evalInFrame("document.querySelector(\"a[href='pages/2/index.html']\").click()");
 	await waitFor(() => evalInPage("location.hash == '#sfz/pages/2/' || undefined"), "route follows TOC click");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Alpha' || undefined"), "alpha page displayed");
-	await assertEquals("cluster shows page title", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Alpha page");
+	// the cluster is updated when the frame reports the displayed page, after the page itself is visible
+	await waitFor(() => evalInPage("document.querySelector('.archive-page-title').textContent == 'Alpha page' || undefined"), "cluster shows page title");
+	await waitFor(() => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden) || undefined"), "edit tools visible on a page");
 
 	await evalInFrame("document.body.dataset.testMarker = 'stashed'");
 	await evalInFrame("document.querySelector(\"a[href^='http'][href$='beta.html']\").click()");
@@ -312,11 +354,25 @@ async function run() {
 	await waitFor(() => evalInFrame("document.querySelectorAll('.sfz-modified-page').length == 0 || undefined"), "modified markers cleared after save");
 	await verifySavedArchive(savedFilePath);
 	const savedBase64 = readFileSync(savedFilePath).toString("base64");
+	// the re-saved archive goes to a WebDAV stub: the background used to read the
+	// archive bytes as text before handing them to a destination
+	const webDAV = await startWebDAVStub();
+	await updateDefaultProfile({ saveWithWebDAV: true, webDAVURL: webDAV.url, webDAVUser: "user", webDAVPassword: "password" });
 	await openEditorArchive(savedBase64, "fixture-resaved.zip.html");
 	await waitFor(() => evalInPage("location.hash == '#sfz/?toc' || undefined"), "re-saved archive reopens on the TOC");
 	await waitFor(() => evalInFrame("document.querySelectorAll(\"a[href$='index.html']\").length == 5 || undefined"), "re-saved archive TOC lists 5 pages");
 	await evalInPage("location.hash = '#sfz/pages/2/'");
 	await waitFor(() => evalInFrame("Boolean(document.querySelector('single-file-note')) || undefined"), "note persisted in re-saved archive");
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const uploadedFilePath = await waitFor(() => webDAV.uploads.get("fixture-resaved.zip.html"), "archive uploaded to WebDAV");
+	try {
+		await verifySavedArchive(uploadedFilePath);
+	} catch (error) {
+		failures++;
+		console.log("FAIL uploaded archive is readable", error.message);
+	}
+	await updateDefaultProfile({ saveWithWebDAV: false });
+	webDAV.close();
 
 	await evalInPage("location.hash = '#sfz/pages/3/'");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Beta' || undefined"), "route set before deep-link reopen");
@@ -334,6 +390,7 @@ async function run() {
 	await assertEquals("single-page: no archive route", () => evalInPage("location.hash"), "");
 	await assertEquals("single-page: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("single-page: save button visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
+	await assertEquals("single-page: edit tools visible", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden)"), true);
 
 	const dedupBase64 = readFileSync(DEDUP_FIXTURE_PATH).toString("base64");
 	await openEditorArchive(dedupBase64, "multi-page-dedup.zip.html");
@@ -389,6 +446,8 @@ async function run() {
 	await waitFor(() => evalInFrame("(() => { const heading = document.querySelector('h1'); return heading && heading.textContent == 'Gamma' || undefined; })()"), "dropped plain page displayed");
 	await assertEquals("plain drop: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("plain drop: archive route cleared", () => evalInPage("location.hash"), "");
+	await evalInPage("document.querySelector('.add-note-yellow-button').dispatchEvent(new MouseEvent('mouseup'))");
+	await waitFor(() => evalInFrame("Boolean(document.querySelector('single-file-note')) || undefined"), "note added to the dropped plain page");
 	await evalInPage(FILENAME_CAPTURE_SCRIPT);
 	clearDownloadDir();
 	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
@@ -397,6 +456,19 @@ async function run() {
 	await assertEquals("plain drop on disk under the dropped filename", () => basename(savedPlainPath), "dropped-plain.html");
 	const savedPlainContent = readFileSync(savedPlainPath).toString();
 	await assertEquals("plain drop save is a plain page with the dropped content", async () => savedPlainContent.includes("Gamma") && !savedPlainContent.includes("data-sfz") && !savedPlainContent.includes("sfz-pages.json"), true);
+	await assertEquals("plain drop save keeps the note added in the editor", async () => savedPlainContent.includes("single-file-note"), true);
+
+	const digestBase64 = readFileSync(DIGEST_FIXTURE_PATH).toString("base64");
+	await openEditorArchive(digestBase64, "classic-digest.html", false);
+	await waitFor(() => evalInFrame("(() => { const heading = document.querySelector('h1'); return heading && heading.textContent == 'Delta' || undefined; })()"), "classic page with template data displayed");
+	await evalInPage(FILENAME_CAPTURE_SCRIPT);
+	clearDownloadDir();
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const savedDigestPath = await waitForDownload("classic page with template data downloaded");
+	const savedDigestName = basename(savedDigestPath);
+	const savedDigestHash = createHash("sha256").update(readFileSync(savedDigestPath)).digest("hex");
+	await assertEquals("digest filename recomputed from the template data", () => /^Digest fixture_[0-9a-f]{64}\.html$/.test(savedDigestName), true);
+	await assertEquals("filename digest matches the saved bytes", () => savedDigestName.includes(savedDigestHash), true);
 
 
 
@@ -473,12 +545,16 @@ async function run() {
 		await originalReader.close();
 	}
 
-	async function evalInPage(expression) {
-		const { result, exceptionDetails } = await cdp.Runtime.evaluate({ expression }, sessionId);
+	async function evalInPage(expression, awaitPromise = false) {
+		const { result, exceptionDetails } = await cdp.Runtime.evaluate({ expression, awaitPromise }, sessionId);
 		if (exceptionDetails) {
 			throw new Error(exceptionDetails.text + " " + JSON.stringify(exceptionDetails.exception));
 		}
 		return result.value;
+	}
+
+	function updateDefaultProfile(profile) {
+		return evalInPage("chrome.runtime.sendMessage(" + JSON.stringify({ method: "config.updateProfile", profileName: "__Default_Settings__", profile }) + ")", true);
 	}
 
 	async function evalInFrame(expression) {
