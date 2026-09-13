@@ -1,6 +1,7 @@
 // author=codex-5.6 sol extra high
 // Optional ordering: #noCache&countryorder=jp,us,hk,sg,nl,de,in.
 // Supports 60 locations, ISO codes and English names; see README.md.
+// QX AnyTLS: preserve source ALPN and normalize TLS aliases before export.
 
 // BEGIN COUNTRY ORDER: keep this standalone block identical in all country-order scripts.
 // [ISO code, English name, aliases/cities, Chinese name/city pattern].
@@ -152,6 +153,59 @@ function setFakeSubscriptionInfo() {
   $options._res.headers["plan-name"] = null;
 }
 
+// QX expects a hex-encoded list of length-prefixed UTF-8 protocol names.
+// No Buffer/TextEncoder dependency: this script also runs in iOS JS runtimes.
+function encodeQxAlpn(value) {
+  const protocols = Array.isArray(value) ? value :
+    typeof value === "string" ? value.split(",") : null;
+  if (!protocols) throw new Error("iOS adapter: AnyTLS ALPN must be a string or array");
+  const encoded = protocols.map((protocol) => {
+    if (typeof protocol !== "string") {
+      throw new Error("iOS adapter: AnyTLS ALPN entries must be strings");
+    }
+    protocol = protocol.trim();
+    if (!protocol) return "";
+    const bytes = encodeURIComponent(protocol).match(/%[0-9a-f]{2}|[^%]/gi) || [];
+    if (bytes.length > 255) {
+      throw new Error("iOS adapter: AnyTLS ALPN protocol exceeds 255 bytes");
+    }
+    return bytes.length.toString(16).padStart(2, "0") + bytes.map((byte) =>
+      byte[0] === "%" ? byte.slice(1).toLowerCase() :
+        byte.charCodeAt(0).toString(16).padStart(2, "0")
+    ).join("");
+  }).join("");
+  if (encoded.length / 2 > 65533) {
+    throw new Error("iOS adapter: AnyTLS ALPN list exceeds the TLS extension limit");
+  }
+  return encoded || undefined;
+}
+
+function adaptQxAnyTls(proxy, targetPlatform) {
+  if (!["qx", "quantumultx"].includes(String(targetPlatform).toLowerCase()) ||
+      !proxy || proxy.type !== "anytls") return proxy;
+
+  // Keep canonical Sub-Store fields and explicit QX settings authoritative.
+  // Clone so another export of the same subscription retains its source data.
+  const adapted = Object.assign({}, proxy, { tls: true });
+  if (adapted.sni == null) {
+    const sni = proxy.servername != null ? proxy.servername : proxy["tls-host"];
+    if (sni != null) adapted.sni = sni;
+  }
+  if (adapted["tls-fingerprint"] == null) {
+    if (proxy["tls-cert-sha256"] != null) {
+      adapted["tls-fingerprint"] = proxy["tls-cert-sha256"];
+    } else if (typeof proxy.fingerprint === "string" &&
+        /^(?:[0-9a-f]{64}|(?:[0-9a-f]{2}:){31}[0-9a-f]{2})$/i.test(proxy.fingerprint.trim())) {
+      adapted["tls-fingerprint"] = proxy.fingerprint.trim().replace(/:/g, "").toLowerCase();
+    }
+  }
+  if (adapted["tls-alpn"] == null && proxy.alpn != null) {
+    const alpn = encodeQxAlpn(proxy.alpn);
+    if (alpn) adapted["tls-alpn"] = alpn;
+  }
+  return adapted;
+}
+
 function operator(proxies = [], targetPlatform, context) {
   setFakeSubscriptionInfo();
   const input = Array.isArray(proxies) ? proxies : [];
@@ -159,7 +213,8 @@ function operator(proxies = [], targetPlatform, context) {
     const name = proxy && proxy.name != null ? String(proxy.name) : "";
     return !TRAFFIC_NODE_PATTERN.test(name);
   });
-  const output = sortByCountry(realNodes, (proxy) =>
+  const adaptedNodes = realNodes.map((proxy) => adaptQxAnyTls(proxy, targetPlatform));
+  const output = sortByCountry(adaptedNodes, (proxy) =>
     classifySortCountry(proxy && proxy.name != null ? String(proxy.name) : "")
   ).concat(
     FAKE_ACCOUNT_NODES.map((proxy) => Object.assign({}, proxy))

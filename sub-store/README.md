@@ -55,6 +55,35 @@ unrelated subscriptions.
 The legacy `convert.js` operator was removed. Existing configurations should
 migrate to `convert-v2.js`.
 
+## AnyTLS for Quantumult X
+
+When the export target is `QX` / `QuantumultX`, `ios-adapter.js` prepares AnyTLS
+TLS fields for Sub-Store's exporter. For example, source `alpn: [h2, http/1.1]`
+becomes `tls-alpn=02683208687474702f312e31` in the exported node. Arrays and
+comma-separated strings are supported; an explicit `tls-alpn` takes precedence.
+Absent ALPN is left absent, and malformed entries or entries exceeding 255 UTF-8
+bytes are rejected. This preserves supplied settings; it does not establish that
+ALPN caused a connection failure.
+
+The adapter also maps `servername` / `tls-host` to Sub-Store's `sni`, and
+`tls-cert-sha256` or a Mihomo SHA-256 `fingerprint` to `tls-fingerprint`, without
+overwriting existing canonical fields. Browser fingerprints such as
+`client-fingerprint: chrome` are not certificate hashes and are not converted to
+certificate pins. Certificate verification settings, credentials, server
+addresses, and source nodes are preserved. Other export targets are unchanged.
+
+Use Quantumult X 1.6.0 or later and a Sub-Store backend whose AnyTLS exporter
+supports `tls-alpn`. Current upstream also converts `alpn` directly; this adapter
+explicitly prepares the QX field for compatibility with exporters that only pass
+that field through. It cannot fix a backend that omits both forms, or recover ALPN
+already removed by an earlier parser/operation. Place it after operations that
+change node TLS fields, refresh the subscription, and inspect the final QX node.
+If `tls-alpn` is still missing, update Sub-Store and check the input node data.
+
+This is a node operator; private DNS must still be configured in Quantumult X.
+Sources: [Sub-Store QX exporter](https://github.com/sub-store-org/Sub-Store/blob/master/backend/src/core/proxy-utils/producers/qx.js),
+[Quantumult X configuration](https://github.com/crossutility/Quantumult-X/blob/master/sample.conf).
+
 ## Country flags for one subscription
 
 See [custom country ordering](#custom-country-ordering) below to sort nodes in
