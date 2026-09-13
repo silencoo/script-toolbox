@@ -56,6 +56,9 @@ migrate to `convert-v2.js`.
 
 ## Country flags for one subscription
 
+See [custom country ordering](#custom-country-ordering) below to sort nodes in
+`ios-adapter.js` or `convert-v2.js` without changing their names.
+
 Add `add-country-flags.js` as a script operation on the individual subscription
 that needs renaming. It recognizes 30 common locations across Asia, Europe, the
 Americas, and Oceania from common Chinese names, English names, abbreviations,
@@ -64,3 +67,66 @@ unrecognized node names receive the neutral `🌐` icon. Existing flags for
 locations outside the built-in mapping are preserved. Leading bracketed tags
 stay before the icon, matching `convert-v2.js`; untagged names use `🇹🇼 Taiwan 03`.
 Both batch operators update `dialer-proxy` references when renaming their targets.
+
+## Custom country ordering
+
+Both `ios-adapter.js` and `convert-v2.js` accept `countryorder` through
+Sub-Store's script URL fragment. Set the URL in the **script operation**, keep
+one `#`, and join parameters with `&`:
+
+```text
+https://raw.githubusercontent.com/silencoo/script-toolbox/refs/heads/main/sub-store/ios-adapter.js#noCache&countryorder=jp,us,hk,sg,nl,de,in
+https://raw.githubusercontent.com/silencoo/script-toolbox/refs/heads/main/sub-store/convert-v2.js#noCache&countryorder=jp,us,hk,sg,nl,de,in
+```
+
+These URLs require the updated scripts to be published to `main`. To try local
+changes before publishing, paste the script into Sub-Store's inline script
+operation and set its arguments to `{"countryorder":"jp,us,hk,sg,nl,de,in"}`.
+
+The example prioritizes Japan, United States, Hong Kong, Singapore, Netherlands,
+Germany, then India. Codes and English names can be mixed, case-insensitively:
+`countryorder=JP,us,hk,sg,Netherlands,Germany,India`. Separate entries with commas
+(recommended) or `>`; spaces around entries are ignored. For multiword names
+in a URL, use `%20` or underscores, e.g. `United%20States` or `United_States`.
+Aliases such as `uk`, `usa`, `uae`, and `Czech Republic` are also accepted.
+
+- Nodes are identified from their names: recognized flags take precedence,
+  followed by Chinese/English names, standalone codes, and common city names.
+  No GeoIP lookup or server connection is performed.
+- Nodes from the same location retain their original order. Unlisted and
+  unrecognized locations follow the requested ones, retaining their original
+  relative order. Duplicate preferences and unknown values are ignored.
+- Omit `countryorder`, leave it empty, or use `countryorder=off` to preserve the
+  script's previous ordering behavior.
+- The iOS adapter sorts its real output nodes and leaves its two replacement
+  account-information nodes at the end. Client-side sorting or later Sub-Store
+  operations can override that output order; the adapter does not edit client
+  policy groups.
+- The converter sorts its output nodes (including the manual, Auto, and AI
+  node lists) and reorders its existing country groups and country references.
+  Fixed policy entries such as Auto, Proxies, Direct, and Fallback keep their
+  positions within each list. This applies to special groups too: for example,
+  putting `jp` first makes Japan the first Gemini country choice. Saved client
+  selections may still take precedence. URL-test groups still select by latency.
+- Sorting does not change group membership or create additional country groups:
+  v2's automatic country groups remain Japan, United States, Taiwan, Singapore,
+  and Hong Kong. Netherlands/Germany/India and the other locations are sorted
+  wherever their actual nodes appear. Dedicated `[pro]` nodes remain outside
+  ordinary automatic groups.
+
+The ordering recognizer supports these **60 countries and regions** (the
+separate flag-renaming operator above still has its own 30-location mapping):
+
+| Region | Accepted codes and English names |
+| --- | --- |
+| East Asia | `jp` Japan, `tw` Taiwan, `hk` Hong Kong, `kr` South Korea, `cn` China, `mo` Macau |
+| Southeast Asia | `sg` Singapore, `id` Indonesia, `my` Malaysia, `th` Thailand, `vn` Vietnam, `ph` Philippines, `kh` Cambodia |
+| South/Central Asia | `in` India, `pk` Pakistan, `bd` Bangladesh, `np` Nepal, `lk` Sri Lanka, `kz` Kazakhstan |
+| Middle East | `ae` United Arab Emirates, `tr` Turkey, `il` Israel, `sa` Saudi Arabia |
+| Europe | `de` Germany, `gb` United Kingdom, `fr` France, `nl` Netherlands, `ru` Russia, `it` Italy, `es` Spain, `ch` Switzerland, `se` Sweden, `fi` Finland, `pl` Poland, `no` Norway, `ie` Ireland, `at` Austria, `be` Belgium, `dk` Denmark, `pt` Portugal, `cz` Czechia, `hu` Hungary, `ro` Romania, `bg` Bulgaria, `gr` Greece, `ua` Ukraine, `lu` Luxembourg, `is` Iceland, `ee` Estonia, `lv` Latvia, `lt` Lithuania |
+| Americas | `us` United States, `ca` Canada, `br` Brazil, `ar` Argentina, `cl` Chile, `mx` Mexico |
+| Oceania | `au` Australia, `nz` New Zealand |
+| Africa | `za` South Africa |
+
+Sub-Store parses the fragment into `$arguments` before loading the script; see
+the upstream [script loader](https://github.com/sub-store-org/Sub-Store/blob/master/backend/src/core/proxy-utils/index.js).
