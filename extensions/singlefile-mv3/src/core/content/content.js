@@ -21,7 +21,7 @@
  *   Source.
  */
 
-/* global browser, document, location, setTimeout, URL, setInterval, clearInterval */
+/* global browser, document, location, setTimeout, addEventListener, URL, setInterval, clearInterval */
 
 import * as download from "./../common/download.js";
 import { fetch, frameFetch } from "./../../lib/single-file/fetch/content/content-fetch.js";
@@ -71,6 +71,8 @@ if (!bootstrap || !bootstrap.initializedSingleFile) {
 		bootstrap.initializedSingleFile = true;
 	} else {
 		globalThis.singlefileBootstrap = { initializedSingleFile: true };
+		addEventListener("keydown", cancelSaveKeyListener, true);
+		addEventListener("keyup", cancelSaveKeyListener, true);
 	}
 }
 
@@ -188,6 +190,8 @@ async function savePage(message) {
 					browser.runtime.sendMessage({ method: "ui.processError", error: errorMessage });
 					onError(errorMessage);
 				}
+			} finally {
+				ui.onEndPage();
 			}
 		} else {
 			browser.runtime.sendMessage({ method: "ui.processCancelled" });
@@ -198,6 +202,20 @@ async function savePage(message) {
 		}
 	}
 	clearInterval(pingInterval);
+}
+
+function cancelSave() {
+	browser.runtime.sendMessage({ method: "downloads.cancel" });
+}
+
+function cancelSaveKeyListener(event) {
+	if (event.key == "Escape" && globalThis.singlefileBootstrap.cancelSave) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (event.type == "keyup") {
+			globalThis.singlefileBootstrap.cancelSave();
+		}
+	}
 }
 
 async function capturePage(message) {
@@ -242,10 +260,9 @@ async function processPage(options) {
 	const frames = singlefile.processors.frameTree;
 	let framesSessionId;
 	singlefile.helper.initDoc(document);
-	ui.onStartPage(options);
+	ui.onStartPage(options, cancelSave);
 	processor = new singlefile.SingleFile(options);
 	const preInitializationPromises = [];
-	options.insertCanonicalLink = true;
 	let index = 0, maxIndex = 0, initializing;
 	options.onprogress = async event => {
 		const { options } = event.detail;
