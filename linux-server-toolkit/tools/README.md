@@ -65,6 +65,12 @@ The capture endpoints are `/test`, `/api`, and `/download/<filename>`. The
 dashboard is `/`. Common credential-bearing headers are redacted before being
 stored, and logs remain bounded in memory.
 
+Query credentials (including `passkey`, `authkey`, token/secret/signature aliases)
+and the `Referer` header are redacted. Download URLs show the route template,
+not the filename. The built-in HTTP access/error logger omits raw request targets
+so it cannot bypass query redaction. If deployed behind a reverse proxy or a
+different WSGI server, configure that server's access logs separately.
+
 Listening beyond loopback requires a dashboard password:
 
 ```bash

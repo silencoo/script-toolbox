@@ -262,6 +262,58 @@ exit 99
         docker.chmod(0o755)
         return {'PATH': str(bin_dir) + ':' + os.environ['PATH'], 'FIXTURE_DIR': str(self.root)}
 
+    def test_compose_backup_keeps_credentials_private_and_preserves_caller_umask(self):
+        project = self.root / 'project'
+        project.mkdir()
+        (project / 'compose.yaml').write_text('services: {}\n')
+        (project / '.env').write_text('PASSWORD=FAKE_BACKUP_SECRET\n')
+        (project / '.env').chmod(0o600)
+        backup = self.root / 'backups'
+        backup.mkdir(mode=0o755)
+        # Simulate a retry into a directory produced by the old implementation.
+        for name in ('compose.resolved.yaml', 'project-files.tar.gz'):
+            (backup / name).write_text('old')
+            (backup / name).chmod(0o644)
+        output = self.shell('''umask 022
+mock_compose() { printf '%s\\n' 'PASSWORD: FAKE_BACKUP_SECRET'; }
+backup_compose_project "$TEST_TMP/project" "$TEST_TMP/backups" mock_compose compose.yaml 0
+printf 'caller_umask=%s\\n' "$(umask)"
+''')
+        self.assertIn('caller_umask=0022', output)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
+        for name in ('compose.resolved.yaml', 'project-files.tar.gz'):
+            self.assertEqual((backup / name).stat().st_mode & 0o777, 0o600)
+        self.assertIn('FAKE_BACKUP_SECRET', (backup / 'compose.resolved.yaml').read_text())
+
+    def test_compose_backup_rejects_symlinked_secret_output(self):
+        project = self.root / 'project'
+        project.mkdir()
+        (project / 'compose.yaml').write_text('services: {}\n')
+        backup = self.root / 'backups'
+        backup.mkdir()
+        public = self.root / 'public'
+        public.write_text('unchanged')
+        (backup / 'compose.resolved.yaml').symlink_to(public)
+        self.shell('''mock_compose() { echo secret; }
+backup_compose_project "$TEST_TMP/project" "$TEST_TMP/backups" mock_compose compose.yaml 0
+''', status=1)
+        self.assertEqual(public.read_text(), 'unchanged')
+
+    def test_goecs_disables_upload_for_existing_and_new_installations(self):
+        for installed in ('0', '1'):
+            with self.subTest(installed=installed):
+                output = self.shell('''confirm_action() { return 0; }
+command() {
+    if [[ "$*" == '-v goecs' ]]; then [[ "$INSTALLED" == 1 ]]; else builtin command "$@"; fi
+}
+run_remote_script_unverified() { INSTALLED=1; }
+goecs() { printf 'ARG:%s\\n' "$@"; }
+TOOLKIT_EFFECTIVE_LANG=zh
+action_run_goecs
+''', env={'INSTALLED': installed})
+                self.assertIn('ARG:-l=zh', output)
+                self.assertIn('ARG:-upload=false', output)
+
     @unittest.skipUnless(shutil.which('jq'), 'requires jq')
     def test_compose_backup_resolves_names_and_propagates_failure(self):
         env = self.docker_fixture()
@@ -303,6 +355,12 @@ invoke_action install_docker_compose_backup_timer
             self.assertEqual(child.returncode, 0 if rc == 0 else 1, child.stderr)
             log = (self.root / 'timer.log').read_text()
             self.assertEqual('compose backup done' in log, rc == 0)
+            self.assertEqual((self.root / 'timer.log').stat().st_mode & 0o777, 0o600)
+            for backup in (self.root / 'backups').iterdir():
+                self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((backup / 'compose.resolved.yaml').stat().st_mode & 0o777, 0o600)
+                self.assertEqual((backup / 'project-files.tar.gz').stat().st_mode & 0o777, 0o600)
+            self.assertIn("umask 077; exec tar", (self.root / 'docker.calls').read_text())
         self.assertIn('-v reviewapp_db:/volume:ro', (self.root / 'docker.calls').read_text())
 
     @unittest.skipUnless(shutil.which('jq'), 'requires jq')

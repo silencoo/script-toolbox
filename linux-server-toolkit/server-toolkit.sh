@@ -2824,7 +2824,7 @@ function action_install_essentials() {
     # 更新包列表（统一管理）
     # 基础工具
     local packages=(
-        curl wget vim nano git unzip zip tar tmux mosh
+        curl wget vim nano git unzip zip tar tmux mosh kitty-terminfo
         htop btop jq ca-certificates gnupg lsb-release
         iperf3 mtr nmap net-tools dnsutils tcpdump iputils-ping socat
         ufw fail2ban unattended-upgrades
@@ -5991,6 +5991,41 @@ action_configure_ssh() {
 # ==============================================================
 
 # --- 模块: 运行测试脚本 ---
+action_run_goecs() {
+    local installer_url='https://raw.githubusercontent.com/oneclickvirt/ecs/master/goecs.sh'
+    local language="${TOOLKIT_EFFECTIVE_LANG:-en}"
+
+    if ! confirm_action "$(ui_text 'Run Fusion Monster Go (install goecs if missing)?' '运行融合怪 Go 版（未安装时先安装 goecs）？')" "y"; then
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info \
+            '[DRY RUN] Would install goecs if missing, then open the Fusion Monster Go menu' \
+            '[DRY RUN] 缺失时安装 goecs，然后打开融合怪 Go 版菜单'
+        return 0
+    fi
+
+    if ! command -v goecs > /dev/null 2>&1; then
+        # Only install the binary; the upstream "env" action changes system packages.
+        if ! run_remote_script_unverified "$installer_url" \
+            "$(ui_text 'Fusion Monster Go installer' '融合怪 Go 版安装脚本')" install; then
+            return 1
+        fi
+        hash -r
+    fi
+
+    if ! command -v goecs > /dev/null 2>&1; then
+        ui_log_error \
+            'goecs was not found after installation; check the installer output and PATH' \
+            '安装后未找到 goecs，请检查安装输出和 PATH'
+        return 1
+    fi
+
+    run_command "$(ui_text 'Fusion Monster Go benchmark' '融合怪 Go 版测评')" \
+        goecs "-l=$language" -upload=false
+}
+
 function action_run_test_scripts() {
     local choice
     while true; do
@@ -6005,7 +6040,7 @@ function action_run_test_scripts() {
         printf '%b\n' "${GREEN}[2]${PLAIN} Yabs - Yet Another Benchmark Script ($(ui_text "performance" "性能测试"))"
         printf '%b\n' "${GREEN}[3]${PLAIN} RegionRestrictionCheck - $(ui_text "streaming availability" "流媒体解锁检测")"
         printf '%b\n' "${GREEN}[4]${PLAIN} IP Quality Check - $(ui_text "IP reputation" "IP 质量检测")"
-        printf '%b\n' "${GREEN}[5]${PLAIN} Fusion Monster - $(ui_text "comprehensive benchmark" "综合性能测试")"
+        printf '%b\n' "${GREEN}[5]${PLAIN} Fusion Monster Go (goecs) - $(ui_text "comprehensive benchmark" "综合性能测试")"
         printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
         printf '%b\n' ""
         ui_read choice "Enter [0-5]: " "请输入 [0-5]: "
@@ -6046,18 +6081,8 @@ function action_run_test_scripts() {
                 fi
                 ;;
             5)
-                ui_log_info "Running the Fusion Monster benchmark..." "运行融合怪测评脚本..."
-                if confirm_action "$(ui_text "Run the Fusion Monster benchmark?" "确认运行融合怪测评脚本?")" "y"; then
-                    local script_path='/tmp/ecs.sh'
-                    local ecs_url='https://gitlab.com/spiritysdx/za/-/raw/main/ecs.sh'
-                    if download_remote_script_unverified "$ecs_url" "$script_path" "$(ui_text 'Fusion Monster benchmark' '融合怪测评脚本')"; then
-                        bash "$script_path" || \
-                            ui_log_warning "Fusion Monster benchmark failed" "融合怪测评脚本执行失败"
-                        rm -f -- "$script_path"
-                    else
-                        ui_log_warning "Fusion Monster benchmark skipped" "已跳过融合怪测评脚本"
-                    fi
-                fi
+                action_run_goecs || \
+                    ui_log_warning "Fusion Monster Go benchmark failed or installation was skipped" "融合怪 Go 版测评失败或已跳过安装"
                 ;;
             0) return 0 ;;
             *) menu_invalid_choice; continue ;;
@@ -7994,13 +8019,22 @@ docker_compose_volume_names() {
     ' "$1"
 }
 
-backup_compose_project() {
+backup_compose_project() (
+    # Isolate the umask so callers keep their own permissions policy.
+    umask 077
     local project_dir="$1" backup_dir="$2" compose_cmd="$3" compose_file="$4" include_volumes="$5"
     local volumes="" volume
     local -a project_files=("$compose_file")
     [ ! -f "$project_dir/.env" ] || project_files+=(.env)
     mkdir -p "$backup_dir" || return 1
     backup_dir="$(cd "$backup_dir" && pwd -P)" || return 1
+    chmod 700 "$backup_dir" || return 1
+    # Retries must also protect files created by older versions.
+    local output
+    for output in compose.resolved.yaml compose.resolved.json project-files.tar.gz; do
+        [ ! -L "$backup_dir/$output" ] || return 1
+        [ ! -e "$backup_dir/$output" ] || chmod 600 "$backup_dir/$output" || return 1
+    done
     (cd "$project_dir" && $compose_cmd config) > "$backup_dir/compose.resolved.yaml" || return 1
     if [ "$include_volumes" = "1" ]; then
         command -v jq > /dev/null 2>&1 || { echo "Compose volume backup requires jq" >&2; return 1; }
@@ -8018,14 +8052,19 @@ backup_compose_project() {
     tar -C "$project_dir" -czf "$backup_dir/project-files.tar.gz" "${project_files[@]}" || return 1
     if [ -n "$volumes" ]; then
         mkdir -p "$backup_dir/volumes" || return 1
+        chmod 700 "$backup_dir/volumes" || return 1
         while IFS= read -r volume; do
             [ -n "$volume" ] || continue
+            [ ! -L "$backup_dir/volumes/${volume}.tar.gz" ] || return 1
+            [ ! -e "$backup_dir/volumes/${volume}.tar.gz" ] || \
+                chmod 600 "$backup_dir/volumes/${volume}.tar.gz" || return 1
             echo "Backing up volume: $volume"
             docker run --rm -v "${volume}:/volume:ro" -v "$backup_dir/volumes:/backup" \
-                busybox tar -czf "/backup/${volume}.tar.gz" -C /volume . || return 1
+                busybox sh -c 'umask 077; exec tar -czf "$1" -C /volume .' \
+                sh "/backup/${volume}.tar.gz" || return 1
         done <<< "$volumes"
     fi
-}
+)
 
 run_docker_compose_backup_once() {
     local project_dir backup_root compose_cmd timestamp project_name backup_dir compose_file candidate include_volumes=0
@@ -8146,6 +8185,11 @@ COMPOSE_FILE=$(printf '%q' "$compose_file")
 INCLUDE_VOLUMES=$(printf '%q' "$include_volumes")
 LOG_FILE="/var/log/init-compose-backup-${timer_id}.log"
 
+umask 077
+[ ! -L "\$LOG_FILE" ] || exit 1
+touch "\$LOG_FILE"
+chmod 600 "\$LOG_FILE"
+
 $(declare -f docker_compose_volume_names backup_compose_project)
 
 timestamp="\$(date +%Y%m%d_%H%M%S)"
@@ -8168,6 +8212,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
+UMask=0077
 ExecStart=$script_path
 EOF
 
@@ -9862,7 +9907,7 @@ function action_install_terminal_tools() {
     ui_log_info "Updating the system and installing core dependencies..." "更新系统并安装基础依赖..."
     update_apt_once || return 1
     local -a core_packages=(
-        git curl wget unzip tar build-essential zsh tmux xz-utils bzip2
+        git curl wget unzip tar build-essential zsh tmux xz-utils bzip2 kitty-terminfo
     )
     local -a enhancement_candidates=(
         ripgrep fd-find p7zip-full zstd lz4 pigz fzf jq yq btop ncdu duf git-delta

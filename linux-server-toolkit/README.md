@@ -49,9 +49,14 @@ sudo env TOOLKIT_LANG=auto ./server-toolkit.sh
 `dumb` 纯文本模式。清屏命令缺失或失败不会再使菜单退出，重定向输出时不清屏
 也不输出界面颜色；设置 `NO_COLOR=1` 可禁用颜色。
 
-此兼容处理只影响工具箱及其子进程，不下载终端文件、不安装软件，也不修改用户的
-Shell 配置。它不会修复当前 SSH 会话中其他程序的终端描述；其他程序需要完整
-Kitty 能力时，仍应安装对应 terminfo。
+启动时的终端回退只影响工具箱及其子进程，不安装软件或修改用户的 Shell 配置。
+执行基础工具安装（含标准初始化和四个内置 Profile）或单独的终端环境安装时，
+会通过统一 APT 流程更新软件包列表并安装 `kitty-terminfo`，已安装时自动跳过，
+为 Kitty SSH 会话中的程序提供 `xterm-kitty` 终端描述。也可手动安装：
+
+```bash
+sudo apt-get update && sudo apt-get install -y kitty-terminfo
+```
 
 ## 怎么选
 
@@ -85,6 +90,24 @@ sudo env NON_INTERACTIVE=1 DRY_RUN=1 ./server-toolkit.sh
 ```bash
 PLAN_ONLY=1 INIT_PROFILE=docker-host ./server-toolkit.sh
 ```
+
+## 服务器测评
+
+入口：主菜单 `7 诊断与测试` → `6 服务器测评脚本` → `5 Fusion Monster Go (goecs)`。
+
+融合怪使用 Go 版，项目地址：
+
+```text
+https://github.com/oneclickvirt/ecs
+```
+
+已安装 `goecs` 时直接打开其菜单；否则通过现有远程脚本下载、SHA256 记录和
+确认流程运行官方 `goecs.sh install`，检查命令可用后再启动。此入口只安装
+二进制，不调用上游 `env` 环境安装步骤。Go 版界面语言跟随工具箱设置，
+Dry Run 不下载、不安装，也不启动测试。
+
+此入口固定传入 `-upload=false`，默认不上传融合怪报告。需要分享时可自行运行
+`goecs -upload=true`。网络测速、IP 查询等项目仍会连接相应外部服务。
 
 ## APT 第三方源恢复
 
@@ -270,6 +293,9 @@ Compose 命名卷备份要求 `jq` 和支持 `config --format json` 的 Compose 
 并先检查卷是否存在；解析、归档或任一卷备份失败都会返回失败。
 已安装的定时备份脚本需要从菜单重新配置一次，才能使用更新后的实现。
 
+Compose 手动备份和定时备份使用 `700` 目录、`600` 文件，并保留私有的定时任务日志。
+备份包含 `.env` 和展开后的配置，仍属于敏感数据。历史备份不会被自动扫描或修改。
+
 ## 配套工具与配方
 
 仓库还保留少量不进入交互菜单的独立工具：Cloudflare IPv4 DDNS、vnStat
@@ -287,6 +313,8 @@ bash -n server-toolkit.sh
 for script in tools/*.sh; do bash -n "$script"; done
 python3 tests/test_terminal.py
 python3 tests/test_bug_regressions.py
+# 需要 Flask；使用虚构凭证和本机临时端口检查日志脱敏。
+python3 tests/test_capture_privacy.py
 ./tests/test_init_safety.sh
 ./tests/cloudflare-ddns-test.sh
 ./tests/vnstat-traffic-firewall-test.sh

@@ -12,6 +12,7 @@ from datetime import datetime
 from threading import Lock
 
 from flask import Flask, Response, jsonify, render_template_string, request
+from werkzeug.serving import WSGIRequestHandler
 
 app = Flask(__name__)
 
@@ -24,6 +25,9 @@ sensitive_headers = {
     "proxy-authorization",
     "set-cookie",
     "x-api-key",
+    "x-auth-token",
+    "x-access-token",
+    "referer",
 }
 sensitive_arguments = {
     "api_key",
@@ -32,7 +36,35 @@ sensitive_arguments = {
     "password",
     "secret",
     "token",
+    "passkey",
+    "authkey",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "client_secret",
+    "api_token",
+    "session",
+    "session_id",
+    "signature",
+    "credential",
+    "code",
 }
+
+
+def sensitive_argument(name):
+    normalized = ''.join(character for character in name.casefold() if character.isalnum())
+    return any(normalized.endswith(''.join(c for c in key if c.isalnum()))
+               for key in sensitive_arguments)
+
+
+class PrivateRequestHandler(WSGIRequestHandler):
+    """Never put raw request targets (including queries) in access/error logs."""
+
+    def log_request(self, code='-', size='-'):
+        self.log('info', 'HTTP response %s', code)
+
+    def log_error(self, format, *args):
+        self.log('error', 'HTTP request error (request details omitted)')
 
 
 def dashboard_authorized():
@@ -199,17 +231,18 @@ def log_request():
     # 获取请求信息
     user_agent = request.headers.get('User-Agent', '未知')
     method = request.method
-    url = request.base_url
+    # Route templates also hide credential-bearing download filenames/paths.
+    url = request.host_url.rstrip('/') + (request.url_rule.rule if request.url_rule else '/[unmatched]')
     remote_addr = request.remote_addr
 
     # Bound stored values and redact common credential-bearing headers.
     try:
         headers_dict = {
-            key: "[REDACTED]" if key.lower() in sensitive_headers else value[:4096]
+            key: "[REDACTED]" if key.lower() in sensitive_headers or sensitive_argument(key) else value[:4096]
             for key, value in request.headers.items()
         }
         args_dict = {
-            key: "[REDACTED]" if key.lower() in sensitive_arguments else value[:4096]
+            key: "[REDACTED]" if sensitive_argument(key) else value[:4096]
             for key, value in request.args.items()
         }
     except Exception as e:
@@ -290,4 +323,5 @@ if __name__ == '__main__':
     print("默认仅监听本机；公网或局域网监听必须设置管理口令。")
     print("=" * 50)
 
-    app.run(host=options.host, port=options.port, debug=False, use_reloader=False)
+    app.run(host=options.host, port=options.port, debug=False, use_reloader=False,
+            request_handler=PrivateRequestHandler)
