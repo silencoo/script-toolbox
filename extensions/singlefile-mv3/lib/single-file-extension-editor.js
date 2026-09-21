@@ -24,7 +24,7 @@
 	 *   Source.
 	 */
 
-	/* global document, getComputedStyle, FileReader, Image, OffscreenCanvas, createImageBitmap */
+	/* global browser, document, getComputedStyle, Image, OffscreenCanvas, createImageBitmap, btoa */
 
 	const singlefile$1 = globalThis.singlefile;
 
@@ -35,6 +35,13 @@
 	let EMBEDDED_IMAGE_BUTTON_MESSAGE$1, SHARE_PAGE_BUTTON_MESSAGE$1, SHARE_SELECTION_BUTTON_MESSAGE$1, ERROR_TITLE_MESSAGE$1;
 
 	const CSS_PROPERTIES$1 = new Set(Array.from(getComputedStyle(document.documentElement)));
+	let UI_DIRECTION$1 = "ltr";
+	try {
+		UI_DIRECTION$1 = browser.i18n.getMessage("@@bidi_dir");
+		// eslint-disable-next-line no-unused-vars
+	} catch (error) {
+		// ignored
+	}
 
 	function setLabels(labels) {
 		({ EMBEDDED_IMAGE_BUTTON_MESSAGE: EMBEDDED_IMAGE_BUTTON_MESSAGE$1, SHARE_PAGE_BUTTON_MESSAGE: SHARE_PAGE_BUTTON_MESSAGE$1, SHARE_SELECTION_BUTTON_MESSAGE: SHARE_SELECTION_BUTTON_MESSAGE$1, ERROR_TITLE_MESSAGE: ERROR_TITLE_MESSAGE$1 } = labels);
@@ -119,7 +126,7 @@
 					cursor: pointer;
 					transition: opacity 250ms;
 					height: 16px;
-					font-size: .8rem;
+					font-size: 13px;
 					align-self: center;
 				}
 				.singlefile-open-file-bar button, .singlefile-share-page-bar button{
@@ -127,6 +134,18 @@
 				}
 				.singlefile-open-file-bar .close-button, .singlefile-share-page-bar .close-button{
 					filter: invert(1);
+				}
+				@media (prefers-color-scheme: dark) {
+					.singlefile-open-file-bar.container, .singlefile-share-page-bar.container {
+						background-color: #1c1b22;
+						border-block-end: #4a4a55 1px solid;
+					}
+					.singlefile-open-file-bar a, .singlefile-share-page-bar a {
+						color: #8ab4f8;
+					}
+					.singlefile-open-file-bar .close-button, .singlefile-share-page-bar .close-button {
+						filter: none;
+					}
 				}
 				a {
 					color: #303036;
@@ -183,6 +202,7 @@
 		const element = document.createElement(tagName);
 		element.className = SINGLE_FILE_UI_ELEMENT_CLASS$1;
 		CSS_PROPERTIES$1.forEach(property => element.style.setProperty(property, "initial", "important"));
+		element.style.setProperty("direction", UI_DIRECTION$1, "important");
 		return element;
 	}
 
@@ -848,18 +868,24 @@
 	const LOGS_LINE_CLASSNAME = "singlefile-logs-line";
 	const LOGS_LINE_TEXT_ELEMENT_CLASSNAME = "singlefile-logs-line-text";
 	const LOGS_LINE_STATUS_ELEMENT_CLASSNAME = "singlefile-logs-line-icon";
+	const LOGS_LINE_STATUS_DONE_CLASSNAME = "singlefile-logs-line-icon-done";
 	const SINGLE_FILE_UI_ELEMENT_CLASS = singlefile.helper.SINGLE_FILE_UI_ELEMENT_CLASS;
 	const CSS_PROPERTIES = new Set(Array.from(getComputedStyle(document.documentElement)));
-	let LOG_PANEL_WIDTH, LOG_PANEL_DEFERRED_IMAGES_MESSAGE, LOG_PANEL_FRAME_CONTENTS_MESSAGE, LOG_PANEL_EMBEDDED_IMAGE_MESSAGE, LOG_PANEL_STEP_MESSAGE;
-	try {
-		LOG_PANEL_WIDTH = browser.i18n.getMessage("logPanelWidth");
-		LOG_PANEL_DEFERRED_IMAGES_MESSAGE = browser.i18n.getMessage("logPanelDeferredImages");
-		LOG_PANEL_FRAME_CONTENTS_MESSAGE = browser.i18n.getMessage("logPanelFrameContents");
-		LOG_PANEL_EMBEDDED_IMAGE_MESSAGE = browser.i18n.getMessage("logPanelEmbeddedImage");
-		LOG_PANEL_STEP_MESSAGE = browser.i18n.getMessage("logPanelStep");
-		// eslint-disable-next-line no-unused-vars
-	} catch (error) {
-		// ignored
+	const UI_DIRECTION = getMessage("@@bidi_dir", "ltr");
+	const LOG_PANEL_WIDTH = getMessage("logPanelWidth", "122");
+	getMessage("logPanelDeferredContent", "Deferred content");
+	getMessage("logPanelFrameContents", "Frame contents");
+	getMessage("logPanelEmbeddedImage", "Embedded image");
+	getMessage("logPanelStep", "Step");
+	getMessage("maskCancelButton", "Cancel (Esc)");
+
+	function getMessage(messageName, defaultMessage) {
+		try {
+			return browser.i18n.getMessage(messageName) || defaultMessage;
+			// eslint-disable-next-line no-unused-vars
+		} catch (error) {
+			return defaultMessage;
+		}
 	}
 
 	let logsWindowElement;
@@ -916,6 +942,25 @@
 					text-align: center;
 					position: relative;
 					top: 1px;
+					color: black;
+				}
+				.${LOGS_LINE_STATUS_ELEMENT_CLASSNAME}.${LOGS_LINE_STATUS_DONE_CLASSNAME} {
+					color: #055000;
+				}
+				@media (prefers-color-scheme: dark) {
+					.${LOGS_CLASSNAME} {
+						background-color: #1c1b22;
+					}
+					.${LOGS_LINE_CLASSNAME} {
+						color: #eeeeee;
+						background-color: #1c1b22;
+					}
+					.${LOGS_LINE_STATUS_ELEMENT_CLASSNAME} {
+						color: #eeeeee;
+					}
+					.${LOGS_LINE_STATUS_ELEMENT_CLASSNAME}.${LOGS_LINE_STATUS_DONE_CLASSNAME} {
+						color: #7dc67d;
+					}
 				}
 			`;
 				shadowRoot.appendChild(styleElement);
@@ -933,6 +978,7 @@
 		const element = document.createElement(tagName);
 		element.className = SINGLE_FILE_UI_ELEMENT_CLASS;
 		CSS_PROPERTIES.forEach(property => element.style.setProperty(property, "initial", "important"));
+		element.style.setProperty("direction", UI_DIRECTION, "important");
 		return element;
 	}
 
@@ -3371,10 +3417,11 @@
 		const DISABLED_NOSCRIPT_ATTRIBUTE_NAME = "data-single-file-disabled-noscript";
 		const COMMENT_HEADER = "Page saved with SingleFile";
 		const COMMENT_HEADER_LEGACY = "Archive processed by SingleFile";
+		const EDIT_MESSAGE_METHODS = ["addNote", "displayNotes", "hideNotes", "enableHighlight", "disableHighlight", "displayHighlights", "hideHighlights", "enableRemoveHighlights", "disableRemoveHighlights", "enableEditPage", "disableEditPage", "formatPage", "cancelFormatPage", "enableCutInnerPage", "enableCutOuterPage", "disableCutInnerPage", "disableCutOuterPage", "undoCutPage", "undoAllCutPage", "redoCutPage"];
 
 		let NOTES_WEB_STYLESHEET, MASK_WEB_STYLESHEET, HIGHLIGHTS_WEB_STYLESHEET;
 		let selectedNote, anchorElement, maskNoteElement, maskPageElement, highlightSelectionMode, removeHighlightMode, resizingNoteMode, movingNoteMode, highlightColor, collapseNoteTimeout, cuttingOuterMode, cuttingMode, cuttingTouchTarget, cuttingPath, cuttingPathIndex, previousContent;
-		let removedElements = [], removedElementIndex = 0, pageResources, pageUrl, pageCompressContent, includeInfobar, openInfobar, infobarPositionAbsolute, infobarPositionTop, infobarPositionBottom, infobarPositionLeft, infobarPositionRight;
+		let removedElements = [], removedElementIndex = 0, pageResources, pageUrl, pageCompressContent, includeInfobar, openInfobar, animateInfobar, infobarPositionAbsolute, infobarPositionTop, infobarPositionBottom, infobarPositionLeft, infobarPositionRight;
 		let pageArchiveContent, archivePages, archiveManifest, archivePassword, archiveUrlToPath, archiveTocContent, archiveTocPresent, stashedArchivePages, modifiedArchivePagePaths, currentArchivePagePath, archiveTocDisplayed, droppedArchiveContent;
 
 		globalThis.zip = singlefile.helper.zip;
@@ -3400,11 +3447,15 @@
 					}
 					onUpdate(true);
 				}
+				if (archiveTocDisplayed && EDIT_MESSAGE_METHODS.includes(message.method)) {
+					return;
+				}
 				if (message.method == "addNote") {
 					addNote(message);
 				}
 				if (message.method == "displayNotes") {
 					document.querySelectorAll(NOTE_TAGNAME).forEach(noteElement => noteElement.shadowRoot.querySelector("." + NOTE_CLASS).classList.remove(NOTE_HIDDEN_CLASS));
+					reflowNotes();
 				}
 				if (message.method == "hideNotes") {
 					document.querySelectorAll(NOTE_TAGNAME).forEach(noteElement => noteElement.shadowRoot.querySelector("." + NOTE_CLASS).classList.add(NOTE_HIDDEN_CLASS));
@@ -3484,6 +3535,7 @@
 				if (message.method == "getContent") {
 					includeInfobar = message.includeInfobar;
 					openInfobar = message.openInfobar;
+					animateInfobar = message.animateInfobar;
 					infobarPositionAbsolute = message.infobarPositionAbsolute;
 					infobarPositionTop = message.infobarPositionTop;
 					infobarPositionBottom = message.infobarPositionBottom;
@@ -3557,6 +3609,7 @@
 				if (message.method == "displayInfobar") {
 					singlefile.helper.displayIcon(document, true, {
 						openInfobar: message.openInfobar,
+						animateInfobar: message.animateInfobar,
 						infobarPositionAbsolute: message.infobarPositionAbsolute,
 						infobarPositionTop: message.infobarPositionTop,
 						infobarPositionBottom: message.infobarPositionBottom,
@@ -3646,7 +3699,7 @@
 					if (infobarElement) {
 						infobarElement.remove();
 					}
-					await initPage();
+					initPage();
 					if (!archivePages) {
 						let icon;
 						const origContentDocument = (new DOMParser()).parseFromString(origDocContent, "text/html");
@@ -3654,12 +3707,7 @@
 						if (iconElement) {
 							const iconResource = resources.find(resource => resource.filename == iconElement.getAttribute("href"));
 							if (iconResource && iconResource.content) {
-								const reader = new FileReader();
-								reader.readAsDataURL(await (await fetch(iconResource.content)).blob());
-								icon = await new Promise((resolve, reject) => {
-									reader.addEventListener("load", () => resolve(reader.result), false);
-									reader.addEventListener("error", reject, false);
-								});
+								icon = await getDataURI(await (await fetch(iconResource.content)).blob());
 							} else {
 								icon = iconElement.href;
 							}
@@ -3701,26 +3749,10 @@
 						element.setAttribute(DISABLED_NOSCRIPT_ATTRIBUTE_NAME, element.innerHTML);
 						element.textContent = "";
 					});
-					contentDocument.querySelectorAll("iframe").forEach(element => {
-						const pointerEvents = "pointer-events";
-						element.style.setProperty("-sf-" + pointerEvents, element.style.getPropertyValue(pointerEvents), element.style.getPropertyPriority(pointerEvents));
-						element.style.setProperty(pointerEvents, "none", "important");
-					});
+					disableFramePointerEvents(contentDocument);
 					document.replaceChild(contentDocument.documentElement, document.documentElement);
 					singlefile.helper.fixInvalidNesting(document);
-					document.querySelectorAll("[data-single-file-note-refs]").forEach(noteRefElement => noteRefElement.dataset.singleFileNoteRefs = noteRefElement.dataset.singleFileNoteRefs.replace(/,/g, " "));
-					deserializeShadowRoots(document);
-					document.querySelectorAll(NOTE_TAGNAME).forEach(containerElement => attachNoteListeners(containerElement, true));
-					insertHighlightStylesheet(document);
-					maskPageElement = getMaskElement(PAGE_MASK_CLASS, PAGE_MASK_CONTAINER_CLASS);
-					maskNoteElement = getMaskElement(NOTE_MASK_CLASS);
-					document.documentElement.onmousedown = onMouseDown;
-					document.documentElement.onmouseup = document.documentElement.ontouchend = onMouseUp;
-					document.documentElement.onmouseover = onMouseOver;
-					document.documentElement.onmouseout = onMouseOut;
-					document.documentElement.onkeydown = onKeyDown;
-					document.documentElement.ontouchstart = document.documentElement.ontouchmove = onTouchMove;
-					window.onclick = event => event.preventDefault();
+					initPageContent();
 					const iconElement = document.querySelector("link[rel*=icon]");
 					window.parent.postMessage(JSON.stringify({
 						method: "onInit",
@@ -3789,7 +3821,7 @@
 				pageUrl = stashedPage.url;
 				pageCompressContent = true;
 				document.replaceChild(stashedPage.content, document.documentElement);
-				await initPage();
+				initPage();
 			} else {
 				await init({ content: pageArchiveContent, password: archivePassword, compressContent: true, pagePath });
 			}
@@ -3915,17 +3947,27 @@
 			}
 		}
 
-		async function initPage() {
-			document.querySelectorAll("iframe").forEach(element => {
+		function initPage() {
+			disableFramePointerEvents(document);
+			initPageContent();
+		}
+
+		function disableFramePointerEvents(doc) {
+			doc.querySelectorAll("iframe").forEach(element => {
 				const pointerEvents = "pointer-events";
-				element.style.setProperty("-sf-" + pointerEvents, element.style.getPropertyValue(pointerEvents), element.style.getPropertyPriority(pointerEvents));
+				if (element.style.getPropertyValue(pointerEvents) != "none" || element.style.getPropertyPriority(pointerEvents) != "important") {
+					element.style.setProperty("--sf-" + pointerEvents, element.style.getPropertyValue(pointerEvents), element.style.getPropertyPriority(pointerEvents));
+				}
 				element.style.setProperty(pointerEvents, "none", "important");
 			});
+		}
+
+		function initPageContent() {
 			document.querySelectorAll("[data-single-file-note-refs]").forEach(noteRefElement => noteRefElement.dataset.singleFileNoteRefs = noteRefElement.dataset.singleFileNoteRefs.replace(/,/g, " "));
 			deserializeShadowRoots(document);
 			reflowNotes();
-			await waitResourcesLoad();
-			reflowNotes();
+			waitResourcesLoad().then(reflowNotes);
+			watchNotesLayout();
 			document.querySelectorAll(NOTE_TAGNAME).forEach(containerElement => attachNoteListeners(containerElement, true));
 			insertHighlightStylesheet(document);
 			maskPageElement = getMaskElement(PAGE_MASK_CLASS, PAGE_MASK_CONTAINER_CLASS);
@@ -3996,6 +4038,7 @@
 			document.documentElement.insertBefore(containerElement, maskPageElement.getRootNode().host);
 			noteElement.classList.add(NOTE_SELECTED_CLASS);
 			selectedNote = noteElement;
+			saveNoteOffset(containerElement);
 			onUpdate(false);
 		}
 
@@ -4067,6 +4110,7 @@
 					deleteNoteRef(containerElement, noteId);
 					addNoteRef(document.documentElement, noteId);
 				}
+				saveNoteOffset(containerElement);
 				onUpdate(false);
 			};
 			removeNoteElement.ontouchend = removeNoteElement.onclick = event => {
@@ -4498,6 +4542,7 @@
 			noteElement.style.setProperty("position", "absolute");
 			noteElement.style.setProperty("left", (clientX - boundingRectPositionedElement.x - deltaX - borderX) + "px");
 			noteElement.style.setProperty("top", (clientY - boundingRectPositionedElement.y - deltaY - borderY) + "px");
+			saveNoteOffset(containerElement);
 		}
 
 		function resetAnchorNote(containerElement) {
@@ -4507,6 +4552,7 @@
 			deleteNoteRef(containerElement, noteId);
 			addNoteRef(document.documentElement, noteId);
 			document.documentElement.insertBefore(containerElement, maskPageElement.getRootNode().host);
+			saveNoteOffset(containerElement);
 		}
 
 		function getPosition(event) {
@@ -4615,9 +4661,11 @@
 				previousContent = getContent(false, []);
 			}
 			const shadowRoots = {};
+			const noteOffsets = {};
 			const classesToPreserve = ["single-file-highlight", "single-file-highlight-yellow", "single-file-highlight-green", "single-file-highlight-pink", "single-file-highlight-blue"];
 			document.querySelectorAll(NOTE_TAGNAME).forEach(containerElement => {
 				shadowRoots[containerElement.dataset.noteId] = containerElement.shadowRoot;
+				noteOffsets[containerElement.dataset.noteId] = { x: containerElement.dataset.noteOffsetX, y: containerElement.dataset.noteOffsetY };
 				const className = "singlefile-note-id-" + containerElement.dataset.noteId;
 				containerElement.classList.add(className);
 				classesToPreserve.push(className);
@@ -4646,6 +4694,11 @@
 				const noteId = (Array.from(containerElement.classList).find(className => /singlefile-note-id-\d+/.test(className))).split("singlefile-note-id-")[1];
 				containerElement.classList.remove("singlefile-note-id-" + noteId);
 				containerElement.dataset.noteId = noteId;
+				const noteOffset = noteOffsets[noteId];
+				if (noteOffset && noteOffset.x !== undefined && noteOffset.y !== undefined && document.querySelector("[data-single-file-note-refs~=\"" + noteId + "\"]")) {
+					containerElement.dataset.noteOffsetX = noteOffset.x;
+					containerElement.dataset.noteOffsetY = noteOffset.y;
+				}
 				if (!containerElement.shadowRoot) {
 					containerElement.attachShadow({ mode: "open" });
 					containerElement.shadowRoot.appendChild(shadowRoots[noteId]);
@@ -4701,7 +4754,7 @@
 				if (pageCompressContent) {
 					document.replaceChild(previousContent, document.documentElement);
 					deserializeShadowRoots(document);
-					await initPage();
+					initPage();
 				} else {
 					await init({ content: previousContent }, { reset: true });
 				}
@@ -4720,6 +4773,7 @@
 		}
 
 		function getContent(compressHTML, updatedResources) {
+			saveNoteOffsets();
 			unhighlightCutElement();
 			serializeShadowRoots(document);
 			singlefile.helper.markInvalidNesting(document);
@@ -4737,6 +4791,7 @@
 			if (includeInfobar) {
 				const options = singlefile.helper.extractInfobarData(doc);
 				options.openInfobar = openInfobar;
+				options.animateInfobar = animateInfobar;
 				options.infobarPositionAbsolute = infobarPositionAbsolute;
 				options.infobarPositionTop = infobarPositionTop;
 				options.infobarPositionRight = infobarPositionRight;
@@ -4757,8 +4812,14 @@
 			});
 			doc.querySelectorAll("iframe").forEach(element => {
 				const pointerEvents = "pointer-events";
-				element.style.setProperty(pointerEvents, element.style.getPropertyValue("-sf-" + pointerEvents), element.style.getPropertyPriority("-sf-" + pointerEvents));
-				element.style.removeProperty("-sf-" + pointerEvents);
+				const savedProperty = "--sf-" + pointerEvents;
+				const savedValue = element.style.getPropertyValue(savedProperty);
+				if (savedValue) {
+					element.style.setProperty(pointerEvents, savedValue, element.style.getPropertyPriority(savedProperty));
+					element.style.removeProperty(savedProperty);
+				} else {
+					element.style.removeProperty(pointerEvents);
+				}
 			});
 			doc.body.removeAttribute("contentEditable");
 			const newResources = Object.keys(updatedResources).filter(url => updatedResources[url].type == "stylesheet").map(url => updatedResources[url]);
@@ -4818,30 +4879,67 @@
 			document.querySelectorAll(NOTE_TAGNAME).forEach(containerElement => {
 				const noteElement = containerElement.shadowRoot.querySelector("." + NOTE_CLASS);
 				const noteBoundingRect = noteElement.getBoundingClientRect();
-				const anchorElement = getAnchorElement(containerElement);
-				const anchorBoundingRect = anchorElement.getBoundingClientRect();
-				const maxX = anchorBoundingRect.x + Math.max(0, anchorBoundingRect.width - noteBoundingRect.width);
-				const minX = anchorBoundingRect.x;
-				const maxY = anchorBoundingRect.y + Math.max(0, anchorBoundingRect.height - NOTE_HEADER_HEIGHT);
-				const minY = anchorBoundingRect.y;
-				let left = parseInt(noteElement.style.getPropertyValue("left"));
-				let top = parseInt(noteElement.style.getPropertyValue("top"));
-				if (noteBoundingRect.x > maxX) {
-					left -= noteBoundingRect.x - maxX;
+				if ((noteBoundingRect.width || noteBoundingRect.height) && !noteElement.classList.contains(NOTE_MOVING_CLASS)) {
+					const anchorElement = getAnchorElement(containerElement);
+					const anchorBoundingRect = anchorElement.getBoundingClientRect();
+					const offsetX = Number(containerElement.dataset.noteOffsetX);
+					const offsetY = Number(containerElement.dataset.noteOffsetY);
+					const savedOffset = anchorElement != document.documentElement && !isNaN(offsetX) && !isNaN(offsetY);
+					const maxX = anchorBoundingRect.x + Math.max(0, anchorBoundingRect.width - noteBoundingRect.width);
+					const minX = anchorBoundingRect.x;
+					const maxY = anchorBoundingRect.y + Math.max(0, anchorBoundingRect.height - NOTE_HEADER_HEIGHT);
+					const minY = anchorBoundingRect.y;
+					const positionX = Math.min(maxX, Math.max(minX, savedOffset ? anchorBoundingRect.x + offsetX : noteBoundingRect.x));
+					const positionY = Math.min(maxY, Math.max(minY, savedOffset ? anchorBoundingRect.y + offsetY : noteBoundingRect.y));
+					const left = parseFloat(noteElement.style.getPropertyValue("left"));
+					const top = parseFloat(noteElement.style.getPropertyValue("top"));
+					noteElement.style.setProperty("position", "absolute");
+					if (Math.abs(positionX - noteBoundingRect.x) > 0.5) {
+						noteElement.style.setProperty("left", (left + positionX - noteBoundingRect.x) + "px");
+					}
+					if (Math.abs(positionY - noteBoundingRect.y) > 0.5) {
+						noteElement.style.setProperty("top", (top + positionY - noteBoundingRect.y) + "px");
+					}
 				}
-				if (noteBoundingRect.x < minX) {
-					left += minX - noteBoundingRect.x;
-				}
-				if (noteBoundingRect.y > maxY) {
-					top -= noteBoundingRect.y - maxY;
-				}
-				if (noteBoundingRect.y < minY) {
-					top += minY - noteBoundingRect.y;
-				}
-				noteElement.style.setProperty("position", "absolute");
-				noteElement.style.setProperty("left", left + "px");
-				noteElement.style.setProperty("top", top + "px");
 			});
+		}
+
+		function watchNotesLayout() {
+			if (globalThis.ResizeObserver) {
+				let reflowPending;
+				new ResizeObserver(() => {
+					if (!reflowPending) {
+						reflowPending = requestAnimationFrame(() => {
+							reflowPending = null;
+							reflowNotes();
+						});
+					}
+				}).observe(document.documentElement);
+			}
+			if (document.fonts) {
+				document.fonts.ready.then(() => reflowNotes());
+			}
+		}
+
+
+		function saveNoteOffset(containerElement) {
+			const noteElement = containerElement.shadowRoot.querySelector("." + NOTE_CLASS);
+			if (noteElement) {
+				const anchorElement = getAnchorElement(containerElement);
+				const noteBoundingRect = noteElement.getBoundingClientRect();
+				if (anchorElement == document.documentElement) {
+					delete containerElement.dataset.noteOffsetX;
+					delete containerElement.dataset.noteOffsetY;
+				} else if (noteBoundingRect.width || noteBoundingRect.height) {
+					const anchorBoundingRect = anchorElement.getBoundingClientRect();
+					containerElement.dataset.noteOffsetX = Math.round(noteBoundingRect.x - anchorBoundingRect.x);
+					containerElement.dataset.noteOffsetY = Math.round(noteBoundingRect.y - anchorBoundingRect.y);
+				}
+			}
+		}
+
+		function saveNoteOffsets() {
+			document.querySelectorAll(NOTE_TAGNAME).forEach(containerElement => saveNoteOffset(containerElement));
 		}
 
 		function resetHighlightedElement(element) {
@@ -5860,7 +5958,9 @@ pre code {
 			const PAGE_MASK_ACTIVE_CLASS = ${JSON.stringify(PAGE_MASK_ACTIVE_CLASS)};
 			const REMOVED_CONTENT_CLASS = ${JSON.stringify(REMOVED_CONTENT_CLASS)};
 			const NESTING_TRACK_ID_ATTRIBUTE_NAME = ${JSON.stringify(singlefile.helper.NESTING_TRACK_ID_ATTRIBUTE_NAME)};
-			const reflowNotes = ${minifyText(reflowNotes.toString())};			
+			const reflowNotes = ${minifyText(reflowNotes.toString())};
+			const saveNoteOffset = ${minifyText(saveNoteOffset.toString())};
+			const watchNotesLayout = ${minifyText(watchNotesLayout.toString())};
 			const addNoteRef = ${minifyText(addNoteRef.toString())};
 			const deleteNoteRef = ${minifyText(deleteNoteRef.toString())};
 			const getNoteRefs = ${minifyText(getNoteRefs.toString())};
@@ -5883,9 +5983,8 @@ pre code {
 			processNode(document);
 			reflowNotes();
 			document.querySelectorAll(${JSON.stringify(NOTE_TAGNAME)}).forEach(noteElement => attachNoteListeners(noteElement));
-			if (document.documentElement.dataset && document.documentElement.dataset.sfz !== undefined) {
-				waitResourcesLoad().then(reflowNotes);
-			}
+			waitResourcesLoad().then(reflowNotes);
+			watchNotesLayout();
 			const trackIds = {};
 			document.querySelectorAll("[" + NESTING_TRACK_ID_ATTRIBUTE_NAME + "]").forEach(element => trackIds[element.getAttribute(NESTING_TRACK_ID_ATTRIBUTE_NAME)] = element);
 			Object.keys(trackIds).forEach(id => {
@@ -5958,6 +6057,24 @@ pre code {
 				}
 			} else {
 				return element.shadowRoot;
+			}
+		}
+
+		async function getDataURI(blob) {
+			if (globalThis.FileReader) {
+				const reader = new globalThis.FileReader();
+				reader.readAsDataURL(blob);
+				return new Promise((resolve, reject) => {
+					reader.addEventListener("load", () => resolve(reader.result), false);
+					reader.addEventListener("error", reject, false);
+				});
+			} else {
+				const bytes = new Uint8Array(await blob.arrayBuffer());
+				let content = "";
+				for (let offset = 0; offset < bytes.length; offset += 8192) {
+					content += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+				}
+				return "data:" + (blob.type || "application/octet-stream") + ";base64," + btoa(content);
 			}
 		}
 

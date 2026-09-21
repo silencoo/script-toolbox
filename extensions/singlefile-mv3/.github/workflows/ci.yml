@@ -8,15 +8,15 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       -
         name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       -
         name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 26
           cache: npm
@@ -26,6 +26,9 @@ jobs:
       -
         name: Run linter
         run: npx eslint .
+      -
+        name: Run the unit tests
+        run: npm run test:unit
       # also exercises the edge packaging round-trip, which patches config.js and
       # manifest.json and must restore them and lib/ exactly
       -
@@ -35,6 +38,20 @@ jobs:
       -
         name: Check the committed build output
         run: git diff --exit-code
+      # this file is inlined into every self-extracting page, which declares
+      # windows-1252, so one non-ASCII character in it is re-decoded there and the
+      # CP437 table it carries is shifted, which mangles the entry names read
+      # through it (single-file-core doc/singlefile-archive.md, 2.1 and 5.8). terser
+      # emits the shortest form unless told otherwise, so a rollup config that loses
+      # ascii_only reintroduces this silently
+      -
+        name: Check the inlined zip build is pure ASCII
+        run: |
+          strays=$(LC_ALL=C tr -d '\11\12\15\40-\176' < lib/single-file-zip.min.js | wc -c)
+          if [ "$strays" -ne 0 ]; then
+            echo "lib/single-file-zip.min.js holds $strays bytes outside printable ASCII"
+            exit 1
+          fi
       # the repository and the packages built without WOLEET_API_KEY must stay keyless
       -
         name: Check the Woleet API key stays out of the repository
@@ -49,15 +66,15 @@ jobs:
           unzip -p singlefile-extension-edge.zip lib/single-file-extension-background.js | grep -q WOLEET_API_KEY_PLACEHOLDER
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       -
         name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       -
         name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 26
           cache: npm

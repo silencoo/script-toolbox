@@ -55,7 +55,7 @@ export {
 };
 
 async function downloadPage(pageData, options) {
-	if (options.includeBOM) {
+	if (options.includeBOM && typeof pageData.content == "string") {
 		pageData.content = "\ufeff" + pageData.content;
 	}
 	const embeddedImage = options.embeddedImage;
@@ -96,12 +96,14 @@ async function downloadPage(pageData, options) {
 		defaultEditorMode: options.defaultEditorMode,
 		includeInfobar: options.includeInfobar,
 		openInfobar: options.openInfobar,
+		animateInfobar: options.animateInfobar,
 		warnUnsavedPage: options.warnUnsavedPage,
 		createRootDirectory: options.createRootDirectory,
 		selfExtractingArchive: options.selfExtractingArchive,
 		disableCompression: options.disableCompression,
 		embeddedImage: embeddedImage ? Array.from(embeddedImage) : null,
 		preventAppendedData: options.preventAppendedData,
+		maxAppendedDataLength: options.maxAppendedDataLength,
 		extractDataFromPage: options.extractDataFromPage,
 		insertCanonicalLink: options.insertCanonicalLink,
 		insertMetaNoIndex: options.insertMetaNoIndex,
