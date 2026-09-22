@@ -1,8 +1,15 @@
 # Companion tools
 
-These focused tools complement `server-toolkit.sh` without being added to its
-interactive menu. They keep independent command lines and are safe to inspect
-or run on their own.
+These focused tools complement `server-toolkit.sh`. Most have independent
+command lines; login notifications are also managed from the toolkit menu.
+
+## Login notifications (Bark)
+
+`login-notify.py` and `login-notify.service` implement the Debian 12/13 login
+notification module. Use **Security and access → Login notifications (Bark)**
+to install, configure, test, inspect or uninstall it. Credentials live outside
+the repository. See [the login notification guide](login-notify.md) for recovery,
+retention, privacy and verification limits.
 
 ## Cloudflare IPv4 DDNS
 

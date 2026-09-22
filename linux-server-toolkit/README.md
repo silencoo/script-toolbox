@@ -298,6 +298,12 @@ Compose 手动备份和定时备份使用 `700` 目录、`600` 文件，并保�
 
 ## 配套工具与配方
 
+“安全与访问 → 登录通知（Bark）”提供 Debian 12/13 的 SSH / 本地控制台登录
+预警，包含独立 systemd 服务、SQLite 持久化队列、断网重试和 journal cursor
+恢复。机器别名、通知时区和 Bark 凭据通过安装向导配置，凭据保存在仓库外。
+安装/更新需要完整仓库；内置 Profile 不自动开启推送，卸载默认保留配置与队列。
+使用方法、容量策略和验收边界见 [登录通知说明](tools/login-notify.md)。
+
 仓库还保留少量不进入交互菜单的独立工具：Cloudflare IPv4 DDNS、vnStat
 月流量阈值检查，以及临时 User-Agent 请求捕获服务。它们位于
 [`tools/`](./tools/README.md)，拥有独立参数和安全边界。
@@ -313,6 +319,7 @@ bash -n server-toolkit.sh
 for script in tools/*.sh; do bash -n "$script"; done
 python3 tests/test_terminal.py
 python3 tests/test_bug_regressions.py
+python3 tests/test_login_notify.py
 # 需要 Flask；使用虚构凭证和本机临时端口检查日志脱敏。
 python3 tests/test_capture_privacy.py
 ./tests/test_init_safety.sh

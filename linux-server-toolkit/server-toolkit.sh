@@ -7657,6 +7657,169 @@ function action_backup_restore() {
     done
 }
 
+# --- 模块: 登录通知 (Debian 12/13) ---
+validate_login_notify_python() {
+    /usr/bin/python3 -I -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$1"
+}
+
+login_notify_command() {
+    local command="$1"
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info "[DRY RUN] Login notification command: $command" "[DRY RUN] 登录通知操作: $command"
+        return 0
+    fi
+    if [ ! -f /usr/local/lib/login-notify/login-notify.py ]; then
+        ui_log_error "Install login notifications first" "请先安装登录通知"
+        return 1
+    fi
+    local language=()
+    [ "$TOOLKIT_EFFECTIVE_LANG" = zh ] && language=(--zh)
+    runuser -u login-notify -- /usr/bin/python3 -I \
+        /usr/local/lib/login-notify/login-notify.py "$command" "${language[@]}"
+}
+
+configure_login_notify() {
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info "[DRY RUN] Would privately configure Bark and machine alias" "[DRY RUN] 将私密配置 Bark 和机器别名"
+        return 0
+    fi
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        ui_log_error "Configure /etc/login-notify/config.json interactively first" "请先交互配置 /etc/login-notify/config.json"
+        return 1
+    fi
+    if [ ! -f /usr/local/lib/login-notify/login-notify.py ]; then
+        ui_log_error "Install login notifications first" "请先安装登录通知"
+        return 1
+    fi
+    local language=()
+    [ "$TOOLKIT_EFFECTIVE_LANG" = zh ] && language=(--zh)
+    /usr/bin/python3 -I /usr/local/lib/login-notify/login-notify.py configure "${language[@]}" || return 1
+    if systemctl is-active --quiet login-notify.service; then
+        run_command "Restart login notifications" systemctl restart login-notify.service || return 1
+    fi
+}
+
+install_login_notify() {
+    local source="$SCRIPT_DIR/tools/login-notify.py" unit="$SCRIPT_DIR/tools/login-notify.service"
+    local path
+    if [ ! -f "$source" ] || [ ! -f "$unit" ]; then
+        ui_log_error "Companion files missing; download the complete repository" "缺少配套文件，请下载完整仓库"
+        return 1
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info \
+            "[DRY RUN] Install Python/libsystemd/CA certificates, dedicated account, private config/state and login-notify.service; preserve existing queue/cursor. No PAM or SSH changes." \
+            "[DRY RUN] 安装 Python/libsystemd/CA 证书、专用账户、私有配置/状态目录和 login-notify.service；保留已有队列/cursor，不修改 PAM 或 SSH。"
+        return 0
+    fi
+    if [ "$OS_ID" != debian ] || [[ "$OS_VERSION" != 12 && "$OS_VERSION" != 13 ]]; then
+        ui_log_error "Login notifications currently support Debian 12/13" "登录通知目前支持 Debian 12/13"
+        return 1
+    fi
+    if [ ! -d /run/systemd/system ]; then
+        ui_log_error "A running systemd system is required" "需要正在运行的 systemd 系统"
+        return 1
+    fi
+    if [ "$NON_INTERACTIVE" = 1 ] && [ ! -f /etc/login-notify/config.json ]; then
+        ui_log_error "Configure login notifications interactively before non-interactive installation" "非交互安装前，请先交互配置登录通知"
+        return 1
+    fi
+    # Never follow an unexpected symlink while creating privileged installation paths.
+    for path in /usr/local/lib/login-notify /etc/login-notify /var/lib/login-notify; do
+        if [ -L "$path" ]; then
+            ui_log_error "Refusing a symlink at $path" "拒绝使用符号链接路径 $path"
+            return 1
+        fi
+    done
+    update_apt_once || return 1
+    install_packages_batch python3 libsystemd0 ca-certificates || return 1
+    validate_login_notify_python "$source" || return 1
+    getent group systemd-journal > /dev/null || return 1
+    if ! getent passwd login-notify > /dev/null; then
+        if ! getent group login-notify > /dev/null; then
+            run_command "Create login notification group" groupadd --system login-notify || return 1
+        fi
+        run_command "Create login notification account" useradd --system --gid login-notify \
+            --groups systemd-journal --home-dir /var/lib/login-notify --no-create-home \
+            --shell /usr/sbin/nologin login-notify || return 1
+    else
+        if [ "$(getent passwd login-notify | cut -d: -f3)" = 0 ] || \
+           [ "$(getent passwd login-notify | cut -d: -f7)" != /usr/sbin/nologin ] || \
+           [ "$(getent passwd login-notify | cut -d: -f6)" != /var/lib/login-notify ] || \
+           [ "$(id -gn login-notify)" != login-notify ]; then
+            ui_log_error "Existing login-notify account is not a dedicated service account" "已有 login-notify 账户不是专用服务账户"
+            return 1
+        fi
+        run_command "Grant journal read access" usermod -a -G systemd-journal login-notify || return 1
+    fi
+    run_command "Create program directory" install -d -m 755 -o root -g root /usr/local/lib/login-notify || return 1
+    run_command "Create private configuration directory" install -d -m 750 -o root -g login-notify /etc/login-notify || return 1
+    run_command "Create private state directory" install -d -m 700 -o login-notify -g login-notify /var/lib/login-notify || return 1
+    write_file_atomic /usr/local/lib/login-notify/login-notify.py "Login notification program" \
+        644 root root validate_login_notify_python < "$source" || return 1
+    # Credentials never pass through generic backup/report helpers or shell variables.
+    if [ ! -f /etc/login-notify/config.json ]; then
+        configure_login_notify || return 1
+    fi
+    login_notify_command check-config || return 1
+    write_file_atomic /etc/systemd/system/login-notify.service "Login notification service" \
+        644 root root validate_systemd_candidate < "$unit" || return 1
+    systemd_daemon_reload || return 1
+    run_command "Enable login notifications" systemctl enable login-notify.service || return 1
+    run_command "Start or restart login notifications" systemctl restart login-notify.service || return 1
+    ui_log_success "Login notification service installed; check status and send a test" "登录通知服务已安装；请查看状态并发送测试通知"
+    ui_log_info "Use compatibility check to verify SSH and console samples. Missing samples remain unverified." \
+        "请使用兼容性检查验证 SSH 和控制台样本；没有样本的类型仍标记为未验证。"
+}
+
+show_login_notify_status() {
+    print_systemd_status "Login notifications" login-notify.service
+    login_notify_command status
+}
+
+uninstall_login_notify() {
+    if [ "$DRY_RUN" = 1 ]; then
+        ui_log_info "[DRY RUN] Uninstall service/program; keep account, credentials, queue and cursor" \
+            "[DRY RUN] 卸载服务和程序；保留账户、凭据、队列和 cursor"
+        return 0
+    fi
+    confirm_action "$(ui_text 'Uninstall login notifications? Configuration and queued events will be kept.' '卸载登录通知？配置和队列将保留。')" n || return 0
+    run_command "Disable login notifications" systemctl disable --now login-notify.service || return 1
+    run_command "Remove login notification service" rm -f /etc/systemd/system/login-notify.service || return 1
+    run_command "Remove login notification program" rm -f /usr/local/lib/login-notify/login-notify.py || return 1
+    systemd_daemon_reload
+}
+
+action_login_notify() {
+    local choice
+    while true; do
+        menu_header "$(ui_text 'Login notifications (Bark)' '登录通知（Bark）')" \
+            "$(ui_text 'Login event alerts; not a complete intrusion detector.' '登录事件预警，不是完整入侵检测。')"
+        menu_option "$GREEN" 1 'Install / update (Debian 12/13)' '安装 / 更新（Debian 12/13）'
+        menu_option "$GREEN" 2 'Configure machine alias / Bark' '配置机器别名 / Bark'
+        menu_option "$GREEN" 3 'Queue a test notification' '发送测试通知'
+        menu_option "$GREEN" 4 'Service / queue / gap status' '查看服务 / 队列 / 日志缺口'
+        menu_option "$GREEN" 5 'Check journal compatibility (read-only)' '检查日志兼容性（只读）'
+        menu_option "$GREEN" 6 'Enable / start' '启用 / 启动'
+        menu_option "$GREEN" 7 'Disable / stop (keep queue)' '停用 / 停止（保留队列）'
+        menu_option "$GREEN" 8 'Uninstall (keep configuration and queue)' '卸载（保留配置和队列）'
+        menu_option "$GREEN" 0 'Back' '返回'
+        ui_read choice 'Select: ' '请选择: '
+        case "$choice" in
+            1) run_menu_action install_login_notify ;;
+            2) run_menu_action configure_login_notify ;;
+            3) run_menu_action login_notify_command test ;;
+            4) run_menu_action show_login_notify_status ;;
+            5) run_menu_action login_notify_command probe ;;
+            6) run_menu_action run_command 'Enable login notifications' systemctl enable --now login-notify.service ;;
+            7) run_menu_action run_command 'Disable login notifications' systemctl disable --now login-notify.service ;;
+            8) run_menu_action uninstall_login_notify ;;
+            0) return ;;
+            *) menu_invalid_choice ;;
+        esac
+    done
+}
+
 # --- 模块: 监控/告警基础 ---
 configure_journald_persistent() {
     ui_log_info "Configuring persistent journald storage and log size limits..." "配置 journald 持久化与日志容量限制..."
@@ -8456,6 +8619,7 @@ function action_module_status_overview() {
 
     printf '%b\n' "${BOLD}$(ui_text "Services / timers:" "服务 / 定时器:")${PLAIN}"
     print_systemd_status "Docker" "docker.service"
+    print_systemd_status "Login notifications" "login-notify.service"
     print_systemd_status "$(ui_text "Restic backup timer" "Restic 备份定时器")" "init-restic-backup.timer"
     print_systemd_status "$(ui_text "Health-check timer" "健康检查定时器")" "init-health-check.timer"
     print_systemd_status "$(ui_text "Maintenance-check timer" "维护检查定时器")" "init-maintenance-check.timer"
@@ -8668,6 +8832,7 @@ profile_module_description() {
     case "$module" in
         essentials) ui_text 'Install essential tools' '安装基础工具包' ;;
         ssh) ui_text 'Configure SSH security' 'SSH 安全配置' ;;
+        login_notify) ui_text 'Install login notifications (existing private config required in non-interactive mode)' '安装登录通知（非交互模式需要已有私有配置）' ;;
         firewall) ui_text 'Configure the UFW firewall' 'UFW 防火墙配置' ;;
         fail2ban) ui_text 'Configure Fail2ban brute-force protection' 'Fail2ban 防暴力破解' ;;
         auto_updates) ui_text 'Configure unattended-upgrades security updates' 'unattended-upgrades 自动安全更新' ;;
@@ -8702,6 +8867,7 @@ profile_module_impact() {
     case "$module" in
         essentials) ui_text 'apt packages: curl/wget/git/vim/tmux, etc.; changes the system timezone only when SYSTEM_TIMEZONE is set.' 'apt 包: curl/wget/git/vim/tmux 等；仅在设置 SYSTEM_TIMEZONE 时修改系统时区。' ;;
         ssh) ui_text 'Files: /etc/ssh/sshd_config and the selected account authorized_keys; service: ssh/sshd; may change the SSH port or login methods.' '文件: /etc/ssh/sshd_config 与所选账户 authorized_keys；服务: ssh/sshd；可能改变 SSH 端口/登录方式。' ;;
+        login_notify) ui_text 'Debian 12/13: dedicated account, /etc/login-notify, /var/lib/login-notify, Python program and login-notify.service; external Bark notifications.' 'Debian 12/13：专用账户、/etc/login-notify、/var/lib/login-notify、Python 程序和 login-notify.service；向 Bark 发送通知。' ;;
         firewall) ui_text 'Service: ufw; rules: SSH port and common inbound policy.' '服务: ufw；规则: SSH 端口与常用入站策略。' ;;
         fail2ban) ui_text 'File: /etc/fail2ban/jail.d/sshd.local; service: fail2ban.' '文件: /etc/fail2ban/jail.d/sshd.local；服务: fail2ban。' ;;
         auto_updates) ui_text 'Files: /etc/apt/apt.conf.d/20auto-upgrades and 50unattended-upgrades.' '文件: /etc/apt/apt.conf.d/20auto-upgrades, 50unattended-upgrades。' ;;
@@ -8734,7 +8900,7 @@ profile_module_impact() {
 profile_module_catalog() {
     local module
     for module in \
-        essentials ssh firewall fail2ban auto_updates swap docker reverse_proxy compose_backup \
+        essentials ssh login_notify firewall fail2ban auto_updates swap docker reverse_proxy compose_backup \
         monitoring backup_restore security_audit runtime terminal network_tools rclone croc \
         module_status script_quality report port_exposure ssh_audit external_trust \
         maintenance_window restic_drill docker_security docker_image_check; do
@@ -8745,7 +8911,7 @@ profile_module_catalog() {
 is_profile_module_known() {
     local module="$1"
     case "$module" in
-        essentials|ssh|firewall|fail2ban|auto_updates|swap|docker|reverse_proxy|compose_backup|monitoring|backup_restore|security_audit|runtime|terminal|network_tools|rclone|croc|module_status|script_quality|report|port_exposure|ssh_audit|external_trust|maintenance_window|restic_drill|docker_security|docker_image_check)
+        essentials|ssh|login_notify|firewall|fail2ban|auto_updates|swap|docker|reverse_proxy|compose_backup|monitoring|backup_restore|security_audit|runtime|terminal|network_tools|rclone|croc|module_status|script_quality|report|port_exposure|ssh_audit|external_trust|maintenance_window|restic_drill|docker_security|docker_image_check)
             return 0
             ;;
         *)
@@ -8868,6 +9034,7 @@ run_profile_module() {
     case "$module" in
         essentials) invoke_action action_install_essentials ;;
         ssh) invoke_action action_configure_ssh ;;
+        login_notify) invoke_action install_login_notify ;;
         firewall) invoke_action action_configure_firewall ;;
         fail2ban) invoke_action action_configure_fail2ban ;;
         auto_updates) invoke_action action_configure_auto_updates ;;
@@ -10527,6 +10694,7 @@ show_security_menu() {
         menu_option "$GREEN" "6" "Security audit (Lynis/debsums)" "安全审计 (Lynis/debsums)"
         menu_option "$GREEN" "7" "SSH configuration audit" "SSH 配置审计"
         menu_option "$GREEN" "8" "Exposed-port scan" "端口暴露扫描"
+        menu_option "$GREEN" "9" "Login notifications (Bark)" "登录通知（Bark）"
         menu_back_and_exit
         printf '%b\n' ""
         ui_read choice "Select: " "请选择: "
@@ -10539,6 +10707,7 @@ show_security_menu() {
             6) run_menu_flow action_security_audit ;;
             7) run_menu_action action_ssh_config_audit ;;
             8) run_menu_action action_port_exposure_scan ;;
+            9) run_menu_flow action_login_notify ;;
             b|B) return ;;
             0) exit 0 ;;
             *) menu_invalid_choice ;;
