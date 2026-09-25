@@ -5461,7 +5461,7 @@ function action_install_nvm_node() {
 
 # --- 模块: SSH 安全配置（事务式） ---
 validate_authorized_keys_candidate() {
-    local candidate="$1" line trimmed tmp valid_count=0
+    local candidate="$1" line trimmed tmp valid_count=0 line_number=0
     [ -s "$candidate" ] || return 1
     command -v ssh-keygen > /dev/null 2>&1 || {
         ui_log_error \
@@ -5472,11 +5472,15 @@ validate_authorized_keys_candidate() {
     tmp="$(mktemp /tmp/init-authorized-key.XXXXXX)" || return 1
     chmod 600 "$tmp"
     while IFS= read -r line || [ -n "$line" ]; do
+        line_number=$((line_number + 1))
         trimmed="$(trim_whitespace "$line")"
         [ -z "$trimmed" ] && continue
         case "$trimmed" in \#*) continue ;; esac
         printf '%s\n' "$line" > "$tmp"
         if ! ssh-keygen -l -f "$tmp" > /dev/null 2>&1; then
+            ui_log_error \
+                "Invalid SSH public key at line $line_number; check both existing authorized_keys entries and the new key" \
+                "第 $line_number 行 SSH 公钥无效；请检查 authorized_keys 中的旧记录及新公钥"
             rm -f -- "$tmp"
             return 1
         fi
@@ -5553,7 +5557,13 @@ install_authorized_key() {
         return 0
     fi
     candidate="$(mktemp "$ssh_dir/.authorized_keys.init.XXXXXX")" || return 1
-    [ -f "$key_file" ] && cp -- "$key_file" "$candidate"
+    if [ -f "$key_file" ]; then
+        cp -- "$key_file" "$candidate" || { rm -f -- "$candidate"; return 1; }
+        # Separate the new key even when the existing file has no final newline.
+        if [ -s "$candidate" ] && [ -n "$(tail -c 1 -- "$candidate")" ]; then
+            printf '\n' >> "$candidate"
+        fi
+    fi
     printf '%s\n' "$public_key" >> "$candidate"
     atomic_install_file "$key_file" "$candidate" "SSH authorized_keys" 600 "$uid" "$gid" validate_authorized_keys_candidate
 }

@@ -35,6 +35,35 @@ initialize_terminal
         self.assertEqual(child.returncode, status, child.stdout + child.stderr)
         return child.stdout + child.stderr
 
+    @unittest.skipUnless(shutil.which('ssh-keygen'), 'requires ssh-keygen')
+    def test_authorized_keys_reports_invalid_existing_line(self):
+        candidate = self.root / 'authorized_keys'
+        candidate.write_text('# provider placeholder\nssh-rsa  nginx@localhost\n')
+        output = self.shell('validate_authorized_keys_candidate "$TEST_TMP/authorized_keys"', status=1)
+        self.assertIn('Invalid SSH public key at line 2', output)
+        self.assertEqual(candidate.read_text(), '# provider placeholder\nssh-rsa  nginx@localhost\n')
+
+    @unittest.skipUnless(shutil.which('ssh-keygen'), 'requires ssh-keygen')
+    def test_append_key_after_existing_file_without_newline(self):
+        keys = []
+        for name in ('old', 'new'):
+            key = self.root / name
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+            keys.append(key.with_suffix('.pub').read_text().strip())
+        ssh_dir = self.root / '.ssh'
+        ssh_dir.mkdir()
+        candidate = ssh_dir / 'authorized_keys'
+        for original in (keys[0], '# provider placeholder'):
+            candidate.write_text(original)
+            self.shell('''run_command() { mkdir -p "$TEST_TMP/.ssh"; }
+atomic_install_file() {
+    "$7" "$2" || return 1
+    mv "$2" "$1"
+}
+install_authorized_key "$(id -un)" "$TEST_TMP" "$(cat "$TEST_TMP/new.pub")"
+''')
+            self.assertEqual(candidate.read_text(), original + '\n' + keys[1] + '\n')
+
     def test_noninteractive_profile_runs_modules_in_order(self):
         output = self.shell('''NON_INTERACTIVE=1
 run_profile_module() { printf 'EXECUTED:%s\n' "$1"; }
