@@ -56,11 +56,21 @@ done
 } > "$BACKEND_ROOT/claude-code/statusline-setup.sh"
 chmod +x "$BACKEND_ROOT/claude-code/statusline-setup.sh"
 
+cat > "$BACKEND_ROOT/install-client.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'install'
+for argument in "$@"; do printf ' <%s>' "$argument"; done
+printf '\n'
+EOF
+
 mkdir -p "$TEST_HOME" "$FAKE_BIN"
 : > "$LOG_FILE"
 for command_name in claude codex opencode pi; do
   {
     printf '%s\n' '#!/usr/bin/env bash'
+    if [ "$command_name" = codex ]; then
+      printf 'if [ "${1:-}" = app-server ]; then exec node "%s/../tests/fake-codex.mjs" "$@"; fi\n' "$SCRIPT_DIR"
+    fi
     printf '%s\n' 'printf "%s test-version\n" "$(basename "$0")"'
   } > "${FAKE_BIN}/${command_name}"
   chmod +x "${FAKE_BIN}/${command_name}"
@@ -80,10 +90,14 @@ help_output="$(run_agentctl --help)"
 printf '%s' "$help_output" | grep -q '^  agentctl$' ||
   fail "help omitted the no-argument guide"
 [ "$(AGENTCTL_AGENT_ROOT="$TEST_ROOT/missing" "$AGENTCTL" --version)" = \
-  "agentctl 0.17.9" ] ||
+  "agentctl 0.17.12" ] ||
   fail "metadata commands unnecessarily required the backend tree"
-[ "$(run_agentctl --version)" = "agentctl 0.17.9" ] ||
+[ "$(run_agentctl --version)" = "agentctl 0.17.12" ] ||
   fail "version output is incorrect"
+
+[ "$(run_agentctl install codex --yes)" = "install <codex> <--yes>" ] ||
+  fail "install did not reach the independent CLI installer"
+[ ! -s "$LOG_FILE" ] || fail "CLI installation entered Provider setup"
 
 run_agentctl failover --help >/dev/null ||
   fail "failover command did not reach its controller"
@@ -124,7 +138,7 @@ printf '%s\n' "$TEST_HOME/.codex/provider-keys/script_toolbox_openai.key" \
   > "$TEST_HOME/.codex/.script-toolbox-provider-key"
 chmod 600 "$TEST_HOME/.codex/.script-toolbox-provider-key"
 printf '%s\n' \
-  '{"auth_mode":"chatgpt","tokens":{"access_token":"PRESERVED-OFFICIAL-LOGIN-MUST-NOT-APPEAR"}}' \
+  '{"auth_mode":"chatgpt","tokens":{"account_id":"fixture","id_token":"header.e30.signature","access_token":"PRESERVED-OFFICIAL-LOGIN-MUST-NOT-APPEAR","refresh_token":"fixture-refresh"}}' \
   > "$TEST_HOME/.codex/auth.json"
 chmod 600 "$TEST_HOME/.codex/auth.json"
 
@@ -161,7 +175,7 @@ OFFICIAL_HOME="${TEST_ROOT}/official-home"
 mkdir -p "$OFFICIAL_HOME/.codex"
 printf '%s\n' 'model = "gpt-official"' > "$OFFICIAL_HOME/.codex/config.toml"
 printf '%s\n' \
-  '{"auth_mode":"chatgpt","tokens":{"access_token":"OFFICIAL-LOGIN-SECRET-MUST-NOT-APPEAR"}}' \
+  '{"tokens":{"account_id":"fixture","id_token":"header.e30.signature","access_token":"OFFICIAL-LOGIN-SECRET-MUST-NOT-APPEAR","refresh_token":"fixture-refresh"}}' \
   > "$OFFICIAL_HOME/.codex/auth.json"
 chmod 600 "$OFFICIAL_HOME/.codex/auth.json"
 official_status="$(
@@ -351,6 +365,14 @@ grep -q '^uninstall codex$' "$LOG_FILE" ||
 run_agentctl uninstall opencode --yes
 grep -q '^uninstall opencode$' "$LOG_FILE" ||
   fail "explicit confirmed uninstall did not reach its backend"
+
+printf '5\n4\ny\n' |
+  HOME="$TEST_HOME" PATH="${FAKE_BIN}:${PATH}" \
+    AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" AGENTCTL_TEST_LOG="$LOG_FILE" \
+    "$AGENTCTL" interactive >"$TEST_ROOT/interactive-install.out" 2>&1 ||
+  fail "guided install failed"
+grep -q 'install <pi> <--yes>' "$TEST_ROOT/interactive-install.out" ||
+  fail "guided install did not reach the independent installer"
 
 if AGENTCTL_AGENT_ROOT="$BACKEND_ROOT" \
   HOME="$TEST_HOME" \

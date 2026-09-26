@@ -11,6 +11,7 @@ import {
   actionForKey,
   actionLabel,
   actionNeedsConfirmation,
+  actionDetailLines,
   accountEntries,
   clampSelection,
   componentSummary,
@@ -91,7 +92,7 @@ Keys:
   p / a                             Plan / apply selected configuration
   Prompts: v local · V Workspace    View Prompt content on demand
   u                                 Roll back a preset
-  Agents: c / p / Enter unified Providers · x uninstall owned config
+  Agents: i install CLI · c / p / Enter unified Providers · x remove owned config
   Accounts: a/Enter switch · x delete saved account
   Providers: v views · p plan · a apply · u upload · d download/merge · i incompatible
   Providers (Codex): S observer start/stop · A attach/detach
@@ -198,7 +199,7 @@ function SummaryRow({ name, summary }) {
   return (
     <Box>
       <Box width={12} flexShrink={0}><Text bold color="white">{name}</Text></Box>
-      <Box width={14} flexShrink={0}><Badge kind={summary.kind}>{summary.label}</Badge></Box>
+      <Box minWidth={14} marginRight={1} flexShrink={0}><Badge kind={summary.kind}>{summary.label}</Badge></Box>
       <Box flexGrow={1}><Text color="white">{summary.detail}</Text></Box>
     </Box>
   );
@@ -370,11 +371,12 @@ function Agents({ snapshot, selected }) {
           <Row label="Saved accounts" value={accounts.value} kind={accounts.kind} />
         )}
         <SummaryRow name="Inference" summary={componentSummary("inference", { ok: true, data: current })} />
-        <Row label="CLI" value={current.cli_installed ? current.cli_version || "installed" : "not installed"} kind={current.cli_installed ? "good" : "bad"} />
+        <Row label="CLI" value={current.cli_installed ? `Installed${current.cli_version ? ` · ${current.cli_version}` : ""}` : "Not installed"} kind={current.cli_installed ? "good" : "bad"} />
         {targetReport(snapshot, current.client) && <Row label="Preset" value={targetReport(snapshot, current.client)?.preset?.name || "none"} kind={targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted"} />}
         <Text color="gray">
-          <Text color="cyan" bold>c/p/Enter</Text> unified Providers · <Text color="red" bold>x</Text> uninstall owned config
+          <Text color="cyan" bold>i</Text> {current.cli_installed ? "check CLI" : "install CLI"} · <Text color="cyan" bold>c/p/Enter</Text> Providers · <Text color="red" bold>x</Text> remove owned config
         </Text>
+        {!current.cli_installed && <Text color="gray">Install first; sign in or configure a Provider later.</Text>}
       </Box>
     </Box>
   );
@@ -1507,7 +1509,7 @@ function Help() {
       <Text>t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) · r refresh · q quit</Text>
       <Text>Up / Down  select previous / next item inside the current section</Text>
       <Text>
-        Agents: <Text color="cyan" bold>c/p/Enter</Text> open unified Providers · <Text color="red" bold>x</Text> uninstall
+        Agents: <Text color="cyan" bold>i</Text> install CLI · <Text color="cyan" bold>c/p/Enter</Text> Providers · <Text color="red" bold>x</Text> remove owned config
       </Text>
       <Text>Accounts: ↑/↓ select · a/Enter switch or refresh · x delete non-current snapshot</Text>
       <Text>Providers: ↑/↓ select · p plan · a apply · u upload · d download/merge · i incompatible · v next view</Text>
@@ -1527,7 +1529,7 @@ function Help() {
   );
 }
 
-function App({ initialSection, controller, onLaunch }) {
+export function App({ initialSection, controller, onLaunch }) {
   const { exit } = useApp();
   const [section, setSection] = useState(initialSection);
   const [target, setTarget] = useState("codex");
@@ -1579,8 +1581,9 @@ function App({ initialSection, controller, onLaunch }) {
     cloudError: "",
     key: ""
   });
-  const [message, setMessage] = useState("Loading diagnostics…");
-  const [lastDetail, setLastDetail] = useState("");
+  const [message, setMessage] = useState("");
+  const [refreshMessage, setRefreshMessage] = useState("Loading diagnostics…");
+  const [lastOutput, setLastOutput] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showIncompatibleProviders, setShowIncompatibleProviders] = useState(false);
@@ -1596,7 +1599,10 @@ function App({ initialSection, controller, onLaunch }) {
     const sequence = refreshSequence.current + 1;
     refreshSequence.current = sequence;
     setLoading(true);
-    if (!quiet) setMessage("Refreshing diagnostics…");
+    if (!quiet) {
+      setMessage("");
+      setRefreshMessage("Refreshing diagnostics…");
+    }
     try {
       const local = typeof controller.localSnapshot === "function"
         ? await controller.localSnapshot({ signal: abortController.signal })
@@ -1610,7 +1616,7 @@ function App({ initialSection, controller, onLaunch }) {
         accounts: clampSelection(value.accounts, accountEntries(local).length)
       }));
       setLoading(false);
-      setMessage(local.workspaceLoading
+      setRefreshMessage(local.workspaceLoading
         ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} · Workspace ${local.workspace ? "refreshing" : "connecting"}…`
         : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
       if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
@@ -1619,16 +1625,16 @@ function App({ initialSection, controller, onLaunch }) {
           setSnapshot(next);
           setSelected((value) => clampSelection(value, presetEntries(next).length));
           const cloud = workspacePresentation(next.workspace, next.workspaceError, false);
-          setMessage(`${cloud.status} · local state remains ready`);
+          setRefreshMessage(`${cloud.status} · local state remains ready`);
         }).catch((error) => {
           if (refreshSequence.current !== sequence) return;
           setSnapshot((value) => value ? { ...value, workspaceLoading: false } : value);
-          setMessage(`Local ready · Workspace refresh failed: ${error.message}`);
+          setRefreshMessage(`Local ready · Workspace refresh failed: ${error.message}`);
         });
       }
     } catch (error) {
       if (refreshSequence.current !== sequence) return;
-      setMessage(`Refresh failed: ${error.message}`);
+      setRefreshMessage(`Refresh failed: ${error.message}`);
     } finally {
       if (refreshSequence.current === sequence) setLoading(false);
     }
@@ -2004,7 +2010,7 @@ function App({ initialSection, controller, onLaunch }) {
       return !current?.enabled;
     });
     setBusy(true);
-    setLastDetail("");
+    setLastOutput(null);
     setMessage(enabling.length > 0
       ? `Checking ${enabling.length} MCP server requirement(s)…`
       : "Preparing target-specific MCP change…");
@@ -2055,7 +2061,7 @@ function App({ initialSection, controller, onLaunch }) {
       return;
     }
     setBusy(true);
-    setLastDetail("");
+    setLastOutput(null);
     setMessage(`Loading ${source === "cloud" ? "Workspace" : "local"} Prompt preview…`);
     try {
       const preview = await controller.promptPreview({ source, selection, target });
@@ -2106,14 +2112,16 @@ function App({ initialSection, controller, onLaunch }) {
         : action.includes("-") ? selectedRemote : selectedPreset;
     const selection = typeof payload.selection === "string" ? payload.selection : liveSelection;
     const runningLabel = actionLabel(action, selection, actionTarget);
-    setMessage(action === "mcp-disable"
+    setMessage(action === "agent-install"
+      ? `${runningLabel} · downloading if needed; this may take several minutes…`
+      : action === "mcp-disable"
       ? `${runningLabel} · removing only the changed target entry…`
       : action === "mcp-enable" || action === "mcp-batch"
         ? `${runningLabel} · updating changed target entries atomically…`
         : action === "skills-disable" || action === "skills-enable" || action === "skills-batch"
           ? `${runningLabel} · updating managed links atomically…`
         : `${runningLabel}…`);
-    setLastDetail("");
+    setLastOutput(null);
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
@@ -2135,7 +2143,7 @@ function App({ initialSection, controller, onLaunch }) {
           result.data?.localInitializationRequired &&
           payload.initializeLocal !== true && payload.skipLocalInitialization !== true) {
         const componentLabel = action === "mcp-apply" ? "MCP" : "Skills";
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage(`Choose how to apply this Workspace ${componentLabel} selection.`);
         setConfirm({
           action,
@@ -2158,7 +2166,7 @@ function App({ initialSection, controller, onLaunch }) {
         driftRequest.name === attemptedDrift.name && driftRequest.scope === attemptedDrift.scope;
       if (!result.ok && driftRequest && !alreadyAttempted) {
         const workspaceRuntime = driftRequest.scope === "workspace";
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage(`Confirmation required: Skill '${driftRequest.name}' changed outside skillsctl.`);
         setConfirm({
           ...payload,
@@ -2178,7 +2186,7 @@ function App({ initialSection, controller, onLaunch }) {
         return;
       }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
         setConfirm({
           ...payload,
@@ -2195,12 +2203,15 @@ function App({ initialSection, controller, onLaunch }) {
         });
         return;
       }
-      setMessage(result.ok
-        ? action === "skills-apply" && firstDetailLine
+      const resultTitle = result.ok
+        ? action === "agent-install"
+          ? `Installed: ${targetLabel(selection)} CLI`
+          : action === "skills-apply" && firstDetailLine
           ? `Done: ${firstDetailLine}`
           : `Done: ${actionLabel(action, selection, actionTarget)}`
-        : `Failed: ${firstDetailLine || actionLabel(action, selection, actionTarget)}`);
-      setLastDetail(result.detail || "");
+        : `Failed: ${actionLabel(action, selection, actionTarget)}`;
+      setMessage(resultTitle);
+      setLastOutput({ title: resultTitle, ok: result.ok, detail: result.detail || "" });
       if (localMcpAction) {
         if (result.data?.state) patchLocalMcpState(result.data.state);
         if (result.ok && action === "mcp-batch") {
@@ -2221,6 +2232,7 @@ function App({ initialSection, controller, onLaunch }) {
       }
     } catch (error) {
       setMessage(`Failed: ${error.message}`);
+      setLastOutput({ title: `Failed: ${runningLabel}`, ok: false, detail: error.message });
     } finally {
       setBusy(false);
     }
@@ -2852,6 +2864,9 @@ function App({ initialSection, controller, onLaunch }) {
       setConfirm({
         action,
         selection,
+        ...(action === "agent-install" ? {
+          detail: "Download and install the CLI if missing. No API key is required.\nConfigure its Provider or sign in after installation."
+        } : {}),
         target: providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target,
         label: actionLabel(
           action,
@@ -2967,9 +2982,10 @@ function App({ initialSection, controller, onLaunch }) {
       {showHelp
         ? <Help />
         : <Panel title={panelTitle} accent={SECTION_COLORS[section] || "cyan"}>{content}</Panel>}
-      {lastDetail && !confirm && (
-        <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column" marginTop={1}>
-          {lastDetail.split("\n").slice(0, 8).map((line, index) => (
+      {lastOutput && !confirm && (
+        <Box borderStyle="single" borderColor={lastOutput.title ? lastOutput.ok ? "green" : "red" : "gray"} paddingX={1} flexDirection="column" marginTop={1}>
+          {lastOutput.title && <Text bold color={lastOutput.ok ? "green" : "red"}>{lastOutput.title}</Text>}
+          {actionDetailLines(lastOutput.detail).map((line, index) => (
             <Text key={`${index}-${line}`} color="gray">{line}</Text>
           ))}
         </Box>
@@ -3004,54 +3020,60 @@ function App({ initialSection, controller, onLaunch }) {
           </Text>
         </Box>
       ) : (
-        <Box marginTop={1} justifyContent="space-between">
-          <Text color={message.startsWith("Failed") ? "red" : "gray"} wrap="truncate-end">{loading || busy ? "◌ " : ""}{message}</Text>
-          <Text color="gray">? help · [/] tabs · {(["snippets", "accounts"].includes(section)) ? "" : "t target · "}r refresh · q quit</Text>
+        <Box marginTop={1} gap={1} flexDirection={process.stdout.columns && process.stdout.columns < 100 ? "column" : "row"}>
+          <Box flexGrow={1} flexShrink={1}>
+            <Text color={(message || refreshMessage).startsWith("Failed") || (message || refreshMessage).startsWith("Refresh failed") ? "red" : "gray"} wrap="truncate-end">{loading || busy ? "◌ " : ""}{message || refreshMessage}</Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text color="gray">? help · [/] tabs · {(["snippets", "accounts"].includes(section)) ? "" : "t target · "}r refresh · q quit</Text>
+          </Box>
         </Box>
       )}
     </Box>
   );
 }
 
-let options;
-try {
-  options = parseArgs(process.argv.slice(2));
-} catch (error) {
-  process.stderr.write(`ERROR ${error.message}\n`);
-  process.exitCode = 1;
-}
-
-if (options?.help) {
-  usage();
-} else if (options) {
-  if (process.versions.node.split(".").map(Number)[0] < 22) {
-    process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
+export async function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`ERROR ${error.message}\n`);
     process.exitCode = 1;
-  } else {
-    const controller = createController();
-    let section = options.section;
-    let keepRunning = true;
-    while (keepRunning) {
-      let launch = null;
-      const instance = render(
-        <App
-          initialSection={section}
-          controller={controller}
-          onLaunch={(command) => { launch = command; }}
-        />
-      );
-      await instance.waitUntilExit();
-      if (!launch) {
-        keepRunning = false;
-        continue;
+  }
+
+  if (options?.help) {
+    usage();
+  } else if (options) {
+    if (process.versions.node.split(".").map(Number)[0] < 22) {
+      process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
+      process.exitCode = 1;
+    } else {
+      const controller = createController();
+      let section = options.section;
+      let keepRunning = true;
+      while (keepRunning) {
+        let launch = null;
+        const instance = render(
+          <App
+            initialSection={section}
+            controller={controller}
+            onLaunch={(command) => { launch = command; }}
+          />
+        );
+        await instance.waitUntilExit();
+        if (!launch) {
+          keepRunning = false;
+          continue;
+        }
+        const result = spawnSync(launch.executable, launch.args, {
+          stdio: "inherit",
+          env: process.env,
+          windowsHide: false
+        });
+        if (result.error) process.stderr.write(`ERROR ${result.error.message}\n`);
+        section = "agents";
       }
-      const result = spawnSync(launch.executable, launch.args, {
-        stdio: "inherit",
-        env: process.env,
-        windowsHide: false
-      });
-      if (result.error) process.stderr.write(`ERROR ${result.error.message}\n`);
-      section = "agents";
     }
   }
 }

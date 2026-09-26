@@ -220,6 +220,31 @@ test("Codex enables its native remote compactor only for declared official OpenA
   }, { secretPresent: true });
   assert.equal(local.provider_name, "openai-api");
   assert.equal(local.compaction.mode, "client_local");
+
+  for (const endpoint of ["https://gateway.example.com/v1", "http://127.0.0.1:18790/v1"]) {
+    const thirdParty = { ...base, endpoint, profile: "gateway" };
+    const fallback = renderProviderPlan({ ...thirdParty,
+      compaction: { upstream: "responses_v2", policy: "auto" }
+    }, { secretPresent: true });
+    assert.equal(fallback.ready, true);
+    assert.equal(fallback.compaction.mode, "client_local");
+    const forced = renderProviderPlan({ ...thirdParty,
+      compaction: { upstream: "responses_v2", policy: "remote" }
+    }, { secretPresent: true });
+    assert.equal(forced.ready, false);
+    assert.match(forced.issue, /not native/);
+  }
+  const obsolete = renderProviderPlan({ ...base,
+    compaction: { upstream: "responses_v1", policy: "remote" }
+  }, { secretPresent: true });
+  assert.equal(obsolete.ready, false);
+  const azure = renderProviderPlan({ ...base, profile: "azure-work",
+    endpoint: "https://test.openai.azure.com/openai/v1",
+    compaction: { upstream: "responses_v2", policy: "remote" }
+  }, { secretPresent: true });
+  assert.equal(azure.ready, true);
+  assert.equal(azure.provider_name, "azure-work");
+  assert.equal(azure.compaction.mode, "remote_native");
 });
 
 test("one portable profile applies native configs to Claude, Codex, OpenCode, and Pi", async () => {

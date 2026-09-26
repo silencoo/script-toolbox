@@ -1,5 +1,43 @@
 # Changelog — agent/
 
+## 2026-09-26 — Persistent CLI installation results
+
+- Agents explicitly shows `Installed` beside each installed CLI's version.
+- Action results retain a success/failure heading and the end of long logs, so
+  installer completion and errors remain visible after background refreshes.
+- Added rendered TUI regression coverage for all four clients, refresh races,
+  narrow terminals, and installation failures. Bumped agentctl to 0.17.12.
+
+## 2026-09-26 — Install CLIs before Provider setup
+
+- Added `agentctl install <claude|codex|opencode|pi>` with preview by default and
+  `--yes` to install without requiring a Provider, API key, or Store.
+- Shared the existing installation logic with Provider setup; existing CLIs are
+  reused and installation verifies the command before reporting success.
+- Added `i` in Agents and an install action in the guided Shell menu. TUI
+  installation uses confirmation, a ten-minute download timeout, clear failure
+  output, and a fresh CLI status afterward.
+- Agents now reads all four client statuses even when preset diagnostics return
+  only Claude/Codex, making OpenCode and Pi available for installation too.
+- Added offline installation/configuration-preservation tests, packaged the new
+  installer in the standalone runtime, and bumped agentctl to 0.17.11.
+
+## 2026-09-26 — Codex 0.157 compatibility
+
+- Unified Provider, status, account, and proxy paths around CODEX_HOME.
+- Account mutations now query Codex's effective credential storage, reject
+  unsupported backends, accept valid legacy ChatGPT snapshots, and verify
+  proposed snapshots with an isolated Codex login-status check before writing.
+- Corrected native V2 compaction reporting for custom providers and ordinary
+  proxies; unsupported forced-remote selections are blocked. Legacy compact
+  endpoint permission is independent of native compaction capability.
+- Passthrough now keeps the inference base at `/backend-api/codex` and owns a
+  separate realtime WebSocket override, with exact restoration and compatible
+  detach for older attachments.
+- Added offline regression tests and optional real-Codex verification via
+  `AGENTCTL_TEST_CODEX_BIN`; updated the standalone runtime and TUI bundle.
+  Bumped agentctl to 0.17.10.
+
 ## 2026-08-29 — Workspace-to-local Skill ownership handoff
 
 - Fixed Workspace Skill Pack apply after a full local Store restore. When the

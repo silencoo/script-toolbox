@@ -48,10 +48,13 @@ agentctl proxy stop --yes
 Passthrough uses the built-in Codex `openai` provider with a loopback
 `openai_base_url`; HTTP and WebSocket Responses are both relayed, and the default second hop is still the official
 `https://chatgpt.com/backend-api/codex` endpoint. The attached local URL ends in
-`/backend-api/codex/realtime` deliberately: the backend marker keeps Codex App
-Realtime call creation on the ChatGPT JSON request shape instead of the public
-API's multipart `/live` shape, while the trailing route keeps both Realtime
-WebSocket variants addressable. The proxy removes that synthetic local prefix
+`/backend-api/codex`, preserving Codex's native backend capability checks and
+ChatGPT call-creation request shape. A separate
+`experimental_realtime_ws_base_url` ending in `/backend-api/codex/realtime`
+keeps both Realtime WebSocket variants addressable. Both settings are backed up
+and restored on detach, including pre-existing realtime overrides. Older
+attachments can still be detached before reattaching with the new URLs.
+The proxy removes the local prefix
 before applying its route allowlist and projecting the request to the official
 upstream. The bearer token,
 `ChatGPT-Account-ID`, model, request bytes, and response bytes are not replaced
@@ -87,7 +90,7 @@ The proxy is native pass-through only:
 | Store protocol | Local API route |
 | --- | --- |
 | `anthropic_messages` | `/v1/messages` |
-| `openai_responses` | `/v1/responses`; `/v1/responses/compact` only for a fully native-capable route |
+| `openai_responses` | `/v1/responses`; `/v1/responses/compact` only when all backends declare legacy `responses_v1` |
 | `openai_chat` | `/v1/chat/completions` |
 | `google_generative` | `/v1beta/models/:model:generateContent` and streaming variant |
 
@@ -97,9 +100,12 @@ backends. Protocol conversion and automatic target attachment are absent.
 
 Provider Store schema 2 declares compaction separately from protocol. The
 proxy's generated schema 6 config opens the compact route only when every
-selected backend resolves to `responses_v1` or `responses_v2` under an
-`auto`/`remote` policy for Codex. A mixed or unverified failover route stays on
-client-local compaction. Anthropic `anthropic-beta` and `context_management`
+selected backend declares `responses_v1` under `auto`. This is an endpoint
+permission, not a claim that current Codex uses that route. Current Codex's V2
+compactor uses Responses streaming and is not enabled for the ordinary
+`agentctl-proxy` provider: `auto` stays local and forced `remote` is rejected.
+Subscription passthrough retains the built-in OpenAI provider and its V2
+capability. Anthropic `anthropic-beta` and `context_management`
 data pass through `/v1/messages` unchanged; the daemon never translates them
 into an OpenAI request.
 

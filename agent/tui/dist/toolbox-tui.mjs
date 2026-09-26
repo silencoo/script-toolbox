@@ -941,9 +941,9 @@ var require_scheduler_production = __commonJS({
         currentPriorityLevel = previousPriorityLevel;
       }
     };
-    exports.unstable_scheduleCallback = function(priorityLevel, callback, options2) {
+    exports.unstable_scheduleCallback = function(priorityLevel, callback, options) {
       var currentTime = exports.unstable_now();
-      "object" === typeof options2 && null !== options2 ? (options2 = options2.delay, options2 = "number" === typeof options2 && 0 < options2 ? currentTime + options2 : currentTime) : options2 = currentTime;
+      "object" === typeof options && null !== options ? (options = options.delay, options = "number" === typeof options && 0 < options ? currentTime + options : currentTime) : options = currentTime;
       switch (priorityLevel) {
         case 1:
           var timeout = -1;
@@ -960,16 +960,16 @@ var require_scheduler_production = __commonJS({
         default:
           timeout = 5e3;
       }
-      timeout = options2 + timeout;
+      timeout = options + timeout;
       priorityLevel = {
         id: taskIdCounter++,
         callback,
         priorityLevel,
-        startTime: options2,
+        startTime: options,
         expirationTime: timeout,
         sortIndex: -1
       };
-      options2 > currentTime ? (priorityLevel.sortIndex = options2, push(timerQueue, priorityLevel), null === peek(taskQueue) && priorityLevel === peek(timerQueue) && (isHostTimeoutScheduled ? (localClearTimeout(taskTimeoutID), taskTimeoutID = -1) : isHostTimeoutScheduled = true, requestHostTimeout(handleTimeout, options2 - currentTime))) : (priorityLevel.sortIndex = timeout, push(taskQueue, priorityLevel), isHostCallbackScheduled || isPerformingWork || (isHostCallbackScheduled = true, isMessageLoopRunning || (isMessageLoopRunning = true, schedulePerformWorkUntilDeadline())));
+      options > currentTime ? (priorityLevel.sortIndex = options, push(timerQueue, priorityLevel), null === peek(taskQueue) && priorityLevel === peek(timerQueue) && (isHostTimeoutScheduled ? (localClearTimeout(taskTimeoutID), taskTimeoutID = -1) : isHostTimeoutScheduled = true, requestHostTimeout(handleTimeout, options - currentTime))) : (priorityLevel.sortIndex = timeout, push(taskQueue, priorityLevel), isHostCallbackScheduled || isPerformingWork || (isHostCallbackScheduled = true, isMessageLoopRunning || (isMessageLoopRunning = true, schedulePerformWorkUntilDeadline())));
       return priorityLevel;
     };
     exports.unstable_shouldYield = shouldYieldToHost;
@@ -9108,13 +9108,13 @@ var require_react_reconciler_production = __commonJS({
       exports2.isAlreadyRendering = function() {
         return 0 !== (executionContext & 6);
       };
-      exports2.observeVisibleRects = function(hostRoot, selectors, callback, options2) {
+      exports2.observeVisibleRects = function(hostRoot, selectors, callback, options) {
         if (!supportsTestSelectors) throw Error(formatProdErrorMessage(363));
         hostRoot = findAllNodes(hostRoot, selectors);
         var disconnect = setupIntersectionObserver(
           hostRoot,
           callback,
-          options2
+          options
         ).disconnect;
         return {
           disconnect: function() {
@@ -9380,8 +9380,8 @@ var require_permessage_deflate = __commonJS({
        * @param {Object} [options.zlibInflateOptions] Options to pass to zlib on
        *     inflate
        */
-      constructor(options2) {
-        this._options = options2 || {};
+      constructor(options) {
+        this._options = options || {};
         this._threshold = this._options.threshold !== void 0 ? this._options.threshold : 1024;
         this._maxPayload = this._options.maxPayload | 0;
         this._isServer = !!this._options.isServer;
@@ -9966,16 +9966,16 @@ var require_receiver = __commonJS({
        * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
        *     not to skip UTF-8 validation for text and close messages
        */
-      constructor(options2 = {}) {
+      constructor(options = {}) {
         super();
-        this._allowSynchronousEvents = options2.allowSynchronousEvents !== void 0 ? options2.allowSynchronousEvents : true;
-        this._binaryType = options2.binaryType || BINARY_TYPES[0];
-        this._extensions = options2.extensions || {};
-        this._isServer = !!options2.isServer;
-        this._maxBufferedChunks = options2.maxBufferedChunks | 0;
-        this._maxFragments = options2.maxFragments | 0;
-        this._maxPayload = options2.maxPayload | 0;
-        this._skipUTF8Validation = !!options2.skipUTF8Validation;
+        this._allowSynchronousEvents = options.allowSynchronousEvents !== void 0 ? options.allowSynchronousEvents : true;
+        this._binaryType = options.binaryType || BINARY_TYPES[0];
+        this._extensions = options.extensions || {};
+        this._isServer = !!options.isServer;
+        this._maxBufferedChunks = options.maxBufferedChunks | 0;
+        this._maxFragments = options.maxFragments | 0;
+        this._maxPayload = options.maxPayload | 0;
+        this._skipUTF8Validation = !!options.skipUTF8Validation;
         this[kWebSocket] = void 0;
         this._bufferedBytes = 0;
         this._buffers = [];
@@ -10612,15 +10612,15 @@ var require_sender = __commonJS({
        * @return {(Buffer|String)[]} The framed data
        * @public
        */
-      static frame(data, options2) {
+      static frame(data, options) {
         let mask;
         let merge = false;
         let offset = 2;
         let skipMasking = false;
-        if (options2.mask) {
-          mask = options2.maskBuffer || maskBuffer;
-          if (options2.generateMask) {
-            options2.generateMask(mask);
+        if (options.mask) {
+          mask = options.maskBuffer || maskBuffer;
+          if (options.generateMask) {
+            options.generateMask(mask);
           } else {
             if (randomPoolPointer === RANDOM_POOL_SIZE) {
               if (randomPool === void 0) {
@@ -10639,15 +10639,15 @@ var require_sender = __commonJS({
         }
         let dataLength;
         if (typeof data === "string") {
-          if ((!options2.mask || skipMasking) && options2[kByteLength] !== void 0) {
-            dataLength = options2[kByteLength];
+          if ((!options.mask || skipMasking) && options[kByteLength] !== void 0) {
+            dataLength = options[kByteLength];
           } else {
             data = Buffer.from(data);
             dataLength = data.length;
           }
         } else {
           dataLength = data.length;
-          merge = options2.mask && options2.readOnly && !skipMasking;
+          merge = options.mask && options.readOnly && !skipMasking;
         }
         let payloadLength = dataLength;
         if (dataLength >= 65536) {
@@ -10658,8 +10658,8 @@ var require_sender = __commonJS({
           payloadLength = 126;
         }
         const target = Buffer.allocUnsafe(merge ? dataLength + offset : offset);
-        target[0] = options2.fin ? options2.opcode | 128 : options2.opcode;
-        if (options2.rsv1) target[0] |= 64;
+        target[0] = options.fin ? options.opcode | 128 : options.opcode;
+        if (options.rsv1) target[0] |= 64;
         target[1] = payloadLength;
         if (payloadLength === 126) {
           target.writeUInt16BE(dataLength, 2);
@@ -10667,7 +10667,7 @@ var require_sender = __commonJS({
           target[2] = target[3] = 0;
           target.writeUIntBE(dataLength, 4, 6);
         }
-        if (!options2.mask) return [target, data];
+        if (!options.mask) return [target, data];
         target[1] |= 128;
         target[offset - 4] = mask[0];
         target[offset - 3] = mask[1];
@@ -10714,7 +10714,7 @@ var require_sender = __commonJS({
             throw new TypeError("Second argument must be a string or a Uint8Array");
           }
         }
-        const options2 = {
+        const options = {
           [kByteLength]: buf.length,
           fin: true,
           generateMask: this._generateMask,
@@ -10725,9 +10725,9 @@ var require_sender = __commonJS({
           rsv1: false
         };
         if (this._state !== DEFAULT) {
-          this.enqueue([this.dispatch, buf, false, options2, cb]);
+          this.enqueue([this.dispatch, buf, false, options, cb]);
         } else {
-          this.sendFrame(_Sender.frame(buf, options2), cb);
+          this.sendFrame(_Sender.frame(buf, options), cb);
         }
       }
       /**
@@ -10755,7 +10755,7 @@ var require_sender = __commonJS({
         if (byteLength > 125) {
           throw new RangeError("The data size must not be greater than 125 bytes");
         }
-        const options2 = {
+        const options = {
           [kByteLength]: byteLength,
           fin: true,
           generateMask: this._generateMask,
@@ -10767,14 +10767,14 @@ var require_sender = __commonJS({
         };
         if (isBlob(data)) {
           if (this._state !== DEFAULT) {
-            this.enqueue([this.getBlobData, data, false, options2, cb]);
+            this.enqueue([this.getBlobData, data, false, options, cb]);
           } else {
-            this.getBlobData(data, false, options2, cb);
+            this.getBlobData(data, false, options, cb);
           }
         } else if (this._state !== DEFAULT) {
-          this.enqueue([this.dispatch, data, false, options2, cb]);
+          this.enqueue([this.dispatch, data, false, options, cb]);
         } else {
-          this.sendFrame(_Sender.frame(data, options2), cb);
+          this.sendFrame(_Sender.frame(data, options), cb);
         }
       }
       /**
@@ -10802,7 +10802,7 @@ var require_sender = __commonJS({
         if (byteLength > 125) {
           throw new RangeError("The data size must not be greater than 125 bytes");
         }
-        const options2 = {
+        const options = {
           [kByteLength]: byteLength,
           fin: true,
           generateMask: this._generateMask,
@@ -10814,14 +10814,14 @@ var require_sender = __commonJS({
         };
         if (isBlob(data)) {
           if (this._state !== DEFAULT) {
-            this.enqueue([this.getBlobData, data, false, options2, cb]);
+            this.enqueue([this.getBlobData, data, false, options, cb]);
           } else {
-            this.getBlobData(data, false, options2, cb);
+            this.getBlobData(data, false, options, cb);
           }
         } else if (this._state !== DEFAULT) {
-          this.enqueue([this.dispatch, data, false, options2, cb]);
+          this.enqueue([this.dispatch, data, false, options, cb]);
         } else {
-          this.sendFrame(_Sender.frame(data, options2), cb);
+          this.sendFrame(_Sender.frame(data, options), cb);
         }
       }
       /**
@@ -10840,10 +10840,10 @@ var require_sender = __commonJS({
        * @param {Function} [cb] Callback
        * @public
        */
-      send(data, options2, cb) {
+      send(data, options, cb) {
         const perMessageDeflate = this._extensions[PerMessageDeflate2.extensionName];
-        let opcode = options2.binary ? 2 : 1;
-        let rsv1 = options2.compress;
+        let opcode = options.binary ? 2 : 1;
+        let rsv1 = options.compress;
         let byteLength;
         let readOnly;
         if (typeof data === "string") {
@@ -10867,12 +10867,12 @@ var require_sender = __commonJS({
           rsv1 = false;
           opcode = 0;
         }
-        if (options2.fin) this._firstFragment = true;
+        if (options.fin) this._firstFragment = true;
         const opts = {
           [kByteLength]: byteLength,
-          fin: options2.fin,
+          fin: options.fin,
           generateMask: this._generateMask,
-          mask: options2.mask,
+          mask: options.mask,
           maskBuffer: this._maskBuffer,
           opcode,
           readOnly,
@@ -10913,8 +10913,8 @@ var require_sender = __commonJS({
        * @param {Function} [cb] Callback
        * @private
        */
-      getBlobData(blob, compress, options2, cb) {
-        this._bufferedBytes += options2[kByteLength];
+      getBlobData(blob, compress, options, cb) {
+        this._bufferedBytes += options[kByteLength];
         this._state = GET_BLOB_DATA;
         blob.arrayBuffer().then((arrayBuffer) => {
           if (this._socket.destroyed) {
@@ -10924,14 +10924,14 @@ var require_sender = __commonJS({
             process.nextTick(callCallbacks, this, err, cb);
             return;
           }
-          this._bufferedBytes -= options2[kByteLength];
+          this._bufferedBytes -= options[kByteLength];
           const data = toBuffer(arrayBuffer);
           if (!compress) {
             this._state = DEFAULT;
-            this.sendFrame(_Sender.frame(data, options2), cb);
+            this.sendFrame(_Sender.frame(data, options), cb);
             this.dequeue();
           } else {
-            this.dispatch(data, compress, options2, cb);
+            this.dispatch(data, compress, options, cb);
           }
         }).catch((err) => {
           process.nextTick(onError, this, err, cb);
@@ -10960,15 +10960,15 @@ var require_sender = __commonJS({
        * @param {Function} [cb] Callback
        * @private
        */
-      dispatch(data, compress, options2, cb) {
+      dispatch(data, compress, options, cb) {
         if (!compress) {
-          this.sendFrame(_Sender.frame(data, options2), cb);
+          this.sendFrame(_Sender.frame(data, options), cb);
           return;
         }
         const perMessageDeflate = this._extensions[PerMessageDeflate2.extensionName];
-        this._bufferedBytes += options2[kByteLength];
+        this._bufferedBytes += options[kByteLength];
         this._state = DEFLATING;
-        perMessageDeflate.compress(data, options2.fin, (_, buf) => {
+        perMessageDeflate.compress(data, options.fin, (_, buf) => {
           if (this._socket.destroyed) {
             const err = new Error(
               "The socket was closed while data was being compressed"
@@ -10976,10 +10976,10 @@ var require_sender = __commonJS({
             callCallbacks(this, err, cb);
             return;
           }
-          this._bufferedBytes -= options2[kByteLength];
+          this._bufferedBytes -= options[kByteLength];
           this._state = DEFAULT;
-          options2.readOnly = false;
-          this.sendFrame(_Sender.frame(buf, options2), cb);
+          options.readOnly = false;
+          this.sendFrame(_Sender.frame(buf, options), cb);
           this.dequeue();
         });
       }
@@ -11092,11 +11092,11 @@ var require_event_target = __commonJS({
        * @param {Boolean} [options.wasClean=false] Indicates whether or not the
        *     connection was cleanly closed
        */
-      constructor(type, options2 = {}) {
+      constructor(type, options = {}) {
         super(type);
-        this[kCode] = options2.code === void 0 ? 0 : options2.code;
-        this[kReason] = options2.reason === void 0 ? "" : options2.reason;
-        this[kWasClean] = options2.wasClean === void 0 ? false : options2.wasClean;
+        this[kCode] = options.code === void 0 ? 0 : options.code;
+        this[kReason] = options.reason === void 0 ? "" : options.reason;
+        this[kWasClean] = options.wasClean === void 0 ? false : options.wasClean;
       }
       /**
        * @type {Number}
@@ -11130,10 +11130,10 @@ var require_event_target = __commonJS({
        * @param {*} [options.error=null] The error that generated this event
        * @param {String} [options.message=''] The error message
        */
-      constructor(type, options2 = {}) {
+      constructor(type, options = {}) {
         super(type);
-        this[kError] = options2.error === void 0 ? null : options2.error;
-        this[kMessage] = options2.message === void 0 ? "" : options2.message;
+        this[kError] = options.error === void 0 ? null : options.error;
+        this[kMessage] = options.message === void 0 ? "" : options.message;
       }
       /**
        * @type {*}
@@ -11159,9 +11159,9 @@ var require_event_target = __commonJS({
        *     attributes via object members of the same name
        * @param {*} [options.data=null] The message content
        */
-      constructor(type, options2 = {}) {
+      constructor(type, options = {}) {
         super(type);
-        this[kData] = options2.data === void 0 ? null : options2.data;
+        this[kData] = options.data === void 0 ? null : options.data;
       }
       /**
        * @type {*}
@@ -11184,9 +11184,9 @@ var require_event_target = __commonJS({
        *     the listener would be automatically removed when invoked.
        * @public
        */
-      addEventListener(type, handler, options2 = {}) {
+      addEventListener(type, handler, options = {}) {
         for (const listener of this.listeners(type)) {
-          if (!options2[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
+          if (!options[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
             return;
           }
         }
@@ -11227,9 +11227,9 @@ var require_event_target = __commonJS({
         } else {
           return;
         }
-        wrapper[kForOnEventAttribute] = !!options2[kForOnEventAttribute];
+        wrapper[kForOnEventAttribute] = !!options[kForOnEventAttribute];
         wrapper[kListener] = handler;
-        if (options2.once) {
+        if (options.once) {
           this.once(type, wrapper);
         } else {
           this.on(type, wrapper);
@@ -11465,7 +11465,7 @@ var require_websocket = __commonJS({
        * @param {(String|String[])} [protocols] The subprotocols
        * @param {Object} [options] Connection options
        */
-      constructor(address, protocols, options2) {
+      constructor(address, protocols, options) {
         super();
         this._binaryType = BINARY_TYPES[0];
         this._closeCode = 1006;
@@ -11489,16 +11489,16 @@ var require_websocket = __commonJS({
             protocols = [];
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
-              options2 = protocols;
+              options = protocols;
               protocols = [];
             } else {
               protocols = [protocols];
             }
           }
-          initAsClient(this, address, protocols, options2);
+          initAsClient(this, address, protocols, options);
         } else {
-          this._autoPong = options2.autoPong;
-          this._closeTimeout = options2.closeTimeout;
+          this._autoPong = options.autoPong;
+          this._closeTimeout = options.closeTimeout;
           this._isServer = true;
         }
       }
@@ -11601,18 +11601,18 @@ var require_websocket = __commonJS({
        *     not to skip UTF-8 validation for text and close messages
        * @private
        */
-      setSocket(socket, head, options2) {
+      setSocket(socket, head, options) {
         const receiver = new Receiver2({
-          allowSynchronousEvents: options2.allowSynchronousEvents,
+          allowSynchronousEvents: options.allowSynchronousEvents,
           binaryType: this.binaryType,
           extensions: this._extensions,
           isServer: this._isServer,
-          maxBufferedChunks: options2.maxBufferedChunks,
-          maxFragments: options2.maxFragments,
-          maxPayload: options2.maxPayload,
-          skipUTF8Validation: options2.skipUTF8Validation
+          maxBufferedChunks: options.maxBufferedChunks,
+          maxFragments: options.maxFragments,
+          maxPayload: options.maxPayload,
+          skipUTF8Validation: options.skipUTF8Validation
         });
-        const sender = new Sender2(socket, this._extensions, options2.generateMask);
+        const sender = new Sender2(socket, this._extensions, options.generateMask);
         this._receiver = receiver;
         this._sender = sender;
         this._socket = socket;
@@ -11790,13 +11790,13 @@ var require_websocket = __commonJS({
        * @param {Function} [cb] Callback which is executed when data is written out
        * @public
        */
-      send(data, options2, cb) {
+      send(data, options, cb) {
         if (this.readyState === _WebSocket.CONNECTING) {
           throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
         }
-        if (typeof options2 === "function") {
-          cb = options2;
-          options2 = {};
+        if (typeof options === "function") {
+          cb = options;
+          options = {};
         }
         if (typeof data === "number") data = data.toString();
         if (this.readyState !== _WebSocket.OPEN) {
@@ -11808,7 +11808,7 @@ var require_websocket = __commonJS({
           mask: !this._isServer,
           compress: true,
           fin: true,
-          ...options2
+          ...options
         };
         if (!this._extensions[PerMessageDeflate2.extensionName]) {
           opts.compress = false;
@@ -11902,7 +11902,7 @@ var require_websocket = __commonJS({
     WebSocket2.prototype.addEventListener = addEventListener;
     WebSocket2.prototype.removeEventListener = removeEventListener;
     module.exports = WebSocket2;
-    function initAsClient(websocket, address, protocols, options2) {
+    function initAsClient(websocket, address, protocols, options) {
       const opts = {
         allowSynchronousEvents: true,
         autoPong: true,
@@ -11915,7 +11915,7 @@ var require_websocket = __commonJS({
         perMessageDeflate: true,
         followRedirects: false,
         maxRedirects: 10,
-        ...options2,
+        ...options,
         socketPath: void 0,
         hostname: void 0,
         protocol: void 0,
@@ -12027,11 +12027,11 @@ var require_websocket = __commonJS({
           websocket._originalIpc = isIpcUrl;
           websocket._originalSecure = isSecure;
           websocket._originalHostOrSocketPath = isIpcUrl ? opts.socketPath : parsedUrl.host;
-          const headers = options2 && options2.headers;
-          options2 = { ...options2, headers: {} };
+          const headers = options && options.headers;
+          options = { ...options, headers: {} };
           if (headers) {
             for (const [key2, value] of Object.entries(headers)) {
-              options2.headers[key2.toLowerCase()] = value;
+              options.headers[key2.toLowerCase()] = value;
             }
           }
         } else if (websocket.listenerCount("redirect") === 0) {
@@ -12043,8 +12043,8 @@ var require_websocket = __commonJS({
             opts.auth = void 0;
           }
         }
-        if (opts.auth && !options2.headers.authorization) {
-          options2.headers.authorization = "Basic " + Buffer.from(opts.auth).toString("base64");
+        if (opts.auth && !options.headers.authorization) {
+          options.headers.authorization = "Basic " + Buffer.from(opts.auth).toString("base64");
         }
         req = websocket._req = request2(opts);
         if (websocket._redirects) {
@@ -12080,7 +12080,7 @@ var require_websocket = __commonJS({
             emitErrorAndClose(websocket, err);
             return;
           }
-          initAsClient(websocket, addr, protocols, options2);
+          initAsClient(websocket, addr, protocols, options);
         } else if (!websocket.emit("unexpected-response", req, res)) {
           abortHandshake(
             websocket,
@@ -12170,16 +12170,16 @@ var require_websocket = __commonJS({
       websocket.emit("error", err);
       websocket.emitClose();
     }
-    function netConnect(options2) {
-      options2.path = options2.socketPath;
-      return net.connect(options2);
+    function netConnect(options) {
+      options.path = options.socketPath;
+      return net.connect(options);
     }
-    function tlsConnect(options2) {
-      options2.path = void 0;
-      if (!options2.servername && options2.servername !== "") {
-        options2.servername = net.isIP(options2.host) ? "" : options2.host;
+    function tlsConnect(options) {
+      options.path = void 0;
+      if (!options.servername && options.servername !== "") {
+        options.servername = net.isIP(options.host) ? "" : options.host;
       }
-      return tls.connect(options2);
+      return tls.connect(options);
     }
     function abortHandshake(websocket, stream, message) {
       websocket._readyState = WebSocket2.CLOSING;
@@ -12338,10 +12338,10 @@ var require_stream = __commonJS({
         this.emit("error", err);
       }
     }
-    function createWebSocketStream2(ws, options2) {
+    function createWebSocketStream2(ws, options) {
       let terminateOnDestroy = true;
       const duplex = new Duplex({
-        ...options2,
+        ...options,
         autoDestroy: false,
         emitClose: false,
         objectMode: false,
@@ -12516,9 +12516,9 @@ var require_websocket_server = __commonJS({
        *     class to use. It must be the `WebSocket` class or class that extends it
        * @param {Function} [callback] A listener for the `listening` event
        */
-      constructor(options2, callback) {
+      constructor(options, callback) {
         super();
-        options2 = {
+        options = {
           allowSynchronousEvents: true,
           autoPong: true,
           maxBufferedChunks: 256 * 1024,
@@ -12538,14 +12538,14 @@ var require_websocket_server = __commonJS({
           path: null,
           port: null,
           WebSocket: WebSocket2,
-          ...options2
+          ...options
         };
-        if (options2.port == null && !options2.server && !options2.noServer || options2.port != null && (options2.server || options2.noServer) || options2.server && options2.noServer) {
+        if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
           throw new TypeError(
             'One and only one of the "port", "server", or "noServer" options must be specified'
           );
         }
-        if (options2.port != null) {
+        if (options.port != null) {
           this._server = http.createServer((req, res) => {
             const body = http.STATUS_CODES[426];
             res.writeHead(426, {
@@ -12555,13 +12555,13 @@ var require_websocket_server = __commonJS({
             res.end(body);
           });
           this._server.listen(
-            options2.port,
-            options2.host,
-            options2.backlog,
+            options.port,
+            options.host,
+            options.backlog,
             callback
           );
-        } else if (options2.server) {
-          this._server = options2.server;
+        } else if (options.server) {
+          this._server = options.server;
         }
         if (this._server) {
           const emitConnection = this.emit.bind(this, "connection");
@@ -12573,12 +12573,12 @@ var require_websocket_server = __commonJS({
             }
           });
         }
-        if (options2.perMessageDeflate === true) options2.perMessageDeflate = {};
-        if (options2.clientTracking) {
+        if (options.perMessageDeflate === true) options.perMessageDeflate = {};
+        if (options.clientTracking) {
           this.clients = /* @__PURE__ */ new Set();
           this._shouldEmitClose = false;
         }
-        this.options = options2;
+        this.options = options;
         this._state = RUNNING;
       }
       /**
@@ -13009,7 +13009,7 @@ var require_onetime = __commonJS({
     "use strict";
     var mimicFn = require_mimic_fn();
     var calledFunctions = /* @__PURE__ */ new WeakMap();
-    var onetime2 = (function_, options2 = {}) => {
+    var onetime2 = (function_, options = {}) => {
       if (typeof function_ !== "function") {
         throw new TypeError("Expected a function");
       }
@@ -13021,7 +13021,7 @@ var require_onetime = __commonJS({
         if (callCount === 1) {
           returnValue = function_.apply(this, arguments_);
           function_ = null;
-        } else if (options2.throw === true) {
+        } else if (options.throw === true) {
           throw new Error(`Function \`${functionName}\` can only be called once`);
         }
         return returnValue;
@@ -13374,9 +13374,9 @@ function debounce(func, debounceMs, { signal, edges } = {}) {
 }
 
 // node_modules/es-toolkit/dist/compat/function/debounce.mjs
-function debounce2(func, debounceMs = 0, options2 = {}) {
-  if (typeof options2 !== "object") options2 = {};
-  const { leading = false, trailing = true, maxWait } = options2;
+function debounce2(func, debounceMs = 0, options = {}) {
+  if (typeof options !== "object") options = {};
+  const { leading = false, trailing = true, maxWait } = options;
   const edges = Array(2);
   if (leading) edges[0] = "leading";
   if (trailing) edges[1] = "trailing";
@@ -13410,8 +13410,8 @@ function debounce2(func, debounceMs = 0, options2 = {}) {
 }
 
 // node_modules/es-toolkit/dist/compat/function/throttle.mjs
-function throttle(func, throttleMs = 0, options2 = {}) {
-  const { leading = true, trailing = true } = options2;
+function throttle(func, throttleMs = 0, options = {}) {
+  const { leading = true, trailing = true } = options;
   return debounce2(func, throttleMs, {
     leading,
     maxWait: throttleMs,
@@ -13583,15 +13583,15 @@ var link = (text, url) => {
   const closeLink = wrapOsc(`${OSC}8${SEP}${SEP}${BEL}`);
   return openLink + text + closeLink;
 };
-var image = (data, options2 = {}) => {
+var image = (data, options = {}) => {
   let returnValue = `${OSC}1337;File=inline=1`;
-  if (options2.width) {
-    returnValue += `;width=${options2.width}`;
+  if (options.width) {
+    returnValue += `;width=${options.width}`;
   }
-  if (options2.height) {
-    returnValue += `;height=${options2.height}`;
+  if (options.height) {
+    returnValue += `;height=${options.height}`;
   }
-  if (options2.preserveAspectRatio === false) {
+  if (options.preserveAspectRatio === false) {
     returnValue += ";preserveAspectRatio=0";
   }
   const imageBuffer = Buffer.from(data);
@@ -13599,17 +13599,17 @@ var image = (data, options2 = {}) => {
 };
 var iTerm = {
   setCwd: (cwd2 = cwdFunction()) => wrapOsc(`${OSC}50;CurrentDir=${cwd2}${BEL}`),
-  annotation(message, options2 = {}) {
+  annotation(message, options = {}) {
     let returnValue = `${OSC}1337;`;
-    const hasX = options2.x !== void 0;
-    const hasY = options2.y !== void 0;
-    if ((hasX || hasY) && !(hasX && hasY && options2.length !== void 0)) {
+    const hasX = options.x !== void 0;
+    const hasY = options.y !== void 0;
+    if ((hasX || hasY) && !(hasX && hasY && options.length !== void 0)) {
       throw new Error("`x`, `y` and `length` must be defined when `x` or `y` is defined");
     }
     message = message.replaceAll("|", "");
-    returnValue += options2.isHidden ? "AddHiddenAnnotation=" : "AddAnnotation=";
-    if (options2.length > 0) {
-      returnValue += (hasX ? [message, options2.length, options2.x, options2.y] : [options2.length, message]).join("|");
+    returnValue += options.isHidden ? "AddHiddenAnnotation=" : "AddAnnotation=";
+    if (options.length > 0) {
+      returnValue += (hasX ? [message, options.length, options.x, options.y] : [options.length, message]).join("|");
     } else {
       returnValue += message;
     }
@@ -15441,14 +15441,14 @@ function trailingWidth(visibleSegment, eastAsianWidthOptions) {
   }
   return extra;
 }
-function stringWidth(input, options2 = {}) {
+function stringWidth(input, options = {}) {
   if (typeof input !== "string" || input.length === 0) {
     return 0;
   }
   const {
     ambiguousIsNarrow = true,
     countAnsiEscapeCodes = false
-  } = options2;
+  } = options;
   let string = input;
   if (!countAnsiEscapeCodes && (string.includes("\x1B") || string.includes("\x9B"))) {
     string = stripAnsi(string);
@@ -15924,8 +15924,8 @@ var expandTabs = (line) => {
   }
   return expandedLine;
 };
-var exec = (string, columns, options2 = {}) => {
-  if (options2.trim !== false && string.trim() === "") {
+var exec = (string, columns, options = {}) => {
+  if (options.trim !== false && string.trim() === "") {
     return "";
   }
   let returnValue = "";
@@ -15934,21 +15934,21 @@ var exec = (string, columns, options2 = {}) => {
   const lengths = wordLengths(string);
   let rows = [""];
   for (const [index, word] of string.split(" ").entries()) {
-    if (options2.trim !== false) {
+    if (options.trim !== false) {
       rows[rows.length - 1] = rows.at(-1).trimStart();
     }
     let rowLength = stringWidth(rows.at(-1));
     if (index !== 0) {
-      if (rowLength >= columns && (options2.wordWrap === false || options2.trim === false)) {
+      if (rowLength >= columns && (options.wordWrap === false || options.trim === false)) {
         rows.push("");
         rowLength = 0;
       }
-      if (rowLength > 0 || options2.trim === false) {
+      if (rowLength > 0 || options.trim === false) {
         rows[rows.length - 1] += " ";
         rowLength++;
       }
     }
-    if (options2.hard && options2.wordWrap !== false && lengths[index] > columns) {
+    if (options.hard && options.wordWrap !== false && lengths[index] > columns) {
       const remainingColumns = columns - rowLength;
       const breaksStartingThisLine = 1 + Math.floor((lengths[index] - remainingColumns - 1) / columns);
       const breaksStartingNextLine = Math.floor((lengths[index] - 1) / columns);
@@ -15959,19 +15959,19 @@ var exec = (string, columns, options2 = {}) => {
       continue;
     }
     if (rowLength + lengths[index] > columns && rowLength > 0 && lengths[index] > 0) {
-      if (options2.wordWrap === false && rowLength < columns) {
+      if (options.wordWrap === false && rowLength < columns) {
         wrapWord(rows, word, columns);
         continue;
       }
       rows.push("");
     }
-    if (rowLength + lengths[index] > columns && options2.wordWrap === false) {
+    if (rowLength + lengths[index] > columns && options.wordWrap === false) {
       wrapWord(rows, word, columns);
       continue;
     }
     rows[rows.length - 1] += word;
   }
-  if (options2.trim !== false) {
+  if (options.trim !== false) {
     rows = rows.map((row) => stringVisibleTrimSpacesRight(row));
   }
   const preString = rows.join("\n");
@@ -16009,8 +16009,8 @@ var exec = (string, columns, options2 = {}) => {
   }
   return returnValue;
 };
-function wrapAnsi(string, columns, options2) {
-  return String(string).normalize().replaceAll("\r\n", "\n").split("\n").map((line) => exec(expandTabs(line), columns, options2)).join("\n");
+function wrapAnsi(string, columns, options) {
+  return String(string).normalize().replaceAll("\r\n", "\n").split("\n").map((line) => exec(expandTabs(line), columns, options)).join("\n");
 }
 
 // node_modules/terminal-size/index.js
@@ -17045,13 +17045,13 @@ function validateInput(text, columns, position, truncationCharacter) {
     throw new TypeError(`Expected \`options.truncationCharacter\` to be a string, got ${typeof truncationCharacter}`);
   }
 }
-function cliTruncate(text, columns, options2 = {}) {
+function cliTruncate(text, columns, options = {}) {
   const {
     position = "end",
     space = false,
     preferTruncationOnSpace = false
-  } = options2;
-  let { truncationCharacter = "\u2026" } = options2;
+  } = options;
+  let { truncationCharacter = "\u2026" } = options;
   validateInput(text, columns, position, truncationCharacter);
   if (columns < 1) {
     return "";
@@ -18243,11 +18243,11 @@ var reconciler_default = (0, import_react_reconciler.default)({
 });
 
 // node_modules/indent-string/index.js
-function indentString(string, count = 1, options2 = {}) {
+function indentString(string, count = 1, options = {}) {
   const {
     indent = " ",
     includeEmptyLines = false
-  } = options2;
+  } = options;
   if (typeof string !== "string") {
     throw new TypeError(
       `Expected \`input\` to be a \`string\`, got \`${typeof string}\``
@@ -18673,10 +18673,10 @@ function _supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
   }
   return min;
 }
-function createSupportsColor(stream, options2 = {}) {
+function createSupportsColor(stream, options = {}) {
   const level = _supportsColor(stream, {
     streamIsTTY: stream && stream.isTTY,
-    ...options2
+    ...options
   });
   return translateLevel(level);
 }
@@ -18728,21 +18728,21 @@ var levelMapping = [
   "ansi16m"
 ];
 var styles4 = /* @__PURE__ */ Object.create(null);
-var applyOptions = (object, options2 = {}) => {
-  if (options2.level && !(Number.isInteger(options2.level) && options2.level >= 0 && options2.level <= 3)) {
+var applyOptions = (object, options = {}) => {
+  if (options.level && !(Number.isInteger(options.level) && options.level >= 0 && options.level <= 3)) {
     throw new Error("The `level` option should be an integer from 0 to 3");
   }
   const colorLevel = stdoutColor ? stdoutColor.level : 0;
-  object.level = options2.level === void 0 ? colorLevel : options2.level;
+  object.level = options.level === void 0 ? colorLevel : options.level;
 };
-var chalkFactory = (options2) => {
+var chalkFactory = (options) => {
   const chalk2 = (...strings) => strings.join(" ");
-  applyOptions(chalk2, options2);
+  applyOptions(chalk2, options);
   Object.setPrototypeOf(chalk2, createChalk.prototype);
   return chalk2;
 };
-function createChalk(options2) {
-  return chalkFactory(options2);
+function createChalk(options) {
+  return chalkFactory(options);
 }
 Object.setPrototypeOf(createChalk.prototype, Function.prototype);
 for (const [styleName, style] of Object.entries(ansi_styles_default2)) {
@@ -19009,8 +19009,8 @@ var applyPaddingToText = (node, text) => {
   }
   return text;
 };
-var renderNodeToScreenReaderOutput = (node, options2 = {}) => {
-  if (options2.skipStaticElements && node.internal_static) {
+var renderNodeToScreenReaderOutput = (node, options = {}) => {
+  if (options.skipStaticElements && node.internal_static) {
     return "";
   }
   if (node.yogaNode?.getDisplay() === src_default.DISPLAY_NONE) {
@@ -19025,7 +19025,7 @@ var renderNodeToScreenReaderOutput = (node, options2 = {}) => {
     output = childNodes.map((childNode) => {
       const screenReaderOutput = renderNodeToScreenReaderOutput(childNode, {
         parentRole: node.internal_accessibility?.role,
-        skipStaticElements: options2.skipStaticElements
+        skipStaticElements: options.skipStaticElements
       });
       return screenReaderOutput;
     }).filter(Boolean).join(separator);
@@ -19039,14 +19039,14 @@ var renderNodeToScreenReaderOutput = (node, options2 = {}) => {
         output = `(${stateDescription}) ${output}`;
       }
     }
-    if (role && role !== options2.parentRole) {
+    if (role && role !== options.parentRole) {
       output = `${role}: ${output}`;
     }
   }
   return output;
 };
-var renderNodeToOutput = (node, output, options2) => {
-  const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements } = options2;
+var renderNodeToOutput = (node, output, options) => {
+  const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements } = options;
   if (skipStaticElements && node.internal_static) {
     return;
   }
@@ -19444,13 +19444,13 @@ var Output = class {
   height;
   operations = [];
   caches = new OutputCaches();
-  constructor(options2) {
-    const { width, height } = options2;
+  constructor(options) {
+    const { width, height } = options;
     this.width = width;
     this.height = height;
   }
-  write(x, y, text, options2) {
-    const { transformers } = options2;
+  write(x, y, text, options) {
+    const { transformers } = options;
     if (!text) {
       return;
     }
@@ -20296,7 +20296,7 @@ var generateLineNumbers = (line, around) => {
   }
   return lineNumbers;
 };
-var codeExcerpt = (source, line, options2 = {}) => {
+var codeExcerpt = (source, line, options = {}) => {
   var _a;
   if (typeof source !== "string") {
     throw new TypeError("Source code is missing.");
@@ -20308,7 +20308,7 @@ var codeExcerpt = (source, line, options2 = {}) => {
   if (line > lines.length) {
     return;
   }
-  return generateLineNumbers(line, (_a = options2.around) !== null && _a !== void 0 ? _a : 3).filter((line2) => lines[line2 - 1] !== void 0).map((line2) => ({ line: line2, value: lines[line2 - 1] }));
+  return generateLineNumbers(line, (_a = options.around) !== null && _a !== void 0 ? _a : 3).filter((line2) => lines[line2 - 1] !== void 0).map((line2) => ({ line: line2, value: lines[line2 - 1] }));
 };
 var dist_default3 = codeExcerpt;
 
@@ -21214,16 +21214,16 @@ var Ink = class {
   // mode and bracketed paste state.
   pauseInput;
   resumeInput;
-  constructor(options2) {
+  constructor(options) {
     autoBind(this);
-    this.options = options2;
+    this.options = options;
     this.rootNode = createNode("ink-root");
     this.rootNode.onComputeLayout = this.calculateLayout;
-    this.isScreenReaderEnabled = options2.isScreenReaderEnabled ?? process12.env["INK_SCREEN_READER"] === "true";
-    this.interactive = this.resolveInteractiveOption(options2.interactive);
+    this.isScreenReaderEnabled = options.isScreenReaderEnabled ?? process12.env["INK_SCREEN_READER"] === "true";
+    this.interactive = this.resolveInteractiveOption(options.interactive);
     this.alternateScreen = false;
-    const unthrottled = options2.debug || this.isScreenReaderEnabled;
-    const maxFps = options2.maxFps ?? 30;
+    const unthrottled = options.debug || this.isScreenReaderEnabled;
+    const maxFps = options.maxFps ?? 30;
     const renderThrottleMs = maxFps > 0 ? Math.max(1, Math.ceil(1e3 / maxFps)) : 0;
     this.renderThrottleMs = unthrottled ? 0 : renderThrottleMs;
     if (unthrottled) {
@@ -21242,8 +21242,8 @@ var Ink = class {
     }
     this.rootNode.onImmediateRender = this.onRender;
     this.rootNode.onStaticChange = this.handleStaticChange;
-    this.log = log_update_default.create(options2.stdout, {
-      incremental: options2.incrementalRendering
+    this.log = log_update_default.create(options.stdout, {
+      incremental: options.incrementalRendering
     });
     this.cursorPosition = void 0;
     this.throttledLog = unthrottled ? this.log : throttle((output) => {
@@ -21262,30 +21262,30 @@ var Ink = class {
     });
     this.isUnmounted = false;
     this.isUnmounting = false;
-    this.isConcurrent = options2.concurrent ?? false;
+    this.isConcurrent = options.concurrent ?? false;
     this.lastOutput = "";
     this.lastOutputToRender = "";
     this.lastOutputHeight = 0;
     this.lastTerminalWidth = getWindowSize(this.options.stdout).columns;
     this.fullStaticOutput = "";
-    const rootTag = options2.concurrent ? import_constants2.ConcurrentRoot : import_constants2.LegacyRoot;
+    const rootTag = options.concurrent ? import_constants2.ConcurrentRoot : import_constants2.LegacyRoot;
     this.container = reconciler_default.createContainer(this.rootNode, rootTag, null, false, null, "id", () => {
     }, () => {
     }, () => {
     }, () => {
     });
     this.unsubscribeExit = (0, import_signal_exit2.default)(this.unmount, { alwaysLast: false });
-    this.setAlternateScreen(Boolean(options2.alternateScreen));
+    this.setAlternateScreen(Boolean(options.alternateScreen));
     if (process12.env["DEV"] === "true") {
       reconciler_default.injectIntoDevTools();
     }
-    if (options2.patchConsole) {
+    if (options.patchConsole) {
       this.patchConsole();
     }
     if (this.interactive) {
-      options2.stdout.on("resize", this.resized);
+      options.stdout.on("resize", this.resized);
       this.unsubscribeResize = () => {
-        options2.stdout.off("resize", this.resized);
+        options.stdout.off("resize", this.resized);
       };
     }
     this.initKittyKeyboard();
@@ -21864,7 +21864,7 @@ var Ink = class {
 };
 
 // node_modules/ink/build/render.js
-var render = (node, options2) => {
+var render = (node, options) => {
   const inkOptions = {
     stdout: process13.stdout,
     stdin: process13.stdin,
@@ -21876,7 +21876,7 @@ var render = (node, options2) => {
     incrementalRendering: false,
     concurrent: false,
     alternateScreen: false,
-    ...getOptions(options2)
+    ...getOptions(options)
   };
   const instance = getInstance(inkOptions.stdout, () => new Ink(inkOptions));
   instance.render(node);
@@ -22369,17 +22369,17 @@ var import_react21 = __toESM(require_react(), 1);
 var useStdinContext = () => (0, import_react21.useContext)(StdinContext_default);
 
 // node_modules/ink/build/hooks/use-input.js
-var useInput = (inputHandler, options2 = {}) => {
+var useInput = (inputHandler, options = {}) => {
   const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } = useStdinContext();
   (0, import_react22.useEffect)(() => {
-    if (options2.isActive === false) {
+    if (options.isActive === false) {
       return;
     }
     setRawMode(true);
     return () => {
       setRawMode(false);
     };
-  }, [options2.isActive, setRawMode]);
+  }, [options.isActive, setRawMode]);
   const handleData = (0, import_react22.useEffectEvent)((data) => {
     const keypress = parse_keypress_default(data);
     const key = {
@@ -22437,14 +22437,14 @@ var useInput = (inputHandler, options2 = {}) => {
     });
   });
   (0, import_react22.useEffect)(() => {
-    if (options2.isActive === false) {
+    if (options.isActive === false) {
       return;
     }
     internal_eventEmitter.on("input", handleData);
     return () => {
       internal_eventEmitter.removeListener("input", handleData);
     };
-  }, [options2.isActive, internal_eventEmitter]);
+  }, [options.isActive, internal_eventEmitter]);
 };
 var use_input_default = useInput;
 
@@ -22527,7 +22527,15 @@ import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:pa
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 function pathApi(platform2) {
-  return platform2 === "win32" ? win32 : posix;
+  return platform2 === "win32" || platform2 === "windows" ? win32 : posix;
+}
+function codexHome({
+  platform: platform2 = process.platform,
+  environment = process.env,
+  home = homedir()
+} = {}) {
+  const paths = pathApi(platform2);
+  return environment.CODEX_HOME ? paths.resolve(environment.CODEX_HOME) : paths.join(home, ".codex");
 }
 function platformConfigHome({
   platform: platform2 = process.platform,
@@ -22822,28 +22830,28 @@ function validateVersionMetadata(version) {
 function storeApiPath(config) {
   return `/v1/stores/${config.store_id}`;
 }
-async function authenticatedRequest(config, protocol, path, options2 = {}) {
+async function authenticatedRequest(config, protocol, path, options = {}) {
   const token = deriveAuthenticationToken(config, protocol);
   return request(config, protocol, path, {
-    ...options2,
+    ...options,
     headers: {
-      ...options2.headers,
+      ...options.headers,
       Authorization: `Bearer ${token}`
     },
     authenticated: true
   });
 }
-async function request(config, _protocol, path, options2 = {}) {
-  const headers = new Headers(options2.headers);
+async function request(config, _protocol, path, options = {}) {
+  const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   const controller = new AbortController();
   const deadline = Date.now() + FETCH_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${config.endpoint}${path}`, {
-      method: options2.method || "GET",
+      method: options.method || "GET",
       headers,
-      body: options2.body,
+      body: options.body,
       redirect: "error",
       signal: controller.signal
     });
@@ -23618,7 +23626,24 @@ function resolveProviderProfile(profile, {
   resolved.outbound_model = outbound;
   return resolved;
 }
-function effectiveProviderCompaction(resolved) {
+function officialOpenAiEndpoint(value) {
+  const endpoint = new URL(value);
+  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" && !endpoint.port && endpoint.pathname.replace(/\/$/, "") === "/v1" && !endpoint.search;
+}
+function azureResponsesProvider(resolved) {
+  return resolved.profile?.toLowerCase() === "azure" || [
+    "openai.azure.",
+    "cognitiveservices.azure.",
+    "aoai.azure.",
+    "azure-api.",
+    "azurefd.",
+    "windows.net/openai"
+  ].some((marker) => resolved.endpoint.toLowerCase().includes(marker));
+}
+function codexProviderName(resolved, compaction) {
+  return compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint) ? "OpenAI" : resolved.profile;
+}
+function effectiveProviderCompaction(resolved, { mode = "direct" } = {}) {
   validateTarget(resolved.target, "compaction target");
   validateProtocol2(resolved.protocol, "compaction protocol");
   const compaction = structuredClone(resolved.compaction || {
@@ -23626,6 +23651,17 @@ function effectiveProviderCompaction(resolved) {
     policy: "auto"
   });
   validateCompaction(compaction, "resolved compaction", { protocol: resolved.protocol });
+  const azureNative = resolved.target === "codex" && mode === "direct" && azureResponsesProvider(resolved);
+  if (azureNative && (compaction.policy === "local" || compaction.upstream !== "responses_v2")) {
+    return {
+      ...compaction,
+      mode: "unsupported",
+      label: "Unavailable \xB7 Azure requires V2",
+      native: false,
+      responses_compact: false,
+      issue: "Codex enables remote V2 for Azure; declare responses_v2 with auto/remote policy"
+    };
+  }
   if (compaction.policy === "local") {
     return {
       ...compaction,
@@ -23636,13 +23672,13 @@ function effectiveProviderCompaction(resolved) {
       issue: ""
     };
   }
-  if (["responses_v2", "responses_v1"].includes(compaction.upstream) && resolved.target === "codex") {
+  if (compaction.upstream === "responses_v2" && resolved.target === "codex" && mode === "direct" && (officialOpenAiEndpoint(resolved.endpoint) || azureNative)) {
     return {
       ...compaction,
       mode: "remote_native",
       label: "Remote \xB7 native",
       native: true,
-      responses_compact: true,
+      responses_compact: false,
       issue: ""
     };
   }
@@ -23663,15 +23699,15 @@ function effectiveProviderCompaction(resolved) {
       label: "Unavailable \xB7 target unsupported",
       native: false,
       responses_compact: false,
-      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target}`
+      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target} in ${mode} mode with this provider`
     };
   }
   return {
     ...compaction,
     mode: "client_local",
-    label: "Local \xB7 upstream unverified",
+    label: compaction.upstream === "none" ? "Local \xB7 upstream unverified" : "Local \xB7 client capability unavailable",
     native: false,
-    responses_compact: false,
+    responses_compact: compaction.upstream === "responses_v1",
     issue: ""
   };
 }
@@ -24087,10 +24123,6 @@ function loopbackEndpoint(value) {
   const host = new URL(value).hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
 }
-function officialOpenAiEndpoint(value) {
-  const endpoint = new URL(value);
-  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" && endpoint.port === "" && endpoint.pathname.replace(/\/$/, "") === "/v1" && endpoint.search === "";
-}
 function compatibilityIssue(resolved) {
   const { target, protocol, auth } = resolved;
   const context = resolved.context || {
@@ -24145,7 +24177,8 @@ function targetPathApi(platform2) {
 }
 function targetPaths(target, {
   home = homedir2(),
-  platform: platform2 = normalizeRuntimePlatform()
+  platform: platform2 = normalizeRuntimePlatform(),
+  environment = process.env
 } = {}) {
   validateTarget(target);
   const targetPath = targetPathApi(platform2);
@@ -24163,7 +24196,7 @@ function targetPaths(target, {
     };
   }
   if (target === "codex") {
-    const root2 = targetPath.join(home, ".codex");
+    const root2 = codexHome({ home, platform: platform2, environment });
     const keyDir2 = targetPath.join(root2, "provider-keys");
     return {
       root: root2,
@@ -24238,7 +24271,7 @@ function renderProviderPlan(resolved, {
   const needsSecret = resolved.auth.mode !== "none";
   const secretReady = !needsSecret || secretPresent;
   const compatible = !issue;
-  const providerName = resolved.target === "codex" && compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint) ? "OpenAI" : resolved.profile;
+  const providerName = resolved.target === "codex" ? codexProviderName(resolved, compaction) : resolved.profile;
   return {
     schema: 1,
     profile: resolved.profile,
@@ -24831,7 +24864,7 @@ function createRemoteWorkspace({
     childCache.set(type, value);
     return value;
   }
-  async function catalog(type, target = "codex", options2 = {}) {
+  async function catalog(type, target = "codex", options = {}) {
     if (type === "providers") {
       const workspace = await rawWorkspace();
       if (!workspace.agent.providers || !workspace.agent.secrets) return [];
@@ -24840,7 +24873,7 @@ function createRemoteWorkspace({
       }));
     }
     const storeType = type === "snippets" ? "prompts" : type;
-    const { snapshot } = await child(storeType, options2);
+    const { snapshot } = await child(storeType, options);
     if (type === "mcp") {
       return Object.entries(snapshot.profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, profile]) => {
         const selected = mcpSelection(snapshot, name, target);
@@ -25286,6 +25319,7 @@ var defaultAgentRoot = resolve4(
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 var PROCESS_TIMEOUT_MS = 2e4;
+var INSTALL_TIMEOUT_MS = 10 * 6e4;
 var PROCESS_KILL_GRACE_MS = 1e3;
 var WORKSPACE_RETRY_DELAY_MS = 250;
 var MCP_READINESS_CACHE_MS = 5 * 60 * 1e3;
@@ -25686,13 +25720,15 @@ function createController({
     const accountLabel = typeof accounts.active?.saved_as === "string" ? accounts.active.saved_as : "";
     let agents = Array.isArray(doctorResult.data?.targets) ? doctorResult.data.targets.map((report) => report?.provider?.data ? { ...report.provider.data, client: report.provider.data.client || report.target } : null).filter(Boolean) : null;
     let agentsError = "";
-    if (!Array.isArray(agents) || agents.length === 0 || agents.length !== doctorResult.data?.targets?.length) {
+    if (!Array.isArray(agents) || [...AGENT_CLIENTS].some((client) => !agents.some((agent) => agent?.client === client))) {
       const agentsResult = await runAgentctlJson(
         ["status", "all", "--json"],
         "agentctl status",
         { signal }
       );
-      agents = agentsResult.data;
+      if (Array.isArray(agentsResult.data) && agentsResult.data.length > 0) {
+        agents = agentsResult.data;
+      }
       agentsError = agentsResult.error;
     }
     agents = Array.isArray(agents) ? agents.map((agent) => agent?.client === "codex" && agent.identity && accountLabel ? { ...agent, identity: { ...agent.identity, account: accountLabel } } : agent) : agents;
@@ -25799,13 +25835,13 @@ function createController({
       workspaceSkillsErrors: workspaceSkills.errors
     };
   }
-  async function snapshot(options2 = {}) {
-    const local = await localSnapshot(options2);
-    return hydrateSnapshot(local, options2);
+  async function snapshot(options = {}) {
+    const local = await localSnapshot(options);
+    return hydrateSnapshot(local, options);
   }
-  async function remoteCatalog(type, target, options2 = {}) {
+  async function remoteCatalog(type, target, options = {}) {
     try {
-      return { ok: true, items: await remoteWorkspace.catalog(type, target, options2), error: "" };
+      return { ok: true, items: await remoteWorkspace.catalog(type, target, options), error: "" };
     } catch (error) {
       return { ok: false, items: [], error: sanitizeOutput(error?.message || error) };
     }
@@ -26894,15 +26930,20 @@ Ownership verification failed; ${rollback2.detail}.` : ""}`
         detail: result2.ok ? operation === "use" ? `${selection} is now the active Codex official account; inference Provider is unchanged; start a new Codex session` : `${selection} was removed from the saved account Store; live auth is unchanged` : result2.error || `Codex account ${operation} failed.`
       };
     }
-    if (actionName === "agent-uninstall") {
+    if (actionName === "agent-install" || actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-      const args2 = ["uninstall", agent, "--yes"];
+      const installing = actionName === "agent-install";
+      const args2 = [installing ? "install" : "uninstall", agent, "--yes"];
       const command = controllerCommand(agentctl, args2);
-      const result2 = await run(command.executable, command.args);
+      const result2 = await run(
+        command.executable,
+        command.args,
+        installing ? { timeoutMs: INSTALL_TIMEOUT_MS } : {}
+      );
       return {
         ok: result2.code === 0,
         data: { agent },
-        detail: sanitizeOutput(result2.stdout || result2.stderr) || (result2.code === 0 ? "Done" : `Action failed with code ${result2.code}`)
+        detail: sanitizeOutput(result2.code === 0 ? result2.stdout || result2.stderr : result2.stderr || result2.stdout) || (result2.code === 0 ? "Done" : `Action failed with code ${result2.code}`)
       };
     }
     if (actionName === "snippet-copy") {
@@ -26957,11 +26998,11 @@ Ownership verification failed; ${rollback2.detail}.` : ""}`
       detail: result.code === 0 ? successDetail : sanitizeOutput(result.stderr || result.stdout) || `Action failed with code ${result.code}`
     };
   }
-  async function locateSkillsDriftScope(name, actionName, options2) {
+  async function locateSkillsDriftScope(name, actionName, options) {
     const local = await runController(tools.skills, ["list", "--json"]);
     const localDetail = sanitizeOutput(local.stderr || local.stdout);
     if (skillsCatalogDriftName(localDetail) === name) return "local";
-    const workspaceAction = actionName === "skills-apply" || actionName === "skills-download" || options2?.source === "cloud" && ["plan", "apply"].includes(actionName);
+    const workspaceAction = actionName === "skills-apply" || actionName === "skills-download" || options?.source === "cloud" && ["plan", "apply"].includes(actionName);
     if (workspaceAction && typeof remoteWorkspace.runtimeEnvironment === "function") {
       try {
         const env3 = await remoteWorkspace.runtimeEnvironment();
@@ -26973,14 +27014,14 @@ Ownership verification failed; ${rollback2.detail}.` : ""}`
     }
     return workspaceAction ? "workspace" : "local";
   }
-  async function action(actionName, options2 = {}) {
+  async function action(actionName, options = {}) {
     try {
-      const result = await dispatchAction(actionName, options2);
+      const result = await dispatchAction(actionName, options);
       if (result?.ok || result?.data?.skillDriftRepairRequired) return result;
       const detail = sanitizeOutput(result?.detail || "");
       const name = skillsCatalogDriftName(detail);
       if (!name) return result;
-      const scope = await locateSkillsDriftScope(name, actionName, options2);
+      const scope = await locateSkillsDriftScope(name, actionName, options);
       return {
         ...result,
         data: withSkillsDrift(result?.data || {}, detail, scope),
@@ -26990,7 +27031,7 @@ Ownership verification failed; ${rollback2.detail}.` : ""}`
       const detail = sanitizeOutput(error?.message || error);
       const name = skillsCatalogDriftName(detail);
       if (!name) throw error;
-      const scope = await locateSkillsDriftScope(name, actionName, options2);
+      const scope = await locateSkillsDriftScope(name, actionName, options);
       return {
         ok: false,
         data: withSkillsDrift({}, detail, scope),
@@ -27037,6 +27078,13 @@ function targetLabel(target) {
   if (target === "opencode") return "OpenCode";
   if (target === "pi") return "Pi";
   return String(target || "Unknown");
+}
+function actionDetailLines(detail) {
+  const text = String(detail || "").trim();
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= 8) return lines;
+  return [...lines.slice(0, 2), `\u2026 ${lines.length - 7} earlier log lines omitted \u2026`, ...lines.slice(-5)];
 }
 function normalizeSection(value) {
   return SECTIONS.some((section) => section.id === value) ? value : "overview";
@@ -27552,6 +27600,7 @@ function proxyPresentation(proxy = {}, { officialSubscription = false } = {}) {
 }
 function actionForKey(section, input) {
   if (section === "agents") {
+    if (input === "i") return "agent-install";
     if (input === "p" || input === "c" || input === "\r") return "agent-provider";
     if (input === "x") return "agent-uninstall";
   }
@@ -27587,10 +27636,11 @@ function actionForKey(section, input) {
   return null;
 }
 function actionNeedsConfirmation(action) {
-  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "skills-download" || action === "provider-sync-push" || action === "provider-sync-pull" || action === "proxy-start" || action === "proxy-stop" || action === "proxy-attach" || action === "proxy-detach" || action.endsWith("-apply");
+  return action === "apply" || action === "rollback" || action === "agent-uninstall" || action === "agent-install" || action === "account-use" || action === "account-delete" || action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" || action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" || action === "mcp-profile-upload" || action === "skills-repair" || action === "skills-enable" || action === "skills-disable" || action === "skills-batch" || action === "skills-pack-save" || action === "skills-pack-update" || action === "skills-pack-upload" || action === "skills-download" || action === "provider-sync-push" || action === "provider-sync-pull" || action === "proxy-start" || action === "proxy-stop" || action === "proxy-attach" || action === "proxy-detach" || action.endsWith("-apply");
 }
 function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
+  if (action === "agent-install") return `Install ${targetLabel(selection)} CLI`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
   if (action === "account-use") return `Switch Codex official account to ${selection || "account"}`;
   if (action === "account-delete") return `Delete saved Codex account ${selection || "account"}`;
@@ -27847,7 +27897,7 @@ Keys:
   p / a                             Plan / apply selected configuration
   Prompts: v local \xB7 V Workspace    View Prompt content on demand
   u                                 Roll back a preset
-  Agents: c / p / Enter unified Providers \xB7 x uninstall owned config
+  Agents: i install CLI \xB7 c / p / Enter unified Providers \xB7 x remove owned config
   Accounts: a/Enter switch \xB7 x delete saved account
   Providers: v views \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible
   Providers (Codex): S observer start/stop \xB7 A attach/detach
@@ -27922,7 +27972,7 @@ function Row({ label, value, kind = "value" }) {
   return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, String(label).padEnd(18)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: COLORS[kind] || COLORS.value }, value));
 }
 function SummaryRow({ name, summary }) {
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, null, /* @__PURE__ */ import_react34.default.createElement(Box_default, { width: 12, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "white" }, name)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { width: 14, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, summary.detail)));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, null, /* @__PURE__ */ import_react34.default.createElement(Box_default, { width: 12, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: "white" }, name)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { minWidth: 14, marginRight: 1, flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Badge, { kind: summary.kind }, summary.label)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexGrow: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white" }, summary.detail)));
 }
 function TargetStatusRow({ state, selected }) {
   const count = state.items.length;
@@ -28008,7 +28058,7 @@ function Agents({ snapshot, selected }) {
   const safeIndex = clampSelection(selected, agents.length);
   const current = agents[safeIndex];
   const accounts = accountSummary(snapshot);
-  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: current }) }), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? current.cli_version || "installed" : "not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall owned config")));
+  return /* @__PURE__ */ import_react34.default.createElement(Box_default, { gap: 2, flexDirection: process.stdout.columns && process.stdout.columns < 88 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column", minWidth: 24 }, agents.map((agent, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: agent.client, color: index === safeIndex ? "cyan" : void 0, bold: index === safeIndex }, index === safeIndex ? "> " : "  ", agent.label || agent.client, agent.cli_installed ? "" : " (not installed)"))), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexDirection: "column" }, /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true }, current.label || current.client), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Identity", summary: componentSummary("identity", { ok: true, data: current }) }), current.client === "codex" && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Saved accounts", value: accounts.value, kind: accounts.kind }), /* @__PURE__ */ import_react34.default.createElement(SummaryRow, { name: "Inference", summary: componentSummary("inference", { ok: true, data: current }) }), /* @__PURE__ */ import_react34.default.createElement(Row, { label: "CLI", value: current.cli_installed ? `Installed${current.cli_version ? ` \xB7 ${current.cli_version}` : ""}` : "Not installed", kind: current.cli_installed ? "good" : "bad" }), targetReport(snapshot, current.client) && /* @__PURE__ */ import_react34.default.createElement(Row, { label: "Preset", value: targetReport(snapshot, current.client)?.preset?.name || "none", kind: targetReport(snapshot, current.client)?.preset?.drift ? "bad" : "muted" }), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "i"), " ", current.cli_installed ? "check CLI" : "install CLI", " \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " remove owned config"), !current.cli_installed && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Install first; sign in or configure a Provider later.")));
 }
 function AccountsView({ snapshot, selected }) {
   const entries = accountEntries(snapshot);
@@ -28500,7 +28550,7 @@ function Cloud({ snapshot }) {
   ), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Catalogs are browsed on demand and decrypted only in this process."), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Only an applied Provider, Profile, Pack, Prompt, Snippet, or Preset is materialized locally."));
 }
 function Help() {
-  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " open unified Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " uninstall"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible \xB7 v next view"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills Workspace: d download selected Pack files into the local canonical Store"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
+  return /* @__PURE__ */ import_react34.default.createElement(Panel, { title: "Keyboard help" }, /* @__PURE__ */ import_react34.default.createElement(Text, null, "[ / ] or Tab / Shift+Tab / Left / Right  switch section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "t  cycle target (Claude/Codex/OpenCode/Pi in Providers and Skills) \xB7 r refresh \xB7 q quit"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Up / Down  select previous / next item inside the current section"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Agents: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "i"), " install CLI \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "cyan", bold: true }, "c/p/Enter"), " Providers \xB7 ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red", bold: true }, "x"), " remove owned config"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Accounts: \u2191/\u2193 select \xB7 a/Enter switch or refresh \xB7 x delete non-current snapshot"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers: \u2191/\u2193 select \xB7 p plan \xB7 a apply \xB7 u upload \xB7 d download/merge \xB7 i incompatible \xB7 v next view"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Providers (Codex): S start/stop subscription observer \xB7 A attach/detach \xB7 y confirms every lifecycle change"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 x problems \xB7 g group"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP: Space toggle \xB7 m batch \xB7 a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: l local \xB7 w Workspace \xB7 / search \xB7 e enabled \xB7 Space toggle \xB7 m batch"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills: a apply staged \xB7 c clear \xB7 s save \xB7 S update \xB7 u backup"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Skills Workspace: d download selected Pack files into the local canonical Store"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills / Prompts: p inspect plan \xB7 a apply selected Workspace item"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "MCP / Skills: f repair the current named local selection when Drift is reported"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Prompts: v view active local \xB7 V view selected Workspace \xB7 \u2191/\u2193 scroll preview"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Snippets: \u2191/\u2193 select \xB7 c copy local \xB7 p inspect cloud pull \xB7 a pull"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Presets: p inspect plan \xB7 a apply \xB7 u rollback"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Destructive actions require y confirmation."));
 }
 function App2({ initialSection, controller, onLaunch }) {
   const { exit } = use_app_default();
@@ -28563,8 +28613,9 @@ function App2({ initialSection, controller, onLaunch }) {
     cloudError: "",
     key: ""
   });
-  const [message, setMessage] = (0, import_react34.useState)("Loading diagnostics\u2026");
-  const [lastDetail, setLastDetail] = (0, import_react34.useState)("");
+  const [message, setMessage] = (0, import_react34.useState)("");
+  const [refreshMessage, setRefreshMessage] = (0, import_react34.useState)("Loading diagnostics\u2026");
+  const [lastOutput, setLastOutput] = (0, import_react34.useState)(null);
   const [confirm, setConfirm] = (0, import_react34.useState)(null);
   const [showHelp, setShowHelp] = (0, import_react34.useState)(false);
   const [showIncompatibleProviders, setShowIncompatibleProviders] = (0, import_react34.useState)(false);
@@ -28579,7 +28630,10 @@ function App2({ initialSection, controller, onLaunch }) {
     const sequence = refreshSequence.current + 1;
     refreshSequence.current = sequence;
     setLoading(true);
-    if (!quiet) setMessage("Refreshing diagnostics\u2026");
+    if (!quiet) {
+      setMessage("");
+      setRefreshMessage("Refreshing diagnostics\u2026");
+    }
     try {
       const local = typeof controller.localSnapshot === "function" ? await controller.localSnapshot({ signal: abortController.signal }) : await controller.snapshot({ signal: abortController.signal });
       if (refreshSequence.current !== sequence) return;
@@ -28591,23 +28645,23 @@ function App2({ initialSection, controller, onLaunch }) {
         accounts: clampSelection(value.accounts, accountEntries(local).length)
       }));
       setLoading(false);
-      setMessage(local.workspaceLoading ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} \xB7 Workspace ${local.workspace ? "refreshing" : "connecting"}\u2026` : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
+      setRefreshMessage(local.workspaceLoading ? `Local ready ${new Date(local.updatedAt).toLocaleTimeString()} \xB7 Workspace ${local.workspace ? "refreshing" : "connecting"}\u2026` : `Local ready ${new Date(local.updatedAt).toLocaleTimeString()}`);
       if (typeof controller.hydrateSnapshot === "function" && local.phase === "local") {
         void controller.hydrateSnapshot(local, { signal: abortController.signal }).then((next) => {
           if (refreshSequence.current !== sequence) return;
           setSnapshot(next);
           setSelected((value) => clampSelection(value, presetEntries(next).length));
           const cloud = workspacePresentation(next.workspace, next.workspaceError, false);
-          setMessage(`${cloud.status} \xB7 local state remains ready`);
+          setRefreshMessage(`${cloud.status} \xB7 local state remains ready`);
         }).catch((error) => {
           if (refreshSequence.current !== sequence) return;
           setSnapshot((value) => value ? { ...value, workspaceLoading: false } : value);
-          setMessage(`Local ready \xB7 Workspace refresh failed: ${error.message}`);
+          setRefreshMessage(`Local ready \xB7 Workspace refresh failed: ${error.message}`);
         });
       }
     } catch (error) {
       if (refreshSequence.current !== sequence) return;
-      setMessage(`Refresh failed: ${error.message}`);
+      setRefreshMessage(`Refresh failed: ${error.message}`);
     } finally {
       if (refreshSequence.current === sequence) setLoading(false);
     }
@@ -28939,7 +28993,7 @@ function App2({ initialSection, controller, onLaunch }) {
       return !current?.enabled;
     });
     setBusy(true);
-    setLastDetail("");
+    setLastOutput(null);
     setMessage(enabling.length > 0 ? `Checking ${enabling.length} MCP server requirement(s)\u2026` : "Preparing target-specific MCP change\u2026");
     try {
       const results = await Promise.all(enabling.map(
@@ -28981,7 +29035,7 @@ function App2({ initialSection, controller, onLaunch }) {
       return;
     }
     setBusy(true);
-    setLastDetail("");
+    setLastOutput(null);
     setMessage(`Loading ${source === "cloud" ? "Workspace" : "local"} Prompt preview\u2026`);
     try {
       const preview = await controller.promptPreview({ source, selection, target });
@@ -29029,8 +29083,8 @@ function App2({ initialSection, controller, onLaunch }) {
     const liveSelection = action.startsWith("agent-") ? selectedAgentId : accountAction ? selectedAccountName : providerAction ? selectedProviderName : localMcpAction ? payload.selection || selectedMcpServer?.name || "" : localSkillsAction ? payload.selection || selectedSkill?.name || "" : localRepairAction ? localRepairSelection : action === "snippet-copy" ? selectedLocalSnippet : action.includes("-") ? selectedRemote : selectedPreset;
     const selection = typeof payload.selection === "string" ? payload.selection : liveSelection;
     const runningLabel = actionLabel(action, selection, actionTarget);
-    setMessage(action === "mcp-disable" ? `${runningLabel} \xB7 removing only the changed target entry\u2026` : action === "mcp-enable" || action === "mcp-batch" ? `${runningLabel} \xB7 updating changed target entries atomically\u2026` : action === "skills-disable" || action === "skills-enable" || action === "skills-batch" ? `${runningLabel} \xB7 updating managed links atomically\u2026` : `${runningLabel}\u2026`);
-    setLastDetail("");
+    setMessage(action === "agent-install" ? `${runningLabel} \xB7 downloading if needed; this may take several minutes\u2026` : action === "mcp-disable" ? `${runningLabel} \xB7 removing only the changed target entry\u2026` : action === "mcp-enable" || action === "mcp-batch" ? `${runningLabel} \xB7 updating changed target entries atomically\u2026` : action === "skills-disable" || action === "skills-enable" || action === "skills-batch" ? `${runningLabel} \xB7 updating managed links atomically\u2026` : `${runningLabel}\u2026`);
+    setLastOutput(null);
     try {
       const result = await controller.action(action, {
         agent: selectedAgentId,
@@ -29048,7 +29102,7 @@ function App2({ initialSection, controller, onLaunch }) {
       const firstDetailLine = String(result.detail || "").split("\n")[0];
       if (!result.ok && ["mcp-apply", "skills-apply"].includes(action) && result.data?.localInitializationRequired && payload.initializeLocal !== true && payload.skipLocalInitialization !== true) {
         const componentLabel = action === "mcp-apply" ? "MCP" : "Skills";
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage(`Choose how to apply this Workspace ${componentLabel} selection.`);
         setConfirm({
           action,
@@ -29071,7 +29125,7 @@ function App2({ initialSection, controller, onLaunch }) {
       const alreadyAttempted = driftRequest && attemptedDrift && driftRequest.name === attemptedDrift.name && driftRequest.scope === attemptedDrift.scope;
       if (!result.ok && driftRequest && !alreadyAttempted) {
         const workspaceRuntime = driftRequest.scope === "workspace";
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage(`Confirmation required: Skill '${driftRequest.name}' changed outside skillsctl.`);
         setConfirm({
           ...payload,
@@ -29091,7 +29145,7 @@ Review its current files before continuing. [y] keeps those files, updates only 
         return;
       }
       if (!result.ok && action === "mcp-apply" && result.data?.forceRequired && payload.force !== true) {
-        setLastDetail(result.detail || "");
+        setLastOutput({ detail: result.detail || "" });
         setMessage("Confirmation required: same-name MCP entries are not yet owned by mcpctl.");
         setConfirm({
           ...payload,
@@ -29106,8 +29160,9 @@ Review its current files before continuing. [y] keeps those files, updates only 
         });
         return;
       }
-      setMessage(result.ok ? action === "skills-apply" && firstDetailLine ? `Done: ${firstDetailLine}` : `Done: ${actionLabel(action, selection, actionTarget)}` : `Failed: ${firstDetailLine || actionLabel(action, selection, actionTarget)}`);
-      setLastDetail(result.detail || "");
+      const resultTitle = result.ok ? action === "agent-install" ? `Installed: ${targetLabel(selection)} CLI` : action === "skills-apply" && firstDetailLine ? `Done: ${firstDetailLine}` : `Done: ${actionLabel(action, selection, actionTarget)}` : `Failed: ${actionLabel(action, selection, actionTarget)}`;
+      setMessage(resultTitle);
+      setLastOutput({ title: resultTitle, ok: result.ok, detail: result.detail || "" });
       if (localMcpAction) {
         if (result.data?.state) patchLocalMcpState(result.data.state);
         if (result.ok && action === "mcp-batch") {
@@ -29128,6 +29183,7 @@ Review its current files before continuing. [y] keeps those files, updates only 
       }
     } catch (error) {
       setMessage(`Failed: ${error.message}`);
+      setLastOutput({ title: `Failed: ${runningLabel}`, ok: false, detail: error.message });
     } finally {
       setBusy(false);
     }
@@ -29733,6 +29789,9 @@ Review its current files before continuing. [y] keeps those files, updates only 
       setConfirm({
         action,
         selection,
+        ...action === "agent-install" ? {
+          detail: "Download and install the CLI if missing. No API key is required.\nConfigure its Provider or sign in after installation."
+        } : {},
         target: providerAction ? providerTarget : action.startsWith("skills-") ? skillsTarget : target,
         label: actionLabel(
           action,
@@ -29818,53 +29877,58 @@ Review its current files before continuing. [y] keeps those files, updates only 
       dimColor: section !== item.id
     },
     ` ${item.label} `
-  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastDetail && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastDetail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), mcpProfilePrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "magenta", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, mcpProfilePrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), mcpProfilePrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, mcpProfilePrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 allowed: letters, numbers, . _ -")) : skillsPackPrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, skillsPackPrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), skillsPackPrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, skillsPackPrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 lowercase letters, numbers, single hyphens")) : confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, flexDirection: "column" }, confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: confirm.warning ? "red" : "gray" }, line)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? ", confirm.initializationChoice ? "[y] initialize / [s] selected only / [n] cancel" : "[y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, justifyContent: "space-between" }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: message.startsWith("Failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit")));
+  ))), showHelp ? /* @__PURE__ */ import_react34.default.createElement(Help, null) : /* @__PURE__ */ import_react34.default.createElement(Panel, { title: panelTitle, accent: SECTION_COLORS[section] || "cyan" }, content), lastOutput && !confirm && /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: lastOutput.title ? lastOutput.ok ? "green" : "red" : "gray", paddingX: 1, flexDirection: "column", marginTop: 1 }, lastOutput.title && /* @__PURE__ */ import_react34.default.createElement(Text, { bold: true, color: lastOutput.ok ? "green" : "red" }, lastOutput.title), actionDetailLines(lastOutput.detail).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: "gray" }, line))), mcpProfilePrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "magenta", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "magenta", bold: true }, mcpProfilePrompt.mode === "update" ? "Update MCP Profile" : "Save MCP Profile"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, mcpProfilePrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), mcpProfilePrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, mcpProfilePrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 allowed: letters, numbers, . _ -")) : skillsPackPrompt ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { borderStyle: "single", borderColor: "green", paddingX: 1, flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "green", bold: true }, skillsPackPrompt.mode === "update" ? "Update Skill Pack" : "Save Skill Pack"), /* @__PURE__ */ import_react34.default.createElement(Text, null, "Name: ", /* @__PURE__ */ import_react34.default.createElement(Text, { color: "white", bold: true }, skillsPackPrompt.value), /* @__PURE__ */ import_react34.default.createElement(Text, { inverse: true }, " ")), skillsPackPrompt.error && /* @__PURE__ */ import_react34.default.createElement(Text, { color: "red" }, skillsPackPrompt.error), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "Enter confirm \xB7 Esc cancel \xB7 lowercase letters, numbers, single hyphens")) : confirm ? /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, flexDirection: "column" }, confirm.detail && confirm.detail.split("\n").slice(0, 8).map((line, index) => /* @__PURE__ */ import_react34.default.createElement(Text, { key: `${index}-${line}`, color: confirm.warning ? "red" : "gray" }, line)), /* @__PURE__ */ import_react34.default.createElement(Text, { color: "yellow", bold: true }, confirm.label, "? ", confirm.initializationChoice ? "[y] initialize / [s] selected only / [n] cancel" : "[y/N]")) : /* @__PURE__ */ import_react34.default.createElement(Box_default, { marginTop: 1, gap: 1, flexDirection: process.stdout.columns && process.stdout.columns < 100 ? "column" : "row" }, /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexGrow: 1, flexShrink: 1 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: (message || refreshMessage).startsWith("Failed") || (message || refreshMessage).startsWith("Refresh failed") ? "red" : "gray", wrap: "truncate-end" }, loading || busy ? "\u25CC " : "", message || refreshMessage)), /* @__PURE__ */ import_react34.default.createElement(Box_default, { flexShrink: 0 }, /* @__PURE__ */ import_react34.default.createElement(Text, { color: "gray" }, "? help \xB7 [/] tabs \xB7 ", ["snippets", "accounts"].includes(section) ? "" : "t target \xB7 ", "r refresh \xB7 q quit"))));
 }
-var options;
-try {
-  options = parseArgs(process.argv.slice(2));
-} catch (error) {
-  process.stderr.write(`ERROR ${error.message}
+async function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`ERROR ${error.message}
 `);
-  process.exitCode = 1;
-}
-if (options?.help) {
-  usage();
-} else if (options) {
-  if (process.versions.node.split(".").map(Number)[0] < 22) {
-    process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
     process.exitCode = 1;
-  } else {
-    const controller = createController();
-    let section = options.section;
-    let keepRunning = true;
-    while (keepRunning) {
-      let launch = null;
-      const instance = render_default(
-        /* @__PURE__ */ import_react34.default.createElement(
-          App2,
-          {
-            initialSection: section,
-            controller,
-            onLaunch: (command) => {
-              launch = command;
+  }
+  if (options?.help) {
+    usage();
+  } else if (options) {
+    if (process.versions.node.split(".").map(Number)[0] < 22) {
+      process.stderr.write("ERROR agent TUI requires Node.js 22 or newer\n");
+      process.exitCode = 1;
+    } else {
+      const controller = createController();
+      let section = options.section;
+      let keepRunning = true;
+      while (keepRunning) {
+        let launch = null;
+        const instance = render_default(
+          /* @__PURE__ */ import_react34.default.createElement(
+            App2,
+            {
+              initialSection: section,
+              controller,
+              onLaunch: (command) => {
+                launch = command;
+              }
             }
-          }
-        )
-      );
-      await instance.waitUntilExit();
-      if (!launch) {
-        keepRunning = false;
-        continue;
-      }
-      const result = spawnSync(launch.executable, launch.args, {
-        stdio: "inherit",
-        env: process.env,
-        windowsHide: false
-      });
-      if (result.error) process.stderr.write(`ERROR ${result.error.message}
+          )
+        );
+        await instance.waitUntilExit();
+        if (!launch) {
+          keepRunning = false;
+          continue;
+        }
+        const result = spawnSync(launch.executable, launch.args, {
+          stdio: "inherit",
+          env: process.env,
+          windowsHide: false
+        });
+        if (result.error) process.stderr.write(`ERROR ${result.error.message}
 `);
-      section = "agents";
+        section = "agents";
+      }
     }
   }
 }
+
+// src/cli.mjs
+await main();

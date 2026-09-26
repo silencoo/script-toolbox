@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  codexHome,
   platformConfigHome,
   platformDataHome,
   platformStateHome
 } from "./platform-paths.mjs";
+
+test("Codex home honors explicit roots on native and projected platforms", () => {
+  assert.equal(codexHome({ home: "/h", environment: {} }), "/h/.codex");
+  assert.equal(codexHome({ home: "/h", environment: { CODEX_HOME: "/other/codex" } }), "/other/codex");
+  assert.equal(codexHome({ platform: "windows", home: "C:\\Users\\T",
+    environment: { CODEX_HOME: "D:\\Codex Home" } }), "D:\\Codex Home");
+});
 
 test("Linux honors XDG roots", () => {
   const options = {

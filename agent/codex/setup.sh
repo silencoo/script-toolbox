@@ -39,7 +39,9 @@ LIST_PROVIDERS=0
 INTERACTIVE=0
 DRY_RUN=0
 
-SETTINGS_DIR="${HOME}/.codex"
+SETTINGS_DIR="${CODEX_HOME:-${HOME}/.codex}"
+# Resolve relative overrides before recording owned credential paths.
+case "$SETTINGS_DIR" in /*|[A-Za-z]:[\\/]*) ;; *) SETTINGS_DIR="${PWD}/${SETTINGS_DIR}" ;; esac
 SETTINGS_FILE="${SETTINGS_DIR}/config.toml"
 STATE_FILE="${SETTINGS_DIR}/.script-toolbox-provider-key"
 DEFAULTS_BACKUP_FILE="${SETTINGS_DIR}/.script-toolbox-defaults-backup.toml"
@@ -339,7 +341,7 @@ else
   validate_model_api "$MODELS_URL" bearer "$KEY" "$MODEL"
 fi
 
-ensure_npm_cli codex @openai/codex "Codex CLI"
+ensure_agent_cli codex
 
 mkdir -p "$SETTINGS_DIR" "$KEY_DIR"
 if [ ! -f "$SETTINGS_FILE" ]; then

@@ -24,6 +24,18 @@ terminals. Pipes, test fixtures, and other non-interactive callers retain their
 previous behavior. The older line-oriented guides remain available with the
 explicit `interactive` command.
 
+In Agents, select Claude Code, Codex, OpenCode, or Pi and press `i` to install
+its CLI. Confirm with `y`, or cancel with `n`/Escape. Installation needs no API
+key or Provider selection; existing CLIs are kept and client configuration stays
+as it was. The operation allows up to ten minutes for downloads, reports failures,
+and refreshes CLI status afterward. Use `c`/`p`/Enter to configure a Provider later.
+The equivalent command is `agentctl install <client> --yes`.
+
+After installation, the CLI row shows `Installed` and its version. The result
+panel keeps an explicit `Installed` or `Failed` heading and the final log lines;
+background Workspace and periodic status refreshes preserve the action result.
+Pressing `r` refreshes the footer status while keeping the result panel visible.
+
 The dashboard combines a full portable Providers control plane, live
 MCP/Skills/Prompt selections, a shared Snippets library, development presets,
 and encrypted Workspace status. It refreshes every 30 seconds or immediately

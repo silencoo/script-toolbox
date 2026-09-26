@@ -468,15 +468,7 @@ else
   validate_model_api "$MODELS_URL" "$VALIDATION_AUTH" "$KEY" "$MODEL"
 fi
 
-ensure_node 22 19
-if command -v pi >/dev/null 2>&1; then
-  ok "Pi already installed ($(pi --version 2>/dev/null || echo 'unknown version'))"
-else
-  info "Installing @earendil-works/pi-coding-agent globally..."
-  npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-  command -v pi >/dev/null 2>&1 || die "pi is not on PATH after npm install"
-  ok "Pi installed"
-fi
+ensure_agent_cli pi
 
 mkdir -p "$SETTINGS_DIR"
 [ -f "$SETTINGS_FILE" ] || printf '{}\n' > "$SETTINGS_FILE"

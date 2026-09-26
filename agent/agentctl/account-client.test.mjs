@@ -14,9 +14,77 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { accountDefaults } from "./account-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLIENT = join(HERE, "account-client.mjs");
+
+test("account paths honor CODEX_HOME and the explicit auth-file override", () => {
+  const home = join(tmpdir(), "default-home");
+  const alternate = join(tmpdir(), "alternate-codex");
+  assert.equal(accountDefaults({ home, environment: { CODEX_HOME: alternate } }).authFile,
+    join(alternate, "auth.json"));
+  assert.equal(accountDefaults({ home, environment: {
+    CODEX_HOME: alternate, AGENTCTL_CODEX_AUTH_FILE: join(home, "explicit", "auth.json")
+  } }).authFile, join(home, "explicit", "auth.json"));
+});
+
+test("legacy ChatGPT snapshots load but incomplete or malformed tokens never enter the Store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentctl-account-schema-"));
+  const authFile = join(root, "home", ".codex", "auth.json");
+  try {
+    await mkdir(dirname(authFile), { recursive: true });
+    const legacy = JSON.parse(auth("legacy-account", "legacy"));
+    delete legacy.auth_mode;
+    await writeFile(authFile, JSON.stringify(legacy), { mode: 0o600 });
+    run(root, ["save", "legacy", "--yes"]);
+    assert.equal(JSON.parse(run(root, ["status", "--json"]).stdout).active.saved_as, "legacy");
+    const saved = await readFile(join(root, "store", "legacy.auth.json"));
+    for (const modify of [
+      (v) => { delete v.tokens.id_token; },
+      (v) => { delete v.tokens.refresh_token; },
+      (v) => { delete v.tokens.access_token; },
+      (v) => { v.tokens.id_token = "broken-jwt"; },
+      (v) => { v.tokens.id_token = "h.bnVsbA.s"; },
+      (v) => { v.last_refresh = "invalid-date"; },
+      (v) => { v.auth_mode = "apikey"; }
+    ]) {
+      const invalid = structuredClone(legacy);
+      modify(invalid);
+      const bytes = Buffer.from(JSON.stringify(invalid));
+      await writeFile(authFile, bytes);
+      const refused = run(root, ["save", "invalid", "--yes"], { status: 1 });
+      assert.match(refused.stderr, /not a complete ChatGPT/);
+      assert.deepEqual(await readFile(authFile), bytes);
+      await assert.rejects(() => lstat(join(root, "store", "invalid.auth.json")), { code: "ENOENT" });
+    }
+    assert.deepEqual(await readFile(join(root, "store", "legacy.auth.json")), saved);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("account mutations reject non-file effective stores including managed overrides", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentctl-account-stores-"));
+  const directory = join(root, "home", ".codex");
+  try {
+    await mkdir(directory, { recursive: true });
+    const before = auth("saved-account", "saved");
+    await writeFile(join(directory, "auth.json"), before, { mode: 0o600 });
+    run(root, ["save", "primary", "--yes"]);
+    for (const mode of ["keyring", "auto", "ephemeral"]) {
+      await writeFile(join(directory, "config.toml"), 'cli_auth_credentials_store = "file"\n');
+      await writeFile(join(directory, "requirements.toml"), `cli_auth_credentials_store = "${mode}"\n`);
+      for (const args of [["use", "primary"], ["save", "other"], ["login", "other"]]) {
+        const result = run(root, [...args, "--yes"], { status: 1 });
+        assert.match(result.stderr, new RegExp(`Codex uses '${mode}' credentials`));
+      }
+      const state = JSON.parse(run(root, ["status", "--json"]).stdout);
+      assert.equal(state.credential_store, mode);
+      assert.equal(state.active.official_login, false);
+      assert.equal(state.accounts.some((row) => row.current), false);
+      assert.equal(await readFile(join(directory, "auth.json"), "utf8"), before);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function auth(accountId, marker) {
   return `${JSON.stringify({
@@ -26,7 +94,7 @@ function auth(accountId, marker) {
     tokens: {
       access_token: `access-${marker}`,
       account_id: accountId,
-      id_token: `id-${marker}`,
+      id_token: `header.${Buffer.from(JSON.stringify({ email: `${marker}@example.invalid` })).toString("base64url")}.signature`,
       refresh_token: `refresh-${marker}`
     }
   }, null, 2)}\n`;
@@ -42,7 +110,7 @@ function run(root, args, { status = 0, environment = {} } = {}) {
     "--store", store
   ], {
     encoding: "utf8",
-    env: { ...process.env, ...environment }
+    env: { ...process.env, AGENTCTL_CODEX_BIN: join(HERE, "../tests/fake-codex.mjs"), ...environment }
   });
   assert.equal(
     result.status,
@@ -57,7 +125,13 @@ async function fakeCodex(root) {
   await writeFile(path, `#!/usr/bin/env node
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { serveConfig } from ${JSON.stringify(new URL("../tests/fake-codex.mjs", import.meta.url).href)};
 
+if (process.argv.includes("app-server")) {
+  serveConfig();
+} else if (process.argv.includes("status")) {
+  process.exitCode = process.env.FAKE_CODEX_REJECT_SNAPSHOT ? 1 : 0;
+} else {
 const home = process.env.CODEX_HOME;
 const args = process.argv.slice(2);
 const authFile = join(home, "auth.json");
@@ -76,11 +150,12 @@ writeFileSync(authFile, JSON.stringify({
   tokens: {
     access_token: "access-" + process.env.FAKE_MARKER,
     account_id: process.env.FAKE_ACCOUNT_ID,
-    id_token: "id-" + process.env.FAKE_MARKER,
+    id_token: "header." + Buffer.from(JSON.stringify({ email: process.env.FAKE_MARKER + "@example.invalid" })).toString("base64url") + ".signature",
     refresh_token: "refresh-" + process.env.FAKE_MARKER
   }
 }, null, 2) + "\\n", { mode: 0o600 });
 process.stderr.write("fake isolated login completed\\n");
+}
 `);
   if (process.platform !== "win32") await chmod(path, 0o700);
   return path;
@@ -140,6 +215,20 @@ test("Codex accounts save, refresh, and switch without exposing OAuth material",
     const switchPreview = JSON.parse(run(root, ["use", "primary", "--json"]).stdout);
     assert.equal(switchPreview.preview, true);
     assert.match(await readFile(authFile, "utf8"), /backup-v2/);
+
+    // A locally plausible snapshot can still be rejected by the installed
+    // Codex parser. Neither the live login nor saved refresh tokens may change.
+    const rejectionEnvironment = { FAKE_CODEX_REJECT_SNAPSHOT: "1" };
+    const beforeRejection = await readFile(authFile);
+    const savedBeforeRejection = await readFile(join(store, "backup.auth.json"));
+    for (const args of [["save", "backup"], ["use", "primary"]]) {
+      const rejected = run(root, [...args, "--yes"], {
+        status: 1, environment: rejectionEnvironment
+      });
+      assert.match(rejected.stderr, /Codex could not load the account snapshot/);
+      assert.deepEqual(await readFile(authFile), beforeRejection);
+      assert.deepEqual(await readFile(join(store, "backup.auth.json")), savedBeforeRejection);
+    }
 
     const switched = run(root, ["use", "primary", "--yes", "--json"]);
     assert.equal(switched.stdout.includes(primaryId), false);
@@ -303,6 +392,16 @@ test("agentctl account login isolates OAuth revocation, activates verified auth,
     await assert.rejects(() => lstat(join(store, "failed.auth.json")), { code: "ENOENT" });
     logRows = (await readFile(loginLog, "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
+    await assert.rejects(() => lstat(logRows.at(-1).home), { code: "ENOENT" });
+
+    const rejectedSnapshot = run(root, ["login", "rejected", "--yes", "--json"], {
+      status: 1,
+      environment: { ...loginEnvironment, FAKE_CODEX_REJECT_SNAPSHOT: "1" }
+    });
+    assert.match(rejectedSnapshot.stderr, /Codex could not load the account snapshot/);
+    assert.deepEqual(await readFile(authFile), beforeFailure);
+    await assert.rejects(() => lstat(join(store, "rejected.auth.json")), { code: "ENOENT" });
+    logRows = (await readFile(loginLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     await assert.rejects(() => lstat(logRows.at(-1).home), { code: "ENOENT" });
 
     const beforeRollback = await readFile(authFile);

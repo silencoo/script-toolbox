@@ -12,6 +12,7 @@ export const defaultAgentRoot = resolve(
 const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 20_000;
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_KILL_GRACE_MS = 1_000;
 const WORKSPACE_RETRY_DELAY_MS = 250;
 const MCP_READINESS_CACHE_MS = 5 * 60 * 1000;
@@ -469,14 +470,18 @@ export function createController({
         : null).filter(Boolean)
       : null;
     let agentsError = "";
-    if (!Array.isArray(agents) || agents.length === 0 ||
-        agents.length !== doctorResult.data?.targets?.length) {
+    // Preset diagnostics cover only Claude/Codex. Agents also needs OpenCode
+    // and Pi, including their missing-CLI states for independent installation.
+    if (!Array.isArray(agents) || [...AGENT_CLIENTS].some((client) =>
+      !agents.some((agent) => agent?.client === client))) {
       const agentsResult = await runAgentctlJson(
         ["status", "all", "--json"],
         "agentctl status",
         { signal }
       );
-      agents = agentsResult.data;
+      if (Array.isArray(agentsResult.data) && agentsResult.data.length > 0) {
+        agents = agentsResult.data;
+      }
       agentsError = agentsResult.error;
     }
     agents = Array.isArray(agents)
@@ -1808,15 +1813,18 @@ export function createController({
           : result.error || `Codex account ${operation} failed.`
       };
     }
-    if (actionName === "agent-uninstall") {
+    if (actionName === "agent-install" || actionName === "agent-uninstall") {
       if (!AGENT_CLIENTS.has(agent)) throw new Error(`unsupported agent client: ${agent}`);
-      const args = ["uninstall", agent, "--yes"];
+      const installing = actionName === "agent-install";
+      const args = [installing ? "install" : "uninstall", agent, "--yes"];
       const command = controllerCommand(agentctl, args);
-      const result = await run(command.executable, command.args);
+      const result = await run(command.executable, command.args,
+        installing ? { timeoutMs: INSTALL_TIMEOUT_MS } : {});
       return {
         ok: result.code === 0,
         data: { agent },
-        detail: sanitizeOutput(result.stdout || result.stderr) ||
+        detail: sanitizeOutput(result.code === 0
+          ? result.stdout || result.stderr : result.stderr || result.stdout) ||
           (result.code === 0 ? "Done" : `Action failed with code ${result.code}`)
       };
     }

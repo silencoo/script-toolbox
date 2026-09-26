@@ -584,17 +584,7 @@ else
   validate_model_api "$MODELS_URL" "$VALIDATION_AUTH" "$KEY" "$MODEL"
 fi
 
-if command -v claude >/dev/null 2>&1; then
-  ok "Claude Code already installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
-else
-  info "Installing Claude Code through Anthropic's native installer..."
-  if ! curl -fsSL https://claude.ai/install.sh | bash || ! command -v claude >/dev/null 2>&1; then
-    warn "native install was unavailable; falling back to npm"
-    ensure_npm_cli claude @anthropic-ai/claude-code "Claude Code"
-  else
-    ok "Claude Code installed"
-  fi
-fi
+ensure_agent_cli claude
 
 mkdir -p "$SETTINGS_DIR"
 if [ ! -f "$SETTINGS_FILE" ]; then

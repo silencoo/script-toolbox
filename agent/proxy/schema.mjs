@@ -20,7 +20,7 @@ export const PROXY_LOCK_KIND = "agentctl-proxy-lock";
 export const PROVIDER_MODE = "provider";
 export const PASSTHROUGH_MODE = "openai_subscription_passthrough";
 export const OPENAI_SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
-export const OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH = "/backend-api/codex/realtime";
+export const OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH = "/backend-api/codex";
 
 export class ProxySchemaError extends Error {
   constructor(message) {
@@ -83,7 +83,7 @@ function validateCompaction(value, protocol, label = "proxy compaction") {
       typeof value.label !== "string" || value.label.length < 1 || value.label.length > 100 ||
       typeof value.responses_compact !== "boolean" ||
       (value.responses_compact &&
-       (protocol !== "openai_responses" || value.mode !== "remote_native"))) {
+       protocol !== "openai_responses")) {
     throw new ProxySchemaError(`${label} configuration is invalid`);
   }
   return value;
@@ -330,7 +330,7 @@ export function validateProxyState(value, instanceId = "") {
   validateCompaction(normalized.compaction, normalized.protocol, "proxy state compaction");
   if (normalized.local_base_url !== undefined) {
     if (normalized.mode !== PASSTHROUGH_MODE || typeof normalized.local_base_url !== "string" ||
-        !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+\/backend-api\/codex\/realtime$/.test(
+        !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+\/backend-api\/codex(?:\/realtime)?$/.test(
           normalized.local_base_url
         )) {
       throw new ProxySchemaError("proxy state local base URL is invalid");

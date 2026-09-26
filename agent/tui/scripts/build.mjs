@@ -8,7 +8,7 @@ const output = resolve(packageRoot, "dist", "toolbox-tui.mjs");
 
 await mkdir(dirname(output), { recursive: true });
 await build({
-  entryPoints: [resolve(packageRoot, "src", "toolbox-tui.jsx")],
+  entryPoints: [resolve(packageRoot, "src", "cli.mjs")],
   outfile: output,
   bundle: true,
   platform: "node",

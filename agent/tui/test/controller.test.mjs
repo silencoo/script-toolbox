@@ -1725,14 +1725,39 @@ test("Workspace refresh retries transient failures and keeps the last successful
   assert.match(stale.workspaceError, /could not reach/);
 });
 
-test("Agents actions keep only owned uninstall; Provider navigation stays inside the TUI", async () => {
+test("Agents includes OpenCode and Pi even when preset diagnostics cover only two clients", async () => {
+  const clients = ["claude", "codex", "opencode", "pi"];
+  const controller = createController({ agentRoot: "/agent", remoteWorkspace: {},
+    runner: async (_executable, args) => {
+      if (args.includes("doctor")) return { code: 0, stdout: JSON.stringify({
+        targets: clients.slice(0, 2).map((target) => ({ target, provider: { data: { client: target } } }))
+      }), stderr: "" };
+      if (args.join(" ") === "status all --json") return { code: 0, stdout: JSON.stringify(
+        clients.map((client) => ({ client, cli_installed: client === "codex" }))
+      ), stderr: "" };
+      return { code: 0, stdout: "{}", stderr: "" };
+    }
+  });
+  const snapshot = await controller.localSnapshot();
+  assert.deepEqual(snapshot.agents.map((agent) => agent.client), clients);
+  assert.equal(snapshot.agents.find((agent) => agent.client === "pi").cli_installed, false);
+});
+
+test("Agents install all four CLIs without a Provider and retain owned-config removal", async () => {
   const calls = [];
-  const runner = async (executable, args) => {
-    calls.push({ executable, args });
+  const runner = async (executable, args, options) => {
+    calls.push({ executable, args, options });
     if (args[0] === "account") return { code: 0, stdout: '{"ok":true}', stderr: "" };
     return { code: 0, stdout: "provider-a\nprovider-b\n", stderr: "" };
   };
   const controller = createController({ agentRoot: "/agent", runner, remoteWorkspace: {} });
+  for (const agent of ["claude", "codex", "opencode", "pi"]) {
+    const installed = await controller.action("agent-install", { agent });
+    assert.equal(installed.ok, true);
+    assert.deepEqual(calls.at(-1).args, ["install", agent, "--yes"]);
+    assert.equal(calls.at(-1).options.timeoutMs, 600_000);
+  }
+  await assert.rejects(() => controller.action("agent-install", { agent: "unknown" }), /unsupported agent client/);
   const removed = await controller.action("agent-uninstall", { agent: "claude" });
   assert.equal(removed.ok, true);
   assert.deepEqual(calls.at(-1).args, ["uninstall", "claude", "--yes"]);
@@ -1747,6 +1772,14 @@ test("Agents actions keep only owned uninstall; Provider navigation stays inside
     () => controller.action("agent-provider", { agent: "pi" }),
     /unsupported TUI action/
   );
+});
+
+test("CLI installation failures show the actionable error instead of progress output", async () => {
+  const controller = createController({ agentRoot: "/agent", remoteWorkspace: {},
+    runner: async () => ({ code: 1, stdout: "Installing...", stderr: "npm could not download package" }) });
+  const result = await controller.action("agent-install", { agent: "codex" });
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /could not download/);
 });
 
 test("Provider dashboard resolves exact target metadata without exposing Secret values", async () => {

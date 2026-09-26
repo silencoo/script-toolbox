@@ -585,7 +585,25 @@ export function resolveProviderProfile(profile, {
   return resolved;
 }
 
-export function effectiveProviderCompaction(resolved) {
+function officialOpenAiEndpoint(value) {
+  const endpoint = new URL(value);
+  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" &&
+    !endpoint.port && endpoint.pathname.replace(/\/$/, "") === "/v1" && !endpoint.search;
+}
+
+function azureResponsesProvider(resolved) {
+  return resolved.profile?.toLowerCase() === "azure" || [
+    "openai.azure.", "cognitiveservices.azure.", "aoai.azure.",
+    "azure-api.", "azurefd.", "windows.net/openai"
+  ].some((marker) => resolved.endpoint.toLowerCase().includes(marker));
+}
+
+export function codexProviderName(resolved, compaction) {
+  return compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint)
+    ? "OpenAI" : resolved.profile;
+}
+
+export function effectiveProviderCompaction(resolved, { mode = "direct" } = {}) {
   validateTarget(resolved.target, "compaction target");
   validateProtocol(resolved.protocol, "compaction protocol");
   const compaction = structuredClone(resolved.compaction || {
@@ -594,6 +612,13 @@ export function effectiveProviderCompaction(resolved) {
   });
   validateCompaction(compaction, "resolved compaction", { protocol: resolved.protocol });
 
+  const azureNative = resolved.target === "codex" && mode === "direct" &&
+    azureResponsesProvider(resolved);
+  if (azureNative && (compaction.policy === "local" || compaction.upstream !== "responses_v2")) {
+    return { ...compaction, mode: "unsupported", label: "Unavailable · Azure requires V2",
+      native: false, responses_compact: false,
+      issue: "Codex enables remote V2 for Azure; declare responses_v2 with auto/remote policy" };
+  }
   if (compaction.policy === "local") {
     return {
       ...compaction,
@@ -604,14 +629,14 @@ export function effectiveProviderCompaction(resolved) {
       issue: ""
     };
   }
-  if (["responses_v2", "responses_v1"].includes(compaction.upstream) &&
-      resolved.target === "codex") {
+  if (compaction.upstream === "responses_v2" && resolved.target === "codex" &&
+      mode === "direct" && (officialOpenAiEndpoint(resolved.endpoint) || azureNative)) {
     return {
       ...compaction,
       mode: "remote_native",
       label: "Remote · native",
       native: true,
-      responses_compact: true,
+      responses_compact: false,
       issue: ""
     };
   }
@@ -633,15 +658,15 @@ export function effectiveProviderCompaction(resolved) {
       label: "Unavailable · target unsupported",
       native: false,
       responses_compact: false,
-      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target}`
+      issue: `remote compaction '${compaction.upstream}' is not native for ${resolved.target} in ${mode} mode with this provider`
     };
   }
   return {
     ...compaction,
     mode: "client_local",
-    label: "Local · upstream unverified",
+    label: compaction.upstream === "none" ? "Local · upstream unverified" : "Local · client capability unavailable",
     native: false,
-    responses_compact: false,
+    responses_compact: compaction.upstream === "responses_v1",
     issue: ""
   };
 }

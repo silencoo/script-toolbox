@@ -8,6 +8,7 @@ import {
   actionForKey,
   actionLabel,
   actionNeedsConfirmation,
+  actionDetailLines,
   clampSelection,
   componentSummary,
   componentTargetState,
@@ -36,6 +37,21 @@ import {
   workspaceConfigured,
   workspacePresentation
 } from "../src/model.mjs";
+
+test("action logs keep completion and failure details when installer output is long", () => {
+  for (const ending of ["OK Claude Code ready: 2.1.283", "ERROR version check failed"]) {
+    const lines = ["Install Claude Code CLI", "Provider: later", ...Array.from({ length: 20 }, (_, i) => `Download step ${i}`), ending, "Next steps"];
+    const visible = actionDetailLines(lines.join("\r\n") + "\n");
+    assert.equal(visible.length, 8);
+    assert.deepEqual(visible.slice(0, 2), lines.slice(0, 2));
+    assert.equal(visible[2], "… 17 earlier log lines omitted …");
+    assert.deepEqual(visible.slice(-5), lines.slice(-5));
+    assert.ok(visible.includes(ending));
+  }
+  assert.deepEqual(actionDetailLines(""), []);
+  assert.deepEqual(actionDetailLines("  \n"), []);
+  assert.deepEqual(actionDetailLines("OK ready\nNext steps\n"), ["OK ready", "Next steps"]);
+});
 
 test("section navigation wraps and invalid sections fall back", () => {
   assert.equal(normalizeSection("mcp"), "mcp");
@@ -527,6 +543,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionForKey("agents", "p"), "agent-provider");
   assert.equal(actionForKey("agents", "\r"), "agent-provider");
   assert.equal(actionForKey("agents", "x"), "agent-uninstall");
+  assert.equal(actionForKey("agents", "i"), "agent-install");
   assert.equal(actionForKey("accounts", "a"), "account-use");
   assert.equal(actionForKey("accounts", "\r"), "account-use");
   assert.equal(actionForKey("accounts", "x"), "account-delete");
@@ -543,6 +560,7 @@ test("actions are scoped and writes require confirmation", () => {
   assert.equal(actionNeedsConfirmation("snippets-apply"), true);
   assert.equal(actionNeedsConfirmation("snippet-copy"), false);
   assert.equal(actionNeedsConfirmation("agent-uninstall"), true);
+  assert.equal(actionNeedsConfirmation("agent-install"), true);
   assert.equal(actionNeedsConfirmation("account-use"), true);
   assert.equal(actionNeedsConfirmation("account-delete"), true);
   assert.equal(actionNeedsConfirmation("provider-plan"), false);

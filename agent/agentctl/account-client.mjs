@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
@@ -18,6 +17,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { codexHome } from "../platform-paths.mjs";
+import { chatgptAccountId, readCodexCredentialStore, spawnCodex, validateCodexSnapshot } from "../codex-runtime.mjs";
 
 const SCHEMA = 1;
 const STORE_KIND = "agentctl-codex-account-store";
@@ -60,6 +61,9 @@ tokens are never printed. Switching refreshes the saved copy of the current
 account first and refuses to replace an unsaved or unrecognized live auth file.
 Account login runs Codex in an empty temporary CODEX_HOME, verifies the new
 official credential, saves it, and activates it without revoking the old login.
+An installed Codex CLI and effective file credential storage are required for
+mutations. Keyring/auto/ephemeral storage is reported but never changed.
+CODEX_HOME is honored unless --auth-file or AGENTCTL_CODEX_AUTH_FILE overrides it.
 `);
 }
 
@@ -71,7 +75,7 @@ export function accountDefaults({
     storePath: resolve(environment.AGENTCTL_ACCOUNT_STORE ||
       join(home, ".config", "agentctl", "codex-accounts")),
     authFile: resolve(environment.AGENTCTL_CODEX_AUTH_FILE ||
-      join(home, ".codex", "auth.json")),
+      join(codexHome({ environment, home }), "auth.json")),
     codexBin: environment.AGENTCTL_CODEX_BIN || "codex"
   };
 }
@@ -171,16 +175,8 @@ function parseAuth(bytes, label) {
   } catch {
     throw new AccountClientError(`${label} is not valid JSON`);
   }
-  const tokens = value && typeof value === "object" && !Array.isArray(value)
-    ? value.tokens
-    : null;
-  const accountId = tokens && typeof tokens === "object" && !Array.isArray(tokens)
-    ? tokens.account_id
-    : null;
-  const hasToken = tokens && ["access_token", "refresh_token", "id_token"]
-    .some((key) => typeof tokens[key] === "string" && tokens[key].length > 0);
-  if (value?.auth_mode !== "chatgpt" || typeof accountId !== "string" ||
-      accountId.length === 0 || accountId.length > 1024 || !hasToken) {
+  const accountId = chatgptAccountId(value);
+  if (!accountId) {
     throw new AccountClientError(
       `${label} is not a complete ChatGPT/Codex official login with an account ID`
     );
@@ -260,14 +256,18 @@ function publicAccount(account, activeFingerprint = "") {
 }
 
 async function accountStatus(options) {
+  let credentialStore = "unknown";
+  try { credentialStore = await readCodexCredentialStore(options); } catch {}
   const [active, accounts] = await Promise.all([
     inspectActive(options.authFile),
     loadAccounts(options.storePath)
   ]);
-  const activeFingerprint = active.record?.fingerprint || "";
+  const activeFingerprint = credentialStore === "file" ? active.record?.fingerprint || "" : "";
   const current = accounts.filter((account) => account.fingerprint === activeFingerprint)
     .map((account) => account.name);
-  const activeStatus = active.status === "official-login"
+  const activeStatus = credentialStore === "unknown" ? "credential-store-unavailable"
+    : credentialStore !== "file" ? "unsupported-credential-store"
+    : active.status === "official-login"
     ? current.length ? "saved" : "unsaved"
     : active.status;
   return {
@@ -276,11 +276,12 @@ async function accountStatus(options) {
     store: options.storePath,
     store_exists: await validateStore(options.storePath),
     auth_file: options.authFile,
+    credential_store: credentialStore,
     active: {
       status: activeStatus,
-      official_login: active.status === "official-login",
+      official_login: credentialStore === "file" && active.status === "official-login",
       saved_as: current[0] || null,
-      credential_private: active.record?.private === true
+      credential_private: credentialStore === "file" && active.record?.private === true
     },
     account_count: accounts.length,
     accounts: accounts.map((account) => publicAccount(account, activeFingerprint))
@@ -358,6 +359,7 @@ function mutationOutput(action, details, options) {
 async function saveAccount(name, options) {
   validateName(name);
   const prepare = async () => {
+    await requireFileCredentials(options);
     const active = await readAuth(options.authFile, "live Codex auth");
     const accounts = await loadAccounts(options.storePath);
     const existing = validateSnapshotDestination(name, active, accounts, options.force);
@@ -373,12 +375,30 @@ async function saveAccount(name, options) {
   if (!options.yes) return mutationOutput(action, details, options);
   await withStoreLock(options.storePath, async () => {
     const current = await prepare();
+    await verifySnapshot(current.active.bytes, options);
     await writeBytesAtomic(accountPath(options.storePath, name), current.active.bytes);
   });
   return mutationOutput(action, details, options);
 }
 
-function loginPreflight(options) {
+async function requireFileCredentials(options) {
+  let mode;
+  try { mode = await readCodexCredentialStore(options); }
+  catch (error) { throw new AccountClientError(error.message); }
+  if (mode !== "file") {
+    throw new AccountClientError(
+      `Codex uses '${mode}' credentials; account snapshots require cli_auth_credentials_store="file". No account files were changed`
+    );
+  }
+}
+
+async function verifySnapshot(bytes, options) {
+  try { await validateCodexSnapshot(bytes, options); }
+  catch (error) { throw new AccountClientError(error.message); }
+}
+
+async function loginPreflight(options) {
+  await requireFileCredentials(options);
   return Promise.all([
     inspectActive(options.authFile),
     loadAccounts(options.storePath)
@@ -411,9 +431,13 @@ function runIsolatedCodexLogin(options, codexHome) {
   const environment = { ...process.env, CODEX_HOME: codexHome };
   delete environment.CODEX_ACCESS_TOKEN;
   delete environment.OPENAI_API_KEY;
+  delete environment.CODEX_API_KEY;
+  delete environment.OPENAI_FEDERATION_RULE_ID;
+  delete environment.OPENAI_IDENTITY_TOKEN_FILE;
+  delete environment.OPENAI_WORKLOAD_IDENTITY_CONTEXT;
 
   return new Promise((resolveLogin, rejectLogin) => {
-    const child = spawn(executable, args, {
+    const child = spawnCodex(executable, args, {
       env: environment,
       stdio: options.json ? ["inherit", 2, 2] : "inherit",
       windowsHide: false
@@ -483,6 +507,7 @@ async function loginAccount(name, options) {
     if (process.platform !== "win32") await chmod(codexHome, 0o700);
     await runIsolatedCodexLogin(options, codexHome);
     staged = await readAuth(join(codexHome, "auth.json"), "isolated Codex login");
+    await verifySnapshot(staged.bytes, options);
 
     await withStoreLock(options.storePath, async () => {
       const currentState = await loginPreflight(options);
@@ -592,6 +617,7 @@ async function loginAccount(name, options) {
 async function useAccount(name, options) {
   validateName(name);
   const prepare = async () => {
+    await requireFileCredentials(options);
     const accounts = await loadAccounts(options.storePath);
     const target = accounts.find((account) => account.name === name);
     if (!target) throw new AccountClientError(`saved account not found: ${name}`);
@@ -629,6 +655,7 @@ async function useAccount(name, options) {
   if (!options.yes) return mutationOutput(action, details, options);
   await withStoreLock(options.storePath, async () => {
     const current = await prepare();
+    await verifySnapshot(current.alreadyCurrent ? current.active.record.bytes : current.target.bytes, options);
     if (current.active.record && current.current) {
       await writeBytesAtomic(
         accountPath(options.storePath, current.current.name),
@@ -649,6 +676,7 @@ async function useAccount(name, options) {
 async function deleteAccount(name, options) {
   validateName(name);
   const prepare = async () => {
+    await requireFileCredentials(options);
     const accounts = await loadAccounts(options.storePath);
     const target = accounts.find((account) => account.name === name);
     if (!target) throw new AccountClientError(`saved account not found: ${name}`);
@@ -678,6 +706,7 @@ function emitStatus(status, options, { listOnly = false } = {}) {
     return;
   }
   process.stdout.write(`Codex Accounts: ${status.account_count} saved\n`);
+  process.stdout.write(`Credential store: ${status.credential_store}\n`);
   process.stdout.write(`Active: ${status.active.saved_as || status.active.status}\n`);
   if (status.accounts.length === 0) {
     process.stdout.write("(no saved accounts)\n");

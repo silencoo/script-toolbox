@@ -431,7 +431,7 @@ else
   validate_model_api "$MODELS_URL" "$VALIDATION_AUTH" "$KEY" "$MODEL"
 fi
 
-ensure_npm_cli opencode opencode-ai "OpenCode"
+ensure_agent_cli opencode
 
 mkdir -p "$SETTINGS_DIR"
 migrate_legacy_file

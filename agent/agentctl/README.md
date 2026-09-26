@@ -19,8 +19,8 @@ background, browses cloud catalogs on demand, and can plan/apply one selected
 Provider, Profile, Pack, Prompt, or Preset without first restoring the whole
 Store. The Providers view distinguishes built-in/local/Workspace sources,
 reconciles one conflicting row at a time, and resolves Claude Code, Codex,
-OpenCode, and Pi independently. The Agents section
-opens that same Provider view or confirms removal of agentctl-owned
+OpenCode, and Pi independently. The Agents section installs CLIs with `i`,
+opens that same Provider view, or confirms removal of agentctl-owned
 configuration. Node.js 22 or newer is required. `agentctl interactive` provides
 a compact line-oriented view of the same catalog.
 
@@ -31,6 +31,26 @@ The same dashboard can be selected explicitly:
 ```
 
 ## Explicit commands
+
+Install a CLI before choosing a Provider or entering a key:
+
+```bash
+agentctl install claude                 # Preview only
+agentctl install claude --yes
+agentctl install codex --yes
+agentctl install opencode --yes
+agentctl install pi --yes
+```
+
+Each command installs only the requested CLI and verifies `--version`. Existing
+commands are kept. No Provider Store or API key is needed, and agentctl does not
+change client configuration, credentials, status-line, MCP, or Skills bindings.
+Claude uses the official native installer with an npm fallback; Codex, OpenCode,
+and Pi reuse their npm installation paths. Pi requires Node.js 22.19 or newer.
+Downloads and package-manager errors are reported without applying a Provider.
+Run the installed CLI to sign in, or select a Provider later. The guided Shell
+menu also offers this installation step; Agents in the TUI asks for confirmation
+after `i` and refreshes the installed status when finished.
 
 ```bash
 # Built-ins are visible immediately, even before a local Store exists.
@@ -125,8 +145,23 @@ the active home performs a server-side OAuth revocation first; copying the old
 `auth.json` cannot make that revoked refresh token valid again. The currently
 active official login must already have a saved label so agentctl can preserve
 it before switching.
+Account commands require an installed Codex CLI. They query its effective
+configuration, including system settings and managed requirements, before
+changing snapshots or the live login. Only `cli_auth_credentials_store = "file"`
+is supported: `keyring`, `auto`, `ephemeral`, or an unreadable configuration
+blocks mutations without reporting a successful switch. Status reports the
+credential store and does not mark file snapshots current for another backend.
+Legacy ChatGPT files without `auth_mode` are accepted when their complete token
+data is valid. Save/login/use also ask Codex to load the proposed snapshot in an
+isolated home before activation; this verifies local readability, not OAuth
+validity at the service.
 The Account Store is device-local by design and is separate from Provider
 backup/restore.
+
+Provider apply/uninstall, status, accounts, and proxy operations honor
+`CODEX_HOME`, falling back to `~/.codex`. Explicit account `--auth-file` /
+`AGENTCTL_CODEX_AUTH_FILE` and proxy `--codex-config` / `AGENTCTL_CODEX_CONFIG`
+overrides still take precedence for their respective commands.
 
 Per-client setup scripts are private render backends. Public selection, model
 choice, Secret import, installation, and switching all go through
@@ -165,7 +200,7 @@ support from what a client should do:
 upstream match; otherwise compaction stays local. The exact `openai-api` and
 `anthropic-api` built-ins carry native declarations. Custom and migrated
 third-party profiles default to `none/auto` until explicitly verified—accepting
-Responses traffic alone does not prove `/responses/compact` support.
+Responses traffic alone does not prove native remote compaction support.
 
 Provider profiles describe inference only. They do not contain or bind an
 official ChatGPT account. A Codex plan reports `official_identity.policy` as
@@ -285,10 +320,15 @@ Secret through a short-lived owner-only file and records only safe selection
 metadata in device-local state. Claude profile apply does not alter the
 separately managed status-line setting.
 
-For Codex, an exact official OpenAI profile with `responses_v1` or
-`responses_v2` in `auto`/`remote` mode is rendered with the `OpenAI` Provider
-name Codex recognizes, enabling its native remote compact request. `local`
-keeps the profile under its own name. Codex-specific thresholds such as
+For current Codex, an exact official OpenAI profile with `responses_v2` in
+`auto`/`remote` mode is rendered with the `OpenAI` Provider name Codex recognizes.
+Recognized Azure providers also support V2. Custom gateways and ordinary
+Provider proxies use client-local compaction under `auto`; forcing `remote`
+is rejected when the final Codex provider cannot enable it. `responses_v1`
+does not enable Codex's V2 compactor: V2 uses the Responses stream, not the
+legacy `/responses/compact` endpoint. `local` keeps OpenAI profiles under their
+own names; Codex-recognized Azure configurations cannot enforce local mode and
+are rejected unless verified V2 capability is declared. Codex-specific thresholds such as
 `model_auto_compact_token_limit` are not inferred from remote compaction
 capability.
 
@@ -466,7 +506,8 @@ and an attached observer cannot be stopped.
 
 `start` never edits Codex. `attach --yes` separately snapshots the exact
 `$CODEX_HOME/config.toml` bytes and mode, then inserts a marked top-level
-`model_provider = "openai"` plus the loopback `openai_base_url`. This keeps the
+`model_provider = "openai"`, the loopback `openai_base_url`, and a separate
+`experimental_realtime_ws_base_url`. This keeps the
 built-in OpenAI/ChatGPT authentication path; both HTTP and WebSocket Responses
 pass through the observable local first hop and then the official upstream.
 `detach --yes` restores the snapshot byte-for-byte when nothing else changed.
@@ -476,15 +517,16 @@ only when the proxy-managed block or owner-only backup changed, rather than
 discarding or overwriting ambiguous edits. `stop` likewise refuses until Codex
 is detached.
 
-The subscription attachment URL includes the synthetic local suffix
-`/backend-api/codex/realtime`. Codex uses the `/backend-api` marker to retain
-the ChatGPT backend request shape for App voice call creation; without it, the
-same account session emits the public-API multipart `POST /live`, which cannot
-be byte-forwarded to the ChatGPT backend. The proxy strips the local marker and
+The inference URL ends in `/backend-api/codex`, preserving Codex's backend
+capability checks. Realtime WebSockets use `/backend-api/codex/realtime`
+separately, so voice/live path normalization does not change the inference
+provider's capabilities. The proxy strips the local prefix and
 allowlists the resulting `POST /realtime/calls`, `POST /alpha/search`, Responses,
 and Realtime WebSocket routes before forwarding. This keeps Codex App voice and
 standalone web search working without introducing protocol conversion or a
-general-purpose forward proxy.
+general-purpose forward proxy. Existing user realtime overrides are backed up
+and restored on detach. Attachments made by older versions remain detachable;
+detach and attach again to adopt the corrected URLs.
 
 It binds only to loopback and accepts only the selected native protocol's
 allowlisted routes. The local base URL is reported after start: OpenAI

@@ -2,7 +2,18 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 
 function pathApi(platform) {
-  return platform === "win32" ? win32 : posix;
+  return platform === "win32" || platform === "windows" ? win32 : posix;
+}
+
+export function codexHome({
+  platform = process.platform,
+  environment = process.env,
+  home = homedir()
+} = {}) {
+  const paths = pathApi(platform);
+  return environment.CODEX_HOME
+    ? paths.resolve(environment.CODEX_HOME)
+    : paths.join(home, ".codex");
 }
 
 export function platformConfigHome({

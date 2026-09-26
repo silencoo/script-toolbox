@@ -16,7 +16,7 @@ while [ -L "$SOURCE_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 DEFAULT_AGENT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="0.17.9"
+VERSION="0.17.12"
 WORKSPACE_CLIENT="${SCRIPT_DIR}/workspace-client.mjs"
 ORCHESTRATOR_CLIENT="${SCRIPT_DIR}/orchestrator-client.mjs"
 PROVIDER_CLIENT="${SCRIPT_DIR}/provider-client.mjs"
@@ -41,6 +41,7 @@ Usage:
   agentctl interactive
   agentctl update [--check|--yes]
   agentctl bootstrap [--yes]
+  agentctl install <claude|codex|opencode|pi> [--yes] [--dry-run]
   agentctl status <claude|codex|opencode|pi|all> [--json]
   agentctl statusline <install|status|uninstall> [options]
   agentctl provider <command> [options]
@@ -54,6 +55,8 @@ Usage:
   agentctl doctor [claude|codex|all] [--target <target>] [--json]
 
 Commands:
+  install     Install a CLI now; configure its Provider or login later.
+              No API key is required. Without --yes, show the plan only.
   bootstrap   Initialize the local Provider, Failover, Pricing, MCP, and Skills
               Stores. Idempotent; does not configure a client or Workspace.
   status      Read CLI/provider configuration source and credential metadata,
@@ -369,10 +372,12 @@ status_set_metadata() {
       ;;
     codex)
       CLI_COMMAND="codex"
-      CONFIG_FILE_1="${HOME}/.codex/config.toml"
-      STATE_FILE="${HOME}/.codex/.script-toolbox-provider-key"
-      AUTH_FILE="${HOME}/.codex/auth.json"
-      CREDENTIAL_EXPECTED_PREFIX="${HOME}/.codex/provider-keys/"
+      local codex_root="${CODEX_HOME:-${HOME}/.codex}"
+      case "$codex_root" in /*|[A-Za-z]:[\\/]*) ;; *) codex_root="${PWD}/${codex_root}" ;; esac
+      CONFIG_FILE_1="${codex_root}/config.toml"
+      STATE_FILE="${codex_root}/.script-toolbox-provider-key"
+      AUTH_FILE="${AGENTCTL_CODEX_AUTH_FILE:-${codex_root}/auth.json}"
+      CREDENTIAL_EXPECTED_PREFIX="${codex_root}/provider-keys/"
       ;;
     opencode)
       CLI_COMMAND="opencode"
@@ -392,6 +397,7 @@ status_set_metadata() {
 }
 
 status_prepare_identity() {
+  local auth_metadata=""
   IDENTITY_STATUS="not-applicable"
   IDENTITY_KIND=""
   IDENTITY_PROVIDER=""
@@ -401,16 +407,20 @@ status_prepare_identity() {
   IDENTITY_CREDENTIAL_EXISTS=false
   IDENTITY_CREDENTIAL_MODE=""
   IDENTITY_CREDENTIAL_PRIVATE=false
+  IDENTITY_CREDENTIAL_STORE=""
 
   [ "$CLIENT_ID" = "codex" ] || return 0
   IDENTITY_STATUS="not-configured"
-  [ -f "$AUTH_FILE" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-
-  if jq -e '
-    .auth_mode == "chatgpt"
-    and ((.tokens // {}) | [.. | strings | select(length > 0)] | length > 0)
-  ' "$AUTH_FILE" >/dev/null 2>&1; then
+  command -v node >/dev/null 2>&1 || { IDENTITY_STATUS="credential-store-unavailable"; return 0; }
+  auth_metadata="$(node "${SCRIPT_DIR}/../codex-runtime.mjs" "$AUTH_FILE")"
+  IDENTITY_CREDENTIAL_STORE="$(printf '%s' "$auth_metadata" | jq -r '.credential_store // "unknown"')"
+  if [ "$IDENTITY_CREDENTIAL_STORE" != file ]; then
+    IDENTITY_STATUS="unsupported-credential-store"
+    [ "$IDENTITY_CREDENTIAL_STORE" != unknown ] || IDENTITY_STATUS="credential-store-unavailable"
+    return 0
+  fi
+  if printf '%s' "$auth_metadata" | jq -e '.official_login == true' >/dev/null 2>&1; then
     IDENTITY_STATUS="configured"
     IDENTITY_KIND="chatgpt"
     IDENTITY_PROVIDER="openai"
@@ -551,6 +561,7 @@ status_prepare() {
           CREDENTIAL_PRIVATE="$IDENTITY_CREDENTIAL_PRIVATE"
       elif [ "$OWNERSHIP_MARKER" != true ] &&
            { [ -z "$STATUS_PROVIDER" ] || [ "$STATUS_PROVIDER" = "openai" ]; } &&
+           [ "$IDENTITY_CREDENTIAL_STORE" = file ] &&
            [ -f "$AUTH_FILE" ] &&
            command -v jq >/dev/null 2>&1; then
         if jq -e '((.OPENAI_API_KEY // "") | length > 0)' \
@@ -771,6 +782,7 @@ status_emit_json() {
     --arg identity_provider "$IDENTITY_PROVIDER" \
     --arg identity_account "$IDENTITY_ACCOUNT" \
     --arg identity_source "$IDENTITY_SOURCE" \
+    --arg identity_credential_store "$IDENTITY_CREDENTIAL_STORE" \
     --arg identity_credential_file "$IDENTITY_CREDENTIAL_FILE" \
     --arg identity_credential_mode "$IDENTITY_CREDENTIAL_MODE" \
     --arg config_file_1 "$CONFIG_FILE_1" \
@@ -807,6 +819,7 @@ status_emit_json() {
           provider: (if $identity_provider == "" then null else $identity_provider end),
           account: (if $identity_account == "" then null else $identity_account end),
           source: $identity_source,
+          credential_store: (if $identity_credential_store == "" then null else $identity_credential_store end),
           credential_file: (
             if $identity_credential_file == "" then null else $identity_credential_file end
           ),
@@ -907,6 +920,13 @@ run_status() {
   fi
 }
 
+run_install() {
+  resolve_agent_root
+  local installer="${AGENT_ROOT}/install-client.sh"
+  [ -f "$installer" ] || die "CLI installer not found: $installer"
+  exec bash "$installer" "$@"
+}
+
 run_uninstall() {
   local requested="$1" assume_yes=0
   shift
@@ -957,6 +977,7 @@ run_interactive() {
     "status|Inspect client and provider status" \
     "workspace|Inspect the unified MCP / Skills / Prompts Workspace" \
     "uninstall|Remove managed provider configuration" \
+    "install|Install a CLI; configure its Provider later" \
     "exit|Exit without changes"
   action="$MENU_VALUE"
   if [ "$action" = "exit" ]; then
@@ -980,6 +1001,14 @@ run_interactive() {
       ;;
     uninstall)
       run_uninstall "$CLIENT_ID"
+      ;;
+    install)
+      bash "${AGENT_ROOT}/install-client.sh" "$CLIENT_ID"
+      if ask_yes_no "Install ${CLIENT_LABEL} CLI now?" "no"; then
+        run_install "$CLIENT_ID" --yes
+      else
+        log "[cancelled] no CLI was installed"
+      fi
       ;;
   esac
 }
@@ -1007,6 +1036,10 @@ case "${1:-}" in
   bootstrap)
     shift
     run_bootstrap "$@"
+    ;;
+  install)
+    shift
+    run_install "$@"
     ;;
   status)
     shift

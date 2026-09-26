@@ -359,17 +359,14 @@ function allowedRoute(protocol, method, pathname, {
 function projectPassthroughUrl(localUrl) {
   const projected = new URL(localUrl);
   const pathname = projected.pathname;
-  if (pathname === OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH) {
-    projected.pathname = "/realtime";
-    return projected;
-  }
-  if (pathname.startsWith(`${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}/`)) {
+  const legacyPrefix = `${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}/realtime/`;
+  // Existing attachments may still address the old inference prefix. Keep
+  // those requests working while new attachments use Codex's native prefix.
+  if (pathname.startsWith(legacyPrefix) &&
+      /^(?:responses(?:\/compact)?|models|realtime\/calls|alpha\/search)$/.test(pathname.slice(legacyPrefix.length))) {
+    projected.pathname = `/${pathname.slice(legacyPrefix.length)}`;
+  } else if (pathname.startsWith(`${OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH}/`)) {
     projected.pathname = pathname.slice(OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH.length);
-    return projected;
-  }
-  const livePath = OPENAI_SUBSCRIPTION_LOCAL_BASE_PATH.replace(/\/realtime$/, "/live");
-  if (pathname === livePath || pathname.startsWith(`${livePath}/`)) {
-    projected.pathname = pathname.slice(livePath.length - "/live".length);
   }
   return projected;
 }

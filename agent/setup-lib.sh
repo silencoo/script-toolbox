@@ -367,15 +367,55 @@ ensure_node() {
 
 ensure_npm_cli() {
   local command_name="$1" package_name="$2" display_name="$3"
-  ensure_node
   if command -v "$command_name" >/dev/null 2>&1; then
     ok "$display_name already installed ($("$command_name" --version 2>/dev/null || echo 'unknown version'))"
   else
+    ensure_node
     info "Installing ${package_name} globally..."
     npm install -g "$package_name"
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is not on PATH after npm install"
     ok "$display_name installed"
   fi
+}
+
+ensure_agent_cli() {
+  # Shared by Provider setup and install-only. This function never selects a
+  # Provider or writes client configuration, credentials, or ownership markers.
+  case "$1" in
+    claude)
+      if command -v claude >/dev/null 2>&1; then
+        ok "Claude Code already installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
+        return 0
+      fi
+      command -v curl >/dev/null 2>&1 || die "curl is required"
+      info "Installing Claude Code through Anthropic's native installer..."
+      if ! curl -fsSL https://claude.ai/install.sh | bash; then
+        warn "native install was unavailable; falling back to npm"
+        ensure_npm_cli claude @anthropic-ai/claude-code "Claude Code"
+      elif command -v claude >/dev/null 2>&1; then
+        ok "Claude Code installed"
+      elif [ -x "${HOME}/.local/bin/claude" ]; then
+        die "Claude Code was installed in ~/.local/bin; add that directory to PATH and re-run"
+      else
+        warn "native installer did not provide a Claude command; falling back to npm"
+        ensure_npm_cli claude @anthropic-ai/claude-code "Claude Code"
+      fi
+      ;;
+    codex) ensure_npm_cli codex @openai/codex "Codex CLI" ;;
+    opencode) ensure_npm_cli opencode opencode-ai "OpenCode" ;;
+    pi)
+      if command -v pi >/dev/null 2>&1; then
+        ok "Pi already installed ($(pi --version 2>/dev/null || echo 'unknown version'))"
+        return 0
+      fi
+      ensure_node 22 19
+      info "Installing @earendil-works/pi-coding-agent globally..."
+      npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+      command -v pi >/dev/null 2>&1 || die "pi is not on PATH after npm install"
+      ok "Pi installed"
+      ;;
+    *) die "unsupported CLI: $1" ;;
+  esac
 }
 
 derive_models_url() {

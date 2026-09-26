@@ -476,12 +476,12 @@ test("proxy route and URL projection is protocol-bounded", () => {
   assert.equal(allowedPassthroughWebSocketRoute("/live/not-a-call"), false);
 
   const projectedResponse = projectPassthroughUrl(new URL(
-    "http://127.0.0.1:17321/backend-api/codex/realtime/responses?stream=true"
+    "http://127.0.0.1:17321/backend-api/codex/responses?stream=true"
   ));
   assert.equal(projectedResponse.pathname, "/responses");
   assert.equal(projectedResponse.search, "?stream=true");
   const projectedCall = projectPassthroughUrl(new URL(
-    "http://127.0.0.1:17321/backend-api/codex/realtime/realtime/calls?intent=quicksilver"
+    "http://127.0.0.1:17321/backend-api/codex/realtime/calls?intent=quicksilver"
   ));
   assert.equal(projectedCall.pathname, "/realtime/calls");
   const projectedWebSocket = projectPassthroughUrl(new URL(
@@ -492,6 +492,9 @@ test("proxy route and URL projection is protocol-bounded", () => {
     "ws://127.0.0.1:17321/backend-api/codex/live/rtc_voice-1"
   ));
   assert.equal(projectedLive.pathname, "/live/rtc_voice-1");
+  assert.equal(projectPassthroughUrl(new URL(
+    "http://127.0.0.1:17321/backend-api/codex/realtime/responses"
+  )).pathname, "/responses");
 
   const responses = joinUpstream(
     "https://api.example.com/v1?api-version=2026-01-01",
@@ -1109,7 +1112,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
       "--alias", "model-a=vendor-model-a",
       "--auth-mode", "bearer",
       "--secret", "upstream_key",
-      "--compaction-upstream", "responses_v2",
+      "--compaction-upstream", "responses_v1",
       ...providerArgs(root), "--yes"
     ]);
     const keyFile = join(root, "upstream-key");
@@ -1146,8 +1149,18 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(preview.auth.secret, "upstream_key");
     assert.equal(preview.models.requested_default, "model-a");
     assert.equal(preview.models.outbound_default, "vendor-model-a");
-    assert.equal(preview.compaction.mode, "remote_native");
+    assert.equal(preview.compaction.mode, "client_local");
     assert.equal(preview.compaction.responses_compact, true);
+    const storeBeforeForcedRemote = await readFile(join(root, "config", "providers.json"), "utf8");
+    const forcedRemoteStore = JSON.parse(storeBeforeForcedRemote);
+    forcedRemoteStore.profiles["local-responses"].compaction.policy = "remote";
+    await writeFile(join(root, "config", "providers.json"), JSON.stringify(forcedRemoteStore));
+    const forcedPlan = JSON.parse(run(PROXY_CLIENT, [
+      "plan", "local-responses", "--target", "codex", ...commonProxy, "--json"
+    ], { status: 1 }).stdout);
+    assert.equal(forcedPlan.ready, false);
+    assert.match(forcedPlan.issue, /not native/);
+    await writeFile(join(root, "config", "providers.json"), storeBeforeForcedRemote);
     assert.equal(preview.pricing.version, "2026.08-test");
     assert.equal(JSON.stringify(preview).includes("REAL-UPSTREAM-SECRET"), false);
 
@@ -1174,7 +1187,7 @@ test("proxy lifecycle forwards native Responses securely and keeps metadata body
     assert.equal(running.observability.usage_log.healthy, true);
     assert.equal(running.observability.circuit_state.last_error, null);
     assert.equal(running.pricing_model_source, "response");
-    assert.equal(running.compaction.mode, "remote_native");
+    assert.equal(running.compaction.mode, "client_local");
     assert.deepEqual(running.configuration, { restart_required: false, changed: [] });
     assert.equal(running.admission.max_requests, 64);
     assert.equal(running.admission.active_requests, 0);
@@ -1750,6 +1763,7 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     '# user config must return byte-for-byte',
     'model_provider = "previous-provider"',
     'openai_base_url = "https://previous.invalid"',
+    'experimental_realtime_ws_base_url = "wss://previous.invalid/realtime"',
     'approval_policy = "on-request"',
     '',
     '[model_providers.previous-provider]',
@@ -1773,7 +1787,7 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     assert.equal(plan.mode, "openai_subscription_passthrough");
     assert.equal(
       plan.local_base_url,
-      `http://127.0.0.1:${proxyPort}/backend-api/codex/realtime`
+      `http://127.0.0.1:${proxyPort}/backend-api/codex`
     );
     assert.equal(plan.auth.mode, "openai_passthrough");
     assert.equal(plan.models.requested_default, "unchanged");
@@ -2005,10 +2019,14 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
     assert.match(attachedText, /model_provider = "openai"/);
     assert.match(attachedText, new RegExp(
       `openai_base_url = "http:\\/\\/127\\.0\\.0\\.1:${proxyPort}` +
-      `\\/backend-api\\/codex\\/realtime"`
+      `\\/backend-api\\/codex"`
     ));
     assert.equal(attachedText.includes('model_provider = "previous-provider"'), false);
     assert.equal(attachedText.includes('openai_base_url = "https://previous.invalid"'), false);
+    assert.ok(attachedText.includes(
+      `experimental_realtime_ws_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex/realtime"`
+    ));
+    assert.equal(attachedText.includes('wss://previous.invalid/realtime'), false);
     assert.equal(attachedText.includes('[model_providers.previous-provider]'), true);
     assert.deepEqual(
       await readFile(join(root, "proxy", "codex-config.backup.toml")),
@@ -2076,13 +2094,34 @@ test("OpenAI subscription passthrough is byte-preserving and detach preserves Co
       { code: "ENOENT" }
     );
 
+    // An attachment written by 0.17.9 must remain safely detachable after upgrade.
+    run(PROXY_CLIENT, ["attach", ...commonProxy, "--yes", "--json"]);
+    const attachmentPath = join(root, "proxy", "attachment.json");
+    const legacyState = JSON.parse(await readFile(attachmentPath, "utf8"));
+    legacyState.local_base_url += "/realtime";
+    const legacyBlock = [
+      '# >>> agentctl proxy attach >>>',
+      '# Pure observation: Codex keeps official ChatGPT authentication; only the base URL changes.',
+      'model_provider = "openai"',
+      `openai_base_url = "${legacyState.local_base_url}"`,
+      '# <<< agentctl proxy attach <<<'
+    ].join("\n");
+    const legacyRetained = originalWithAppEdit.toString("utf8")
+      .replace(/^model_provider = .*\n/m, "").replace(/^openai_base_url = .*\n/m, "");
+    const legacyText = `${legacyBlock}\n${legacyRetained}`;
+    legacyState.attached_sha256 = createHash("sha256").update(legacyText).digest("hex");
+    await writeFile(attachmentPath, JSON.stringify(legacyState), { mode: 0o600 });
+    await writeFile(codexConfig, legacyText);
+    run(PROXY_CLIENT, ["detach", ...commonProxy, "--yes", "--json"]);
+    assert.deepEqual(await readFile(codexConfig), originalWithAppEdit);
+
     run(PROXY_CLIENT, ["attach", ...commonProxy, "--yes", "--json"]);
     let reattachedText = await readFile(codexConfig, "utf8");
     await writeFile(
       codexConfig,
       reattachedText.replace(
-        `openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex/realtime"`,
-        `#openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex/realtime"`
+        `openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex"`,
+        `#openai_base_url = "http://127.0.0.1:${proxyPort}/backend-api/codex"`
       )
     );
     const statusAfterEmergencyDisable = JSON.parse(run(PROXY_CLIENT, [

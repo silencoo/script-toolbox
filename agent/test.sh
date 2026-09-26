@@ -714,6 +714,13 @@ else
   fail=1
 fi
 
+if "$SCRIPT_DIR/tests/install-client-test.sh"; then
+  :
+else
+  echo "FAIL: independent CLI installation tests" >&2
+  fail=1
+fi
+
 if "$SCRIPT_DIR/agentctl/test.sh"; then
   :
 else
@@ -752,7 +759,8 @@ fi
 if node --test \
   "$SCRIPT_DIR/module-entry.test.mjs" \
   "$SCRIPT_DIR/platform-command.test.mjs" \
-  "$SCRIPT_DIR/platform-paths.test.mjs"; then
+  "$SCRIPT_DIR/platform-paths.test.mjs" \
+  "$SCRIPT_DIR/codex-compat.test.mjs"; then
   :
 else
   echo "FAIL: cross-platform Bash controller launcher tests" >&2

@@ -19,6 +19,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isMainModule } from "../module-entry.mjs";
+import { codexHome } from "../platform-paths.mjs";
 import {
   ProviderSchemaError,
   effectiveProviderCompaction,
@@ -187,7 +188,7 @@ export function proxyDefaults({
     ? legacyStateRoot
     : join(legacyStateRoot, "instances", instance);
   const configRoot = dirname(providers.storePath);
-  const codexRoot = environment.CODEX_HOME || join(home, ".codex");
+  const codexRoot = codexHome({ environment, home, platform });
   const envPort = Number(environment.AGENTCTL_PROXY_PORT || instancePort(instance));
   return {
     ...providers,
@@ -479,6 +480,9 @@ function codexManagedBlock(localBaseUrl, newline) {
     "# Pure observation: Codex keeps official ChatGPT authentication; only the base URL changes.",
     'model_provider = "openai"',
     `openai_base_url = ${JSON.stringify(localBaseUrl)}`,
+    ...(/\/backend-api\/codex$/.test(localBaseUrl)
+      ? [`experimental_realtime_ws_base_url = ${JSON.stringify(`${localBaseUrl}/realtime`)}`]
+      : []),
     ATTACH_END
   ].join(newline);
 }
@@ -491,12 +495,15 @@ function disabledCodexManagedBlock(localBaseUrl, newline, separator = "") {
   );
 }
 
-function topLevelManagedAssignments(text) {
+function topLevelManagedAssignments(text, localBaseUrl) {
   const assignments = [];
+  const keys = /\/backend-api\/codex$/.test(localBaseUrl)
+    ? /^\s*(?:model_provider|openai_base_url|experimental_realtime_ws_base_url)\s*=/
+    : /^\s*(?:model_provider|openai_base_url)\s*=/;
   let inTable = false;
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     if (/^\s*\[/.test(line)) inTable = true;
-    if (!inTable && /^\s*(?:model_provider|openai_base_url)\s*=/.test(line)) {
+    if (!inTable && keys.test(line)) {
       assignments.push({ index, line });
     }
   }
@@ -518,7 +525,7 @@ function inspectCodexManagedBlock(bytes, localBaseUrl) {
   const prefix = `${candidate.block}${newline}`;
   const retained = text.slice(prefix.length);
   if (retained.includes(ATTACH_START) || retained.includes(ATTACH_END) ||
-      topLevelManagedAssignments(retained).length) {
+      topLevelManagedAssignments(retained, localBaseUrl).length) {
     return { intact: false, reason: "managed_settings_duplicated" };
   }
   return {
@@ -530,9 +537,9 @@ function inspectCodexManagedBlock(bytes, localBaseUrl) {
   };
 }
 
-function restoreOriginalManagedAssignments(originalText, retainedText, newline) {
+function restoreOriginalManagedAssignments(originalText, retainedText, newline, localBaseUrl) {
   const originalLines = originalText.split(/\r?\n/);
-  const managed = topLevelManagedAssignments(originalText);
+  const managed = topLevelManagedAssignments(originalText, localBaseUrl);
   if (!managed.length) return retainedText;
 
   const managedIndexes = new Set(managed.map(({ index }) => index));
@@ -587,7 +594,8 @@ function mergeCodexDetach(originalBytes, attachedBytes, currentBytes, localBaseU
   return Buffer.from(restoreOriginalManagedAssignments(
     originalText,
     managed.retained,
-    managed.newline
+    managed.newline,
+    localBaseUrl
   ), "utf8");
 }
 
@@ -614,11 +622,9 @@ function renderCodexAttachment(original, localBaseUrl) {
     );
   }
   const newline = codexConfigNewline(text);
-  let inTable = false;
-  const retained = text.split(/\r?\n/).filter((line) => {
-    if (/^\s*\[/.test(line)) inTable = true;
-    return inTable || !/^\s*(?:model_provider|openai_base_url)\s*=/.test(line);
-  }).join(newline).replace(/^\s+/, "");
+  const managedIndexes = new Set(topLevelManagedAssignments(text, localBaseUrl).map(({ index }) => index));
+  const retained = text.split(/\r?\n/).filter((_, index) => !managedIndexes.has(index))
+    .join(newline).replace(/^\s+/, "");
   const managed = codexManagedBlock(localBaseUrl, newline);
   return Buffer.from(`${managed}${newline}${retained}`, "utf8");
 }
@@ -636,7 +642,7 @@ function validateAttachment(value) {
       typeof value.proxy_instance_id !== "string" ||
       !/^[a-f0-9-]{36}$/.test(value.proxy_instance_id) ||
       typeof value.local_base_url !== "string" ||
-      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+(?:\/backend-api\/codex\/realtime)?$/.test(value.local_base_url) ||
+      !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):[0-9]+(?:\/backend-api\/codex(?:\/realtime)?)?$/.test(value.local_base_url) ||
       typeof value.config_file !== "string" || !isAbsolute(value.config_file) ||
       typeof value.backup_file !== "string" || !isAbsolute(value.backup_file) ||
       typeof value.config_existed !== "boolean" ||
@@ -1869,7 +1875,7 @@ async function buildPlan(profileName, options) {
   const backends = resolvedBackends.map((resolved) => {
     const secretPresent = resolved.auth.mode === "none" ||
       Boolean(secrets.secrets[resolved.auth.secret]);
-    const compaction = effectiveProviderCompaction(resolved);
+    const compaction = effectiveProviderCompaction(resolved, { mode: "proxy" });
     return {
       profile: resolved.profile,
       endpoint: resolved.endpoint,
@@ -1899,16 +1905,14 @@ async function buildPlan(profileName, options) {
     (forcedRemote && !responsesCompact && !messagesNative
       ? "failover route cannot guarantee the forced remote compaction capability"
       : "");
-  const compaction = responsesCompact
-    ? { mode: "remote_native", label: "Remote · native", responses_compact: true }
-    : messagesNative
+  const compaction = messagesNative
       ? { mode: "messages_native", label: "Messages · Anthropic beta", responses_compact: false }
       : {
           mode: "client_local",
           label: nativeModes.size > 1
             ? "Local · route capability not uniform"
             : backends[0].compaction.label,
-          responses_compact: false
+          responses_compact: responsesCompact
         };
   const issue = compatibility || compactionIssue || (missing.length
     ? `local Secrets are missing for ${missing.join(", ")}`

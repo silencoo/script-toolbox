@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, posix, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { codexHome } from "../platform-paths.mjs";
 
 import {
   PROVIDER_TARGETS,
+  codexProviderName,
   effectiveProviderCompaction,
   normalizeRuntimePlatform,
   validatePlatform,
@@ -56,13 +58,6 @@ function authArgument(mode) {
 function loopbackEndpoint(value) {
   const host = new URL(value).hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-}
-
-function officialOpenAiEndpoint(value) {
-  const endpoint = new URL(value);
-  return endpoint.protocol === "https:" && endpoint.hostname === "api.openai.com" &&
-    endpoint.port === "" && endpoint.pathname.replace(/\/$/, "") === "/v1" &&
-    endpoint.search === "";
 }
 
 function compatibilityIssue(resolved) {
@@ -138,7 +133,8 @@ function targetPathApi(platform) {
 
 export function targetPaths(target, {
   home = homedir(),
-  platform = normalizeRuntimePlatform()
+  platform = normalizeRuntimePlatform(),
+  environment = process.env
 } = {}) {
   validateTarget(target);
   const targetPath = targetPathApi(platform);
@@ -156,7 +152,7 @@ export function targetPaths(target, {
     };
   }
   if (target === "codex") {
-    const root = targetPath.join(home, ".codex");
+    const root = codexHome({ home, platform, environment });
     const keyDir = targetPath.join(root, "provider-keys");
     return {
       root,
@@ -236,10 +232,8 @@ export function renderProviderPlan(resolved, {
   const needsSecret = resolved.auth.mode !== "none";
   const secretReady = !needsSecret || secretPresent;
   const compatible = !issue;
-  const providerName = resolved.target === "codex" &&
-      compaction.mode === "remote_native" && officialOpenAiEndpoint(resolved.endpoint)
-    ? "OpenAI"
-    : resolved.profile;
+  const providerName = resolved.target === "codex"
+    ? codexProviderName(resolved, compaction) : resolved.profile;
   return {
     schema: 1,
     profile: resolved.profile,

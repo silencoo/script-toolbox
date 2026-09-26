@@ -24,6 +24,15 @@ export function targetLabel(target) {
   return String(target || "Unknown");
 }
 
+// Keep the beginning for context and the end for completion/error diagnostics.
+export function actionDetailLines(detail) {
+  const text = String(detail || "").trim();
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= 8) return lines;
+  return [...lines.slice(0, 2), `… ${lines.length - 7} earlier log lines omitted …`, ...lines.slice(-5)];
+}
+
 export function normalizeSection(value) {
   return SECTIONS.some((section) => section.id === value) ? value : "overview";
 }
@@ -664,6 +673,7 @@ export function proxyPresentation(proxy = {}, { officialSubscription = false } =
 
 export function actionForKey(section, input) {
   if (section === "agents") {
+    if (input === "i") return "agent-install";
     if (input === "p" || input === "c" || input === "\r") return "agent-provider";
     if (input === "x") return "agent-uninstall";
   }
@@ -701,6 +711,7 @@ export function actionForKey(section, input) {
 
 export function actionNeedsConfirmation(action) {
   return action === "apply" || action === "rollback" || action === "agent-uninstall" ||
+    action === "agent-install" ||
     action === "account-use" || action === "account-delete" ||
     action === "mcp-repair" || action === "mcp-enable" || action === "mcp-disable" ||
     action === "mcp-batch" || action === "mcp-profile-save" || action === "mcp-profile-update" ||
@@ -717,6 +728,7 @@ export function actionNeedsConfirmation(action) {
 
 export function actionLabel(action, selection, target) {
   if (action === "agent-provider") return `Manage ${selection || "agent"} Provider`;
+  if (action === "agent-install") return `Install ${targetLabel(selection)} CLI`;
   if (action === "agent-uninstall") return `Remove owned ${selection || "agent"} configuration`;
   if (action === "account-use") return `Switch Codex official account to ${selection || "account"}`;
   if (action === "account-delete") return `Delete saved Codex account ${selection || "account"}`;

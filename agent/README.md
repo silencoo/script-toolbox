@@ -48,6 +48,10 @@ The public controllers can be called directly:
 
 ```bash
 ./agentctl/agentctl
+./agentctl/agentctl install claude --yes
+./agentctl/agentctl install codex --yes
+./agentctl/agentctl install opencode --yes
+./agentctl/agentctl install pi --yes
 ./mcpctl/mcpctl
 ./promptctl/promptctl
 ./skillsctl/skillsctl --help
@@ -61,6 +65,10 @@ The public controllers can be called directly:
 ./agentctl/agentctl proxy usage --summary
 ./agentctl/agentctl workspace agent status
 ```
+
+The `install` command installs only a CLI; keys, login, and Provider settings
+can be configured afterward. Omit `--yes` to preview. In the TUI, select a client
+in Agents and press `i` to install it.
 
 Node.js 22 or newer powers the shared Ink 7 / React 19 terminal dashboard and
 the controllers' structured orchestration clients. Run any controller without
