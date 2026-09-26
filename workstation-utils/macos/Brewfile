@@ -7,6 +7,8 @@
 
 # workstation-package|core|cask|keepassxc|KeePassXC|required
 cask "keepassxc" if false
+# workstation-package|core|cask|vscodium|VSCodium|required
+cask "vscodium" if false
 # workstation-package|core|brew|sevenzip|7-Zip CLI|required
 brew "sevenzip" if false
 # workstation-package|core|brew|zstd|Zstandard CLI|required

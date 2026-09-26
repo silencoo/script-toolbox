@@ -38,7 +38,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap a Windows 10/11 development workstation and manage WSL 2 |
 | [`sunshine-vdd-setup/`](./sunshine-vdd-setup/SKILL.md) | Plan, configure, troubleshoot, and verify Sunshine + Moonlight setups using MTT VDD |
-| [`workstation-utils/`](./workstation-utils/) | Install and explicitly uninstall profile-based everyday utilities on Windows and macOS |
+| [`workstation-utils/`](./workstation-utils/) | Install desktop applications on Debian 13, Windows, and macOS; utility uninstall menus on Windows/macOS |
 | [`ghostty/`](./ghostty/) | Install Ghostty on macOS/Linux and configure SSH-safe shell integration |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
@@ -200,6 +200,7 @@ bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/insta
 ./ghostty/tests/setup-test.sh
 ./ghostty/tests/ssh-terminfo-test.sh
 ./workstation-utils/tests/macos-test.sh
+python3 -m unittest discover -s workstation-utils/tests -p 'test_linux.py' -v
 python3 mihomo-console/test_manager.py
 python3 -m py_compile linux-server-toolkit/tools/user-agent-capture-server.py
 python3 sing-box/generate-client-config.py --help

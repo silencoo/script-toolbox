@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "core": {
+      "description": "Browser, editor, passwords, local transfer, and image viewing",
+      "packages": ["firefox", "vscodium", "keepassxc", "localsend", "loupe"]
+    },
+    "desktop": {
+      "description": "Local transfer, chat, and image viewing",
+      "packages": ["localsend", "discord", "loupe"]
+    },
+    "admin": {
+      "description": "Moonlight streaming client",
+      "packages": ["moonlight"]
+    },
+    "apps": {
+      "description": "Application set used by desktop-dotfiles",
+      "packages": ["firefox", "vscodium", "localsend", "keepassxc", "moonlight", "discord", "loupe"]
+    }
+  },
+  "packages": {
+    "firefox": {"name": "Firefox ESR", "manager": "apt", "id": "firefox-esr"},
+    "vscodium": {"name": "VSCodium", "manager": "flatpak", "id": "com.vscodium.codium"},
+    "localsend": {"name": "LocalSend", "manager": "flatpak", "id": "org.localsend.localsend_app"},
+    "keepassxc": {"name": "KeePassXC", "manager": "flatpak", "id": "org.keepassxc.KeePassXC"},
+    "moonlight": {"name": "Moonlight", "manager": "flatpak", "id": "com.moonlight_stream.Moonlight"},
+    "discord": {"name": "Discord", "manager": "flatpak", "id": "com.discordapp.Discord"},
+    "loupe": {"name": "Loupe", "manager": "flatpak", "id": "org.gnome.Loupe"}
+  }
+}

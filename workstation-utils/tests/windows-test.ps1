@@ -61,6 +61,7 @@ if ($config.SchemaVersion -ne 1) {
 }
 
 foreach ($requiredProfile in @(
+    'apps',
     'core',
     'media',
     'maintenance',
@@ -119,6 +120,32 @@ if ($coreMedia -notmatch 'M2Team\.NanaZip' -or
     $coreMedia -notmatch 'yt-dlp\.yt-dlp' -or
     $coreMedia -notmatch 'mikf\.gallery-dl') {
   Stop-Test 'Combined core/media plan omitted a required package.'
+}
+
+$expectedApps = @(
+  'Mozilla.Firefox', 'VSCodium.VSCodium', 'LocalSend.LocalSend',
+  'KeePassXCTeam.KeePassXC', 'MoonlightGameStreamingProject.Moonlight',
+  'Discord.Discord'
+)
+if (@(Compare-Object $expectedApps @($config.Profiles.apps.Packages)).Count -ne 0 -or
+    @($config.Profiles.apps.OptionalPackages).Count -ne 0) {
+  Stop-Test 'The apps profile must preserve exactly the migrated application set.'
+}
+$appPlan = Invoke-SetupForTest -Arguments @('plan', '-Profiles', 'apps')
+$appDryRun = Invoke-SetupForTest -Arguments @('install', '-Profiles', 'apps', '-DryRun', '-Yes')
+foreach ($id in $expectedApps) {
+  if ($appPlan -notmatch [regex]::Escape($id) -or
+      $appDryRun -notmatch [regex]::Escape("winget install --id $id --exact")) {
+    Stop-Test "Migrated application missing from plan/install preview: $id"
+  }
+}
+$composed = Invoke-SetupForTest -Arguments @('plan', '-Profiles', 'apps,core,admin')
+if ([regex]::Matches($composed, '(?m)^\s{2}LocalSend\.LocalSend\s').Count -ne 1) {
+  Stop-Test 'Composed apps/core plan did not deduplicate LocalSend.'
+}
+$profilesList = Invoke-SetupForTest -Arguments @('list')
+if ($profilesList -notmatch '(?m)^\s{2}apps\s') {
+  Stop-Test 'The profile list omitted apps.'
 }
 
 $maintenance = Invoke-SetupForTest -Arguments @(

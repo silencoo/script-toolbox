@@ -1,6 +1,6 @@
 # Utility catalog
 
-This catalog records the choices made by the platform installers. Package
+This catalog records the choices made by the platform installers. Initial package
 identifiers were checked against the WinGet community manifests and the
 Homebrew Formulae API on 2026-08-04.
 
@@ -8,11 +8,38 @@ Built-in operating-system tools are preferred when they already cover the
 need. An entry marked **optional** is installed only when the caller explicitly
 adds `-IncludeOptional` on Windows or `--include-optional` on macOS.
 
+## Desktop application set (Linux / Windows)
+
+The `apps` profile preserves the applications formerly installed by
+`desktop-dotfiles`. Linux uses [`linux/packages.json`](../linux/packages.json);
+Windows uses [`windows/packages.psd1`](../windows/packages.psd1).
+
+| Application | Debian 13 package / Flatpak ID | Windows WinGet ID |
+| --- | --- | --- |
+| Firefox | APT `firefox-esr` | `Mozilla.Firefox` |
+| VSCodium | `com.vscodium.codium` | `VSCodium.VSCodium` |
+| LocalSend | `org.localsend.localsend_app` | `LocalSend.LocalSend` |
+| KeePassXC | `org.keepassxc.KeePassXC` | `KeePassXCTeam.KeePassXC` |
+| Moonlight | `com.moonlight_stream.Moonlight` | `MoonlightGameStreamingProject.Moonlight` |
+| Discord | `com.discordapp.Discord` | `Discord.Discord` |
+| Loupe | `org.gnome.Loupe` | — |
+
+Linux `core` selects Firefox, VSCodium, KeePassXC, LocalSend, and Loupe;
+`desktop` selects LocalSend, Discord, and Loupe; `admin` selects Moonlight.
+The remaining tables describe the broader Windows/macOS utility profiles.
+Windows `apps` adds VSCodium alongside the separate `windows-dev-setup` catalog's
+VS Code choice. Application preferences and i3 integration stay in
+`desktop-dotfiles`; the installers here only manage software installation.
+
+Package-manager behavior: [APT](https://manpages.debian.org/trixie/apt/apt-get.8.en.html)
+and [Flatpak](https://docs.flatpak.org/en/latest/flatpak-command-reference.html).
+
 ## Core
 
 | Purpose | Windows | macOS |
 | --- | --- | --- |
 | Password management | KeePassXC (`KeePassXCTeam.KeePassXC`) | KeePassXC (`keepassxc`) |
+| Text/code editor | VS Code via `windows-dev-setup` | VSCodium (`vscodium`) |
 | GUI archives | NanaZip (`M2Team.NanaZip`) | Keka (`keka`) |
 | Archive CLI | Zstandard (`Meta.Zstandard`) | 7-Zip (`sevenzip`) and Zstandard (`zstd`) |
 | Disk usage | WinDirStat (`WinDirStat.WinDirStat`) | GrandPerspective (`grandperspective`) |

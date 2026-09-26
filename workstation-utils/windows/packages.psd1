@@ -2,6 +2,19 @@
   SchemaVersion = 1
 
   Profiles = @{
+    apps = @{
+      Description = 'Browser, editor, transfer, passwords, streaming client, and chat'
+      Packages = @(
+        'Mozilla.Firefox'
+        'VSCodium.VSCodium'
+        'LocalSend.LocalSend'
+        'KeePassXCTeam.KeePassXC'
+        'MoonlightGameStreamingProject.Moonlight'
+        'Discord.Discord'
+      )
+      OptionalPackages = @()
+    }
+
     core = @{
       Description = 'Everyday security, archives, search, transfer, viewing, and layout'
       Packages = @(
@@ -89,6 +102,18 @@
   }
 
   Packages = @{
+    'Mozilla.Firefox' = @{
+      Name = 'Firefox'
+      Purpose = 'Web browser'
+    }
+    'VSCodium.VSCodium' = @{
+      Name = 'VSCodium'
+      Purpose = 'Text and code editor'
+    }
+    'Discord.Discord' = @{
+      Name = 'Discord'
+      Purpose = 'Chat'
+    }
     'KeePassXCTeam.KeePassXC' = @{
       Name = 'KeePassXC'
       Purpose = 'Local password management'

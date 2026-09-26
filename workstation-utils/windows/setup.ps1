@@ -287,6 +287,7 @@ function Import-SetupConfig {
 function Show-Profiles {
   Write-Section "Workstation utilities for Windows $($script:ScriptVersion)"
   foreach ($profileName in @(
+      'apps',
       'core',
       'media',
       'maintenance',
