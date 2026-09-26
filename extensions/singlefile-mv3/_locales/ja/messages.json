@@ -187,6 +187,14 @@
 		"message": "オプション（設定）",
 		"description": "Options page title"
 	},
+	"optionsNewWindowLink": {
+		"message": "オプションを新しいタブで開く",
+		"description": "Accessible label of the icon opening the options in a new tab"
+	},
+	"optionsEditorLink": {
+		"message": "オプションエディターを開く",
+		"description": "Accessible label of the icon opening the options editor"
+	},
 	"optionsUserInterfaceSubTitle": {
 		"message": "ユーザーインターフェイス（表示）",
 		"description": "Options sub-title: 'User interface'"
@@ -222,6 +230,10 @@
 	"optionOpenInfobar": {
 		"message": "インフォバーを開いておく",
 		"description": "Options page label: 'keep infobar open'"
+	},
+	"optionAnimateInfobar": {
+		"message": "インフォバーをアニメーションさせる",
+		"description": "Options page label: 'animate the infobar'"
 	},
 	"optionRemoveInfobarSavedDate": {
 		"message": "保存日時を含めない",
@@ -267,6 +279,46 @@
 		"message": "置換文字",
 		"description": "Options page label: 'replacement character'"
 	},
+	"optionFilenameReplacements": {
+		"message": "ファイル名で置換される文字",
+		"description": "Options page label: 'characters replaced in file names'"
+	},
+	"optionsFilenameReplacedCharacters": {
+		"message": "文字",
+		"description": "Options page column label in the replaced characters table: 'Character(s)'"
+	},
+	"optionsFilenameReplacementCharacters": {
+		"message": "置換後の文字",
+		"description": "Options page column label in the replaced characters table: 'Replaced with'"
+	},
+	"optionsFilenameReplacedCharactersPlaceholder": {
+		"message": "文字を入力します（例「:」）",
+		"description": "Placeholder in the replaced characters table: 'Type a character (e.g. \":\")'"
+	},
+	"optionsAddFilenameReplacementTooltip": {
+		"message": "文字を追加する",
+		"description": "Popup text 'Add the character' in the options page"
+	},
+	"optionsDeleteFilenameReplacementTooltip": {
+		"message": "この文字の置換をやめる",
+		"description": "Popup text 'Stop replacing this character' in the options page"
+	},
+	"optionsFilenameReplacementsResetButton": {
+		"message": "デフォルトの文字に戻す",
+		"description": "Button label 'Restore default characters' in the options page"
+	},
+	"optionsFilenameReplacementsPreviewFilename": {
+		"message": "テスト用のファイル名",
+		"description": "Options page column label in the preview table: 'Test a file name'"
+	},
+	"optionsFilenameReplacementsPreviewResult": {
+		"message": "結果",
+		"description": "Options page column label in the preview table: 'Result'"
+	},
+	"optionsFilenameReplacementsPreviewPlaceholder": {
+		"message": "ファイル名を入力します",
+		"description": "Placeholder in the preview table: 'Type a file name'"
+	},
 	"optionReplaceEmojisInFilename": {
 		"message": "絵文字をテキストに置き換える",
 		"description": "Options page label: 'replace emojis with text'"
@@ -276,7 +328,7 @@
 		"description": "Options page label: 'save the filename template data into the page'"
 	},
 	"optionConfirmFilename": {
-		"message": "を開く（として保存する：ファイル名を確認するためのダイアログ）",
+		"message": "「名前を付けて保存」ダイアログを開いてファイル名を確認する",
 		"description": "Options page label: 'open the \"Save as\" dialog to confirm the file name'"
 	},
 	"optionFilenameConflictAction": {
@@ -383,6 +435,10 @@
 		"message": "画像",
 		"description": "Options sub-title: 'Images'"
 	},
+	"optionsDeferredContentSubTitle": {
+		"message": "遅延コンテンツ",
+		"description": "Options sub-title: 'Deferred content'"
+	},
 	"optionGroupDuplicateImages": {
 		"message": "オプション重複画像のグループ化",
 		"description": "Options page label: 'group duplicate images together'"
@@ -391,25 +447,25 @@
 		"message": "画像の縮小係数",
 		"description": "Options page label: 'image reduction factor'"
 	},
-	"optionLoadDeferredImages": {
-		"message": "遅延画像を保存する",
-		"description": "Options page label: 'save deferred images'"
+	"optionLoadDeferredContent": {
+		"message": "スクロール時に読み込まれるコンテンツを保存する",
+		"description": "Options page label: 'save content loaded while scrolling'"
 	},
-	"optionLoadDeferredImagesMaxIdleTime": {
+	"optionLoadDeferredContentMaxIdleTime": {
 		"message": "最大アイドル時間（ミリ秒）",
 		"description": "Options page label: 'maximum idle time (ms)'"
 	},
-	"optionLoadDeferredImagesKeepZoomLevel": {
-		"message": "ページを縮小する",
-		"description": "Options page label: 'zoom out the page'"
+	"optionLoadDeferredContentKeepZoomLevel": {
+		"message": "保存中にページを縮小する",
+		"description": "Options page label: 'zoom out the page during the capture'"
 	},
-	"optionLoadDeferredImagesDispatchScrollEvent": {
-		"message": "「スクロール」イベントを発行する",
-		"description": "Options page label: 'dispatch \"scroll\" event'"
+	"optionLoadDeferredContentDispatchScrollEvent": {
+		"message": "スクロールをシミュレートする",
+		"description": "Options page label: 'simulate scrolling'"
 	},
-	"optionLoadDeferredImagesBeforeFrames": {
-		"message": "遅延フレームを読み込む",
-		"description": "Options page label: 'load deferred frames'"
+	"optionLoadDeferredContentBeforeFrames": {
+		"message": "先にフレーム内で読み込む",
+		"description": "Options page label: 'load in frames first'"
 	},
 	"optionRemoveAlternativeImages": {
 		"message": "代替画面解像度用の画像を削除します",
@@ -505,7 +561,7 @@
 	},
 	"optionsAutoSettingsSubTitle": {
 		"message": "自動設定のルール",
-		"description": "Options sub-title: 'Auto-settings rules'"
+		"description": "Options sub-title: the table of rules that pick a profile automatically from the URL of the page being saved"
 	},
 	"optionsDeleteDisplayedRulesConfirm": {
 		"message": "表示されているすべてのルールの削除を確認します",
@@ -517,27 +573,27 @@
 	},
 	"optionsAutoSettingsUrl": {
 		"message": "URL",
-		"description": "Options label in the Auto-settings rules: 'URL'"
+		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
-		"message": "完全または部分的な URL を入力します (例 example.com)",
-		"description": "Placeholder in the Auto-settings rules: 'Type a complete or partial URL (e.g. example.com)'"
+		"message": "完全または部分的な URL を入力します（例 example.com）",
+		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
 		"message": "プロファイル",
-		"description": "Options label in the Auto-settings rules: 'Profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved manually. It is a noun, the name of a profile, not an instruction to save"
 	},
 	"optionsAutoSettingsAutoSaveProfile": {
-		"message": "プロファイルの自動保存",
-		"description": "Options label in the Auto-settings rules: 'Auto-save profile'"
+		"message": "自動保存用プロファイル",
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved automatically. It is a noun phrase, 'the profile used for auto-saving', never 'automatically save the profile'"
 	},
 	"optionsAutoSettingsShowAllProfiles": {
 		"message": "すべてのプロファイルを表示します",
-		"description": "Options label in the Auto-settings rules: 'display all profiles'"
+		"description": "Checkbox label under the Auto-settings rules table: list the rules of every profile instead of only those of the profile selected above"
 	},
 	"optionsAutoSettingsShowAutoSaveProfile": {
-		"message": "「プロファイルの自動保存」列を表示する",
-		"description": "Options label in the Auto-settings rules: 'display 'Auto-save profile' column'"
+		"message": "「自動保存用プロファイル」列を表示する",
+		"description": "Checkbox label under the Auto-settings rules table: show or hide the 'Auto-save profile' column. The quoted name must match the translation of optionsAutoSettingsAutoSaveProfile"
 	},
 	"optionsUpdateRuleTooltip": {
 		"message": "ルールを更新する",
@@ -725,6 +781,10 @@
 		"message": "コンテンツセキュリティポリシーを設定する",
 		"description": "Options page label: 'set content security policy'"
 	},
+	"optionInsertCanonicalLink": {
+		"message": "ページの正規リンクを保存する",
+		"description": "Options page label: 'save the canonical link of the page'"
+	},
 	"optionSaveToClipboard": {
 		"message": "クリップボードに保存する",
 		"description": "Options page label: 'copy to clipboard'"
@@ -893,9 +953,9 @@
 		"message": "インポート",
 		"description": "Options button: 'Import'"
 	},
-	"logPanelDeferredImages": {
-		"message": "遅延画像",
-		"description": "Label 'Deferred images' in the log panel"
+	"logPanelDeferredContent": {
+		"message": "遅延コンテンツ",
+		"description": "Label 'Deferred content' in the log panel"
 	},
 	"logPanelFrameContents": {
 		"message": "フレームの内容",
@@ -911,7 +971,11 @@
 	},
 	"logPanelWidth": {
 		"message": "115",
-		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredImages')"
+		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
+	},
+	"maskCancelButton": {
+		"message": "キャンセル (Esc)",
+		"description": "Button 'Cancel (Esc)' in the mask displayed while a page is being saved"
 	},
 	"topPanelError": {
 		"message": "SingleFile エラー: ",
@@ -1045,6 +1109,10 @@
 		"message": "MHTMLファイルをインポート",
 		"description": "Title of the button 'Import MHTML file' in the editor"
 	},
+	"editorArchiveToc": {
+		"message": "目次",
+		"description": "Title of the table of contents button displayed in the editor when viewing a multi-page archive"
+	},
 	"pendingsTitle": {
 		"message": "保留中の保存",
 		"description": "Title of the pending save page 'Pending saves' in the editor"
@@ -1079,7 +1147,7 @@
 	},
 	"pendingsNoPendings": {
 		"message": "保留中の保存はありません",
-		"description": "Label displayed when they are no pending saves"
+		"description": "Label displayed when there are no pending saves"
 	},
 	"pendingsAddUrlsButton": {
 		"message": "URL を追加",
@@ -1103,7 +1171,7 @@
 	},
 	"batchSaveUrlsNoURLs": {
 		"message": "URL がありません",
-		"description": "Label displayed when they are no URLs"
+		"description": "Label displayed when there are no URLs"
 	},
 	"batchSaveUrlsAddUrlButton": {
 		"message": "URL を追加",
@@ -1160,5 +1228,277 @@
 	"optionsEditorInvalidJSON": {
 		"message": "無効な JSON",
 		"description": "Options editor error message: 'Invalid JSON'"
+	},
+	"optionsMenusSubTitle": {
+		"message": "メニュー",
+		"description": "Options sub-title: 'Menus'"
+	},
+	"optionMenusEditor": {
+		"message": "メニューに表示するエントリとその順序を選択する（すべてのプロファイルで共通）",
+		"description": "Options page label: 'choose the entries displayed in the menus and their order (shared by all profiles)'"
+	},
+	"optionMenusEditorLink": {
+		"message": "メニューエディターを開く...",
+		"description": "Options page link: 'Open the menu editor...'"
+	},
+	"optionMenusDefault": {
+		"message": "デフォルトのメニュー",
+		"description": "Options page state: 'default menus'"
+	},
+	"optionMenusCustomized": {
+		"message": "カスタマイズされたメニュー",
+		"description": "Options page state: 'customized menus'"
+	},
+	"menuSubmenu": {
+		"message": "サブメニュー",
+		"description": "Menu editor entry: 'Submenu'"
+	},
+	"menuSeparator": {
+		"message": "区切り線",
+		"description": "Menu editor entry: 'Separator'"
+	},
+	"menusTitle": {
+		"message": "メニューエディター",
+		"description": "Menu editor title"
+	},
+	"menusSubTitle": {
+		"message": "SingleFile の各メニューに表示するエントリとその順序を選択します。この設定はすべてのプロファイルで共通です。",
+		"description": "Menu editor sub-title"
+	},
+	"menusSurfaceLabel": {
+		"message": "メニュー",
+		"description": "Menu editor label of the menu selector"
+	},
+	"menusSurfacePage": {
+		"message": "ページのコンテキストメニュー",
+		"description": "Menu editor menu name: 'Page context menu'"
+	},
+	"menusSurfaceButton": {
+		"message": "ボタンのメニュー",
+		"description": "Menu editor menu name: 'Button menu'"
+	},
+	"menusSurfaceTab": {
+		"message": "タブのメニュー",
+		"description": "Menu editor menu name: 'Tab menu'"
+	},
+	"menusUseForAllButton": {
+		"message": "すべてのメニューに適用",
+		"description": "Menu editor button: 'Use for all menus'"
+	},
+	"menusUseForAllTooltip": {
+		"message": "他のメニューをこのメニューで置き換えます",
+		"description": "Menu editor tooltip of the 'Use for all menus' button"
+	},
+	"menusUseForAllStatus": {
+		"message": "すべてのメニューがこれらのエントリを使用するようになりました。",
+		"description": "Menu editor status after using a layout for all menus"
+	},
+	"menusContextPage": {
+		"message": "ページ",
+		"description": "Menu editor context: 'Page'"
+	},
+	"menusContextSelection": {
+		"message": "選択範囲",
+		"description": "Menu editor context: 'Selection'"
+	},
+	"menusContextFrame": {
+		"message": "フレーム",
+		"description": "Menu editor context: 'Frame'"
+	},
+	"menusContextLink": {
+		"message": "リンク",
+		"description": "Menu editor context: 'Link'"
+	},
+	"menusHintPage": {
+		"message": "ページを右クリックしたときに表示されます。グレー表示のエントリは、選択したコンテキストには表示されません。",
+		"description": "Menu editor hint of the page context menu"
+	},
+	"menusHintButton": {
+		"message": "ツールバーの SingleFile ボタンを右クリックしたときに表示されます。",
+		"description": "Menu editor hint of the button menu"
+	},
+	"menusHintTab": {
+		"message": "タブを右クリックしたときに表示されます。",
+		"description": "Menu editor hint of the tab menu"
+	},
+	"menusAddLabel": {
+		"message": "追加",
+		"description": "Menu editor label of the entry selector"
+	},
+	"menusAddButton": {
+		"message": "追加",
+		"description": "Menu editor button: 'Add'"
+	},
+	"menusEditHint": {
+		"message": "新しいエントリは、選択したエントリの後、または選択したサブメニューの中に追加されます。ドラッグして並べ替え、サブメニューにドロップして入れ子にし、ラベルをダブルクリックして名前を変更し、Delete キーを押して削除します。",
+		"description": "Menu editor hint about editing"
+	},
+	"menusDynamicBadge": {
+		"message": "動的",
+		"description": "Menu editor badge of the entries managed by SingleFile"
+	},
+	"menusRemoveTooltip": {
+		"message": "このメニューから削除",
+		"description": "Menu editor tooltip of the remove button"
+	},
+	"menusActionLimitLine": {
+		"message": "最初の $1 件のエントリのみ表示されます",
+		"description": "Menu editor line marking the entries hidden by the browser in the button menu"
+	},
+	"menusActionLimitNote": {
+		"message": "ブラウザーがボタンのメニューに表示する最上位のエントリは最大 $1 件です。",
+		"description": "Menu editor note about the limit of top-level entries in the button menu"
+	},
+	"menusActionLimitLineWrapped": {
+		"message": "Firefox は以下のエントリを「SingleFile」サブメニューに移動します",
+		"description": "Menu editor line marking the entries Firefox moves into an automatic submenu in the button menu"
+	},
+	"menusActionLimitNoteWrapped": {
+		"message": "Firefox はボタンのメニューに最上位のエントリを最初の $1 件だけ残し、残りを「SingleFile」サブメニューに移動します。",
+		"description": "Menu editor note about Firefox moving the extra top-level entries of the button menu into an automatic submenu"
+	},
+	"menusWrapButton": {
+		"message": "残りをサブメニューにまとめる",
+		"description": "Menu editor button: 'Wrap the rest in a submenu'"
+	},
+	"menusMoreSubmenu": {
+		"message": "その他...",
+		"description": "Menu editor default label of the submenu created to wrap the hidden entries"
+	},
+	"menusInspectorEmpty": {
+		"message": "メニュー内のエントリを選択すると、ラベルの変更、プロファイルへの関連付け、表示するタイミングの選択ができます。",
+		"description": "Menu editor text when no entry is selected"
+	},
+	"menusInspectorSeparator": {
+		"message": "区切り線です。ドラッグして移動し、Delete キーを押して削除します。",
+		"description": "Menu editor text when a separator is selected"
+	},
+	"menusLabelField": {
+		"message": "ラベル",
+		"description": "Menu editor field: 'Label'"
+	},
+	"menusLabelHelp": {
+		"message": "空のままにすると標準のラベルが使用されます。Windows と Linux では、文字の前に & を付けると、その文字がキーボードアクセラレーターになります。",
+		"description": "Menu editor help of the 'Label' field"
+	},
+	"menusProfileField": {
+		"message": "プロファイル",
+		"description": "Menu editor field: 'Profile'"
+	},
+	"menusProfileNone": {
+		"message": "ページで使用中のプロファイル",
+		"description": "Menu editor option when no profile is bound to the entry"
+	},
+	"menusProfileHelp": {
+		"message": "このエントリをプロファイルに関連付けると、現在のプロファイルに関係なく、ワンクリックでそのプロファイルを使って保存できます。",
+		"description": "Menu editor help of the 'Profile' field"
+	},
+	"menusPresentationField": {
+		"message": "表示形式",
+		"description": "Menu editor field: 'Presentation'"
+	},
+	"menusPresentationSubmenu": {
+		"message": "「プロファイルでページを保存する」サブメニューを 1 つ表示",
+		"description": "Menu editor presentation option: submenu"
+	},
+	"menusPresentationInline": {
+		"message": "プロファイルごとに 1 つのエントリを直接表示",
+		"description": "Menu editor presentation option: inline"
+	},
+	"menusPresentationHelp": {
+		"message": "このリストはオプションで定義されたプロファイルに従います。一部のプロファイルのみを表示するには、代わりにそれらに関連付けた「ページを保存」エントリを追加してください。",
+		"description": "Menu editor help of the 'Presentation' field"
+	},
+	"menusContentsField": {
+		"message": "内容",
+		"description": "Menu editor field: 'Contents'"
+	},
+	"menusContentsHelp": {
+		"message": "このエントリは SingleFile が管理するラジオグループです。移動や名前の変更はできますが、選択肢の編集はできません。",
+		"description": "Menu editor help of the 'Contents' field"
+	},
+	"menusContextsField": {
+		"message": "右クリック時に表示する対象",
+		"description": "Menu editor field: 'Appears when right-clicking'"
+	},
+	"menusAltLabelHelp": {
+		"message": "カスタムラベルがない場合、ページに適用されるときはメニューに「$1」と表示されます。",
+		"description": "Menu editor help about the alternative label of an entry"
+	},
+	"menusSubmenuField": {
+		"message": "サブメニュー",
+		"description": "Menu editor field: 'Submenu'"
+	},
+	"menusSubmenuHelp": {
+		"message": "$1 件のエントリ。この行にエントリをドロップすると追加できます。",
+		"description": "Menu editor help of the 'Submenu' field"
+	},
+	"menusRemoveButton": {
+		"message": "このメニューから削除",
+		"description": "Menu editor button: 'Remove from this menu'"
+	},
+	"menusPageOnly": {
+		"message": "「$1」はページのコンテキストメニューにのみ存在します。",
+		"description": "Menu editor status when an entry is not allowed in a menu"
+	},
+	"menusJsonLabel": {
+		"message": "JSON 形式のメニュー",
+		"description": "Menu editor section: 'Layout as JSON'"
+	},
+	"menusJsonApplyButton": {
+		"message": "適用",
+		"description": "Menu editor button: 'Apply'"
+	},
+	"menusJsonInvalid": {
+		"message": "無効な JSON",
+		"description": "Menu editor status: 'Invalid JSON'"
+	},
+	"menusJsonIgnored": {
+		"message": "適用しましたが、無効な $1 件のエントリは無視されました。",
+		"description": "Menu editor status after applying JSON that contained entries which are not valid (unknown action, wrong shape)"
+	},
+	"menusUnsupportedBadge": {
+		"message": "非対応",
+		"description": "Menu editor badge of the entries the current browser cannot show"
+	},
+	"menusUnsupportedActionHelp": {
+		"message": "このブラウザーはこのエントリに対応していないため、表示されません。",
+		"description": "Menu editor note for an entry the current browser cannot show"
+	},
+	"menusProfileMissingHelp": {
+		"message": "プロファイル「$1」は存在しなくなったため、このエントリではページで使用中のプロファイルが使われます。",
+		"description": "Menu editor note for an entry bound to a deleted profile"
+	},
+	"menusEmptySubmenuHelp": {
+		"message": "このサブメニューには表示可能なエントリがないため、表示されません。",
+		"description": "Menu editor note for a submenu whose entries are all skipped"
+	},
+	"menusResetButton": {
+		"message": "デフォルトに戻す",
+		"description": "Menu editor button: 'Reset to default'"
+	},
+	"menusResetConfirm": {
+		"message": "デフォルトのメニューに戻しますか？",
+		"description": "Menu editor confirmation before restoring the default menus"
+	},
+	"menusSaveError": {
+		"message": "メニューを保存できませんでした：$1",
+		"description": "Menu editor status when saving the layout fails (for example the sync storage quota)"
+	},
+	"menusUnsupported": {
+		"message": "このブラウザーは拡張機能のメニューに対応していないため、ここでカスタマイズできるものはありません。",
+		"description": "Menu editor message shown instead of the editor when the browser has no menus API (for example on Android)"
+	},
+	"menusProfilesBadge": {
+		"message": "プロファイル 2 つ以上必要",
+		"description": "Menu editor badge of the entries that only appear when more than one profile exists"
+	},
+	"menusProfilesHelp": {
+		"message": "このエントリは、プロファイルが 2 つ以上あるときにのみ表示されます。",
+		"description": "Menu editor note for the entries that only appear when more than one profile exists"
+	},
+	"menusContextHelp": {
+		"message": "このエントリは、選択したコンテキスト（$1）には表示されません。",
+		"description": "Menu editor note for an entry whose contexts exclude the context selected above the list"
 	}
 }

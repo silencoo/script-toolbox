@@ -187,6 +187,14 @@
 		"message": "Opções",
 		"description": "Options page title"
 	},
+	"optionsNewWindowLink": {
+		"message": "Abrir as opções num novo separador",
+		"description": "Accessible label of the icon opening the options in a new tab"
+	},
+	"optionsEditorLink": {
+		"message": "Abrir o editor de opções",
+		"description": "Accessible label of the icon opening the options editor"
+	},
 	"optionsUserInterfaceSubTitle": {
 		"message": "Interface do utilizador",
 		"description": "Options sub-title: 'User interface'"
@@ -222,6 +230,10 @@
 	"optionOpenInfobar": {
 		"message": "manter o infobar aberto",
 		"description": "Options page label: 'keep infobar open'"
+	},
+	"optionAnimateInfobar": {
+		"message": "animar a barra de informações",
+		"description": "Options page label: 'animate the infobar'"
 	},
 	"optionRemoveInfobarSavedDate": {
 		"message": "não incluir a data em que foi guardada",
@@ -266,6 +278,46 @@
 	"optionFilenameReplacementCharacter": {
 		"message": "caractere de substituição",
 		"description": "Options page label: 'replacement character'"
+	},
+	"optionFilenameReplacements": {
+		"message": "caracteres substituídos nos nomes de ficheiro",
+		"description": "Options page label: 'characters replaced in file names'"
+	},
+	"optionsFilenameReplacedCharacters": {
+		"message": "Caractere(s)",
+		"description": "Options page column label in the replaced characters table: 'Character(s)'"
+	},
+	"optionsFilenameReplacementCharacters": {
+		"message": "Substituído por",
+		"description": "Options page column label in the replaced characters table: 'Replaced with'"
+	},
+	"optionsFilenameReplacedCharactersPlaceholder": {
+		"message": "Introduzir um caractere (p. ex., \":\")",
+		"description": "Placeholder in the replaced characters table: 'Type a character (e.g. \":\")'"
+	},
+	"optionsAddFilenameReplacementTooltip": {
+		"message": "Adicionar o caractere",
+		"description": "Popup text 'Add the character' in the options page"
+	},
+	"optionsDeleteFilenameReplacementTooltip": {
+		"message": "Deixar de substituir este caractere",
+		"description": "Popup text 'Stop replacing this character' in the options page"
+	},
+	"optionsFilenameReplacementsResetButton": {
+		"message": "Repor os caracteres predefinidos",
+		"description": "Button label 'Restore default characters' in the options page"
+	},
+	"optionsFilenameReplacementsPreviewFilename": {
+		"message": "Testar um nome de ficheiro",
+		"description": "Options page column label in the preview table: 'Test a file name'"
+	},
+	"optionsFilenameReplacementsPreviewResult": {
+		"message": "Resultado",
+		"description": "Options page column label in the preview table: 'Result'"
+	},
+	"optionsFilenameReplacementsPreviewPlaceholder": {
+		"message": "Introduzir um nome de ficheiro",
+		"description": "Placeholder in the preview table: 'Type a file name'"
 	},
 	"optionReplaceEmojisInFilename": {
 		"message": "substituir emojis por texto",
@@ -383,6 +435,10 @@
 		"message": "Imagens",
 		"description": "Options sub-title: 'Images'"
 	},
+	"optionsDeferredContentSubTitle": {
+		"message": "Conteúdo diferido",
+		"description": "Options sub-title: 'Deferred content'"
+	},
 	"optionGroupDuplicateImages": {
 		"message": "agrupar imagens duplicadas",
 		"description": "Options page label: 'group duplicate images together'"
@@ -391,25 +447,25 @@
 		"message": "fator de redução do tamanho da imagem",
 		"description": "Options page label: 'image reduction factor'"
 	},
-	"optionLoadDeferredImages": {
-		"message": "guardar imagens diferidas",
-		"description": "Options page label: 'save deferred images'"
+	"optionLoadDeferredContent": {
+		"message": "guardar o conteúdo carregado ao deslocar",
+		"description": "Options page label: 'save content loaded while scrolling'"
 	},
-	"optionLoadDeferredImagesMaxIdleTime": {
+	"optionLoadDeferredContentMaxIdleTime": {
 		"message": "tempo máximo de inatividade (ms)",
 		"description": "Options page label: 'maximum idle time (ms)'"
 	},
-	"optionLoadDeferredImagesKeepZoomLevel": {
-		"message": "diminuir o zoom da página",
-		"description": "Options page label: 'zoom out the page'"
+	"optionLoadDeferredContentKeepZoomLevel": {
+		"message": "diminuir o zoom da página durante a gravação",
+		"description": "Options page label: 'zoom out the page during the capture'"
 	},
-	"optionLoadDeferredImagesDispatchScrollEvent": {
-		"message": "enviar evento \"scroll\"",
-		"description": "Options page label: 'dispatch \"scroll\" event'"
+	"optionLoadDeferredContentDispatchScrollEvent": {
+		"message": "simular o deslocamento",
+		"description": "Options page label: 'simulate scrolling'"
 	},
-	"optionLoadDeferredImagesBeforeFrames": {
-		"message": "carregar frames diferidos",
-		"description": "Options page label: 'load deferred frames'"
+	"optionLoadDeferredContentBeforeFrames": {
+		"message": "carregar primeiro nos frames",
+		"description": "Options page label: 'load in frames first'"
 	},
 	"optionRemoveAlternativeImages": {
 		"message": "remover imagens para resoluções de ecrã alternativas",
@@ -505,7 +561,7 @@
 	},
 	"optionsAutoSettingsSubTitle": {
 		"message": "Regras de configuração automática",
-		"description": "Options sub-title: 'Auto-settings rules'"
+		"description": "Options sub-title: the table of rules that pick a profile automatically from the URL of the page being saved"
 	},
 	"optionsDeleteDisplayedRulesConfirm": {
 		"message": "Confirmar a eliminação de todas as regras apresentadas",
@@ -517,27 +573,27 @@
 	},
 	"optionsAutoSettingsUrl": {
 		"message": "URL",
-		"description": "Options label in the Auto-settings rules: 'URL'"
+		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
 		"message": "Introduzir um URL completo ou parcial (p. ex., exemplo-pagina.com)",
-		"description": "Placeholder in the Auto-settings rules: 'Type a complete or partial URL (e.g. example.com)'"
+		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
 		"message": "Perfil",
-		"description": "Options label in the Auto-settings rules: 'Profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved manually. It is a noun, the name of a profile, not an instruction to save"
 	},
 	"optionsAutoSettingsAutoSaveProfile": {
-		"message": "Guardar perfil automaticamente",
-		"description": "Options label in the Auto-settings rules: 'Auto-save profile'"
+		"message": "Perfil de gravação automática",
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved automatically. It is a noun phrase, 'the profile used for auto-saving', never 'automatically save the profile'"
 	},
 	"optionsAutoSettingsShowAllProfiles": {
 		"message": "mostrar todos os perfis",
-		"description": "Options label in the Auto-settings rules: 'display all profiles'"
+		"description": "Checkbox label under the Auto-settings rules table: list the rules of every profile instead of only those of the profile selected above"
 	},
 	"optionsAutoSettingsShowAutoSaveProfile": {
-		"message": "mostrar a coluna 'Guardar perfil automaticamente'",
-		"description": "Options label in the Auto-settings rules: 'display 'Auto-save profile' column'"
+		"message": "mostrar a coluna 'Perfil de gravação automática'",
+		"description": "Checkbox label under the Auto-settings rules table: show or hide the 'Auto-save profile' column. The quoted name must match the translation of optionsAutoSettingsAutoSaveProfile"
 	},
 	"optionsUpdateRuleTooltip": {
 		"message": "Atualizar a regra",
@@ -725,6 +781,10 @@
 		"message": "definir a política de segurança de conteúdos",
 		"description": "Options page label: 'set content security policy'"
 	},
+	"optionInsertCanonicalLink": {
+		"message": "guardar a ligação canónica da página",
+		"description": "Options page label: 'save the canonical link of the page'"
+	},
 	"optionSaveToClipboard": {
 		"message": "copiar para a área de transferência",
 		"description": "Options page label: 'copy to clipboard'"
@@ -893,9 +953,9 @@
 		"message": "Importar",
 		"description": "Options button: 'Import'"
 	},
-	"logPanelDeferredImages": {
-		"message": "Imagens diferidas",
-		"description": "Label 'Deferred images' in the log panel"
+	"logPanelDeferredContent": {
+		"message": "Conteúdo diferido",
+		"description": "Label 'Deferred content' in the log panel"
 	},
 	"logPanelFrameContents": {
 		"message": "Conteúdo do frame",
@@ -911,7 +971,11 @@
 	},
 	"logPanelWidth": {
 		"message": "122",
-		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredImages')"
+		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
+	},
+	"maskCancelButton": {
+		"message": "Cancelar (Esc)",
+		"description": "Button 'Cancel (Esc)' in the mask displayed while a page is being saved"
 	},
 	"topPanelError": {
 		"message": "Erro do SingleFile: ",
@@ -1045,6 +1109,10 @@
 		"message": "Importar arquivo MHTML",
 		"description": "Title of the button 'Import MHTML file' in the editor"
 	},
+	"editorArchiveToc": {
+		"message": "Índice",
+		"description": "Title of the table of contents button displayed in the editor when viewing a multi-page archive"
+	},
 	"pendingsTitle": {
 		"message": "Transferência pendente",
 		"description": "Title of the pending save page 'Pending saves' in the editor"
@@ -1079,7 +1147,7 @@
 	},
 	"pendingsNoPendings": {
 		"message": "Não há transferências pendentes",
-		"description": "Label displayed when they are no pending saves"
+		"description": "Label displayed when there are no pending saves"
 	},
 	"pendingsAddUrlsButton": {
 		"message": "Adicionar URLs",
@@ -1103,7 +1171,7 @@
 	},
 	"batchSaveUrlsNoURLs": {
 		"message": "Sem URLs",
-		"description": "Label displayed when they are no URLs"
+		"description": "Label displayed when there are no URLs"
 	},
 	"batchSaveUrlsAddUrlButton": {
 		"message": "Adicionar URL",
@@ -1160,5 +1228,277 @@
 	"optionsEditorInvalidJSON": {
 		"message": "JSON inválido",
 		"description": "Options editor error message: 'Invalid JSON'"
+	},
+	"optionsMenusSubTitle": {
+		"message": "Menus",
+		"description": "Options sub-title: 'Menus'"
+	},
+	"optionMenusEditor": {
+		"message": "escolher as entradas apresentadas nos menus e a sua ordem (partilhadas por todos os perfis)",
+		"description": "Options page label: 'choose the entries displayed in the menus and their order (shared by all profiles)'"
+	},
+	"optionMenusEditorLink": {
+		"message": "Abrir o editor de menus...",
+		"description": "Options page link: 'Open the menu editor...'"
+	},
+	"optionMenusDefault": {
+		"message": "menus predefinidos",
+		"description": "Options page state: 'default menus'"
+	},
+	"optionMenusCustomized": {
+		"message": "menus personalizados",
+		"description": "Options page state: 'customized menus'"
+	},
+	"menuSubmenu": {
+		"message": "Submenu",
+		"description": "Menu editor entry: 'Submenu'"
+	},
+	"menuSeparator": {
+		"message": "Linha de separação",
+		"description": "Menu editor entry: 'Separator'"
+	},
+	"menusTitle": {
+		"message": "Editor de menus",
+		"description": "Menu editor title"
+	},
+	"menusSubTitle": {
+		"message": "Escolha o que aparece em cada menu do SingleFile e por que ordem. Estas definições são partilhadas por todos os perfis.",
+		"description": "Menu editor sub-title"
+	},
+	"menusSurfaceLabel": {
+		"message": "Menu",
+		"description": "Menu editor label of the menu selector"
+	},
+	"menusSurfacePage": {
+		"message": "Menu de contexto da página",
+		"description": "Menu editor menu name: 'Page context menu'"
+	},
+	"menusSurfaceButton": {
+		"message": "Menu do botão",
+		"description": "Menu editor menu name: 'Button menu'"
+	},
+	"menusSurfaceTab": {
+		"message": "Menu do separador",
+		"description": "Menu editor menu name: 'Tab menu'"
+	},
+	"menusUseForAllButton": {
+		"message": "Usar em todos os menus",
+		"description": "Menu editor button: 'Use for all menus'"
+	},
+	"menusUseForAllTooltip": {
+		"message": "Substituir os outros menus por este",
+		"description": "Menu editor tooltip of the 'Use for all menus' button"
+	},
+	"menusUseForAllStatus": {
+		"message": "Todos os menus usam agora estas entradas.",
+		"description": "Menu editor status after using a layout for all menus"
+	},
+	"menusContextPage": {
+		"message": "Página",
+		"description": "Menu editor context: 'Page'"
+	},
+	"menusContextSelection": {
+		"message": "Seleção",
+		"description": "Menu editor context: 'Selection'"
+	},
+	"menusContextFrame": {
+		"message": "Frame",
+		"description": "Menu editor context: 'Frame'"
+	},
+	"menusContextLink": {
+		"message": "Link",
+		"description": "Menu editor context: 'Link'"
+	},
+	"menusHintPage": {
+		"message": "Apresentado ao clicar com o botão direito numa página. As entradas a cinzento não aparecem no contexto selecionado.",
+		"description": "Menu editor hint of the page context menu"
+	},
+	"menusHintButton": {
+		"message": "Apresentado ao clicar com o botão direito no botão do SingleFile na barra de ferramentas.",
+		"description": "Menu editor hint of the button menu"
+	},
+	"menusHintTab": {
+		"message": "Apresentado ao clicar com o botão direito num separador.",
+		"description": "Menu editor hint of the tab menu"
+	},
+	"menusAddLabel": {
+		"message": "Adicionar",
+		"description": "Menu editor label of the entry selector"
+	},
+	"menusAddButton": {
+		"message": "Adicionar",
+		"description": "Menu editor button: 'Add'"
+	},
+	"menusEditHint": {
+		"message": "As novas entradas são inseridas a seguir à entrada selecionada, ou dentro de um submenu selecionado. Arraste para reordenar, largue sobre um submenu para aninhar, faça duplo clique numa etiqueta para a renomear e prima Delete para remover.",
+		"description": "Menu editor hint about editing"
+	},
+	"menusDynamicBadge": {
+		"message": "dinâmica",
+		"description": "Menu editor badge of the entries managed by SingleFile"
+	},
+	"menusRemoveTooltip": {
+		"message": "Remover deste menu",
+		"description": "Menu editor tooltip of the remove button"
+	},
+	"menusActionLimitLine": {
+		"message": "Só são apresentadas as primeiras $1 entradas",
+		"description": "Menu editor line marking the entries hidden by the browser in the button menu"
+	},
+	"menusActionLimitNote": {
+		"message": "O navegador apresenta no máximo $1 entradas de primeiro nível no menu do botão.",
+		"description": "Menu editor note about the limit of top-level entries in the button menu"
+	},
+	"menusActionLimitLineWrapped": {
+		"message": "O Firefox move as entradas seguintes para um submenu 'SingleFile'",
+		"description": "Menu editor line marking the entries Firefox moves into an automatic submenu in the button menu"
+	},
+	"menusActionLimitNoteWrapped": {
+		"message": "O Firefox mantém as primeiras $1 entradas de primeiro nível no menu do botão e move as restantes para um submenu 'SingleFile'.",
+		"description": "Menu editor note about Firefox moving the extra top-level entries of the button menu into an automatic submenu"
+	},
+	"menusWrapButton": {
+		"message": "Agrupar as restantes num submenu",
+		"description": "Menu editor button: 'Wrap the rest in a submenu'"
+	},
+	"menusMoreSubmenu": {
+		"message": "Mais...",
+		"description": "Menu editor default label of the submenu created to wrap the hidden entries"
+	},
+	"menusInspectorEmpty": {
+		"message": "Selecione uma entrada no menu para alterar a sua etiqueta, associá-la a um perfil ou escolher quando aparece.",
+		"description": "Menu editor text when no entry is selected"
+	},
+	"menusInspectorSeparator": {
+		"message": "Linha de separação. Arraste-a para a mover e prima Delete para a remover.",
+		"description": "Menu editor text when a separator is selected"
+	},
+	"menusLabelField": {
+		"message": "Etiqueta",
+		"description": "Menu editor field: 'Label'"
+	},
+	"menusLabelHelp": {
+		"message": "Deixe em branco para usar a etiqueta padrão. No Windows e no Linux, um & antes de uma letra define-a como tecla de atalho.",
+		"description": "Menu editor help of the 'Label' field"
+	},
+	"menusProfileField": {
+		"message": "Perfil",
+		"description": "Menu editor field: 'Profile'"
+	},
+	"menusProfileNone": {
+		"message": "Perfil em uso para a página",
+		"description": "Menu editor option when no profile is bound to the entry"
+	},
+	"menusProfileHelp": {
+		"message": "Associe esta entrada a um perfil para guardar com ele num só clique, seja qual for o perfil atual.",
+		"description": "Menu editor help of the 'Profile' field"
+	},
+	"menusPresentationField": {
+		"message": "Apresentação",
+		"description": "Menu editor field: 'Presentation'"
+	},
+	"menusPresentationSubmenu": {
+		"message": "Um submenu 'Guardar página com perfil'",
+		"description": "Menu editor presentation option: submenu"
+	},
+	"menusPresentationInline": {
+		"message": "Uma entrada por perfil, listadas diretamente",
+		"description": "Menu editor presentation option: inline"
+	},
+	"menusPresentationHelp": {
+		"message": "A lista segue os perfis definidos nas opções. Para mostrar apenas alguns perfis, adicione antes entradas 'Guardar página' associadas a esses perfis.",
+		"description": "Menu editor help of the 'Presentation' field"
+	},
+	"menusContentsField": {
+		"message": "Conteúdo",
+		"description": "Menu editor field: 'Contents'"
+	},
+	"menusContentsHelp": {
+		"message": "Esta entrada é um grupo de botões de opção cujas escolhas são geridas pelo SingleFile. Pode movê-la ou renomeá-la, mas não editar as suas escolhas.",
+		"description": "Menu editor help of the 'Contents' field"
+	},
+	"menusContextsField": {
+		"message": "Aparece ao clicar com o botão direito em",
+		"description": "Menu editor field: 'Appears when right-clicking'"
+	},
+	"menusAltLabelHelp": {
+		"message": "Sem uma etiqueta personalizada, o menu mostra '$1' quando se aplica à página.",
+		"description": "Menu editor help about the alternative label of an entry"
+	},
+	"menusSubmenuField": {
+		"message": "Submenu",
+		"description": "Menu editor field: 'Submenu'"
+	},
+	"menusSubmenuHelp": {
+		"message": "$1 entradas. Largue entradas sobre esta linha para as adicionar.",
+		"description": "Menu editor help of the 'Submenu' field"
+	},
+	"menusRemoveButton": {
+		"message": "Remover deste menu",
+		"description": "Menu editor button: 'Remove from this menu'"
+	},
+	"menusPageOnly": {
+		"message": "'$1' só existe no menu de contexto da página.",
+		"description": "Menu editor status when an entry is not allowed in a menu"
+	},
+	"menusJsonLabel": {
+		"message": "Menus em JSON",
+		"description": "Menu editor section: 'Layout as JSON'"
+	},
+	"menusJsonApplyButton": {
+		"message": "Aplicar",
+		"description": "Menu editor button: 'Apply'"
+	},
+	"menusJsonInvalid": {
+		"message": "JSON inválido",
+		"description": "Menu editor status: 'Invalid JSON'"
+	},
+	"menusJsonIgnored": {
+		"message": "Aplicado, mas $1 entradas inválidas foram ignoradas.",
+		"description": "Menu editor status after applying JSON that contained entries which are not valid (unknown action, wrong shape)"
+	},
+	"menusUnsupportedBadge": {
+		"message": "não suportada",
+		"description": "Menu editor badge of the entries the current browser cannot show"
+	},
+	"menusUnsupportedActionHelp": {
+		"message": "Este navegador não suporta esta entrada, pelo que não é apresentada.",
+		"description": "Menu editor note for an entry the current browser cannot show"
+	},
+	"menusProfileMissingHelp": {
+		"message": "O perfil '$1' já não existe, pelo que esta entrada usa o perfil em uso para a página.",
+		"description": "Menu editor note for an entry bound to a deleted profile"
+	},
+	"menusEmptySubmenuHelp": {
+		"message": "Este submenu não tem entradas visíveis, pelo que não é apresentado.",
+		"description": "Menu editor note for a submenu whose entries are all skipped"
+	},
+	"menusResetButton": {
+		"message": "Repor predefinições",
+		"description": "Menu editor button: 'Reset to default'"
+	},
+	"menusResetConfirm": {
+		"message": "Repor os menus predefinidos?",
+		"description": "Menu editor confirmation before restoring the default menus"
+	},
+	"menusSaveError": {
+		"message": "Não foi possível guardar os menus: $1",
+		"description": "Menu editor status when saving the layout fails (for example the sync storage quota)"
+	},
+	"menusUnsupported": {
+		"message": "Este navegador não suporta menus de extensões, pelo que não há nada para personalizar aqui.",
+		"description": "Menu editor message shown instead of the editor when the browser has no menus API (for example on Android)"
+	},
+	"menusProfilesBadge": {
+		"message": "requer 2+ perfis",
+		"description": "Menu editor badge of the entries that only appear when more than one profile exists"
+	},
+	"menusProfilesHelp": {
+		"message": "Esta entrada só é apresentada quando tem mais do que um perfil.",
+		"description": "Menu editor note for the entries that only appear when more than one profile exists"
+	},
+	"menusContextHelp": {
+		"message": "Esta entrada não é apresentada no contexto selecionado ($1).",
+		"description": "Menu editor note for an entry whose contexts exclude the context selected above the list"
 	}
 }

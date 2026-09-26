@@ -57,6 +57,13 @@ const CAPTURE_OPTION_NAMES = [
 	"groupDuplicateStylesheets",
 	"moveStylesInHead",
 	"imageReductionFactor",
+	"loadDeferredContent",
+	"loadDeferredContentBlockCookies",
+	"loadDeferredContentBlockStorage",
+	"loadDeferredContentKeepZoomLevel",
+	"loadDeferredContentDispatchScrollEvent",
+	"loadDeferredContentBeforeFrames",
+	"loadDeferredContentMinZoomFactor",
 	"loadDeferredImages",
 	"loadDeferredImagesBlockCookies",
 	"loadDeferredImagesBlockStorage",
@@ -85,6 +92,7 @@ const CAPTURE_OPTION_NAMES = [
 	"includeInfobar",
 	"infobarTemplate",
 	"openInfobar",
+	"animateInfobar",
 	"displayStats",
 	"filenameTemplate",
 	"selected",
@@ -119,13 +127,13 @@ async function onMessage(message, sender) {
 		await business.saveTabs(tabs);
 	} else if (message && message.method == METHOD_CAPTURE_PAGE) {
 		const captureConfig = getCaptureConfig(message);
+		const currentTab = message.tabId
+			? await browser.tabs.get(message.tabId)
+			: (await browser.tabs.query({ currentWindow: true, active: true }))[0];
 		const permissionGranted = await externalCapturePermissions.requestPermission(sender, message);
 		if (!permissionGranted) {
 			throw new Error("SingleFile capture was not approved for this extension");
 		}
-		const currentTab = message.tabId
-			? await browser.tabs.get(message.tabId)
-			: (await browser.tabs.query({ currentWindow: true, active: true }))[0];
 		if (!currentTab) {
 			return false;
 		}

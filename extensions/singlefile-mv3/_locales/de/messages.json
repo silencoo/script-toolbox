@@ -187,6 +187,14 @@
 		"message": "Auswahlmenu",
 		"description": "Options page title"
 	},
+	"optionsNewWindowLink": {
+		"message": "Die Optionen in einem neuen Tab öffnen",
+		"description": "Accessible label of the icon opening the options in a new tab"
+	},
+	"optionsEditorLink": {
+		"message": "Den Optionseditor öffnen",
+		"description": "Accessible label of the icon opening the options editor"
+	},
 	"optionsUserInterfaceSubTitle": {
 		"message": "Benutzerschnittstelle",
 		"description": "Options sub-title: 'User interface'"
@@ -222,6 +230,10 @@
 	"optionOpenInfobar": {
 		"message": "Infobar offen halten",
 		"description": "Options page label: 'keep infobar open'"
+	},
+	"optionAnimateInfobar": {
+		"message": "Infobar animieren",
+		"description": "Options page label: 'animate the infobar'"
 	},
 	"optionRemoveInfobarSavedDate": {
 		"message": "Enthalten nicht das gespeicherte Datum",
@@ -266,6 +278,46 @@
 	"optionFilenameReplacementCharacter": {
 		"message": "Ersetzungszeichen",
 		"description": "Options page label: 'replacement character'"
+	},
+	"optionFilenameReplacements": {
+		"message": "In Dateinamen ersetzte Zeichen",
+		"description": "Options page label: 'characters replaced in file names'"
+	},
+	"optionsFilenameReplacedCharacters": {
+		"message": "Zeichen",
+		"description": "Options page column label in the replaced characters table: 'Character(s)'"
+	},
+	"optionsFilenameReplacementCharacters": {
+		"message": "Ersetzt durch",
+		"description": "Options page column label in the replaced characters table: 'Replaced with'"
+	},
+	"optionsFilenameReplacedCharactersPlaceholder": {
+		"message": "Ein Zeichen eingeben (z.B. \":\")",
+		"description": "Placeholder in the replaced characters table: 'Type a character (e.g. \":\")'"
+	},
+	"optionsAddFilenameReplacementTooltip": {
+		"message": "Zeichen hinzufügen",
+		"description": "Popup text 'Add the character' in the options page"
+	},
+	"optionsDeleteFilenameReplacementTooltip": {
+		"message": "Dieses Zeichen nicht mehr ersetzen",
+		"description": "Popup text 'Stop replacing this character' in the options page"
+	},
+	"optionsFilenameReplacementsResetButton": {
+		"message": "Standardzeichen wiederherstellen",
+		"description": "Button label 'Restore default characters' in the options page"
+	},
+	"optionsFilenameReplacementsPreviewFilename": {
+		"message": "Dateinamen testen",
+		"description": "Options page column label in the preview table: 'Test a file name'"
+	},
+	"optionsFilenameReplacementsPreviewResult": {
+		"message": "Ergebnis",
+		"description": "Options page column label in the preview table: 'Result'"
+	},
+	"optionsFilenameReplacementsPreviewPlaceholder": {
+		"message": "Dateinamen eingeben",
+		"description": "Placeholder in the preview table: 'Type a file name'"
 	},
 	"optionReplaceEmojisInFilename": {
 		"message": "Emojis durch Text ersetzen",
@@ -316,7 +368,7 @@
 		"description": "Options page label: 'remove hidden elements'"
 	},
 	"optionRemovedElementsSelector": {
-		"message": "spezifische Elemente entfernen",
+		"message": "Spezifische Elemente entfernen",
 		"description": "Options page label: 'remove specific elements'"
 	},
 	"optionsFileFormatSubTitle": {
@@ -324,7 +376,7 @@
 		"description": "Options sub-title: 'File format'"
 	},
 	"optionFileFormat": {
-		"message": "format",
+		"message": "Format",
 		"description": "Options page label: 'format'"
 	},
 	"optionFileFormatSelectHTML": {
@@ -332,11 +384,11 @@
 		"description": "Options page label: 'HTML'"
 	},
 	"optionFileFormatSelectSelfExtractingUniversal": {
-		"message": "selbstextrahierendes ZIP (universal)",
+		"message": "Selbstextrahierendes ZIP (universal)",
 		"description": "Options page label: 'self-extracting ZIP (universal)'"
 	},
 	"optionFileFormatSelectSelfExtracting": {
-		"message": "selbstextrahierendes ZIP",
+		"message": "Selbstextrahierendes ZIP",
 		"description": "Options page label: 'self-extracting ZIP'"
 	},
 	"optionFileFormatSelectZIP": {
@@ -383,6 +435,10 @@
 		"message": "Bilder",
 		"description": "Options sub-title: 'Images'"
 	},
+	"optionsDeferredContentSubTitle": {
+		"message": "Zurückgestellte Inhalte",
+		"description": "Options sub-title: 'Deferred content'"
+	},
 	"optionGroupDuplicateImages": {
 		"message": "Doppelte Bilder zusammenfassen",
 		"description": "Options page label: 'group duplicate images together'"
@@ -391,25 +447,25 @@
 		"message": "Größenreduktionsfaktor",
 		"description": "Options page label: 'image reduction factor'"
 	},
-	"optionLoadDeferredImages": {
-		"message": "Speicherung zurückgestellter Bilder",
-		"description": "Options page label: 'save deferred images'"
+	"optionLoadDeferredContent": {
+		"message": "Beim Scrollen geladene Inhalte speichern",
+		"description": "Options page label: 'save content loaded while scrolling'"
 	},
-	"optionLoadDeferredImagesMaxIdleTime": {
-		"message": "maximale Inaktivitätszeit (ms)",
+	"optionLoadDeferredContentMaxIdleTime": {
+		"message": "Maximale Inaktivitätszeit (ms)",
 		"description": "Options page label: 'maximum idle time (ms)'"
 	},
-	"optionLoadDeferredImagesKeepZoomLevel": {
-		"message": "Seite verkleinern",
-		"description": "Options page label: 'zoom out the page'"
+	"optionLoadDeferredContentKeepZoomLevel": {
+		"message": "Seite während der Speicherung verkleinern",
+		"description": "Options page label: 'zoom out the page during the capture'"
 	},
-	"optionLoadDeferredImagesDispatchScrollEvent": {
-		"message": "Ereignis \"scroll\" versenden",
-		"description": "Options page label: 'dispatch \"scroll\" event'"
+	"optionLoadDeferredContentDispatchScrollEvent": {
+		"message": "Scrollen simulieren",
+		"description": "Options page label: 'simulate scrolling'"
 	},
-	"optionLoadDeferredImagesBeforeFrames": {
-		"message": "Speicherung zurückgestellter Rahmen",
-		"description": "Options page label: 'load deferred frames'"
+	"optionLoadDeferredContentBeforeFrames": {
+		"message": "Zuerst in Rahmen laden",
+		"description": "Options page label: 'load in frames first'"
 	},
 	"optionRemoveAlternativeImages": {
 		"message": "Bilder für alternative Bildschirmauflösungen entfernen",
@@ -504,8 +560,8 @@
 		"description": "Options sub-title: 'Auto-save'"
 	},
 	"optionsAutoSettingsSubTitle": {
-		"message": "Automatische Einstellung festlegen",
-		"description": "Options sub-title: 'Auto-settings rules'"
+		"message": "Regeln für automatische Einstellungen",
+		"description": "Options sub-title: the table of rules that pick a profile automatically from the URL of the page being saved"
 	},
 	"optionsDeleteDisplayedRulesConfirm": {
 		"message": "Löschbestätigung für alle aufgelisteten Regeln",
@@ -517,27 +573,27 @@
 	},
 	"optionsAutoSettingsUrl": {
 		"message": "URL",
-		"description": "Options label in the Auto-settings rules: 'URL'"
+		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
 		"message": "URL komplett oder teilweise eingeben (z.B. example.com)",
-		"description": "Placeholder in the Auto-settings rules: 'Type a complete or partial URL (e.g. example.com)'"
+		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
 		"message": "Profil",
-		"description": "Options label in the Auto-settings rules: 'Profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved manually. It is a noun, the name of a profile, not an instruction to save"
 	},
 	"optionsAutoSettingsAutoSaveProfile": {
 		"message": "Profil für automatische Speicherung",
-		"description": "Options label in the Auto-settings rules: 'Auto-save profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved automatically. It is a noun phrase, 'the profile used for auto-saving', never 'automatically save the profile'"
 	},
 	"optionsAutoSettingsShowAllProfiles": {
-		"message": "Alle Profiles auflisten",
-		"description": "Options label in the Auto-settings rules: 'display all profiles'"
+		"message": "Alle Profile auflisten",
+		"description": "Checkbox label under the Auto-settings rules table: list the rules of every profile instead of only those of the profile selected above"
 	},
 	"optionsAutoSettingsShowAutoSaveProfile": {
-		"message": "'Profil für automatische Speicherung' anzeigen Spalte",
-		"description": "Options label in the Auto-settings rules: 'display 'Auto-save profile' column'"
+		"message": "Spalte 'Profil für automatische Speicherung' anzeigen",
+		"description": "Checkbox label under the Auto-settings rules table: show or hide the 'Auto-save profile' column. The quoted name must match the translation of optionsAutoSettingsAutoSaveProfile"
 	},
 	"optionsUpdateRuleTooltip": {
 		"message": "Regel ändern",
@@ -664,11 +720,11 @@
 		"description": "Options sub-title: 'External capture API'"
 	},
 	"optionExternalCaptureAllowedIds": {
-		"message": "erlaubte Erweiterungen, eine pro Zeile",
+		"message": "Erlaubte Erweiterungen, eine pro Zeile",
 		"description": "Options page label: 'allowed extensions, one per line'"
 	},
 	"optionExternalCaptureDeniedIds": {
-		"message": "blockierte Erweiterungen, eine pro Zeile",
+		"message": "Blockierte Erweiterungen, eine pro Zeile",
 		"description": "Options page label: 'blocked extensions, one per line'"
 	},
 	"optionsExternalCapturePendingRequest": {
@@ -698,7 +754,7 @@
 		"description": "Options page label: 'display stats in the console after processing'"
 	},
 	"optionSetMaxResourceSize": {
-		"message": "maximale Größe festlegen",
+		"message": "Maximale Größe festlegen",
 		"description": "Options page label: 'set maximum size'"
 	},
 	"optionMaxResourceSize": {
@@ -706,11 +762,11 @@
 		"description": "Options page label: 'maximum size (MB)'"
 	},
 	"optionSetMaxResourceDelay": {
-		"message": "maximale Zeit für den Download festlegen",
+		"message": "Maximale Zeit für den Download festlegen",
 		"description": "Options page label: 'set maximum download time'"
 	},
 	"optionMaxResourceDelay": {
-		"message": "maximale Downloadzeit (s)",
+		"message": "Maximale Downloadzeit (s)",
 		"description": "Options page label: 'maximum download time (s)'"
 	},
 	"optionPassReferrerOnError": {
@@ -724,6 +780,10 @@
 	"optionInsertMetaCSP": {
 		"message": "Content Security Policy einfügen",
 		"description": "Options page label: 'set content security policy'"
+	},
+	"optionInsertCanonicalLink": {
+		"message": "den kanonischen Link der Seite speichern",
+		"description": "Options page label: 'save the canonical link of the page'"
 	},
 	"optionSaveToClipboard": {
 		"message": "Kopieren in die Zwischenablage",
@@ -893,9 +953,9 @@
 		"message": "Importieren",
 		"description": "Options button: 'Import'"
 	},
-	"logPanelDeferredImages": {
-		"message": "Zurückgestellte Bilder",
-		"description": "Label 'Deferred images' in the log panel"
+	"logPanelDeferredContent": {
+		"message": "Zurückgestellte Inhalte",
+		"description": "Label 'Deferred content' in the log panel"
 	},
 	"logPanelFrameContents": {
 		"message": "Rahmeninhalte",
@@ -911,7 +971,11 @@
 	},
 	"logPanelWidth": {
 		"message": "150",
-		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredImages')"
+		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
+	},
+	"maskCancelButton": {
+		"message": "Abbrechen (Esc)",
+		"description": "Button 'Cancel (Esc)' in the mask displayed while a page is being saved"
 	},
 	"topPanelError": {
 		"message": "SingleFile Fehler : ",
@@ -1045,6 +1109,10 @@
 		"message": "MHTML-Datei importieren",
 		"description": "Title of the button 'Import MHTML file' in the editor"
 	},
+	"editorArchiveToc": {
+		"message": "Inhaltsverzeichnis",
+		"description": "Title of the table of contents button displayed in the editor when viewing a multi-page archive"
+	},
 	"pendingsTitle": {
 		"message": "Ausstehende Speicherungen",
 		"description": "Title of the pending save page 'Pending saves' in the editor"
@@ -1079,7 +1147,7 @@
 	},
 	"pendingsNoPendings": {
 		"message": "Keine ausstehenden Speicherungen",
-		"description": "Label displayed when they are no pending saves"
+		"description": "Label displayed when there are no pending saves"
 	},
 	"pendingsAddUrlsButton": {
 		"message": "URLs hinzufügen",
@@ -1103,7 +1171,7 @@
 	},
 	"batchSaveUrlsNoURLs": {
 		"message": "Keine URLs",
-		"description": "Label displayed when they are no URLs"
+		"description": "Label displayed when there are no URLs"
 	},
 	"batchSaveUrlsAddUrlButton": {
 		"message": "URL hinzufügen",
@@ -1160,5 +1228,277 @@
 	"optionsEditorInvalidJSON": {
 		"message": "Ungültiges JSON",
 		"description": "Options editor error message: 'Invalid JSON'"
+	},
+	"optionsMenusSubTitle": {
+		"message": "Menüs",
+		"description": "Options sub-title: 'Menus'"
+	},
+	"optionMenusEditor": {
+		"message": "Einträge der Menüs und ihre Reihenfolge festlegen (gilt für alle Profile)",
+		"description": "Options page label: 'choose the entries displayed in the menus and their order (shared by all profiles)'"
+	},
+	"optionMenusEditorLink": {
+		"message": "Menü-Editor öffnen...",
+		"description": "Options page link: 'Open the menu editor...'"
+	},
+	"optionMenusDefault": {
+		"message": "Standardmenüs",
+		"description": "Options page state: 'default menus'"
+	},
+	"optionMenusCustomized": {
+		"message": "Angepasste Menüs",
+		"description": "Options page state: 'customized menus'"
+	},
+	"menuSubmenu": {
+		"message": "Untermenü",
+		"description": "Menu editor entry: 'Submenu'"
+	},
+	"menuSeparator": {
+		"message": "Trennlinie",
+		"description": "Menu editor entry: 'Separator'"
+	},
+	"menusTitle": {
+		"message": "Menü-Editor",
+		"description": "Menu editor title"
+	},
+	"menusSubTitle": {
+		"message": "Legen Sie fest, was in den einzelnen SingleFile-Menüs erscheint und in welcher Reihenfolge. Diese Einstellungen gelten für alle Profile.",
+		"description": "Menu editor sub-title"
+	},
+	"menusSurfaceLabel": {
+		"message": "Menü",
+		"description": "Menu editor label of the menu selector"
+	},
+	"menusSurfacePage": {
+		"message": "Kontextmenü der Seite",
+		"description": "Menu editor menu name: 'Page context menu'"
+	},
+	"menusSurfaceButton": {
+		"message": "Menü der Schaltfläche",
+		"description": "Menu editor menu name: 'Button menu'"
+	},
+	"menusSurfaceTab": {
+		"message": "Menü des Tabs",
+		"description": "Menu editor menu name: 'Tab menu'"
+	},
+	"menusUseForAllButton": {
+		"message": "Für alle Menüs verwenden",
+		"description": "Menu editor button: 'Use for all menus'"
+	},
+	"menusUseForAllTooltip": {
+		"message": "Die anderen Menüs durch dieses ersetzen",
+		"description": "Menu editor tooltip of the 'Use for all menus' button"
+	},
+	"menusUseForAllStatus": {
+		"message": "Alle Menüs verwenden jetzt diese Einträge.",
+		"description": "Menu editor status after using a layout for all menus"
+	},
+	"menusContextPage": {
+		"message": "Seite",
+		"description": "Menu editor context: 'Page'"
+	},
+	"menusContextSelection": {
+		"message": "Auswahl",
+		"description": "Menu editor context: 'Selection'"
+	},
+	"menusContextFrame": {
+		"message": "Rahmen",
+		"description": "Menu editor context: 'Frame'"
+	},
+	"menusContextLink": {
+		"message": "Link",
+		"description": "Menu editor context: 'Link'"
+	},
+	"menusHintPage": {
+		"message": "Wird beim Rechtsklick auf eine Seite angezeigt. Ausgegraute Einträge erscheinen im ausgewählten Kontext nicht.",
+		"description": "Menu editor hint of the page context menu"
+	},
+	"menusHintButton": {
+		"message": "Wird beim Rechtsklick auf die SingleFile-Schaltfläche in der Symbolleiste angezeigt.",
+		"description": "Menu editor hint of the button menu"
+	},
+	"menusHintTab": {
+		"message": "Wird beim Rechtsklick auf einen Tab angezeigt.",
+		"description": "Menu editor hint of the tab menu"
+	},
+	"menusAddLabel": {
+		"message": "Hinzufügen",
+		"description": "Menu editor label of the entry selector"
+	},
+	"menusAddButton": {
+		"message": "Hinzufügen",
+		"description": "Menu editor button: 'Add'"
+	},
+	"menusEditHint": {
+		"message": "Neue Einträge werden hinter dem ausgewählten Eintrag oder in einem ausgewählten Untermenü eingefügt. Ziehen Sie zum Umsortieren, legen Sie auf einem Untermenü ab zum Verschachteln, doppelklicken Sie auf eine Beschriftung zum Umbenennen, drücken Sie Entf zum Entfernen.",
+		"description": "Menu editor hint about editing"
+	},
+	"menusDynamicBadge": {
+		"message": "dynamisch",
+		"description": "Menu editor badge of the entries managed by SingleFile"
+	},
+	"menusRemoveTooltip": {
+		"message": "Aus diesem Menü entfernen",
+		"description": "Menu editor tooltip of the remove button"
+	},
+	"menusActionLimitLine": {
+		"message": "Nur die ersten $1 Einträge werden angezeigt",
+		"description": "Menu editor line marking the entries hidden by the browser in the button menu"
+	},
+	"menusActionLimitNote": {
+		"message": "Der Browser zeigt im Menü der Schaltfläche höchstens $1 Einträge auf oberster Ebene an.",
+		"description": "Menu editor note about the limit of top-level entries in the button menu"
+	},
+	"menusActionLimitLineWrapped": {
+		"message": "Firefox verschiebt die folgenden Einträge in ein Untermenü 'SingleFile'",
+		"description": "Menu editor line marking the entries Firefox moves into an automatic submenu in the button menu"
+	},
+	"menusActionLimitNoteWrapped": {
+		"message": "Firefox behält die ersten $1 Einträge auf oberster Ebene im Menü der Schaltfläche und verschiebt die übrigen in ein Untermenü 'SingleFile'.",
+		"description": "Menu editor note about Firefox moving the extra top-level entries of the button menu into an automatic submenu"
+	},
+	"menusWrapButton": {
+		"message": "Den Rest in ein Untermenü verschieben",
+		"description": "Menu editor button: 'Wrap the rest in a submenu'"
+	},
+	"menusMoreSubmenu": {
+		"message": "Mehr...",
+		"description": "Menu editor default label of the submenu created to wrap the hidden entries"
+	},
+	"menusInspectorEmpty": {
+		"message": "Wählen Sie einen Eintrag im Menü aus, um seine Beschriftung zu ändern, ihn an ein Profil zu binden oder festzulegen, wann er erscheint.",
+		"description": "Menu editor text when no entry is selected"
+	},
+	"menusInspectorSeparator": {
+		"message": "Trennlinie. Ziehen Sie sie zum Verschieben, drücken Sie Entf zum Entfernen.",
+		"description": "Menu editor text when a separator is selected"
+	},
+	"menusLabelField": {
+		"message": "Beschriftung",
+		"description": "Menu editor field: 'Label'"
+	},
+	"menusLabelHelp": {
+		"message": "Leer lassen, um die Standardbeschriftung zu verwenden. Unter Windows und Linux macht ein & vor einem Buchstaben diesen zum Tastaturkürzel.",
+		"description": "Menu editor help of the 'Label' field"
+	},
+	"menusProfileField": {
+		"message": "Profil",
+		"description": "Menu editor field: 'Profile'"
+	},
+	"menusProfileNone": {
+		"message": "Für die Seite geltendes Profil",
+		"description": "Menu editor option when no profile is bound to the entry"
+	},
+	"menusProfileHelp": {
+		"message": "Binden Sie diesen Eintrag an ein Profil, um mit einem Klick damit zu speichern, unabhängig vom aktuellen Profil.",
+		"description": "Menu editor help of the 'Profile' field"
+	},
+	"menusPresentationField": {
+		"message": "Darstellung",
+		"description": "Menu editor field: 'Presentation'"
+	},
+	"menusPresentationSubmenu": {
+		"message": "Ein Untermenü 'Speichern der Webseite mit Profil'",
+		"description": "Menu editor presentation option: submenu"
+	},
+	"menusPresentationInline": {
+		"message": "Ein Eintrag pro Profil, direkt aufgelistet",
+		"description": "Menu editor presentation option: inline"
+	},
+	"menusPresentationHelp": {
+		"message": "Die Liste folgt den in den Optionen definierten Profilen. Um nur bestimmte Profile anzuzeigen, fügen Sie stattdessen daran gebundene Einträge 'Speichern der Webseite' hinzu.",
+		"description": "Menu editor help of the 'Presentation' field"
+	},
+	"menusContentsField": {
+		"message": "Inhalt",
+		"description": "Menu editor field: 'Contents'"
+	},
+	"menusContentsHelp": {
+		"message": "Dieser Eintrag ist eine Optionsgruppe, deren Auswahlmöglichkeiten von SingleFile verwaltet werden. Sie können ihn verschieben oder umbenennen, aber seine Auswahlmöglichkeiten nicht bearbeiten.",
+		"description": "Menu editor help of the 'Contents' field"
+	},
+	"menusContextsField": {
+		"message": "Erscheint beim Rechtsklick auf",
+		"description": "Menu editor field: 'Appears when right-clicking'"
+	},
+	"menusAltLabelHelp": {
+		"message": "Ohne eigene Beschriftung zeigt das Menü '$1' an, wenn der Eintrag für die Seite gilt.",
+		"description": "Menu editor help about the alternative label of an entry"
+	},
+	"menusSubmenuField": {
+		"message": "Untermenü",
+		"description": "Menu editor field: 'Submenu'"
+	},
+	"menusSubmenuHelp": {
+		"message": "$1 Einträge. Legen Sie Einträge auf dieser Zeile ab, um sie hinzuzufügen.",
+		"description": "Menu editor help of the 'Submenu' field"
+	},
+	"menusRemoveButton": {
+		"message": "Aus diesem Menü entfernen",
+		"description": "Menu editor button: 'Remove from this menu'"
+	},
+	"menusPageOnly": {
+		"message": "'$1' gibt es nur im Kontextmenü der Seite.",
+		"description": "Menu editor status when an entry is not allowed in a menu"
+	},
+	"menusJsonLabel": {
+		"message": "Menüs als JSON",
+		"description": "Menu editor section: 'Layout as JSON'"
+	},
+	"menusJsonApplyButton": {
+		"message": "Übernehmen",
+		"description": "Menu editor button: 'Apply'"
+	},
+	"menusJsonInvalid": {
+		"message": "Ungültiges JSON",
+		"description": "Menu editor status: 'Invalid JSON'"
+	},
+	"menusJsonIgnored": {
+		"message": "Übernommen, aber $1 ungültige Einträge wurden ignoriert.",
+		"description": "Menu editor status after applying JSON that contained entries which are not valid (unknown action, wrong shape)"
+	},
+	"menusUnsupportedBadge": {
+		"message": "nicht unterstützt",
+		"description": "Menu editor badge of the entries the current browser cannot show"
+	},
+	"menusUnsupportedActionHelp": {
+		"message": "Dieser Browser unterstützt diesen Eintrag nicht, daher wird er nicht angezeigt.",
+		"description": "Menu editor note for an entry the current browser cannot show"
+	},
+	"menusProfileMissingHelp": {
+		"message": "Das Profil '$1' existiert nicht mehr, daher verwendet dieser Eintrag das für die Seite geltende Profil.",
+		"description": "Menu editor note for an entry bound to a deleted profile"
+	},
+	"menusEmptySubmenuHelp": {
+		"message": "Dieses Untermenü hat keine sichtbaren Einträge, daher wird es nicht angezeigt.",
+		"description": "Menu editor note for a submenu whose entries are all skipped"
+	},
+	"menusResetButton": {
+		"message": "Auf Standard zurücksetzen",
+		"description": "Menu editor button: 'Reset to default'"
+	},
+	"menusResetConfirm": {
+		"message": "Die Standardmenüs wiederherstellen?",
+		"description": "Menu editor confirmation before restoring the default menus"
+	},
+	"menusSaveError": {
+		"message": "Die Menüs konnten nicht gespeichert werden: $1",
+		"description": "Menu editor status when saving the layout fails (for example the sync storage quota)"
+	},
+	"menusUnsupported": {
+		"message": "Dieser Browser unterstützt keine Erweiterungsmenüs, daher gibt es hier nichts anzupassen.",
+		"description": "Menu editor message shown instead of the editor when the browser has no menus API (for example on Android)"
+	},
+	"menusProfilesBadge": {
+		"message": "ab 2 Profilen",
+		"description": "Menu editor badge of the entries that only appear when more than one profile exists"
+	},
+	"menusProfilesHelp": {
+		"message": "Dieser Eintrag wird nur angezeigt, wenn Sie mehr als ein Profil haben.",
+		"description": "Menu editor note for the entries that only appear when more than one profile exists"
+	},
+	"menusContextHelp": {
+		"message": "Dieser Eintrag wird im ausgewählten Kontext ($1) nicht angezeigt.",
+		"description": "Menu editor note for an entry whose contexts exclude the context selected above the list"
 	}
 }

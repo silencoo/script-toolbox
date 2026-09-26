@@ -187,6 +187,14 @@
 		"message": "SingleFile seçimləri",
 		"description": "Options page title"
 	},
+	"optionsNewWindowLink": {
+		"message": "Seçimləri yeni vərəqdə açın",
+		"description": "Accessible label of the icon opening the options in a new tab"
+	},
+	"optionsEditorLink": {
+		"message": "Seçimlər redaktorunu açın",
+		"description": "Accessible label of the icon opening the options editor"
+	},
 	"optionsUserInterfaceSubTitle": {
 		"message": "İstifadəçi interfeysi",
 		"description": "Options sub-title: 'User interface'"
@@ -222,6 +230,10 @@
 	"optionOpenInfobar": {
 		"message": "infobarı yaddaşa qeyd edilmiş səhifəni baxarkən açın",
 		"description": "Options page label: 'keep infobar open'"
+	},
+	"optionAnimateInfobar": {
+		"message": "infobarı animasiya et",
+		"description": "Options page label: 'animate the infobar'"
 	},
 	"optionRemoveInfobarSavedDate": {
 		"message": "yaddaşa qeyd edilmiş tarixi daxil etməyin",
@@ -266,6 +278,46 @@
 	"optionFilenameReplacementCharacter": {
 		"message": "əvəz olunan simvol",
 		"description": "Options page label: 'replacement character'"
+	},
+	"optionFilenameReplacements": {
+		"message": "fayl adlarında əvəz olunan simvollar",
+		"description": "Options page label: 'characters replaced in file names'"
+	},
+	"optionsFilenameReplacedCharacters": {
+		"message": "Simvol(lar)",
+		"description": "Options page column label in the replaced characters table: 'Character(s)'"
+	},
+	"optionsFilenameReplacementCharacters": {
+		"message": "Nə ilə əvəz olunur",
+		"description": "Options page column label in the replaced characters table: 'Replaced with'"
+	},
+	"optionsFilenameReplacedCharactersPlaceholder": {
+		"message": "Simvol daxil edin (məsələn, \":\")",
+		"description": "Placeholder in the replaced characters table: 'Type a character (e.g. \":\")'"
+	},
+	"optionsAddFilenameReplacementTooltip": {
+		"message": "Simvol əlavə et",
+		"description": "Popup text 'Add the character' in the options page"
+	},
+	"optionsDeleteFilenameReplacementTooltip": {
+		"message": "Bu simvolu əvəz etmə",
+		"description": "Popup text 'Stop replacing this character' in the options page"
+	},
+	"optionsFilenameReplacementsResetButton": {
+		"message": "Standart simvolları bərpa et",
+		"description": "Button label 'Restore default characters' in the options page"
+	},
+	"optionsFilenameReplacementsPreviewFilename": {
+		"message": "Fayl adını sınayın",
+		"description": "Options page column label in the preview table: 'Test a file name'"
+	},
+	"optionsFilenameReplacementsPreviewResult": {
+		"message": "Nəticə",
+		"description": "Options page column label in the preview table: 'Result'"
+	},
+	"optionsFilenameReplacementsPreviewPlaceholder": {
+		"message": "Fayl adı daxil edin",
+		"description": "Placeholder in the preview table: 'Type a file name'"
 	},
 	"optionReplaceEmojisInFilename": {
 		"message": "emoji-ləri mətnlə əvəz edin",
@@ -383,6 +435,10 @@
 		"message": "Şəkillər",
 		"description": "Options sub-title: 'Images'"
 	},
+	"optionsDeferredContentSubTitle": {
+		"message": "Gözləyən məzmun",
+		"description": "Options sub-title: 'Deferred content'"
+	},
 	"optionGroupDuplicateImages": {
 		"message": "şəkilləri qruplaşdırın",
 		"description": "Options page label: 'group duplicate images together'"
@@ -391,25 +447,25 @@
 		"message": "şəkil ölçüsünü azaltma əmsalı",
 		"description": "Options page label: 'image reduction factor'"
 	},
-	"optionLoadDeferredImages": {
-		"message": "gözləyən şəkilləri yükləyin",
-		"description": "Options page label: 'save deferred images'"
+	"optionLoadDeferredContent": {
+		"message": "sürüşdürmə zamanı yüklənən məzmunu saxlayın",
+		"description": "Options page label: 'save content loaded while scrolling'"
 	},
-	"optionLoadDeferredImagesMaxIdleTime": {
+	"optionLoadDeferredContentMaxIdleTime": {
 		"message": "maksimum boş vaxt (ms)",
 		"description": "Options page label: 'maximum idle time (ms)'"
 	},
-	"optionLoadDeferredImagesKeepZoomLevel": {
-		"message": "zoom səviyyəsini saxlayın",
-		"description": "Options page label: 'zoom out the page'"
+	"optionLoadDeferredContentKeepZoomLevel": {
+		"message": "saxlama zamanı səhifəni kiçildin",
+		"description": "Options page label: 'zoom out the page during the capture'"
 	},
-	"optionLoadDeferredImagesDispatchScrollEvent": {
-		"message": "\"scroll\" hadisəsini göndərin",
-		"description": "Options page label: 'dispatch \"scroll\" event'"
+	"optionLoadDeferredContentDispatchScrollEvent": {
+		"message": "sürüşdürməni simulyasiya edin",
+		"description": "Options page label: 'simulate scrolling'"
 	},
-	"optionLoadDeferredImagesBeforeFrames": {
-		"message": "frame-lərdən əvvəl yükləyin",
-		"description": "Options page label: 'load deferred frames'"
+	"optionLoadDeferredContentBeforeFrames": {
+		"message": "əvvəlcə frame-lərdə yükləyin",
+		"description": "Options page label: 'load in frames first'"
 	},
 	"optionRemoveAlternativeImages": {
 		"message": "alternativ ekran çözünürlüklü şəkilləri çıxarın",
@@ -492,7 +548,7 @@
 		"description": "Options page label: 'images'"
 	},
 	"optionsDestinationSubTitle": {
-		"message": "Göstərici",
+		"message": "Təyinat",
 		"description": "Options sub-title: 'Destination'"
 	},
 	"optionsBookmarkSubTitle": {
@@ -505,7 +561,7 @@
 	},
 	"optionsAutoSettingsSubTitle": {
 		"message": "Avtomatik ayarlar qaydaları",
-		"description": "Options sub-title: 'Auto-settings rules'"
+		"description": "Options sub-title: the table of rules that pick a profile automatically from the URL of the page being saved"
 	},
 	"optionsDeleteDisplayedRulesConfirm": {
 		"message": "Göstərilən bütün qaydaların silinməsini təsdiqləyin",
@@ -517,34 +573,34 @@
 	},
 	"optionsAutoSettingsUrl": {
 		"message": "URL",
-		"description": "Options label in the Auto-settings rules: 'URL'"
+		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
 		"message": "Tam və ya qısmi URL daxil edin (məsələn, example.com)",
-		"description": "Placeholder in the Auto-settings rules: 'Type a complete or partial URL (e.g. example.com)'"
+		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
 		"message": "Profil",
-		"description": "Options label in the Auto-settings rules: 'Profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved manually. It is a noun, the name of a profile, not an instruction to save"
 	},
 	"optionsAutoSettingsAutoSaveProfile": {
-		"message": "Auto-save profil",
-		"description": "Options label in the Auto-settings rules: 'Auto-save profile'"
+		"message": "Avtomatik yaddaşa qeyd profili",
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved automatically. It is a noun phrase, 'the profile used for auto-saving', never 'automatically save the profile'"
 	},
 	"optionsAutoSettingsShowAllProfiles": {
 		"message": "bütün profiləri göstərin",
-		"description": "Options label in the Auto-settings rules: 'display all profiles'"
+		"description": "Checkbox label under the Auto-settings rules table: list the rules of every profile instead of only those of the profile selected above"
 	},
 	"optionsAutoSettingsShowAutoSaveProfile": {
-		"message": "Auto-save profilini göstərin",
-		"description": "Options label in the Auto-settings rules: 'display 'Auto-save profile' column'"
+		"message": "'Avtomatik yaddaşa qeyd profili' sütununu göstərin",
+		"description": "Checkbox label under the Auto-settings rules table: show or hide the 'Auto-save profile' column. The quoted name must match the translation of optionsAutoSettingsAutoSaveProfile"
 	},
 	"optionsUpdateRuleTooltip": {
-		"message": "Qayda yenilə",
+		"message": "Qaydanı yenilə",
 		"description": "Popup text 'Update the rule' in the options page"
 	},
 	"optionsDeleteRuleTooltip": {
-		"message": "Qayda sil",
+		"message": "Qaydanı sil",
 		"description": "Popup text 'Delete the rule' in the options page"
 	},
 	"optionsAddRuleTooltip": {
@@ -725,6 +781,10 @@
 		"message": "mətni təhlükəsizlik siyasəti ilə əlavə edin",
 		"description": "Options page label: 'set content security policy'"
 	},
+	"optionInsertCanonicalLink": {
+		"message": "səhifənin kanonik keçidini yadda saxla",
+		"description": "Options page label: 'save the canonical link of the page'"
+	},
 	"optionSaveToClipboard": {
 		"message": "mətni kəsənlərə kopyalayın",
 		"description": "Options page label: 'copy to clipboard'"
@@ -862,7 +922,7 @@
 		"description": "Options button: 'Reset'"
 	},
 	"optionsResetTooltip": {
-		"message": "Seçimləri və ya cari profil sıfırlayın",
+		"message": "Bütün seçimləri ilkin dəyərlərinə sıfırlayın",
 		"description": "Options 'Reset' button tooltip"
 	},
 	"optionsResetConfirm": {
@@ -893,9 +953,9 @@
 		"message": "İçəri al",
 		"description": "Options button: 'Import'"
 	},
-	"logPanelDeferredImages": {
-		"message": "Gözləyən şəkillər",
-		"description": "Label 'Deferred images' in the log panel"
+	"logPanelDeferredContent": {
+		"message": "Gözləyən məzmun",
+		"description": "Label 'Deferred content' in the log panel"
 	},
 	"logPanelFrameContents": {
 		"message": "Frame məzmunu",
@@ -911,7 +971,11 @@
 	},
 	"logPanelWidth": {
 		"message": "122",
-		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredImages')"
+		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
+	},
+	"maskCancelButton": {
+		"message": "İmtina (Esc)",
+		"description": "Button 'Cancel (Esc)' in the mask displayed while a page is being saved"
 	},
 	"topPanelError": {
 		"message": "SingleFile xətası: ",
@@ -1045,6 +1109,10 @@
 		"message": "MHTML faylını daxil et",
 		"description": "Title of the button 'Import MHTML file' in the editor"
 	},
+	"editorArchiveToc": {
+		"message": "Mündəricat",
+		"description": "Title of the table of contents button displayed in the editor when viewing a multi-page archive"
+	},
 	"pendingsTitle": {
 		"message": "Gözləyənlər",
 		"description": "Title of the pending save page 'Pending saves' in the editor"
@@ -1160,5 +1228,277 @@
 	"optionsEditorInvalidJSON": {
 		"message": "Yanlış JSON",
 		"description": "Options editor error message: 'Invalid JSON'"
+	},
+	"optionsMenusSubTitle": {
+		"message": "Menyular",
+		"description": "Options sub-title: 'Menus'"
+	},
+	"optionMenusEditor": {
+		"message": "menyularda göstərilən elementləri və onların sırasını seçin (bütün profillər üçün ortaqdır)",
+		"description": "Options page label: 'choose the entries displayed in the menus and their order (shared by all profiles)'"
+	},
+	"optionMenusEditorLink": {
+		"message": "Menyu redaktorunu aç...",
+		"description": "Options page link: 'Open the menu editor...'"
+	},
+	"optionMenusDefault": {
+		"message": "standart menyular",
+		"description": "Options page state: 'default menus'"
+	},
+	"optionMenusCustomized": {
+		"message": "fərdiləşdirilmiş menyular",
+		"description": "Options page state: 'customized menus'"
+	},
+	"menuSubmenu": {
+		"message": "Alt menyu",
+		"description": "Menu editor entry: 'Submenu'"
+	},
+	"menuSeparator": {
+		"message": "Ayırıcı",
+		"description": "Menu editor entry: 'Separator'"
+	},
+	"menusTitle": {
+		"message": "Menyu redaktoru",
+		"description": "Menu editor title"
+	},
+	"menusSubTitle": {
+		"message": "Hər SingleFile menyusunda nəyin və hansı sırada göstəriləcəyini seçin. Bu ayarlar bütün profillər üçün ortaqdır.",
+		"description": "Menu editor sub-title"
+	},
+	"menusSurfaceLabel": {
+		"message": "Menyu",
+		"description": "Menu editor label of the menu selector"
+	},
+	"menusSurfacePage": {
+		"message": "Səhifənin kontekst menyusu",
+		"description": "Menu editor menu name: 'Page context menu'"
+	},
+	"menusSurfaceButton": {
+		"message": "Düymə menyusu",
+		"description": "Menu editor menu name: 'Button menu'"
+	},
+	"menusSurfaceTab": {
+		"message": "Tab menyusu",
+		"description": "Menu editor menu name: 'Tab menu'"
+	},
+	"menusUseForAllButton": {
+		"message": "Bütün menyulara tətbiq et",
+		"description": "Menu editor button: 'Use for all menus'"
+	},
+	"menusUseForAllTooltip": {
+		"message": "Digər menyuları bununla əvəz et",
+		"description": "Menu editor tooltip of the 'Use for all menus' button"
+	},
+	"menusUseForAllStatus": {
+		"message": "Bütün menyular artıq bu elementlərdən istifadə edir.",
+		"description": "Menu editor status after using a layout for all menus"
+	},
+	"menusContextPage": {
+		"message": "Səhifə",
+		"description": "Menu editor context: 'Page'"
+	},
+	"menusContextSelection": {
+		"message": "Seçim",
+		"description": "Menu editor context: 'Selection'"
+	},
+	"menusContextFrame": {
+		"message": "Frame",
+		"description": "Menu editor context: 'Frame'"
+	},
+	"menusContextLink": {
+		"message": "Link",
+		"description": "Menu editor context: 'Link'"
+	},
+	"menusHintPage": {
+		"message": "Səhifəyə sağ klik edildikdə göstərilir. Boz rəngli elementlər seçilmiş kontekstdə görünmür.",
+		"description": "Menu editor hint of the page context menu"
+	},
+	"menusHintButton": {
+		"message": "Alətlər panelindəki SingleFile düyməsinə sağ klik edildikdə göstərilir.",
+		"description": "Menu editor hint of the button menu"
+	},
+	"menusHintTab": {
+		"message": "Taba sağ klik edildikdə göstərilir.",
+		"description": "Menu editor hint of the tab menu"
+	},
+	"menusAddLabel": {
+		"message": "Əlavə et",
+		"description": "Menu editor label of the entry selector"
+	},
+	"menusAddButton": {
+		"message": "Əlavə et",
+		"description": "Menu editor button: 'Add'"
+	},
+	"menusEditHint": {
+		"message": "Yeni elementlər seçilmiş elementdən sonra və ya seçilmiş alt menyunun içinə əlavə olunur. Sıralamaq üçün sürüşdürün, iç-içə yerləşdirmək üçün alt menyunun üzərinə buraxın, adını dəyişmək üçün etiketə iki dəfə klik edin, silmək üçün Delete düyməsini basın.",
+		"description": "Menu editor hint about editing"
+	},
+	"menusDynamicBadge": {
+		"message": "dinamik",
+		"description": "Menu editor badge of the entries managed by SingleFile"
+	},
+	"menusRemoveTooltip": {
+		"message": "Bu menyudan sil",
+		"description": "Menu editor tooltip of the remove button"
+	},
+	"menusActionLimitLine": {
+		"message": "Yalnız ilk $1 element göstərilir",
+		"description": "Menu editor line marking the entries hidden by the browser in the button menu"
+	},
+	"menusActionLimitNote": {
+		"message": "Brauzer düymə menyusunda ən çoxu $1 üst səviyyəli element göstərir.",
+		"description": "Menu editor note about the limit of top-level entries in the button menu"
+	},
+	"menusActionLimitLineWrapped": {
+		"message": "Firefox aşağıdakı elementləri 'SingleFile' alt menyusuna köçürür",
+		"description": "Menu editor line marking the entries Firefox moves into an automatic submenu in the button menu"
+	},
+	"menusActionLimitNoteWrapped": {
+		"message": "Firefox düymə menyusunda ilk $1 üst səviyyəli elementi saxlayır və qalanlarını 'SingleFile' alt menyusuna köçürür.",
+		"description": "Menu editor note about Firefox moving the extra top-level entries of the button menu into an automatic submenu"
+	},
+	"menusWrapButton": {
+		"message": "Qalanları alt menyuya yığ",
+		"description": "Menu editor button: 'Wrap the rest in a submenu'"
+	},
+	"menusMoreSubmenu": {
+		"message": "Daha çox...",
+		"description": "Menu editor default label of the submenu created to wrap the hidden entries"
+	},
+	"menusInspectorEmpty": {
+		"message": "Etiketini dəyişmək, profilə bağlamaq və ya nə vaxt görünəcəyini seçmək üçün menyudan bir element seçin.",
+		"description": "Menu editor text when no entry is selected"
+	},
+	"menusInspectorSeparator": {
+		"message": "Ayırıcı. Köçürmək üçün sürüşdürün, silmək üçün Delete düyməsini basın.",
+		"description": "Menu editor text when a separator is selected"
+	},
+	"menusLabelField": {
+		"message": "Etiket",
+		"description": "Menu editor field: 'Label'"
+	},
+	"menusLabelHelp": {
+		"message": "Standart etiketi istifadə etmək üçün boş buraxın. Windows və Linux-da hərfdən əvvəl qoyulan & həmin hərfi klaviatura qısayolu edir.",
+		"description": "Menu editor help of the 'Label' field"
+	},
+	"menusProfileField": {
+		"message": "Profil",
+		"description": "Menu editor field: 'Profile'"
+	},
+	"menusProfileNone": {
+		"message": "Səhifə üçün istifadə olunan profil",
+		"description": "Menu editor option when no profile is bound to the entry"
+	},
+	"menusProfileHelp": {
+		"message": "Cari profildən asılı olmayaraq bir kliklə həmin profillə yaddaşa qeyd etmək üçün bu elementi bir profilə bağlayın.",
+		"description": "Menu editor help of the 'Profile' field"
+	},
+	"menusPresentationField": {
+		"message": "Görünüş",
+		"description": "Menu editor field: 'Presentation'"
+	},
+	"menusPresentationSubmenu": {
+		"message": "Bir 'Profil ilə yaddaşa qeyd et' alt menyusu",
+		"description": "Menu editor presentation option: submenu"
+	},
+	"menusPresentationInline": {
+		"message": "Hər profil üçün bir element, birbaşa siyahıda",
+		"description": "Menu editor presentation option: inline"
+	},
+	"menusPresentationHelp": {
+		"message": "Siyahı seçimlərdə təyin olunmuş profillərə uyğundur. Yalnız bəzi profilləri göstərmək üçün əvəzinə həmin profillərə bağlanmış 'Səhifəni yaddaşa qeyd et' elementləri əlavə edin.",
+		"description": "Menu editor help of the 'Presentation' field"
+	},
+	"menusContentsField": {
+		"message": "Məzmun",
+		"description": "Menu editor field: 'Contents'"
+	},
+	"menusContentsHelp": {
+		"message": "Bu element seçimləri SingleFile tərəfindən idarə olunan radio qrupudur. Onu köçürə və adını dəyişə bilərsiniz, amma seçimlərini redaktə edə bilməzsiniz.",
+		"description": "Menu editor help of the 'Contents' field"
+	},
+	"menusContextsField": {
+		"message": "Sağ klik edildikdə göstərilir",
+		"description": "Menu editor field: 'Appears when right-clicking'"
+	},
+	"menusAltLabelHelp": {
+		"message": "Fərdi etiket olmadıqda, səhifəyə aid olduğu halda menyuda '$1' göstərilir.",
+		"description": "Menu editor help about the alternative label of an entry"
+	},
+	"menusSubmenuField": {
+		"message": "Alt menyu",
+		"description": "Menu editor field: 'Submenu'"
+	},
+	"menusSubmenuHelp": {
+		"message": "$1 element. Əlavə etmək üçün elementləri bu sətrin üzərinə buraxın.",
+		"description": "Menu editor help of the 'Submenu' field"
+	},
+	"menusRemoveButton": {
+		"message": "Bu menyudan sil",
+		"description": "Menu editor button: 'Remove from this menu'"
+	},
+	"menusPageOnly": {
+		"message": "'$1' yalnız səhifənin kontekst menyusunda mövcuddur.",
+		"description": "Menu editor status when an entry is not allowed in a menu"
+	},
+	"menusJsonLabel": {
+		"message": "JSON formatında menyular",
+		"description": "Menu editor section: 'Layout as JSON'"
+	},
+	"menusJsonApplyButton": {
+		"message": "Tətbiq et",
+		"description": "Menu editor button: 'Apply'"
+	},
+	"menusJsonInvalid": {
+		"message": "Yanlış JSON",
+		"description": "Menu editor status: 'Invalid JSON'"
+	},
+	"menusJsonIgnored": {
+		"message": "Tətbiq olundu, amma $1 yanlış element nəzərə alınmadı.",
+		"description": "Menu editor status after applying JSON that contained entries which are not valid (unknown action, wrong shape)"
+	},
+	"menusUnsupportedBadge": {
+		"message": "dəstəklənmir",
+		"description": "Menu editor badge of the entries the current browser cannot show"
+	},
+	"menusUnsupportedActionHelp": {
+		"message": "Bu brauzer bu elementi dəstəkləmir, ona görə də göstərilmir.",
+		"description": "Menu editor note for an entry the current browser cannot show"
+	},
+	"menusProfileMissingHelp": {
+		"message": "'$1' profili artıq mövcud deyil, ona görə də bu element səhifə üçün istifadə olunan profili istifadə edir.",
+		"description": "Menu editor note for an entry bound to a deleted profile"
+	},
+	"menusEmptySubmenuHelp": {
+		"message": "Bu alt menyunun görünən elementi yoxdur, ona görə də göstərilmir.",
+		"description": "Menu editor note for a submenu whose entries are all skipped"
+	},
+	"menusResetButton": {
+		"message": "Standarta sıfırla",
+		"description": "Menu editor button: 'Reset to default'"
+	},
+	"menusResetConfirm": {
+		"message": "Standart menyular bərpa edilsin?",
+		"description": "Menu editor confirmation before restoring the default menus"
+	},
+	"menusSaveError": {
+		"message": "Menyuları yaddaşa qeyd etmək mümkün olmadı: $1",
+		"description": "Menu editor status when saving the layout fails (for example the sync storage quota)"
+	},
+	"menusUnsupported": {
+		"message": "Bu brauzer genişləndirmə menyularını dəstəkləmir, ona görə də burada fərdiləşdiriləcək bir şey yoxdur.",
+		"description": "Menu editor message shown instead of the editor when the browser has no menus API (for example on Android)"
+	},
+	"menusProfilesBadge": {
+		"message": "2+ profil lazımdır",
+		"description": "Menu editor badge of the entries that only appear when more than one profile exists"
+	},
+	"menusProfilesHelp": {
+		"message": "Bu element yalnız birdən çox profiliniz olduqda göstərilir.",
+		"description": "Menu editor note for the entries that only appear when more than one profile exists"
+	},
+	"menusContextHelp": {
+		"message": "Bu element seçilmiş kontekstdə ($1) göstərilmir.",
+		"description": "Menu editor note for an entry whose contexts exclude the context selected above the list"
 	}
 }

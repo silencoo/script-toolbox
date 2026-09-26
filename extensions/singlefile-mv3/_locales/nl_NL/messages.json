@@ -187,6 +187,14 @@
 		"message": "Opties",
 		"description": "Options page title"
 	},
+	"optionsNewWindowLink": {
+		"message": "De opties in een nieuw tabblad openen",
+		"description": "Accessible label of the icon opening the options in a new tab"
+	},
+	"optionsEditorLink": {
+		"message": "De optie-editor openen",
+		"description": "Accessible label of the icon opening the options editor"
+	},
 	"optionsUserInterfaceSubTitle": {
 		"message": "Gebruikersinterface",
 		"description": "Options sub-title: 'User interface'"
@@ -222,6 +230,10 @@
 	"optionOpenInfobar": {
 		"message": "infobalk openhouden",
 		"description": "Options page label: 'keep infobar open'"
+	},
+	"optionAnimateInfobar": {
+		"message": "infobalk animeren",
+		"description": "Options page label: 'animate the infobar'"
 	},
 	"optionRemoveInfobarSavedDate": {
 		"message": "sla de opgeslagen datum niet op",
@@ -267,6 +279,46 @@
 		"message": "vervangend teken",
 		"description": "Options page label: 'replacement character'"
 	},
+	"optionFilenameReplacements": {
+		"message": "tekens die in bestandsnamen worden vervangen",
+		"description": "Options page label: 'characters replaced in file names'"
+	},
+	"optionsFilenameReplacedCharacters": {
+		"message": "Teken(s)",
+		"description": "Options page column label in the replaced characters table: 'Character(s)'"
+	},
+	"optionsFilenameReplacementCharacters": {
+		"message": "Vervangen door",
+		"description": "Options page column label in the replaced characters table: 'Replaced with'"
+	},
+	"optionsFilenameReplacedCharactersPlaceholder": {
+		"message": "Typ een teken (bijv. \":\")",
+		"description": "Placeholder in the replaced characters table: 'Type a character (e.g. \":\")'"
+	},
+	"optionsAddFilenameReplacementTooltip": {
+		"message": "Teken toevoegen",
+		"description": "Popup text 'Add the character' in the options page"
+	},
+	"optionsDeleteFilenameReplacementTooltip": {
+		"message": "Dit teken niet meer vervangen",
+		"description": "Popup text 'Stop replacing this character' in the options page"
+	},
+	"optionsFilenameReplacementsResetButton": {
+		"message": "Standaardtekens herstellen",
+		"description": "Button label 'Restore default characters' in the options page"
+	},
+	"optionsFilenameReplacementsPreviewFilename": {
+		"message": "Test een bestandsnaam",
+		"description": "Options page column label in the preview table: 'Test a file name'"
+	},
+	"optionsFilenameReplacementsPreviewResult": {
+		"message": "Resultaat",
+		"description": "Options page column label in the preview table: 'Result'"
+	},
+	"optionsFilenameReplacementsPreviewPlaceholder": {
+		"message": "Typ een bestandsnaam",
+		"description": "Placeholder in the preview table: 'Type a file name'"
+	},
 	"optionReplaceEmojisInFilename": {
 		"message": "vervang emoji's door tekst",
 		"description": "Options page label: 'replace emojis with text'"
@@ -280,7 +332,7 @@
 		"description": "Options page label: 'open the \"Save as\" dialog to confirm the file name'"
 	},
 	"optionFilenameConflictAction": {
-		"message": "gebruik een unieke bestandsnaam",
+		"message": "oplossing van bestandsnaamconflicten",
 		"description": "Options page label: 'filename conflict resolution'"
 	},
 	"optionFilenameConflictActionUniquify": {
@@ -383,6 +435,10 @@
 		"message": "Afbeeldingen",
 		"description": "Options sub-title: 'Images'"
 	},
+	"optionsDeferredContentSubTitle": {
+		"message": "Uitgestelde inhoud",
+		"description": "Options sub-title: 'Deferred content'"
+	},
 	"optionGroupDuplicateImages": {
 		"message": "dubbele afbeeldingen samenvoegen",
 		"description": "Options page label: 'group duplicate images together'"
@@ -391,25 +447,25 @@
 		"message": "factor voor verkleining van afbeeldingen",
 		"description": "Options page label: 'image reduction factor'"
 	},
-	"optionLoadDeferredImages": {
-		"message": "uitgestelde afbeeldingen opslaan",
-		"description": "Options page label: 'save deferred images'"
+	"optionLoadDeferredContent": {
+		"message": "inhoud opslaan die tijdens het scrollen wordt geladen",
+		"description": "Options page label: 'save content loaded while scrolling'"
 	},
-	"optionLoadDeferredImagesMaxIdleTime": {
+	"optionLoadDeferredContentMaxIdleTime": {
 		"message": "maximale wachttijd (ms)",
 		"description": "Options page label: 'maximum idle time (ms)'"
 	},
-	"optionLoadDeferredImagesKeepZoomLevel": {
-		"message": "zoom uit op de pagina",
-		"description": "Options page label: 'zoom out the page'"
+	"optionLoadDeferredContentKeepZoomLevel": {
+		"message": "de pagina uitzoomen tijdens het opslaan",
+		"description": "Options page label: 'zoom out the page during the capture'"
 	},
-	"optionLoadDeferredImagesDispatchScrollEvent": {
-		"message": "verzend \"scroll\"-gebeurtenis",
-		"description": "Options page label: 'dispatch \"scroll\" event'"
+	"optionLoadDeferredContentDispatchScrollEvent": {
+		"message": "scrollen simuleren",
+		"description": "Options page label: 'simulate scrolling'"
 	},
-	"optionLoadDeferredImagesBeforeFrames": {
-		"message": "laad uitgestelde frames",
-		"description": "Options page label: 'load deferred frames'"
+	"optionLoadDeferredContentBeforeFrames": {
+		"message": "eerst in frames laden",
+		"description": "Options page label: 'load in frames first'"
 	},
 	"optionRemoveAlternativeImages": {
 		"message": "verwijder afbeeldingen voor alternatieve schermresoluties",
@@ -505,7 +561,7 @@
 	},
 	"optionsAutoSettingsSubTitle": {
 		"message": "Regels voor automatische configuratie",
-		"description": "Options sub-title: 'Auto-settings rules'"
+		"description": "Options sub-title: the table of rules that pick a profile automatically from the URL of the page being saved"
 	},
 	"optionsDeleteDisplayedRulesConfirm": {
 		"message": "Bevestig het verwijderen van alle weergegeven regels",
@@ -517,27 +573,27 @@
 	},
 	"optionsAutoSettingsUrl": {
 		"message": "URL",
-		"description": "Options label in the Auto-settings rules: 'URL'"
+		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
 		"message": "Typ een volledige of gedeeltelijke URL (bijv. voorbeeld.com)",
-		"description": "Placeholder in the Auto-settings rules: 'Type a complete or partial URL (e.g. example.com)'"
+		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
 		"message": "Profiel",
-		"description": "Options label in the Auto-settings rules: 'Profile'"
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved manually. It is a noun, the name of a profile, not an instruction to save"
 	},
 	"optionsAutoSettingsAutoSaveProfile": {
-		"message": "Profiel automatisch opslaan",
-		"description": "Options label in the Auto-settings rules: 'Auto-save profile'"
+		"message": "Profiel voor automatisch opslaan",
+		"description": "Column header in the Auto-settings rules table, naming the profile of settings used when a page matching the rule is saved automatically. It is a noun phrase, 'the profile used for auto-saving', never 'automatically save the profile'"
 	},
 	"optionsAutoSettingsShowAllProfiles": {
 		"message": "toon alle profielen",
-		"description": "Options label in the Auto-settings rules: 'display all profiles'"
+		"description": "Checkbox label under the Auto-settings rules table: list the rules of every profile instead of only those of the profile selected above"
 	},
 	"optionsAutoSettingsShowAutoSaveProfile": {
-		"message": "toon 'profiel automatisch opslaan' kolom",
-		"description": "Options label in the Auto-settings rules: 'display 'Auto-save profile' column'"
+		"message": "toon de kolom 'Profiel voor automatisch opslaan'",
+		"description": "Checkbox label under the Auto-settings rules table: show or hide the 'Auto-save profile' column. The quoted name must match the translation of optionsAutoSettingsAutoSaveProfile"
 	},
 	"optionsUpdateRuleTooltip": {
 		"message": "Regel bijwerken",
@@ -725,6 +781,10 @@
 		"message": "inhoudsbeveiligingsbeleid instellen",
 		"description": "Options page label: 'set content security policy'"
 	},
+	"optionInsertCanonicalLink": {
+		"message": "sla de canonieke link van de pagina op",
+		"description": "Options page label: 'save the canonical link of the page'"
+	},
 	"optionSaveToClipboard": {
 		"message": "kopieer naar klembord",
 		"description": "Options page label: 'copy to clipboard'"
@@ -893,9 +953,9 @@
 		"message": "Importeer",
 		"description": "Options button: 'Import'"
 	},
-	"logPanelDeferredImages": {
-		"message": "Geplaatste afbeeldingen",
-		"description": "Label 'Deferred images' in the log panel"
+	"logPanelDeferredContent": {
+		"message": "Uitgestelde inhoud",
+		"description": "Label 'Deferred content' in the log panel"
 	},
 	"logPanelFrameContents": {
 		"message": "Inhoud van frames",
@@ -911,7 +971,11 @@
 	},
 	"logPanelWidth": {
 		"message": "147",
-		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredImages')"
+		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
+	},
+	"maskCancelButton": {
+		"message": "Annuleer (Esc)",
+		"description": "Button 'Cancel (Esc)' in the mask displayed while a page is being saved"
 	},
 	"topPanelError": {
 		"message": "SingleFile fout: ",
@@ -1045,6 +1109,10 @@
 		"message": "Importeer MHTML-bestand",
 		"description": "Title of the button 'Import MHTML file' in the editor"
 	},
+	"editorArchiveToc": {
+		"message": "Inhoudsopgave",
+		"description": "Title of the table of contents button displayed in the editor when viewing a multi-page archive"
+	},
 	"pendingsTitle": {
 		"message": "Opslaan in afwachting",
 		"description": "Title of the pending save page 'Pending saves' in the editor"
@@ -1160,5 +1228,277 @@
 	"optionsEditorInvalidJSON": {
 		"message": "Ongeldige JSON",
 		"description": "Options editor error message: 'Invalid JSON'"
+	},
+	"optionsMenusSubTitle": {
+		"message": "Menu's",
+		"description": "Options sub-title: 'Menus'"
+	},
+	"optionMenusEditor": {
+		"message": "kies welke items in de menu's worden weergegeven en in welke volgorde (gedeeld door alle profielen)",
+		"description": "Options page label: 'choose the entries displayed in the menus and their order (shared by all profiles)'"
+	},
+	"optionMenusEditorLink": {
+		"message": "Open de menu-editor...",
+		"description": "Options page link: 'Open the menu editor...'"
+	},
+	"optionMenusDefault": {
+		"message": "standaardmenu's",
+		"description": "Options page state: 'default menus'"
+	},
+	"optionMenusCustomized": {
+		"message": "aangepaste menu's",
+		"description": "Options page state: 'customized menus'"
+	},
+	"menuSubmenu": {
+		"message": "Submenu",
+		"description": "Menu editor entry: 'Submenu'"
+	},
+	"menuSeparator": {
+		"message": "Scheidingslijn",
+		"description": "Menu editor entry: 'Separator'"
+	},
+	"menusTitle": {
+		"message": "Menu-editor",
+		"description": "Menu editor title"
+	},
+	"menusSubTitle": {
+		"message": "Kies wat er in elk SingleFile-menu verschijnt en in welke volgorde. Deze instellingen worden gedeeld door alle profielen.",
+		"description": "Menu editor sub-title"
+	},
+	"menusSurfaceLabel": {
+		"message": "Menu",
+		"description": "Menu editor label of the menu selector"
+	},
+	"menusSurfacePage": {
+		"message": "Contextmenu van de pagina",
+		"description": "Menu editor menu name: 'Page context menu'"
+	},
+	"menusSurfaceButton": {
+		"message": "Knopmenu",
+		"description": "Menu editor menu name: 'Button menu'"
+	},
+	"menusSurfaceTab": {
+		"message": "Tabbladmenu",
+		"description": "Menu editor menu name: 'Tab menu'"
+	},
+	"menusUseForAllButton": {
+		"message": "Gebruik voor alle menu's",
+		"description": "Menu editor button: 'Use for all menus'"
+	},
+	"menusUseForAllTooltip": {
+		"message": "Vervang de andere menu's door dit menu",
+		"description": "Menu editor tooltip of the 'Use for all menus' button"
+	},
+	"menusUseForAllStatus": {
+		"message": "Alle menu's gebruiken nu deze items.",
+		"description": "Menu editor status after using a layout for all menus"
+	},
+	"menusContextPage": {
+		"message": "Pagina",
+		"description": "Menu editor context: 'Page'"
+	},
+	"menusContextSelection": {
+		"message": "Selectie",
+		"description": "Menu editor context: 'Selection'"
+	},
+	"menusContextFrame": {
+		"message": "Frame",
+		"description": "Menu editor context: 'Frame'"
+	},
+	"menusContextLink": {
+		"message": "Link",
+		"description": "Menu editor context: 'Link'"
+	},
+	"menusHintPage": {
+		"message": "Wordt getoond bij rechtsklikken op een pagina. Grijze items verschijnen niet in de geselecteerde context.",
+		"description": "Menu editor hint of the page context menu"
+	},
+	"menusHintButton": {
+		"message": "Wordt getoond bij rechtsklikken op de SingleFile-knop in de werkbalk.",
+		"description": "Menu editor hint of the button menu"
+	},
+	"menusHintTab": {
+		"message": "Wordt getoond bij rechtsklikken op een tabblad.",
+		"description": "Menu editor hint of the tab menu"
+	},
+	"menusAddLabel": {
+		"message": "Toevoegen",
+		"description": "Menu editor label of the entry selector"
+	},
+	"menusAddButton": {
+		"message": "Voeg toe",
+		"description": "Menu editor button: 'Add'"
+	},
+	"menusEditHint": {
+		"message": "Nieuwe items komen na het geselecteerde item, of in een geselecteerd submenu. Sleep om de volgorde te wijzigen, laat los op een submenu om te nesten, dubbelklik op een label om het te hernoemen en druk op Delete om te verwijderen.",
+		"description": "Menu editor hint about editing"
+	},
+	"menusDynamicBadge": {
+		"message": "dynamisch",
+		"description": "Menu editor badge of the entries managed by SingleFile"
+	},
+	"menusRemoveTooltip": {
+		"message": "Verwijder uit dit menu",
+		"description": "Menu editor tooltip of the remove button"
+	},
+	"menusActionLimitLine": {
+		"message": "Alleen de eerste $1 items worden getoond",
+		"description": "Menu editor line marking the entries hidden by the browser in the button menu"
+	},
+	"menusActionLimitNote": {
+		"message": "De browser toont maximaal $1 items op het hoogste niveau in het knopmenu.",
+		"description": "Menu editor note about the limit of top-level entries in the button menu"
+	},
+	"menusActionLimitLineWrapped": {
+		"message": "Firefox verplaatst de volgende items naar een submenu 'SingleFile'",
+		"description": "Menu editor line marking the entries Firefox moves into an automatic submenu in the button menu"
+	},
+	"menusActionLimitNoteWrapped": {
+		"message": "Firefox houdt de eerste $1 items op het hoogste niveau in het knopmenu en verplaatst de rest naar een submenu 'SingleFile'.",
+		"description": "Menu editor note about Firefox moving the extra top-level entries of the button menu into an automatic submenu"
+	},
+	"menusWrapButton": {
+		"message": "Zet de rest in een submenu",
+		"description": "Menu editor button: 'Wrap the rest in a submenu'"
+	},
+	"menusMoreSubmenu": {
+		"message": "Meer...",
+		"description": "Menu editor default label of the submenu created to wrap the hidden entries"
+	},
+	"menusInspectorEmpty": {
+		"message": "Selecteer een item in het menu om het label te wijzigen, het aan een profiel te koppelen of te kiezen wanneer het verschijnt.",
+		"description": "Menu editor text when no entry is selected"
+	},
+	"menusInspectorSeparator": {
+		"message": "Scheidingslijn. Sleep om te verplaatsen, druk op Delete om te verwijderen.",
+		"description": "Menu editor text when a separator is selected"
+	},
+	"menusLabelField": {
+		"message": "Label",
+		"description": "Menu editor field: 'Label'"
+	},
+	"menusLabelHelp": {
+		"message": "Laat leeg om het standaardlabel te gebruiken. Op Windows en Linux maakt een & voor een letter die letter de sneltoets.",
+		"description": "Menu editor help of the 'Label' field"
+	},
+	"menusProfileField": {
+		"message": "Profiel",
+		"description": "Menu editor field: 'Profile'"
+	},
+	"menusProfileNone": {
+		"message": "Profiel dat voor de pagina wordt gebruikt",
+		"description": "Menu editor option when no profile is bound to the entry"
+	},
+	"menusProfileHelp": {
+		"message": "Koppel dit item aan een profiel om er met één klik mee op te slaan, ongeacht het huidige profiel.",
+		"description": "Menu editor help of the 'Profile' field"
+	},
+	"menusPresentationField": {
+		"message": "Weergave",
+		"description": "Menu editor field: 'Presentation'"
+	},
+	"menusPresentationSubmenu": {
+		"message": "Eén submenu 'Sla pagina op met profiel'",
+		"description": "Menu editor presentation option: submenu"
+	},
+	"menusPresentationInline": {
+		"message": "Eén item per profiel, direct in de lijst",
+		"description": "Menu editor presentation option: inline"
+	},
+	"menusPresentationHelp": {
+		"message": "De lijst volgt de profielen die in de opties zijn gedefinieerd. Wil je maar een paar profielen tonen, voeg dan in plaats daarvan 'Sla pagina op'-items toe die aan die profielen zijn gekoppeld.",
+		"description": "Menu editor help of the 'Presentation' field"
+	},
+	"menusContentsField": {
+		"message": "Inhoud",
+		"description": "Menu editor field: 'Contents'"
+	},
+	"menusContentsHelp": {
+		"message": "Dit item is een groep keuzerondjes waarvan de keuzes door SingleFile worden beheerd. Je kunt het verplaatsen of hernoemen, maar de keuzes niet bewerken.",
+		"description": "Menu editor help of the 'Contents' field"
+	},
+	"menusContextsField": {
+		"message": "Verschijnt bij rechtsklikken op",
+		"description": "Menu editor field: 'Appears when right-clicking'"
+	},
+	"menusAltLabelHelp": {
+		"message": "Zonder aangepast label toont het menu '$1' wanneer het op de pagina van toepassing is.",
+		"description": "Menu editor help about the alternative label of an entry"
+	},
+	"menusSubmenuField": {
+		"message": "Submenu",
+		"description": "Menu editor field: 'Submenu'"
+	},
+	"menusSubmenuHelp": {
+		"message": "$1 items. Laat items op deze rij los om ze toe te voegen.",
+		"description": "Menu editor help of the 'Submenu' field"
+	},
+	"menusRemoveButton": {
+		"message": "Verwijder uit dit menu",
+		"description": "Menu editor button: 'Remove from this menu'"
+	},
+	"menusPageOnly": {
+		"message": "'$1' bestaat alleen in het contextmenu van de pagina.",
+		"description": "Menu editor status when an entry is not allowed in a menu"
+	},
+	"menusJsonLabel": {
+		"message": "Menu's als JSON",
+		"description": "Menu editor section: 'Layout as JSON'"
+	},
+	"menusJsonApplyButton": {
+		"message": "Pas toe",
+		"description": "Menu editor button: 'Apply'"
+	},
+	"menusJsonInvalid": {
+		"message": "Ongeldige JSON",
+		"description": "Menu editor status: 'Invalid JSON'"
+	},
+	"menusJsonIgnored": {
+		"message": "Toegepast, maar $1 ongeldige items zijn genegeerd.",
+		"description": "Menu editor status after applying JSON that contained entries which are not valid (unknown action, wrong shape)"
+	},
+	"menusUnsupportedBadge": {
+		"message": "niet ondersteund",
+		"description": "Menu editor badge of the entries the current browser cannot show"
+	},
+	"menusUnsupportedActionHelp": {
+		"message": "Deze browser ondersteunt dit item niet, dus het wordt niet getoond.",
+		"description": "Menu editor note for an entry the current browser cannot show"
+	},
+	"menusProfileMissingHelp": {
+		"message": "Het profiel '$1' bestaat niet meer, dus dit item gebruikt het profiel dat voor de pagina wordt gebruikt.",
+		"description": "Menu editor note for an entry bound to a deleted profile"
+	},
+	"menusEmptySubmenuHelp": {
+		"message": "Dit submenu heeft geen zichtbare items, dus het wordt niet getoond.",
+		"description": "Menu editor note for a submenu whose entries are all skipped"
+	},
+	"menusResetButton": {
+		"message": "Reset naar standaard",
+		"description": "Menu editor button: 'Reset to default'"
+	},
+	"menusResetConfirm": {
+		"message": "De standaardmenu's herstellen?",
+		"description": "Menu editor confirmation before restoring the default menus"
+	},
+	"menusSaveError": {
+		"message": "De menu's konden niet worden opgeslagen: $1",
+		"description": "Menu editor status when saving the layout fails (for example the sync storage quota)"
+	},
+	"menusUnsupported": {
+		"message": "Deze browser ondersteunt geen extensiemenu's, dus er valt hier niets aan te passen.",
+		"description": "Menu editor message shown instead of the editor when the browser has no menus API (for example on Android)"
+	},
+	"menusProfilesBadge": {
+		"message": "vereist 2+ profielen",
+		"description": "Menu editor badge of the entries that only appear when more than one profile exists"
+	},
+	"menusProfilesHelp": {
+		"message": "Dit item wordt alleen getoond wanneer je meer dan één profiel hebt.",
+		"description": "Menu editor note for the entries that only appear when more than one profile exists"
+	},
+	"menusContextHelp": {
+		"message": "Dit item wordt niet getoond in de geselecteerde context ($1).",
+		"description": "Menu editor note for an entry whose contexts exclude the context selected above the list"
 	}
 }
