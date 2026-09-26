@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -8,12 +9,28 @@ import {
   platformStateHome
 } from "./platform-paths.mjs";
 
-test("Codex home honors explicit roots on native and projected platforms", () => {
-  assert.equal(codexHome({ home: "/h", environment: {} }), "/h/.codex");
-  assert.equal(codexHome({ home: "/h", environment: { CODEX_HOME: "/other/codex" } }), "/other/codex");
-  assert.equal(codexHome({ platform: "windows", home: "C:\\Users\\T",
-    environment: { CODEX_HOME: "D:\\Codex Home" } }), "D:\\Codex Home");
+test("Codex home uses native paths by default", () => {
+  const home = resolve("test-home");
+  const alternate = join(home, "Codex Home");
+  assert.equal(codexHome({ home, environment: {} }), join(home, ".codex"));
+  assert.equal(codexHome({ home, environment: { CODEX_HOME: alternate } }), alternate);
 });
+
+for (const platform of ["linux", "darwin"]) {
+  test(`Codex home honors explicit roots on ${platform}`, () => {
+    assert.equal(codexHome({ platform, home: "/h", environment: {} }), "/h/.codex");
+    assert.equal(codexHome({ platform, home: "/h",
+      environment: { CODEX_HOME: "/other/codex" } }), "/other/codex");
+  });
+}
+
+for (const platform of ["win32", "windows"]) {
+  test(`Codex home honors explicit roots on ${platform}`, () => {
+    assert.equal(codexHome({ platform, home: "C:\\Users\\T", environment: {} }), "C:\\Users\\T\\.codex");
+    assert.equal(codexHome({ platform, home: "C:\\Users\\T",
+      environment: { CODEX_HOME: "D:\\Codex Home" } }), "D:\\Codex Home");
+  });
+}
 
 test("Linux honors XDG roots", () => {
   const options = {
