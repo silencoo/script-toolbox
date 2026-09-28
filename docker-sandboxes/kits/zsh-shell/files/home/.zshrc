@@ -1,4 +1,10 @@
 # Managed by the sbx-manager zsh-shell kit.
+# Native CLI installers (including Claude Code) use this directory. Keep it
+# on PATH even before it exists, and export it to setup subprocesses too.
+typeset -U path
+path=("$HOME/.local/bin" $path)
+export PATH
+
 export ZSH="$HOME/.oh-my-zsh"
 ZSH_THEME=""
 zstyle ':omz:update' mode disabled
@@ -64,7 +70,11 @@ unset _sbx_claude_bypass
 # agentctl Provider switches automatically without rewriting the shell file.
 claude() {
   local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-  local claude_command="${commands[claude]:-}"
+  # The command hash can predate an installation in this very shell. Search
+  # PATH for the external executable instead of recursing into this wrapper
+  # or treating a stale/missing cache entry as an uninstalled CLI.
+  local claude_command
+  claude_command="$(builtin whence -p claude)" || claude_command=""
 
   if [[ -z "$claude_command" ]]; then
     print -u2 -- 'claude: command not found'

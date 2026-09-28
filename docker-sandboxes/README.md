@@ -208,6 +208,14 @@ the credential type that conflicts with `~/.claude/settings.json`; switching
 Provider profiles is detected dynamically. The host-side sbx Secret remains
 available to other commands and its value is never read or removed.
 
+The zsh kit exports `~/.local/bin` on `PATH`, including before the directory
+exists, so native CLI installations are available to the shell and its setup
+subprocesses. The Claude wrapper searches `PATH` on each launch rather than
+relying on zsh's command cache; Claude installed during an open session works
+without restarting the shell or manually running `rehash`. Update the manager
+checkout and reattach with `./sbx-manager.sh run --name <sandbox>` (or the
+PowerShell equivalent) to refresh an older kit, unless `--no-shell-kit` is selected.
+
 The bundled kit targets the apt-based official sandbox templates. Disable it
 for an incompatible custom image:
 

@@ -69,6 +69,8 @@ run_setup() {
     "$ROOT_DIR/sbx-manager.sh" "$@" > "$case_dir/output" 2>&1
 }
 
+bash "$ROOT_DIR/tests/zsh-shell-test.sh"
+
 [ -f "$SHELL_KIT/spec.yaml" ] || fail "default shell kit spec is missing"
 [ -f "$SHELL_KIT/files/home/.zshrc" ] || fail "default shell kit zshrc is missing"
 [ -f "$SHELL_KIT/files/home/.config/sbx-manager/apply-home-files.sh" ] \
