@@ -1,17 +1,22 @@
 /* eslint-disable no-console */
-/* global process, URL, setTimeout, TextDecoder */
+/* global process, URL, setTimeout, TextDecoder, Buffer */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { cdp, getTargets, options } from "simple-cdp";
 
 const EXTENSION_PATH = process.env.SF_EXTENSION_PATH || resolve(new URL("..", import.meta.url).pathname);
+const SERVICE_WORKER_PATH = "/" + JSON.parse(readFileSync(join(EXTENSION_PATH, "manifest.json"), "utf8")).background.service_worker;
 const FIXTURES_PATH = new URL("../node_modules/single-file-core/test/fixtures/", import.meta.url).pathname;
 const FIXTURE_PATH = process.env.SF_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page.zip.html");
 const SINGLE_PAGE_FIXTURE_PATH = process.env.SF_SINGLE_PAGE_FIXTURE_PATH || join(FIXTURES_PATH, "single-page.zip.html");
 const DEDUP_FIXTURE_PATH = process.env.SF_DEDUP_FIXTURE_PATH || join(FIXTURES_PATH, "multi-page-dedup.zip.html");
+const DIGEST_FIXTURE_PATH = process.env.SF_DIGEST_FIXTURE_PATH || join(FIXTURES_PATH, "classic-digest.html");
+const NESTING_FIXTURE_PATH = new URL("fixtures/nesting.zip.html", import.meta.url).pathname;
 const ZIP_MODULE_URL = new URL("../node_modules/single-file-core/vendor/zip/zip.js", import.meta.url).href;
 const FILENAME_CAPTURE_SCRIPT = "(() => {" +
 	"if (!window.__sendMessagePatched) {" +
@@ -28,6 +33,9 @@ const FILENAME_CAPTURE_SCRIPT = "(() => {" +
 	"window.__savedFilename = undefined;" +
 	"})()";
 const PLAIN_PAGE_CONTENT = "<!DOCTYPE html><html><!--\n Page saved with SingleFile \n url: https://example.com/plain\n saved date: Thu Aug 27 2026 00:00:00 GMT+0000\n--><head><meta charset=\"utf-8\"><title>Plain page</title></head><body><h1>Gamma</h1></body></html>";
+const NESTING_PAGE_CONTENT = "<!DOCTYPE html><html><!--\n Page saved with SingleFile \n url: https://example.com/nesting\n saved date: Thu Sep 24 2026 00:00:00 GMT+0000\n--><head><meta charset=\"utf-8\"><title>Nesting page</title></head><body>" +
+	"<form id=bouter>" + getNestingMarkers("1.1.1", "binner", "body inner") + "</form>" +
+	"<div id=host><template shadowrootmode=open><form id=souter>" + getNestingMarkers("s0.1.1", "sinner", "shadow inner") + "</form><p id=clean>clean <b>bold</b></p></template></div></body></html>";
 const CHROME_PATH = findChrome();
 const DEBUG_PORT = Number(process.env.SF_E2E_PORT) || 19000 + (process.pid % 2000);
 const EDITOR_PAGE_PATH = "/src/ui/pages/editor.html";
@@ -35,6 +43,11 @@ const SENDER_PAGE_PATH = "/src/ui/pages/pendings.html";
 
 options.apiUrl = "http://127.0.0.1:" + DEBUG_PORT;
 options.commandMaxTime = 15000;
+
+function getNestingMarkers(trackId, id, content) {
+	const data = encodeURIComponent(JSON.stringify({ tag: "form", attributes: [["id", id], ["data-sf-nesting-track-id", trackId]] }));
+	return "<!--data-sf-nesting-track-id-start " + trackId + " " + data + "-->" + content + "<!--data-sf-nesting-track-id-end " + trackId + "-->";
+}
 
 function findChrome() {
 	if (process.env.SF_CHROME_PATH) {
@@ -128,6 +141,33 @@ try {
 console.log(failures ? "FAILED (" + failures + ")" : "PASSED");
 process.exit(failures ? 1 : 0);
 
+// answers the WebDAV client's HEAD probe with "not found" so it PUTs, and keeps each
+// uploaded body on disk for the archive checks
+function startWebDAVStub() {
+	const uploadDir = mkdtempSync(join(tmpdir(), "sf-e2e-webdav-"));
+	const uploads = new Map();
+	const server = createServer((request, response) => {
+		if (request.method == "PUT") {
+			const chunks = [];
+			request.on("data", chunk => chunks.push(chunk));
+			request.on("end", () => {
+				const filename = decodeURIComponent(request.url.substring(1));
+				const filePath = join(uploadDir, basename(filename));
+				writeFileSync(filePath, Buffer.concat(chunks));
+				uploads.set(filename, filePath);
+				response.writeHead(201).end();
+			});
+		} else {
+			response.writeHead(404).end();
+		}
+	});
+	return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve({
+		url: "http://127.0.0.1:" + server.address().port + "/",
+		uploads,
+		close: () => server.close()
+	})));
+}
+
 function clearDownloadDir() {
 	rmSync(downloadDir, { recursive: true, force: true });
 	mkdirSync(downloadDir, { recursive: true });
@@ -142,7 +182,7 @@ function waitForDownload(description) {
 
 async function run() {
 	const extensionId = await waitFor(async () => {
-		const targets = (await getTargets()).filter(target => target.type == "service_worker" && target.url.startsWith("chrome-extension://"));
+		const targets = (await getTargets()).filter(target => target.type == "service_worker" && target.url.startsWith("chrome-extension://") && new URL(target.url).pathname == SERVICE_WORKER_PATH);
 		if (process.env.SF_E2E_DEBUG) {
 			console.log("targets:", (await getTargets()).map(target => target.type + " " + target.url.substring(0, 70)));
 		}
@@ -167,7 +207,7 @@ async function run() {
 	}, "sender page ready");
 	const fixtureBase64 = readFileSync(FIXTURE_PATH).toString("base64");
 
-	async function openEditorArchive(base64Content, filename) {
+	async function openEditorArchive(base64Content, filename, compressContent = true) {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
 				await cdp.Runtime.evaluate({ expression: "window.__fixtureBase64 = \"\"; window.__editorOpenPending = true" }, sessionId);
@@ -177,7 +217,9 @@ async function run() {
 				await cdp.Runtime.evaluate({
 					expression: "(() => {" +
 						"const bytes = Uint8Array.from(atob(window.__fixtureBase64), character => character.charCodeAt(0));" +
-						"chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });" +
+						(compressContent
+							? "chrome.runtime.sendMessage({ method: \"editor.open\", content: Array.from(bytes), compressContent: true, selfExtractingArchive: true, filename: " + JSON.stringify(filename) + " });"
+							: "chrome.runtime.sendMessage({ method: \"editor.open\", content: new TextDecoder().decode(bytes), compressContent: false, filename: " + JSON.stringify(filename) + " });") +
 						"})()"
 				}, sessionId);
 				// eslint-disable-next-line no-unused-vars
@@ -269,11 +311,21 @@ async function run() {
 	await assertEquals("cluster label says TOC", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Table of contents");
 	await assertEquals("save button stays visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
 	await assertEquals("import button hidden", () => evalInPage("document.querySelector('.import-mht-button').hidden"), true);
+	await assertEquals("edit tools hidden on the TOC", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => element.hidden)"), true);
+	await evalInPage("document.querySelector('.editor').contentWindow.postMessage(JSON.stringify({ method: 'addNote', color: 'note-yellow' }), '*')");
+	await new Promise(resolve => setTimeout(resolve, 500));
+	await assertEquals("addNote ignored on the TOC", () => evalInFrame("document.querySelectorAll('single-file-note').length"), 0);
+
+	// the editor's profile switch reads its options through this message, which applies
+	// the same background-save clamp as a regular save
+	await assertEquals("profile options carry the profile name", () => evalInPage("chrome.runtime.sendMessage({ method: 'config.getProfileOptions', profileName: '__Default_Settings__' }).then(options => options.profileName + ':' + typeof options.backgroundSave)", true), "__Default_Settings__:boolean");
 
 	await evalInFrame("document.querySelector(\"a[href='pages/2/index.html']\").click()");
 	await waitFor(() => evalInPage("location.hash == '#sfz/pages/2/' || undefined"), "route follows TOC click");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Alpha' || undefined"), "alpha page displayed");
-	await assertEquals("cluster shows page title", () => evalInPage("document.querySelector('.archive-page-title').textContent"), "Alpha page");
+	// the cluster is updated when the frame reports the displayed page, after the page itself is visible
+	await waitFor(() => evalInPage("document.querySelector('.archive-page-title').textContent == 'Alpha page' || undefined"), "cluster shows page title");
+	await waitFor(() => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden) || undefined"), "edit tools visible on a page");
 
 	await evalInFrame("document.body.dataset.testMarker = 'stashed'");
 	await evalInFrame("document.querySelector(\"a[href^='http'][href$='beta.html']\").click()");
@@ -312,11 +364,25 @@ async function run() {
 	await waitFor(() => evalInFrame("document.querySelectorAll('.sfz-modified-page').length == 0 || undefined"), "modified markers cleared after save");
 	await verifySavedArchive(savedFilePath);
 	const savedBase64 = readFileSync(savedFilePath).toString("base64");
+	// the re-saved archive goes to a WebDAV stub: the background used to read the
+	// archive bytes as text before handing them to a destination
+	const webDAV = await startWebDAVStub();
+	await updateDefaultProfile({ saveWithWebDAV: true, webDAVURL: webDAV.url, webDAVUser: "user", webDAVPassword: "password" });
 	await openEditorArchive(savedBase64, "fixture-resaved.zip.html");
 	await waitFor(() => evalInPage("location.hash == '#sfz/?toc' || undefined"), "re-saved archive reopens on the TOC");
 	await waitFor(() => evalInFrame("document.querySelectorAll(\"a[href$='index.html']\").length == 5 || undefined"), "re-saved archive TOC lists 5 pages");
 	await evalInPage("location.hash = '#sfz/pages/2/'");
 	await waitFor(() => evalInFrame("Boolean(document.querySelector('single-file-note')) || undefined"), "note persisted in re-saved archive");
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const uploadedFilePath = await waitFor(() => webDAV.uploads.get("fixture-resaved.zip.html"), "archive uploaded to WebDAV");
+	try {
+		await verifySavedArchive(uploadedFilePath);
+	} catch (error) {
+		failures++;
+		console.log("FAIL uploaded archive is readable", error.message);
+	}
+	await updateDefaultProfile({ saveWithWebDAV: false });
+	webDAV.close();
 
 	await evalInPage("location.hash = '#sfz/pages/3/'");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Beta' || undefined"), "route set before deep-link reopen");
@@ -334,6 +400,7 @@ async function run() {
 	await assertEquals("single-page: no archive route", () => evalInPage("location.hash"), "");
 	await assertEquals("single-page: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("single-page: save button visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
+	await assertEquals("single-page: edit tools visible", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden)"), true);
 
 	const dedupBase64 = readFileSync(DEDUP_FIXTURE_PATH).toString("base64");
 	await openEditorArchive(dedupBase64, "multi-page-dedup.zip.html");
@@ -389,6 +456,8 @@ async function run() {
 	await waitFor(() => evalInFrame("(() => { const heading = document.querySelector('h1'); return heading && heading.textContent == 'Gamma' || undefined; })()"), "dropped plain page displayed");
 	await assertEquals("plain drop: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("plain drop: archive route cleared", () => evalInPage("location.hash"), "");
+	await evalInPage("document.querySelector('.add-note-yellow-button').dispatchEvent(new MouseEvent('mouseup'))");
+	await waitFor(() => evalInFrame("Boolean(document.querySelector('single-file-note')) || undefined"), "note added to the dropped plain page");
 	await evalInPage(FILENAME_CAPTURE_SCRIPT);
 	clearDownloadDir();
 	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
@@ -397,6 +466,46 @@ async function run() {
 	await assertEquals("plain drop on disk under the dropped filename", () => basename(savedPlainPath), "dropped-plain.html");
 	const savedPlainContent = readFileSync(savedPlainPath).toString();
 	await assertEquals("plain drop save is a plain page with the dropped content", async () => savedPlainContent.includes("Gamma") && !savedPlainContent.includes("data-sfz") && !savedPlainContent.includes("sfz-pages.json"), true);
+	await assertEquals("plain drop save keeps the note added in the editor", async () => savedPlainContent.includes("single-file-note"), true);
+
+	const digestBase64 = readFileSync(DIGEST_FIXTURE_PATH).toString("base64");
+	await openEditorArchive(digestBase64, "classic-digest.html", false);
+	await waitFor(() => evalInFrame("(() => { const heading = document.querySelector('h1'); return heading && heading.textContent == 'Delta' || undefined; })()"), "classic page with template data displayed");
+	await evalInPage(FILENAME_CAPTURE_SCRIPT);
+	clearDownloadDir();
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const savedDigestPath = await waitForDownload("classic page with template data downloaded");
+	const savedDigestName = basename(savedDigestPath);
+	const savedDigestHash = createHash("sha256").update(readFileSync(savedDigestPath)).digest("hex");
+	await assertEquals("digest filename recomputed from the template data", () => /^Digest fixture_[0-9a-f]{64}\.html$/.test(savedDigestName), true);
+	await assertEquals("filename digest matches the saved bytes", () => savedDigestName.includes(savedDigestHash), true);
+
+	await openEditorArchive(Buffer.from(NESTING_PAGE_CONTENT).toString("base64"), "nesting.html", false);
+	await waitFor(() => evalInFrame("(() => { const host = document.getElementById('host'); return host && host.shadowRoot && host.shadowRoot.getElementById('clean') ? true : undefined; })()"), "page with dropped forms displayed");
+	await assertEquals("the editor re-creates a dropped form in the page", () => evalInFrame("Boolean(document.querySelector('#bouter > #binner'))"), true);
+	await assertEquals("and in a shadow root", () => evalInFrame("Boolean(document.getElementById('host').shadowRoot.querySelector('#souter > #sinner'))"), true);
+	await assertEquals("the host keeps no template once its shadow root is attached", () => evalInFrame("document.querySelectorAll('#host > template').length"), 0);
+	await evalInFrame("document.getElementById('host').shadowRoot.getElementById('clean').append(' edited')");
+	await evalInPage(FILENAME_CAPTURE_SCRIPT);
+	clearDownloadDir();
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const savedNestingContent = readFileSync(await waitForDownload("page with dropped forms downloaded")).toString();
+	await assertEquals("the saved page keeps the edit made in the shadow root, in a single template", () => savedNestingContent.includes("bold</b> edited") && savedNestingContent.match(/<template shadowrootmode/g).length, 1);
+	await assertEquals("the saved page carries markers for both forms and nothing else", () => JSON.stringify(Array.from(savedNestingContent.matchAll(/data-sf-nesting-track-id-start \S+ (\S+?)-->/g), match => JSON.parse(decodeURIComponent(match[1])).attributes.find(([name]) => name == "id")[1])), JSON.stringify(["binner", "sinner"]));
+
+	await openEditorArchive(readFileSync(NESTING_FIXTURE_PATH).toString("base64"), "nesting.zip.html");
+	await waitFor(() => evalInFrame("(() => { const host = document.getElementById('host'); return host && host.shadowRoot && host.shadowRoot.getElementById('clean') ? true : undefined; })()"), "archive with dropped forms displayed");
+	await assertEquals("the editor re-creates a dropped form in a shadow root of an archive", () => evalInFrame("Boolean(document.getElementById('host').shadowRoot.querySelector('#souter > #sinner'))"), true);
+	await evalInFrame("document.getElementById('host').shadowRoot.getElementById('clean').append(' edited')");
+	clearDownloadDir();
+	await evalInPage("document.querySelector('.save-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	const savedNestingArchivePath = await waitForDownload("archive with dropped forms downloaded");
+	const nestingZip = await import(ZIP_MODULE_URL);
+	const nestingReader = new nestingZip.ZipReader(new nestingZip.Uint8ArrayReader(new Uint8Array(readFileSync(savedNestingArchivePath))));
+	const savedNestingArchiveContent = await (await nestingReader.getEntries()).find(entry => entry.filename == "index.html").getData(new nestingZip.TextWriter());
+	await nestingReader.close();
+	await assertEquals("the saved archive keeps the edit made in the shadow root", () => savedNestingArchiveContent.includes("bold</b> edited"), true);
+	await assertEquals("and carries markers for both forms and nothing else", () => JSON.stringify(Array.from(savedNestingArchiveContent.matchAll(/data-sf-nesting-track-id-start \S+ (\S+?)-->/g), match => JSON.parse(decodeURIComponent(match[1])).attributes.find(([name]) => name == "id")[1])), JSON.stringify(["binner", "sinner"]));
 
 
 
@@ -473,12 +582,16 @@ async function run() {
 		await originalReader.close();
 	}
 
-	async function evalInPage(expression) {
-		const { result, exceptionDetails } = await cdp.Runtime.evaluate({ expression }, sessionId);
+	async function evalInPage(expression, awaitPromise = false) {
+		const { result, exceptionDetails } = await cdp.Runtime.evaluate({ expression, awaitPromise }, sessionId);
 		if (exceptionDetails) {
 			throw new Error(exceptionDetails.text + " " + JSON.stringify(exceptionDetails.exception));
 		}
 		return result.value;
+	}
+
+	function updateDefaultProfile(profile) {
+		return evalInPage("chrome.runtime.sendMessage(" + JSON.stringify({ method: "config.updateProfile", profileName: "__Default_Settings__", profile }) + ")", true);
 	}
 
 	async function evalInFrame(expression) {
