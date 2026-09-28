@@ -12,7 +12,6 @@ export const defaultAgentRoot = resolve(
 const MAX_OUTPUT = 512 * 1024;
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 20_000;
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_KILL_GRACE_MS = 1_000;
 const WORKSPACE_RETRY_DELAY_MS = 250;
 const MCP_READINESS_CACHE_MS = 5 * 60 * 1000;
@@ -702,7 +701,10 @@ export function createController({
       const args = ["provider", operation, profile, "--target", target, "--json"];
       if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
       if (["apply", "use"].includes(operation)) args.push("--yes");
-      return runAgentctlJson(args, `provider ${operation}`);
+      // Setup may download/install clients and optional helpers. A wall-clock
+      // deadline would kill healthy downloads on slow connections.
+      return runAgentctlJson(args, `provider ${operation}`,
+        operation === "plan" ? {} : { timeoutMs: 0 });
     };
     const result = source === "cloud"
       ? await remoteWorkspace.withProviderFiles(profile, target, execute)
@@ -1819,7 +1821,7 @@ export function createController({
       const args = [installing ? "install" : "uninstall", agent, "--yes"];
       const command = controllerCommand(agentctl, args);
       const result = await run(command.executable, command.args,
-        installing ? { timeoutMs: INSTALL_TIMEOUT_MS } : {});
+        installing ? { timeoutMs: 0 } : {});
       return {
         ok: result.code === 0,
         data: { agent },

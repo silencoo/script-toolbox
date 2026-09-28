@@ -27,9 +27,14 @@ explicit `interactive` command.
 In Agents, select Claude Code, Codex, OpenCode, or Pi and press `i` to install
 its CLI. Confirm with `y`, or cancel with `n`/Escape. Installation needs no API
 key or Provider selection; existing CLIs are kept and client configuration stays
-as it was. The operation allows up to ten minutes for downloads, reports failures,
+as it was. The operation has no TUI-imposed time limit for downloads, reports failures,
 and refreshes CLI status afterward. Use `c`/`p`/Enter to configure a Provider later.
 The equivalent command is `agentctl install <client> --yes`.
+
+Provider setup likewise has no TUI-imposed time limit, so slow downloads are not
+killed partway through installation. Background status checks and Provider
+previews retain their short timeout. Installer/network errors are still reported;
+timeouts enforced by the underlying tools are unchanged.
 
 After installation, the CLI row shows `Installed` and its version. The result
 panel keeps an explicit `Installed` or `Failed` heading and the final log lines;

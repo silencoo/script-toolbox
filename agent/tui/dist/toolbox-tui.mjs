@@ -25319,7 +25319,6 @@ var defaultAgentRoot = resolve4(
 var MAX_OUTPUT = 512 * 1024;
 var MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 var PROCESS_TIMEOUT_MS = 2e4;
-var INSTALL_TIMEOUT_MS = 10 * 6e4;
 var PROCESS_KILL_GRACE_MS = 1e3;
 var WORKSPACE_RETRY_DELAY_MS = 250;
 var MCP_READINESS_CACHE_MS = 5 * 60 * 1e3;
@@ -25926,7 +25925,11 @@ No remote catalog was written locally.`;
       const args = ["provider", operation, profile, "--target", target, "--json"];
       if (paths) args.push("--store", paths.storePath, "--secrets", paths.secretsPath);
       if (["apply", "use"].includes(operation)) args.push("--yes");
-      return runAgentctlJson(args, `provider ${operation}`);
+      return runAgentctlJson(
+        args,
+        `provider ${operation}`,
+        operation === "plan" ? {} : { timeoutMs: 0 }
+      );
     };
     const result = source === "cloud" ? await remoteWorkspace.withProviderFiles(profile, target, execute) : await execute();
     const detail = result.data ? providerPlanDetail(result.data, source) : result.error || `Provider ${operation} failed.`;
@@ -26938,7 +26941,7 @@ Ownership verification failed; ${rollback2.detail}.` : ""}`
       const result2 = await run(
         command.executable,
         command.args,
-        installing ? { timeoutMs: INSTALL_TIMEOUT_MS } : {}
+        installing ? { timeoutMs: 0 } : {}
       );
       return {
         ok: result2.code === 0,

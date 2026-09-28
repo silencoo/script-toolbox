@@ -1,5 +1,14 @@
 # Changelog — agent/
 
+## 2026-09-29 — Let slow TUI installations finish
+
+- Removed the TUI's fixed process deadlines for Provider setup and CLI
+  installation, so slow but healthy downloads can finish. Background status
+  checks and Provider previews remain bounded; underlying tool errors are still
+  reported.
+- Added regression coverage for slow completion, cancellation without a
+  deadline, all Provider sources/clients, and install-versus-preview timeouts.
+
 ## 2026-09-29 — Provider environment credential fallback
 
 - Fixed direct Provider setup and the TUI reporting missing credentials when an

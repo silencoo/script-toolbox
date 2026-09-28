@@ -387,12 +387,22 @@ test("process runner bounds hung children and honors refresh cancellation", asyn
   const pending = runner(
     process.execPath,
     ["-e", "setInterval(() => {}, 1000)"],
-    { signal: abortController.signal, timeoutMs: 2_000 }
+    { signal: abortController.signal, timeoutMs: 0 }
   );
   abortController.abort();
   const aborted = await pending;
   assert.equal(aborted.code, 130);
   assert.equal(aborted.aborted, true);
+});
+
+test("process runner allows slow setup to finish with the deadline disabled", async () => {
+  const runner = createProcessRunner({ cwd: tmpdir(), timeoutMs: 30 });
+  const result = await runner(process.execPath, [
+    "-e", "setTimeout(() => console.log('installed'), 150)"
+  ], { timeoutMs: 0 });
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.stdout.trim(), "installed");
 });
 
 test("JSON remains usable when doctor reports unhealthy exit status", () => {
@@ -1755,12 +1765,13 @@ test("Agents install all four CLIs without a Provider and retain owned-config re
     const installed = await controller.action("agent-install", { agent });
     assert.equal(installed.ok, true);
     assert.deepEqual(calls.at(-1).args, ["install", agent, "--yes"]);
-    assert.equal(calls.at(-1).options.timeoutMs, 600_000);
+    assert.equal(calls.at(-1).options.timeoutMs, 0);
   }
   await assert.rejects(() => controller.action("agent-install", { agent: "unknown" }), /unsupported agent client/);
   const removed = await controller.action("agent-uninstall", { agent: "claude" });
   assert.equal(removed.ok, true);
   assert.deepEqual(calls.at(-1).args, ["uninstall", "claude", "--yes"]);
+  assert.equal(calls.at(-1).options.timeoutMs, undefined);
   const copied = await controller.action("snippet-copy", { selection: "review-code" });
   assert.equal(copied.ok, true);
   assert.deepEqual(calls.at(-1).args, ["snippet", "copy", "review-code"]);
@@ -1921,6 +1932,33 @@ test("Provider TUI proxy lifecycle actions use explicit safe agentctl commands",
   assert.match((await controller.action("proxy-attach")).detail, /official ChatGPT authentication/);
   assert.match((await controller.action("proxy-detach")).detail, /restored exactly/);
   assert.match((await controller.action("proxy-stop")).detail, /history remains/);
+});
+
+test("Provider setup has no deadline for any source while previews stay bounded", async () => {
+  const calls = [];
+  const controller = createController({
+    agentRoot: "/agent",
+    runner: async (_executable, args, options) => {
+      calls.push({ args, options });
+      return { code: 0, stdout: '{"ready":true}', stderr: "" };
+    },
+    remoteWorkspace: {
+      withProviderFiles: async (_name, _target, callback) => callback({
+        storePath: "/tmp/providers.json",
+        secretsPath: "/tmp/provider-secrets.json"
+      })
+    }
+  });
+  for (const source of ["builtin", "local", "cloud"]) {
+    for (const target of ["claude", "codex", "opencode", "pi"]) {
+      const selection = { selection: "gateway", source, target };
+      assert.equal((await controller.action("provider-plan", selection)).ok, true);
+      assert.equal(calls.at(-1).options.timeoutMs, undefined);
+      assert.equal((await controller.action("provider-apply", selection)).ok, true);
+      assert.equal(calls.at(-1).options.timeoutMs, 0);
+      assert.equal(calls.at(-1).args[1], source === "cloud" ? "apply" : "use");
+    }
+  }
 });
 
 test("Provider actions plan/apply one source and synchronize only after explicit action", async () => {
