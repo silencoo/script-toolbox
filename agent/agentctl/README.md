@@ -276,6 +276,19 @@ agentctl provider secret set work_gateway_key \
 agentctl provider secret list
 ```
 
+Direct Provider setup (including the TUI) also accepts exported environment
+credentials when the reference is absent from the local Secret Store. It checks
+the exact reference first, then its uppercase form: for `minimax-cn` and
+`minimax-global`, either `minimax_api_key` or `MINIMAX_API_KEY` works. The variable
+must be exported in the shell that launches `agentctl`; a shell-only variable or
+an unexported `.env` file is not inherited. Restart the TUI after exporting it.
+Saved Secrets take precedence over environment values; `use --secret-file`
+explicitly replaces the selected saved Secret. Environment fallbacks are passed
+to the client setup through a temporary owner-only key file, never printed or
+automatically copied into agentctl's Secret Store/Workspace backup. Client setup
+still saves credentials in the client's normal configuration. `provider secret`
+commands continue to manage only the saved Secret Store.
+
 Portable JSON export always excludes those values, while retaining the
 reference names needed to report missing credentials on another machine:
 

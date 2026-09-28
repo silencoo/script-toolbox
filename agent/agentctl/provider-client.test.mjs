@@ -26,7 +26,7 @@ import {
   builtinProvider,
   builtinProviderCatalog
 } from "./provider-catalog.mjs";
-import { providerDefaults } from "./provider-client.mjs";
+import { providerDefaults, providerSecretValue } from "./provider-client.mjs";
 
 const CLIENT = join(dirname(fileURLToPath(import.meta.url)), "provider-client.mjs");
 
@@ -67,6 +67,97 @@ function common(root) {
     "--state", value.state
   ];
 }
+
+test("provider Secrets prefer stored values and resolve only exact or uppercase environment references", () => {
+  const empty = { secrets: {} };
+  assert.equal(providerSecretValue(empty, "minimax_api_key", { MINIMAX_API_KEY: "upper" }), "upper");
+  assert.equal(providerSecretValue(empty, "minimax_api_key", { minimax_api_key: "lower" }), "lower");
+  assert.equal(providerSecretValue(empty, "minimax_api_key", {
+    minimax_api_key: "lower", MINIMAX_API_KEY: "upper"
+  }), "lower");
+  assert.equal(providerSecretValue({ secrets: { minimax_api_key: { value: "stored" } } },
+    "minimax_api_key", { MINIMAX_API_KEY: "upper" }), "stored");
+  assert.equal(providerSecretValue(empty, "minimax_api_key", { MINIMAX_API_KEY: " \t" }), "");
+  assert.equal(providerSecretValue(empty, "other_key", { MINIMAX_API_KEY: "upper" }), "");
+  assert.equal(providerSecretValue(empty, undefined, { MINIMAX_API_KEY: "upper" }), "");
+  for (const value of ["hidden\nsecond", "hidden\r", "hidden\0", "x".repeat(16385)]) {
+    assert.throws(() => providerSecretValue(empty, "minimax_api_key", { MINIMAX_API_KEY: value }),
+      (error) => /must be a single line/.test(error.message) && !error.message.includes(value));
+  }
+});
+
+test("MiniMax TUI list, plan and use accept environment keys without persisting or printing them", async () => {
+  for (const variable of ["minimax_api_key", "MINIMAX_API_KEY"]) {
+    const root = await mkdtemp(join(tmpdir(), "provider-env-test-"));
+    const backend = join(root, "agents", "claude-code", "setup.sh");
+    const key = "MINIMAX-ENV-TEST-SECRET";
+    const environment = {
+      HOME: root,
+      AGENTCTL_AGENT_ROOT: join(root, "agents"),
+      minimax_api_key: "",
+      MINIMAX_API_KEY: "",
+      [variable]: key,
+      EXPECTED_TEST_KEY: key,
+      TEST_KEY_PATH: join(root, "key-path")
+    };
+    const command = (args, status = 0, env = environment) => {
+      const result = run([...args, ...common(root), "--json"], status, env);
+      assert.equal((result.stdout + result.stderr).includes(key), false);
+      assert.equal((result.stdout + result.stderr).includes("EXPLICIT-TEST-SECRET"), false);
+      return JSON.parse(result.stdout);
+    };
+    try {
+      const rows = command(["list", "--target", "claude"]);
+      assert.equal(rows.find((row) => row.name === "minimax-cn").secret_present, true);
+      assert.equal(rows.find((row) => row.name === "minimax-cn").status, "ready");
+      for (const profile of ["minimax-cn", "minimax-global"]) {
+        for (const target of ["claude", "opencode", "pi"]) {
+          assert.equal(command(["plan", profile, "--target", target]).ready, true);
+        }
+      }
+      assert.equal(command(["use", "minimax-cn", "--target", "claude"]).ready, true);
+      await assert.rejects(readFile(paths(root).store), { code: "ENOENT" });
+      await assert.rejects(readFile(paths(root).secrets), { code: "ENOENT" });
+
+      await mkdir(dirname(backend), { recursive: true });
+      await writeFile(backend, [
+        "#!/bin/sh",
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = "--key-file" ]; then',
+        '    test "$(cat "$2")" = "$EXPECTED_TEST_KEY" || exit 1',
+        '    printf "%s" "$2" > "$TEST_KEY_PATH"',
+        '    exit 0',
+        '  fi',
+        '  shift',
+        'done',
+        'exit 1',
+        ""
+      ].join("\n"), { mode: 0o700 });
+      await chmod(backend, 0o700);
+      assert.deepEqual(command(["use", "minimax-cn", "--target", "claude", "--yes"]).applied, ["claude"]);
+      assert.deepEqual(JSON.parse(await readFile(paths(root).secrets, "utf8")).secrets, {});
+      assert.equal((await readFile(paths(root).store, "utf8")).includes(key), false);
+      assert.equal((await readFile(paths(root).state, "utf8")).includes(key), false);
+      const temporaryKey = await readFile(environment.TEST_KEY_PATH, "utf8");
+      await assert.rejects(readFile(temporaryKey), { code: "ENOENT" });
+      assert.deepEqual(command(["status"]).missing_secrets, []);
+
+      const noKey = { ...environment, minimax_api_key: "", MINIMAX_API_KEY: "" };
+      assert.equal(command(["plan", "minimax-cn", "--target", "claude"], 1, noKey).ready, false);
+      // Explicit file input must override the ambient key and remain reusable.
+      const keyFile = join(root, "explicit.key");
+      await writeFile(keyFile, "EXPLICIT-TEST-SECRET\n", { mode: 0o600 });
+      await chmod(keyFile, 0o600);
+      const explicit = { ...environment, EXPECTED_TEST_KEY: "EXPLICIT-TEST-SECRET" };
+      command(["use", "minimax-cn", "--target", "claude", "--secret-file", keyFile, "--yes"], 0, explicit);
+      command(["apply", "minimax-cn", "--target", "claude", "--yes"], 0, explicit);
+      assert.equal(JSON.parse(await readFile(paths(root).secrets, "utf8"))
+        .secrets.minimax_api_key.value, "EXPLICIT-TEST-SECRET");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
 
 test("built-in context metadata is exact-model scoped", () => {
   assert.deepEqual(builtinModelContext("deepseek", "claude", "deepseek-v4-pro"), {

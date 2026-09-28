@@ -1,5 +1,14 @@
 # Changelog — agent/
 
+## 2026-09-29 — Provider environment credential fallback
+
+- Fixed direct Provider setup and the TUI reporting missing credentials when an
+  API key was already exported. Secret references now fall back to their exact
+  or uppercase environment name (including `minimax_api_key`/`MINIMAX_API_KEY`).
+- Kept saved/explicit-file Secrets higher priority; environment values are not
+  printed or imported into the Secret Store. Added offline regression coverage
+  for readiness, application, precedence, and temporary-key cleanup.
+
 ## 2026-09-26 — Persistent CLI installation results
 
 - Agents explicitly shows `Installed` beside each installed CLI's version.

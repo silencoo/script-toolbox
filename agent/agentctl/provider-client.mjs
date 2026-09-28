@@ -394,6 +394,27 @@ export async function saveProviderSecrets(path, secrets) {
   return next;
 }
 
+// Resolve only the requested reference, without importing ambient credentials
+// into the portable Secret Store. Explicit --secret-file values are staged in
+// that store too, so they retain precedence over environment fallbacks.
+export function providerSecretValue(secrets, reference, environment = process.env) {
+  if (!reference) return "";
+  const stored = secrets.secrets[reference]?.value;
+  if (stored) return stored;
+  for (const name of new Set([reference, reference.toUpperCase()])) {
+    if (!Object.hasOwn(environment, name)) continue;
+    const value = environment[name];
+    if (typeof value !== "string" || !value.trim()) continue;
+    if (value.length > 16384 || /[\r\n\0]/.test(value)) {
+      throw new ProviderClientError(
+        `environment Secret '${name}' must be a single line of at most 16384 characters`
+      );
+    }
+    return value;
+  }
+  return "";
+}
+
 const PROVIDER_STATE_KIND = "agentctl-provider-state";
 
 function newProviderState() {
@@ -602,7 +623,7 @@ async function status(options) {
     ? await loadProviderState(options.statePath)
     : newProviderState();
   const references = collectSecretReferences(store);
-  const missing = [...references.keys()].filter((name) => !secrets.secrets[name]).sort();
+  const missing = [...references.keys()].filter((name) => !providerSecretValue(secrets, name)).sort();
   const output = {
     schema: CURRENT_PROVIDER_SCHEMA,
     platform: normalizeRuntimePlatform(),
@@ -726,7 +747,7 @@ async function list(options) {
   const rows = candidates.map(({ catalog, profile, source, materialized }) => {
     const resolved = resolveProviderProfile(profile, { target, platform });
     const secretPresent = resolved.auth.mode === "none" ||
-      Boolean(secrets.secrets[resolved.auth.secret]);
+      Boolean(providerSecretValue(secrets, resolved.auth.secret));
     const plan = renderProviderPlan(resolved, { secretPresent });
     const nativeAuthProvider = catalog
       ? builtinNativeAuthProvider(profile.name, target)
@@ -1013,7 +1034,7 @@ async function applicationPlans(name, options, {
   return requestedTargets(options.target).map((target) => {
     const resolved = resolveProviderProfile(profile, { target, platform });
     const secretPresent = resolved.auth.mode === "none" ||
-      Boolean(secrets.secrets[resolved.auth.secret]);
+      Boolean(providerSecretValue(secrets, resolved.auth.secret));
     return renderProviderPlan(resolved, { secretPresent });
   });
 }
@@ -1219,7 +1240,7 @@ async function applyApplication(name, options, prepared = {}) {
     for (const plan of activePlans) {
       const secretValue = plan.auth.mode === "none"
         ? "agentctl-loopback-no-auth"
-        : secrets.secrets[plan.auth.secret]?.value;
+        : providerSecretValue(secrets, plan.auth.secret);
       if (!secretValue) {
         throw new ProviderClientError(`local Secret '${plan.auth.secret}' is missing`);
       }
