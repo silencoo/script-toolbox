@@ -4,6 +4,10 @@ The repository-level MIT license covers original work contributed to this
 repository. It does not replace notices or licensing terms already attached to
 third-party-derived files.
 
+- `linux-server-toolkit/server-toolkit.sh` bundles a self-contained terminfo
+  export from Ghostty 1.3.1, derived from
+  `ghostty-org/ghostty/src/terminfo/ghostty.zig` at tag `v1.3.1`.
+  Its MIT license and copyright notice are retained beside the bundled entry.
 - `quantumult-x/resource-parser.js` retains its upstream attribution to
   KOP-XIAO/Shawn. Use and redistribution of that file remain subject to any
   applicable upstream terms.

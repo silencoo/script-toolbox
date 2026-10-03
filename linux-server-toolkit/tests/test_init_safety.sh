@@ -348,6 +348,12 @@ pass "non-interactive unpinned installer still requires ALLOW_UNVERIFIED_REMOTE"
 pass "non-interactive unpinned installer still requires ALLOW_DANGEROUS"
 
 terminal_action_source="$(declare -f action_install_terminal_tools)"
+assert_contains "$(declare -f action_install_essentials)" \
+    'install_terminal_terminfo' \
+    "standard initialization installs common system-wide terminal definitions"
+assert_contains "$terminal_action_source" \
+    'install_terminal_terminfo' \
+    "standalone terminal tools install common system-wide terminal definitions"
 assert_contains "$terminal_action_source" \
     'run_remote_script_as_user_unverified_sh "https://starship.rs/install.sh"' \
     "Starship installer uses its required POSIX shell"

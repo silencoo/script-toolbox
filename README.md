@@ -195,6 +195,8 @@ The standalone deployment scripts can be checked with:
 ```sh
 bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tools/cloudflare-ddns-ipv4.sh linux-server-toolkit/tools/vnstat-traffic-firewall.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh mihomo-console/setup.sh
 ./linux-server-toolkit/tests/test_init_safety.sh
+python3 -m unittest discover -s linux-server-toolkit/tests -p 'test_terminal.py' -v
+python3 -m unittest discover -s linux-server-toolkit/tests -p 'test_terminfo.py' -v
 ./linux-server-toolkit/tests/cloudflare-ddns-test.sh
 ./linux-server-toolkit/tests/vnstat-traffic-firewall-test.sh
 ./ghostty/tests/setup-test.sh

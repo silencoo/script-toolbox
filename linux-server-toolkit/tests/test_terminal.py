@@ -3,8 +3,10 @@
 import os
 from pathlib import Path
 import pty
+import select
 import subprocess
 import tempfile
+import time
 import unittest
 
 TOOLKIT = Path(__file__).resolve().parents[1] / 'server-toolkit.sh'
@@ -48,11 +50,19 @@ action_system_overview() {
                 master, slave = pty.openpty()
                 try:
                     child = subprocess.Popen(args, env=env, stdout=slave, stderr=slave)
-                    os.close(slave)
-                    slave = None
-                    child.wait(timeout=10)
                     chunks = []
-                    while True:
+                    deadline = time.monotonic() + 10
+                    # Keep the parent slave open while draining output: macOS
+                    # can discard unread PTY bytes when the last slave closes.
+                    # Drain during execution so larger output cannot block it.
+                    while child.poll() is None or select.select([master], [], [], 0)[0]:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            child.kill()
+                            child.wait()
+                            raise subprocess.TimeoutExpired(args, 10)
+                        if not select.select([master], [], [], min(remaining, 0.1))[0]:
+                            continue
                         try:
                             chunk = os.read(master, 4096)
                         except OSError:
@@ -60,6 +70,7 @@ action_system_overview() {
                         if not chunk:
                             break
                         chunks.append(chunk)
+                    child.wait(timeout=max(0.1, deadline - time.monotonic()))
                     output = b''.join(chunks).decode()
                     status = child.returncode
                 finally:

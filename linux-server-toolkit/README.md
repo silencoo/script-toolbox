@@ -62,11 +62,32 @@ sudo env TOOLKIT_LANG=auto ./server-toolkit.sh
 
 启动时的终端回退只影响工具箱及其子进程，不安装软件或修改用户的 Shell 配置。
 执行基础工具安装（含标准初始化和四个内置 Profile）或单独的终端环境安装时，
-会通过统一 APT 流程更新软件包列表并安装 `kitty-terminfo`，已安装时自动跳过，
-为 Kitty SSH 会话中的程序提供 `xterm-kitty` 终端描述。也可手动安装：
+会通过统一 APT 流程安装 `ncurses-base`、`ncurses-bin`、`ncurses-term` 和
+`kitty-terminfo`，已安装的软件包自动跳过。这套系统级终端数据库覆盖 Kitty、
+xterm、screen、tmux、rxvt，以及发行版提供的 Alacritty、foot、WezTerm、iTerm2
+等终端类型；具体条目随发行版的 ncurses 版本而异，不需要安装图形终端程序。
+
+Ghostty 的 `xterm-ghostty` 和 `ghostty` 会额外检查系统数据库。若发行版缺少任一
+条目，脚本会用 `tic -x` 编译内置的 Ghostty 1.3.1 独立终端描述，并将缺失条目
+写入 `/usr/share/terminfo`，供所有用户和 `sudo` 使用。已有系统条目保留；仅存在于
+某个用户 `~/.terminfo` 的条目不会被误判为系统级支持。该回退不需要额外下载，
+单文件脚本同样可用，写入沿用工具箱的原子安装、备份和动作回滚流程。
+`DRY_RUN=1` 只显示计划，不编译或写入终端描述。
+
+安装后重新连接 SSH，让 zsh 等程序重新加载终端能力；已有会话可能仍缓存缺失的
+能力，表现为光标移动异常或文字重复。可以验证：
 
 ```bash
-sudo apt-get update && sudo apt-get install -y kitty-terminfo
+infocmp -x xterm-ghostty >/dev/null
+infocmp -x xterm-kitty >/dev/null
+infocmp -x tmux-256color >/dev/null
+```
+
+仅手动安装发行版的终端数据库时可运行（旧发行版还需要 Ghostty 的内置回退）：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ncurses-base ncurses-bin ncurses-term kitty-terminfo
 ```
 
 ## 怎么选
