@@ -593,7 +593,7 @@ extended_english_ui_output="$({
         action_docker_compose_backup action_script_quality \
         action_profile_plan_apply action_ops_enhancements task_custom_init \
         action_run_test_scripts; do
-        "$ui_function" <<< "0" || true
+        "$ui_function" <<< "b" || true
     done
     show_recommended_modules
     action_external_trust_inventory

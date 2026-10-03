@@ -42,6 +42,17 @@ sudo env TOOLKIT_LANG=auto ./server-toolkit.sh
 `TOOLKIT_LANG=en` 可显式固定英文。支持值为 `en`、`zh` 和 `auto`，无效值会在执行
 任何系统变更前被拒绝。
 
+### 统一菜单导航
+
+工具箱自有菜单（包括嵌套子菜单、批量选择和测评报告查看）统一使用：
+
+- `b` / `B`：返回上一级菜单，不退出工具箱。
+- `0`：退出整个工具箱；不再作为“返回”或“取消”的别名。
+
+主菜单没有上一级，只提供 `0` 退出。Enter 仅用于确认/继续提示，测评结果提示中的
+空 Enter 不会返回或清屏。外部测评程序自己的菜单及 `less` 等查看器仍使用其上游
+定义的按键，不由工具箱改写。
+
 ### SSH 终端兼容
 
 启动时保留系统能够识别的 `TERM`。若精简服务器缺少 `xterm-kitty` 等终端描述，
@@ -92,6 +103,32 @@ PLAN_ONLY=1 INIT_PROFILE=docker-host ./server-toolkit.sh
 ```
 
 ## 服务器测评
+
+入口：主菜单 `7 诊断与测试` → `6 服务器测评脚本`。五种测评入口都会自动
+记录 stdout/stderr：
+
+- 运行前显示报告路径，输出实时写入独立的 `.log` 原始记录，不依赖上游脚本保存结果。
+- 结束后生成去除 ANSI 颜色、清屏序列和回车控制符的 `.txt` 报告，并记录起止时间和退出码。
+- 每次运行使用新的时间戳文件名，不覆盖历史报告。失败时也保留部分输出；中断时已写入的
+  `.log` 不会被临时文件清理删除，仍可从历史报告入口查看。
+- 结果停留在屏幕上：输入 `v` 查看报告（有 `less` 时可滚动，按 `q` 退出查看器），
+  输入 `b` 才返回测评菜单；单独按 Enter 不会清屏。菜单 `6` 可重新打开历史报告。
+
+默认目录为 `/var/log/linux-server-toolkit/benchmarks`，新目录权限为 `700`，报告文件
+权限为 `600`。报告可能包含公网 IP 和机器信息，请在分享前检查内容；工具箱不会上传
+这些本地记录。可指定其他私有目录（现有目录必须由执行用户拥有且不开放组/其他用户权限）：
+
+```bash
+sudo env BENCHMARK_REPORT_DIR=/root/benchmark-results ./server-toolkit.sh
+```
+
+无法准备可写的私有报告目录时，不会启动耗时测评。交互终端使用 util-linux
+[`script`](https://man7.org/linux/man-pages/man1/script.1.html) 的输出记录模式，保留
+TTY 交互并及时刷新日志；不启用输入记录。重定向输出或该工具不可用时回退到 `tee`，
+后者保留 stdin，但 stdout 不再是 TTY（交互模式会提示该限制）。Dry Run 不创建报告。
+本地记录不是断线续跑：长时间测评建议在 `tmux` / `screen` 会话中运行。
+
+### Fusion Monster Go (goecs)
 
 入口：主菜单 `7 诊断与测试` → `6 服务器测评脚本` → `5 Fusion Monster Go (goecs)`。
 
@@ -318,6 +355,8 @@ QNAP、Nginx PWA 反向代理和 CloudDrive MITM 调试资料位于
 bash -n server-toolkit.sh
 for script in tools/*.sh; do bash -n "$script"; done
 python3 tests/test_terminal.py
+python3 tests/test_benchmarks.py
+python3 tests/test_menu_navigation.py
 python3 tests/test_bug_regressions.py
 python3 tests/test_login_notify.py
 # 需要 Flask；使用虚构凭证和本机临时端口检查日志脱敏。

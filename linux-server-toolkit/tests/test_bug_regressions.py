@@ -23,6 +23,7 @@ class RegressionTest(unittest.TestCase):
 TEST_TMP="$2"
 LOG_FILE="$TEST_TMP/toolkit.log"
 BACKUP_DIR="$TEST_TMP/backups"
+BENCHMARK_REPORT_DIR="$TEST_TMP/benchmark-reports"
 DIR_TRANSACTION_DIR="$TEST_TMP/transactions"
 LOG_READY=false
 initialize_terminal

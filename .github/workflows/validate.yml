@@ -106,7 +106,10 @@ jobs:
       - name: Test sing-box toolkit
         run: python -m unittest discover -s sing-box/tests -v
       - name: Test Linux server toolkit safety
-        run: ./linux-server-toolkit/tests/test_init_safety.sh
+        run: |
+          ./linux-server-toolkit/tests/test_init_safety.sh
+          python3 linux-server-toolkit/tests/test_benchmarks.py
+          python3 linux-server-toolkit/tests/test_menu_navigation.py
       - name: Validate shared agent TUI
         run: |
           npm ci

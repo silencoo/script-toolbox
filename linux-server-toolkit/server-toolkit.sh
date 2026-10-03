@@ -33,6 +33,7 @@
 # - EXTERNAL_TRUST_MODE=standard  外部资源信任策略: strict/standard/permissive
 # - APT_SOURCE_RECOVERY=prompt  已知失效独立第三方源的恢复策略: prompt/auto-known/never
 # - TARGET_USER=alice  用户级运行时/终端配置的明确目标账户
+# - BENCHMARK_REPORT_DIR=/var/log/linux-server-toolkit/benchmarks  测评报告保存目录
 # - TOOLKIT_LANG=en|zh|auto  菜单语言；默认 en，auto 在 UTF-8 locale 下选择中文
 #
 # 使用示例:
@@ -76,6 +77,9 @@ SWAP_SIZE_MB="${SWAP_SIZE_MB:-}"         # 显式执行 Swap 模块时可指定�
 NETWORK_DIAGNOSTIC_ONLY="${NETWORK_DIAGNOSTIC_ONLY:-0}"  # 1=只运行只读网络诊断
 NETWORK_DIAGNOSTIC_HOST="${NETWORK_DIAGNOSTIC_HOST:-www.cloudflare.com}"
 SYSTEM_OVERVIEW_ONLY="${SYSTEM_OVERVIEW_ONLY:-0}"  # 1=只运行只读机器概览
+BENCHMARK_REPORT_DIR="${BENCHMARK_REPORT_DIR:-/var/log/linux-server-toolkit/benchmarks}"
+LAST_BENCHMARK_REPORT=""
+LAST_BENCHMARK_TEXT_REPORT=""
 EXTERNAL_TRUST_MODE="${EXTERNAL_TRUST_MODE:-standard}"  # strict/standard/permissive
 APT_SOURCE_RECOVERY="${APT_SOURCE_RECOVERY:-prompt}"  # prompt/auto-known/never
 APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
@@ -5376,9 +5380,9 @@ function action_install_runtime() {
         printf '%b\n' "${GREEN}[5]${PLAIN} Go ($(ui_text "official binary" "官方二进制包"))"
         printf '%b\n' "${GREEN}[6]${PLAIN} .NET ($(ui_text "official packages" "官方安装"))"
         printf '%b\n' "${GREEN}[7]${PLAIN} $(ui_text "Batch install (select multiple)" "批量安装（选择多个）")"
-        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-7]: " "请输入 [0-7]: "
+        ui_read choice "Enter [1-7 / b / 0]: " "请输入 [1-7 / b / 0]: "
 
         case "$choice" in
             1) run_menu_action install_nodejs ;;
@@ -5388,7 +5392,8 @@ function action_install_runtime() {
             5) run_menu_action install_go ;;
             6) run_menu_action install_dotnet ;;
             7) run_menu_action install_runtime_batch ;;
-            0) return 0 ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -5409,12 +5414,16 @@ function install_runtime_batch() {
     printf '%b\n' "${GREEN}[4]${PLAIN} Java"
     printf '%b\n' "${GREEN}[5]${PLAIN} Go"
     printf '%b\n' "${GREEN}[6]${PLAIN} .NET"
+    menu_back_and_exit
     printf '%b\n' ""
-    ui_read selections "Enter choices (for example: 1 2): " "请输入选择 (例如: 1 2): "
+    ui_read selections "Enter choices (for example: 1 2; b=back, 0=exit): " \
+        "请输入选择（例如: 1 2；b 返回，0 退出）: "
     
     local runtimes=()
     for sel in $selections; do
         case "$sel" in
+            b|B) return 0 ;;
+            0) exit 0 ;;
             1) runtimes+=("nodejs") ;;
             2) runtimes+=("python") ;;
             3) runtimes+=("php") ;;
@@ -6000,6 +6009,188 @@ action_configure_ssh() {
 # 服务器测试脚本
 # ==============================================================
 
+# Keep the original terminal transcript, but remove ANSI CSI/OSC sequences and
+# carriage returns from the readable copy. Never replay screen-clearing escapes.
+benchmark_plaintext() {
+    LC_ALL=C sed -E \
+        -e $'s/\033\\[[0-?]*[ -/]*[@-~]//g' \
+        -e $'s/\033\\][^\007\033]*(\007|\033\\\\)//g' \
+        -e $'s/\r//g' "$1"
+}
+
+run_benchmark_command() {
+    local slug="$1" description="$2"
+    shift 2
+    local report_base directory_mode status=0 capture_status=0
+    local pipeline_status=()
+    LAST_BENCHMARK_REPORT=""
+    LAST_BENCHMARK_TEXT_REPORT=""
+
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info "[DRY RUN] Would run and save benchmark: $description" \
+            "[DRY RUN] 将运行并保存测评: $description"
+        return 0
+    fi
+    [[ "$slug" =~ ^[a-z0-9-]+$ ]] || return 1
+    # Reports may contain public IPs and machine details. Use a private directory
+    # and mktemp-created files, not predictable filenames in a shared directory.
+    if [ -L "$BENCHMARK_REPORT_DIR" ] ||
+       ! (umask 077; mkdir -p -- "$BENCHMARK_REPORT_DIR") ||
+       [ ! -O "$BENCHMARK_REPORT_DIR" ]; then
+        ui_log_error "Cannot prepare private benchmark report directory: $BENCHMARK_REPORT_DIR" \
+            "无法准备私有测评报告目录: $BENCHMARK_REPORT_DIR"
+        return 1
+    fi
+    directory_mode="$(stat -c %a -- "$BENCHMARK_REPORT_DIR" 2>/dev/null ||
+        stat -f %Lp "$BENCHMARK_REPORT_DIR")" || return 1
+    if ! [[ "$directory_mode" =~ ^[0-7]{3,4}$ ]] ||
+       (( (8#$directory_mode & 077) != 0 )); then
+        ui_log_error "Benchmark report directory must be private (mode 700): $BENCHMARK_REPORT_DIR" \
+            "测评报告目录必须是私有目录（权限 700）: $BENCHMARK_REPORT_DIR"
+        return 1
+    fi
+    report_base="$(mktemp "$BENCHMARK_REPORT_DIR/$(date +%Y%m%d_%H%M%S)-$slug.XXXXXX")" || return 1
+    mv -- "$report_base" "$report_base.log" || return 1
+    LAST_BENCHMARK_REPORT="$report_base.log"
+    printf 'Benchmark: %s\nStarted: %s\n\n' "$description" "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+        >> "$LAST_BENCHMARK_REPORT" || return 1
+    ui_log_info "Saving benchmark output as it runs: $LAST_BENCHMARK_REPORT" \
+        "测评输出将实时保存: $LAST_BENCHMARK_REPORT"
+
+    if [ -t 0 ] && [ -t 1 ] && command -v script >/dev/null 2>&1 &&
+       script --version 2>/dev/null | grep -q util-linux; then
+        # A PTY preserves interactive menus and output written directly to
+        # /dev/tty. Only output is recorded; do not enable script's input log.
+        # shell_join uses Bash quoting, so do not inherit a dash/zsh login shell.
+        if SHELL=/bin/bash script -q -e -f -a \
+            -c "exec $(shell_join "$@")" "$LAST_BENCHMARK_REPORT"; then
+            status=0
+        else
+            status=$?
+        fi
+    else
+        if [ -t 0 ] && [ -t 1 ]; then
+            ui_log_warning 'util-linux script is unavailable; using tee (stdout will not be a TTY)' \
+                'util-linux script 不可用；使用 tee 保存（stdout 不再是 TTY）'
+        fi
+        # Keep stdin untouched and capture both streams. pipefail alone would
+        # lose the actual benchmark exit code when the recorder also fails.
+        if "$@" 2>&1 | tee -a -- "$LAST_BENCHMARK_REPORT"; then
+            pipeline_status=("${PIPESTATUS[@]}")
+        else
+            pipeline_status=("${PIPESTATUS[@]}")
+        fi
+        status="${pipeline_status[0]}"
+        capture_status="${pipeline_status[1]}"
+    fi
+
+    if ! printf '\nFinished: %s\nExit status: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$status" \
+        >> "$LAST_BENCHMARK_REPORT"; then
+        capture_status=1
+    fi
+    if [ "$capture_status" -eq 0 ] &&
+       (umask 077; benchmark_plaintext "$LAST_BENCHMARK_REPORT" > "$report_base.txt"); then
+        LAST_BENCHMARK_TEXT_REPORT="$report_base.txt"
+        ui_log_success "Benchmark report saved: $LAST_BENCHMARK_TEXT_REPORT" \
+            "测评报告已保存: $LAST_BENCHMARK_TEXT_REPORT"
+    else
+        [ "$capture_status" -ne 0 ] || capture_status=1
+        rm -f -- "$report_base.txt"
+        ui_log_error "Report recording or text conversion failed; inspect the transcript: $LAST_BENCHMARK_REPORT" \
+            "报告记录或文本转换失败；请检查原始记录: $LAST_BENCHMARK_REPORT"
+    fi
+    if [ "$status" -ne 0 ]; then
+        ui_log_warning "$description exited with status $status; partial output was retained" \
+            "$description 返回状态 ${status}；已保留部分输出"
+    elif [ "$capture_status" -ne 0 ]; then
+        status="$capture_status"
+    fi
+    return "$status"
+}
+
+run_remote_benchmark() {
+    local slug="$1" url="$2" description="$3" script_path
+    shift 3
+    if [ "$DRY_RUN" = "1" ]; then
+        run_benchmark_command "$slug" "$description" bash "$@"
+        return $?
+    fi
+    # Download/confirmation stays in the parent shell so the existing checksum,
+    # trust gates and temporary-file cleanup remain intact.
+    script_path="$(mktemp /tmp/init_remote_script.XXXXXX)" || return 1
+    register_temp_file "$script_path"
+    download_remote_script_unverified "$url" "$script_path" "$description" || return 1
+    run_benchmark_command "$slug" "$description" bash "$script_path" "$@"
+}
+
+benchmark_view_report() {
+    local report="$1"
+    if [ -f "${report%.log}.txt" ] && [ ! -L "${report%.log}.txt" ]; then
+        report="${report%.log}.txt"
+    fi
+    [ -f "$report" ] && [ ! -L "$report" ] || return 1
+    if [ -t 1 ] && command -v less >/dev/null 2>&1; then
+        benchmark_plaintext "$report" | LESSSECURE=1 less -R
+    else
+        benchmark_plaintext "$report"
+    fi
+}
+
+benchmark_results_prompt() {
+    local report="${1:-$LAST_BENCHMARK_REPORT}" choice
+    [ "$NON_INTERACTIVE" != "1" ] || return 0
+    while true; do
+        printf '\n%s\n%s\n' \
+            "$(ui_text 'Results remain visible until you explicitly go back.' '明确选择返回前，测评结果会留在屏幕上。')" \
+            "$(ui_text "Saved transcript: $report" "原始记录: $report")"
+        # An empty line (including leftover Enter input) must not clear results.
+        ui_read choice '[v] View saved report, [b] Back to benchmarks, [0] Exit: ' \
+            '[v] 查看已保存报告，[b] 返回测评菜单，[0] 退出: ' || return 1
+        case "$choice" in
+            v|V)
+                benchmark_view_report "$report" ||
+                    ui_log_warning "Could not open benchmark report: $report" \
+                        "无法打开测评报告: $report"
+                ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
+        esac
+    done
+}
+
+action_view_benchmark_reports() {
+    local report choice index
+    local reports=()
+    for report in "$BENCHMARK_REPORT_DIR"/*.log; do
+        [ -f "$report" ] && [ ! -L "$report" ] || continue
+        reports+=("$report")
+    done
+    if [ "${#reports[@]}" -eq 0 ]; then
+        ui_log_info "No saved benchmark reports in: $BENCHMARK_REPORT_DIR" \
+            "此目录中没有已保存的测评报告: $BENCHMARK_REPORT_DIR"
+        [ "$NON_INTERACTIVE" = 1 ] || menu_pause || true
+        return 0
+    fi
+    for ((index=${#reports[@]}-1; index>=0; index--)); do
+        printf '[%s] %s\n' "$((${#reports[@]} - index))" "${reports[index]##*/}"
+    done
+    menu_back_and_exit
+    while true; do
+        ui_read choice 'Report number (b=back, 0=exit): ' '报告编号（b 返回，0 退出）: ' || return 0
+        case "$choice" in
+            b|B) return 0 ;;
+            0) exit 0 ;;
+        esac
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "${#choice}" -le 6 ] &&
+           [ "$choice" -ge 1 ] && [ "$choice" -le "${#reports[@]}" ]; then
+            report="${reports[$((${#reports[@]} - 10#$choice))]}"
+            benchmark_view_report "$report" || return 1
+            benchmark_results_prompt "$report" || true
+            return 0
+        fi
+    done
+}
+
 # --- 模块: 运行测试脚本 ---
 action_run_goecs() {
     local installer_url='https://raw.githubusercontent.com/oneclickvirt/ecs/master/goecs.sh'
@@ -6032,7 +6223,7 @@ action_run_goecs() {
         return 1
     fi
 
-    run_command "$(ui_text 'Fusion Monster Go benchmark' '融合怪 Go 版测评')" \
+    run_benchmark_command goecs "$(ui_text 'Fusion Monster Go benchmark' '融合怪 Go 版测评')" \
         goecs "-l=$language" -upload=false
 }
 
@@ -6051,25 +6242,28 @@ function action_run_test_scripts() {
         printf '%b\n' "${GREEN}[3]${PLAIN} RegionRestrictionCheck - $(ui_text "streaming availability" "流媒体解锁检测")"
         printf '%b\n' "${GREEN}[4]${PLAIN} IP Quality Check - $(ui_text "IP reputation" "IP 质量检测")"
         printf '%b\n' "${GREEN}[5]${PLAIN} Fusion Monster Go (goecs) - $(ui_text "comprehensive benchmark" "综合性能测试")"
-        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+        printf '%b\n' "${GREEN}[6]${PLAIN} $(ui_text 'View saved benchmark reports' '查看已保存的测评报告')"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-5]: " "请输入 [0-5]: "
+        ui_read choice "Enter [1-6 / b / 0]: " "请输入 [1-6 / b / 0]: " || return 0
+        LAST_BENCHMARK_REPORT=""
+        LAST_BENCHMARK_TEXT_REPORT=""
 
         case "$choice" in
             1)
                 ui_log_info "Running the NodeQuality node-quality check..." "运行 NodeQuality 节点质量检测..."
                 if confirm_action "$(ui_text "Run NodeQuality?" "确认运行 NodeQuality?")" "y"; then
-                    run_remote_script_unverified 'https://run.NodeQuality.com' \
+                    run_remote_benchmark nodequality 'https://run.NodeQuality.com' \
                         "$(ui_text 'NodeQuality node-quality check' 'NodeQuality 节点质量检测')" || \
-                        ui_log_warning "NodeQuality script skipped" "已跳过 NodeQuality 脚本"
+                        ui_log_warning "NodeQuality failed or was skipped" "NodeQuality 失败或已跳过"
                 fi
                 ;;
             2)
                 ui_log_info "Running the Yabs performance benchmark..." "运行 Yabs 性能测试..."
                 if confirm_action "$(ui_text "Run Yabs?" "确认运行 Yabs?")" "y"; then
-                    run_remote_script_unverified 'https://yabs.sh' \
+                    run_remote_benchmark yabs 'https://yabs.sh' \
                         "$(ui_text 'Yabs performance benchmark' 'Yabs 性能测试')" || \
-                        ui_log_warning "Yabs benchmark skipped" "已跳过 Yabs 测试"
+                        ui_log_warning "Yabs benchmark failed or was skipped" "Yabs 测试失败或已跳过"
                 fi
                 ;;
             3)
@@ -6077,27 +6271,39 @@ function action_run_test_scripts() {
                     "Running the RegionRestrictionCheck streaming-availability check..." \
                     "运行 RegionRestrictionCheck 流媒体解锁检测..."
                 if confirm_action "$(ui_text "Run RegionRestrictionCheck?" "确认运行 RegionRestrictionCheck?")" "y"; then
-                    run_remote_script_unverified 'https://check.unlock.media' \
+                    run_remote_benchmark region-restriction 'https://check.unlock.media' \
                         'RegionRestrictionCheck' || \
-                        ui_log_warning "RegionRestrictionCheck skipped" "已跳过 RegionRestrictionCheck"
+                        ui_log_warning "RegionRestrictionCheck failed or was skipped" "RegionRestrictionCheck 失败或已跳过"
                 fi
                 ;;
             4)
                 ui_log_info "Running the IP reputation check..." "运行 IP质量体检脚本..."
                 if confirm_action "$(ui_text "Run the IP reputation check?" "确认运行 IP质量体检脚本?")" "y"; then
-                    run_remote_script_unverified 'https://Check.Place' \
+                    run_remote_benchmark ip-quality 'https://Check.Place' \
                         "$(ui_text 'IP reputation check' 'IP 质量检测脚本')" '-I' || \
-                        ui_log_warning "IP reputation check skipped" "已跳过 IP 质量检测脚本"
+                        ui_log_warning "IP reputation check failed or was skipped" "IP 质量检测脚本失败或已跳过"
                 fi
                 ;;
             5)
                 action_run_goecs || \
                     ui_log_warning "Fusion Monster Go benchmark failed or installation was skipped" "融合怪 Go 版测评失败或已跳过安装"
                 ;;
-            0) return 0 ;;
+            6)
+                action_view_benchmark_reports || {
+                    ui_log_warning 'Could not view the saved benchmark report' '无法查看已保存的测评报告'
+                    menu_pause || return 0
+                }
+                continue
+                ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice; continue ;;
         esac
-        menu_pause
+        if [ -n "$LAST_BENCHMARK_REPORT" ]; then
+            benchmark_results_prompt || return 0
+        else
+            menu_pause || return 0
+        fi
     done
 }
 
@@ -6143,10 +6349,10 @@ function action_dd_reinstall() {
     printf '%b\n' "${GREEN}[6]${PLAIN} Alpine Linux"
     printf '%b\n' "${GREEN}[7]${PLAIN} Windows 11 ($(ui_text "requires substantial RAM" "需要大内存"))"
     printf '%b\n' "${GREEN}[8]${PLAIN} $(ui_text "Custom command (enter arguments manually)" "自定义命令 (手动输入参数)")"
-    printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Cancel" "取消")"
+    menu_back_and_exit
     printf '%b\n' ""
     
-    ui_read dd_choice "Enter [0-8]: " "请输入选择 [0-8]: "
+    ui_read dd_choice "Enter [1-8 / b / 0]: " "请输入 [1-8 / b / 0]: "
     
     local dd_args=()
     case "$dd_choice" in
@@ -6163,7 +6369,8 @@ function action_dd_reinstall() {
                 "请输入完整参数 (例如: debian 12 --password mypassword): "
             read -r -a dd_args <<< "$custom_args"
             ;;
-        0) return ;;
+        b|B) return 0 ;;
+        0) exit 0 ;;
         *) ui_log_error "Invalid choice" "无效选择"; return ;;
     esac
 
@@ -6478,7 +6685,7 @@ submenu_docker_container() {
         echo "------------------------"
         echo "15. $(ui_text "Clear container IP rules     16. Allow only one source IPv4" "清除容器 IP 限制       16. 限制容器仅允许指定 IPv4")"
         echo "------------------------"
-        echo "0. $(ui_text "Back" "返回上一级")"
+        menu_back_and_exit
         echo "------------------------"
         ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
@@ -6552,7 +6759,8 @@ submenu_docker_container() {
                 fi
                 check_docker_app_ip "$docker_name"
                 ;;
-            0) return 0 ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice; continue ;;
         esac
         menu_pause
@@ -6574,7 +6782,7 @@ submenu_docker_image() {
         echo "3. $(ui_text "Delete image" "删除镜像")"
         echo "4. $(ui_text "Delete all images" "删除所有镜像")"
         echo "------------------------"
-        echo "0. $(ui_text "Back" "返回上一级")"
+        menu_back_and_exit
         echo "------------------------"
         ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
@@ -6596,7 +6804,8 @@ submenu_docker_image() {
                     docker rmi -f "${ids[@]}"
                 fi
                 ;;
-            0) return 0 ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice; continue ;;
         esac
         menu_pause
@@ -6617,7 +6826,7 @@ submenu_docker_network() {
         echo "3. $(ui_text "Disconnect container" "退出网络")"
         echo "4. $(ui_text "Delete network" "删除网络")"
         echo "------------------------"
-        echo "0. $(ui_text "Back" "返回上一级")"
+        menu_back_and_exit
         echo "------------------------"
         ui_read sub_choice "Select: " "请输入你的选择: "
         case "$sub_choice" in
@@ -6642,7 +6851,8 @@ submenu_docker_network() {
                     docker network rm "$net"
                 fi
                 ;;
-            0) return 0 ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice; continue ;;
         esac
         menu_pause
@@ -6667,7 +6877,7 @@ submenu_docker_manager() {
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
       printf '%b\n' "${GREEN}8.${PLAIN}   $(ui_text "Configure a China registry mirror" "更换 Docker 源 (国内加速)")"
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
-      printf '%b\n' "${GREEN}0.${PLAIN}   $(ui_text "Back to main menu" "返回主菜单")"
+      menu_back_and_exit
       printf '%b\n' "${CYAN}------------------------${PLAIN}"
       ui_read sub_choice "Select: " "请输入你的选择: "
 
@@ -6689,7 +6899,8 @@ submenu_docker_manager() {
               install_add_docker_cn
               menu_pause
               ;;
-          0) break ;;
+          b|B) return 0 ;;
+          0) exit 0 ;;
           *) menu_invalid_choice ;;
       esac
     done
@@ -6709,7 +6920,7 @@ submenu_app_market() {
         printf '%b\n' "${GREEN}5.${PLAIN} Portainer ($(ui_text "Docker UI" "Docker 管理面板"))"
         printf '%b\n' "${GREEN}6.${PLAIN} Uptime Kuma ($(ui_text "monitoring" "监控工具"))"
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
-        printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+        menu_back_and_exit
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
         ui_read app_choice "Select: " "请输入选择: "
         
@@ -6764,10 +6975,11 @@ submenu_app_market() {
                     ui_log_success "Uptime Kuma started: http://IP:3001" "Uptime Kuma 已启动: http://IP:3001"
                  fi
                  ;;
-            0) break ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
-        if [ "$app_choice" != "0" ]; then menu_pause; fi
+        menu_pause
     done
 }
 
@@ -6797,9 +7009,9 @@ function action_cd2_mount_helper() {
     printf '%b\n' "------------------------"
     printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Docker is a systemd service (write MountFlags=shared)" "Docker 为 systemd 服务 (写入 MountFlags=shared)")"
     printf '%b\n' "${GREEN}2.${PLAIN} $(ui_text "Temporary make-shared (must be repeated after reboot)" "临时 make-shared (重启后需重做)")"
-    printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back" "返回")"
+    menu_back_and_exit
     printf '%b\n' "------------------------"
-    ui_read mount_choice "Enter [0-2]: " "请输入选择 [0-2]: "
+    ui_read mount_choice "Enter [1-2 / b / 0]: " "请输入 [1-2 / b / 0]: "
 
     case "$mount_choice" in
         1)
@@ -6834,7 +7046,8 @@ EOF
             run_command "$(ui_text "Configure the shared mount" "设置共享挂载")" mount --make-shared "$mount_point"
             ui_log_warning "Note: make-shared applies only until the next reboot and must then be configured again" "提示: make-shared 仅当前运行周期生效，重启后需要重新设置"
             ;;
-        0) return ;;
+        b|B) return 0 ;;
+        0) exit 0 ;;
         *) echo "$(ui_text "Invalid input" "无效输入")"; return ;;
     esac
 }
@@ -6983,7 +7196,7 @@ function action_setup_cd2() {
         printf '%b\n' "${GREEN}1.${PLAIN} $(ui_text "Docker Compose setup (recommended)" "Docker Compose 安装 (推荐)")"
         printf '%b\n' "${GREEN}2.${PLAIN} $(ui_text "Native setup (install_cd2.sh)" "原生安装 (install_cd2.sh)")"
         printf '%b\n' "${GREEN}3.${PLAIN} $(ui_text "Shared-mount setup (MountFlags/make-shared)" "挂载共享设置 (MountFlags/make-shared)")"
-        printf '%b\n' "${GREEN}0.${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+        menu_back_and_exit
         printf '%b\n' "${CYAN}-------------------------------------------------${PLAIN}"
         ui_read cd2_choice "Select: " "请输入选择: "
 
@@ -6991,10 +7204,11 @@ function action_setup_cd2() {
             1) action_setup_cd2_docker_compose ;;
             2) action_setup_cd2_native ;;
             3) action_cd2_mount_helper ;;
-            0) break ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
-        if [ "$cd2_choice" != "0" ]; then menu_pause; fi
+        menu_pause
     done
 }
 
@@ -7062,9 +7276,9 @@ function action_toolbox() {
         printf '%b\n' "${GREEN}[17]${PLAIN} $(ui_text "Module status overview" "模块状态总览")"
         printf '%b\n' "${GREEN}[18]${PLAIN} $(ui_text "Script checks/ShellCheck" "脚本自检/ShellCheck")"
         printf '%b\n' "${GREEN}[19]${PLAIN} $(ui_text "Operations enhancements (profiles/reports/security)" "运维增强中心 (Profile/报告/安全基线)")"
-        printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read tool_choice "Enter [0-19]: " "请输入选择 [0-19]: "
+        ui_read tool_choice "Enter [1-19 / b / 0]: " "请输入 [1-19 / b / 0]: "
 
         case "$tool_choice" in
             1) run_menu_action action_dd_reinstall ;;
@@ -7086,7 +7300,8 @@ function action_toolbox() {
             17) run_menu_flow action_module_status_overview ;;
             18) run_menu_flow action_script_quality ;;
             19) run_menu_flow action_ops_enhancements ;;
-            0) return 0 ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -7650,9 +7865,9 @@ function action_backup_restore() {
         menu_option "$GREEN" "5" "Preview a restic snapshot" "预览 restic 快照"
         menu_option "$GREEN" "6" "Restore a restic snapshot" "恢复 restic 快照"
         menu_option "$GREEN" "7" "Run a restic restore drill" "restic 恢复演练"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
+        ui_read choice "Enter [1-7 / b / 0]: " "请输入 [1-7 / b / 0]: "
         case "$choice" in
             1) run_menu_action install_backup_tools ;;
             2) run_menu_action configure_restic_local_backup ;;
@@ -7661,7 +7876,8 @@ function action_backup_restore() {
             5) run_menu_action preview_restic_snapshot ;;
             6) run_menu_action restore_restic_snapshot ;;
             7) run_menu_action run_restic_restore_drill ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -7813,7 +8029,7 @@ action_login_notify() {
         menu_option "$GREEN" 6 'Enable / start' '启用 / 启动'
         menu_option "$GREEN" 7 'Disable / stop (keep queue)' '停用 / 停止（保留队列）'
         menu_option "$GREEN" 8 'Uninstall (keep configuration and queue)' '卸载（保留配置和队列）'
-        menu_option "$GREEN" 0 'Back' '返回'
+        menu_back_and_exit
         ui_read choice 'Select: ' '请选择: '
         case "$choice" in
             1) run_menu_action install_login_notify ;;
@@ -7824,7 +8040,8 @@ action_login_notify() {
             6) run_menu_action run_command 'Enable login notifications' systemctl enable --now login-notify.service ;;
             7) run_menu_action run_command 'Disable login notifications' systemctl disable --now login-notify.service ;;
             8) run_menu_action uninstall_login_notify ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -7974,15 +8191,16 @@ function action_monitoring_alerts() {
         menu_option "$GREEN" "2" "Install node_exporter" "安装 node_exporter"
         menu_option "$GREEN" "3" "Install the local health-check timer" "安装本机健康检查定时器"
         menu_option "$GREEN" "4" "View monitoring status" "查看监控状态"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-4]: " "请输入选择 [0-4]: "
+        ui_read choice "Enter [1-4 / b / 0]: " "请输入 [1-4 / b / 0]: "
         case "$choice" in
             1) run_menu_action configure_journald_persistent ;;
             2) run_menu_action install_node_exporter ;;
             3) run_menu_action install_health_check_timer ;;
             4) run_menu_action show_monitoring_status ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -8093,13 +8311,14 @@ function action_reverse_proxy_cert() {
         printf '%b\n' "${CYAN}################################################${PLAIN}"
         menu_option "$GREEN" "1" "Caddy automatic HTTPS reverse proxy (recommended)" "Caddy 自动 HTTPS 反代 (推荐)"
         menu_option "$GREEN" "2" "Nginx + Certbot reverse proxy" "Nginx + Certbot 反代"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-2]: " "请输入选择 [0-2]: "
+        ui_read choice "Enter [1-2 / b / 0]: " "请输入 [1-2 / b / 0]: "
         case "$choice" in
             1) run_menu_action configure_caddy_reverse_proxy ;;
             2) run_menu_action configure_nginx_certbot_proxy ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -8152,9 +8371,9 @@ function action_security_audit() {
         menu_option "$GREEN" "5" "Scan exposed ports" "端口暴露扫描"
         menu_option "$GREEN" "6" "Check Docker security baseline" "Docker 安全基线"
         menu_option "$GREEN" "7" "Show external-resource trust inventory" "外部资源信任清单"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
+        ui_read choice "Enter [1-7 / b / 0]: " "请输入 [1-7 / b / 0]: "
         case "$choice" in
             1) run_menu_action install_security_audit_tools ;;
             2) run_menu_action run_lynis_quick_audit ;;
@@ -8163,7 +8382,8 @@ function action_security_audit() {
             5) run_menu_action action_port_exposure_scan ;;
             6) run_menu_action action_docker_security_baseline ;;
             7) run_menu_action action_external_trust_inventory ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -8556,16 +8776,17 @@ function action_docker_compose_backup() {
         menu_option "$GREEN" "3" "View Compose backup timers" "查看 Compose 备份定时器"
         menu_option "$GREEN" "4" "Check Docker security baseline" "Docker 安全基线检查"
         menu_option "$GREEN" "5" "Check Docker image updates" "Docker 镜像更新检查"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-5]: " "请输入选择 [0-5]: "
+        ui_read choice "Enter [1-5 / b / 0]: " "请输入 [1-5 / b / 0]: "
         case "$choice" in
             1) run_menu_action run_docker_compose_backup_once ;;
             2) run_menu_action install_docker_compose_backup_timer ;;
             3) run_menu_action list_docker_compose_backup_timers ;;
             4) run_menu_action action_docker_security_baseline ;;
             5) run_menu_action action_docker_image_update_check ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -8781,15 +9002,16 @@ function action_script_quality() {
         menu_option "$GREEN" "2" "Run ShellCheck" "运行 ShellCheck"
         menu_option "$GREEN" "3" "Run safety/fault-injection regression tests" "运行安全/故障注入回归测试"
         menu_option "$GREEN" "4" "View module status" "查看模块状态总览"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-4]: " "请输入选择 [0-4]: "
+        ui_read choice "Enter [1-4 / b / 0]: " "请输入 [1-4 / b / 0]: "
         case "$choice" in
             1) run_menu_action run_script_static_self_check ;;
             2) run_menu_action run_shellcheck_scan ;;
             3) run_menu_action run_safety_tests ;;
             4) action_module_status_overview ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -9167,9 +9389,9 @@ action_profile_plan_apply() {
         menu_option "$GREEN" "5" "Import a profile file and view its plan" "导入 Profile 文件并查看计划"
         menu_option "$GREEN" "6" "Import and apply a profile file" "导入 Profile 文件并执行"
         menu_option "$GREEN" "7" "Create a custom profile" "创建自定义 Profile"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-7]: " "请输入选择 [0-7]: "
+        ui_read choice "Enter [1-7 / b / 0]: " "请输入 [1-7 / b / 0]: "
         case "$choice" in
             1)
                 profile_presets | while IFS= read -r p; do
@@ -9230,7 +9452,8 @@ action_profile_plan_apply() {
                 fi
                 menu_pause
                 ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -9584,9 +9807,9 @@ action_ops_enhancements() {
         menu_option "$GREEN" "7" "Check Docker security baseline" "Docker 安全基线"
         menu_option "$GREEN" "8" "Check Docker image updates" "Docker 镜像更新检查"
         menu_option "$GREEN" "9" "Run a restic restore drill" "restic 恢复演练"
-        menu_option "$GREEN" "0" "Back" "返回"
+        menu_back_and_exit
         printf '%b\n' ""
-        ui_read choice "Enter [0-9]: " "请输入选择 [0-9]: "
+        ui_read choice "Enter [1-9 / b / 0]: " "请输入 [1-9 / b / 0]: "
         case "$choice" in
             1) run_menu_flow action_profile_plan_apply ;;
             2) run_menu_action generate_system_change_report ;;
@@ -9597,7 +9820,8 @@ action_ops_enhancements() {
             7) run_menu_action action_docker_security_baseline ;;
             8) run_menu_action action_docker_image_update_check ;;
             9) run_menu_action run_restic_restore_drill ;;
-            0) return ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
             *) menu_invalid_choice ;;
         esac
     done
@@ -9792,10 +10016,11 @@ function task_custom_init() {
     done
     printf '%b\n' ""
     printf '%b\n' "${GREEN}[a]${PLAIN} $(ui_text "Select all" "全选")"
-    printf '%b\n' "${GREEN}[0]${PLAIN} $(ui_text "Back to main menu" "返回主菜单")"
+    menu_back_and_exit
     printf '%b\n' ""
     
-    ui_read selections "Enter choices (for example: 1 3 5 or a): " "请输入选择 (例如: 1 3 5 或 a): "
+    ui_read selections "Enter choices (for example: 1 3 5 or a; b=back, 0=exit): " \
+        "请输入选择（例如: 1 3 5 或 a；b 返回，0 退出）: "
     
     # 处理全选
     if [[ "$selections" == "a" || "$selections" == "A" ]]; then
@@ -9804,7 +10029,7 @@ function task_custom_init() {
     
     # 验证输入
     if [[ -z "$selections" ]]; then
-        ui_log_warning "No modules selected; returning to the main menu" "未选择任何模块，返回主菜单"
+        ui_log_warning "No modules selected; returning to the previous menu" "未选择任何模块，返回上一级菜单"
         return
     fi
     
@@ -9813,13 +10038,17 @@ function task_custom_init() {
     for sel in $selections; do
         if [[ "$sel" =~ ^([1-9]|1[0-3])$ ]]; then
             selected_modules+=("$sel")
-        elif [[ "$sel" != "0" ]]; then
-            ui_log_warning "Invalid selection ignored: ${sel}" "无效选择: ${sel}，已忽略"
+        else
+            case "$sel" in
+                b|B) return 0 ;;
+                0) exit 0 ;;
+                *) ui_log_warning "Invalid selection ignored: ${sel}" "无效选择: ${sel}，已忽略" ;;
+            esac
         fi
     done
     
     if [ ${#selected_modules[@]} -eq 0 ]; then
-        ui_log_warning "No valid modules selected; returning to the main menu" "没有有效的模块选择，返回主菜单"
+        ui_log_warning "No valid modules selected; returning to the previous menu" "没有有效的模块选择，返回上一级菜单"
         return
     fi
     
@@ -9839,7 +10068,7 @@ function task_custom_init() {
         y|Y|yes|YES)
             ;;
         *)
-            ui_log_info "Canceled; returning to the main menu" "已取消，返回主菜单"
+            ui_log_info "Canceled; returning to the previous menu" "已取消，返回上一级菜单"
             return
             ;;
     esac
@@ -9936,7 +10165,7 @@ function task_custom_init() {
     ui_log_info "Backup directory: $BACKUP_DIR" "备份目录: $BACKUP_DIR"
     
     printf '%b\n' ""
-    builtin read -r -p "$(ui_text "Press Enter to return to the main menu..." "按 Enter 键返回主菜单...")"
+    menu_pause
 }
 
 function cleanup() {
@@ -10437,7 +10666,7 @@ menu_option() {
 }
 
 menu_back_and_exit() {
-    menu_option "$GREEN" "b" "Back to main menu" "返回主菜单"
+    menu_option "$GREEN" "b" "Back to previous menu" "返回上一级菜单"
     menu_option "$GREEN" "0" "Exit" "退出"
 }
 
@@ -10985,6 +11214,10 @@ handle_signal() {
     fi
     recover_pending_directory_transactions || true
     cleanup_temp_files
+    if [ -n "$LAST_BENCHMARK_REPORT" ]; then
+        ui_log_warning "Benchmark interrupted; recorded output remains in: $LAST_BENCHMARK_REPORT" \
+            "测评已中断；已记录的输出保留在: $LAST_BENCHMARK_REPORT"
+    fi
     ui_log_warning "Operation interrupted; file backups remain in ${BACKUP_DIR}. Review the log for external state changes that were not recorded." "操作已中断；文件备份保留在 ${BACKUP_DIR}，请结合日志检查未记录的外部状态变更"
     exit "$exit_code"
 }
