@@ -1,7 +1,7 @@
 # macOS terminal setup
 
 The macOS `terminal` profile provides the prompt, navigation, aliases, and Zsh
-plugins used by the [Linux server toolkit](../../linux-server-toolkit/), using
+plugins used by the [Linux server toolkit](../../server-toolkit/), using
 Homebrew packages and the Zsh already supplied by macOS. It manages a block in
 your `.zshrc` and configures Ghostty for SSH and terminal icons.
 
@@ -11,21 +11,21 @@ initializer opens a menu: choose Install profiles, select `2` for Terminal
 then review and confirm the plan:
 
 ```sh
-./workstation-utils/macos/setup.sh
+./workstation/macos/setup.sh
 ```
 
 Explicit commands are also available:
 
 ```sh
-./workstation-utils/macos/setup.sh plan terminal
-./workstation-utils/macos/setup.sh install terminal --dry-run
-./workstation-utils/macos/setup.sh install terminal
+./workstation/macos/setup.sh plan terminal
+./workstation/macos/setup.sh install terminal --dry-run
+./workstation/macos/setup.sh install terminal
 ```
 
 Combine this profile with `core` to install everyday applications too:
 
 ```sh
-./workstation-utils/macos/setup.sh install core terminal
+./workstation/macos/setup.sh install core terminal
 ```
 
 ## Packages and features
@@ -108,7 +108,7 @@ the shell block checks whether each executable/plugin is available at startup.
 For configuration only after installing the tools yourself:
 
 ```sh
-./workstation-utils/macos/terminal-setup.sh
+./workstation/macos/terminal-setup.sh
 ```
 
 ## Validation
@@ -118,8 +118,8 @@ Zsh startup with fixture tools and plugins, without installing packages or
 changing the actual user's dotfiles:
 
 ```sh
-./workstation-utils/tests/macos-test.sh
-python3 -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v
+./workstation/tests/macos-test.sh
+python3 -B -m unittest discover -s workstation/tests -p 'test_macos*.py' -v
 ```
 
 Upstream references: [Starship](https://starship.rs/guide/),

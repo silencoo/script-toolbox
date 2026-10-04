@@ -4,7 +4,7 @@ The repository-level MIT license covers original work contributed to this
 repository. It does not replace notices or licensing terms already attached to
 third-party-derived files.
 
-- `linux-server-toolkit/server-toolkit.sh` bundles a self-contained terminfo
+- `server-toolkit/server-toolkit.sh` bundles a self-contained terminfo
   export from Ghostty 1.3.1, derived from
   `ghostty-org/ghostty/src/terminfo/ghostty.zig` at tag `v1.3.1`.
   Its MIT license and copyright notice are retained beside the bundled entry.
@@ -44,14 +44,14 @@ third-party-derived files.
 - Files under `userscripts/123pan-fastlink/` were imported from a local mirror
   of Bao-qing's `123FastLink`. The userscript retains its original author
   attribution, and its GreasyFork distribution identifies it as MIT licensed.
-- `userscripts/chatgpt-checker-next/` is derived from zetaloop/chatgpt-checker-next
+- `userscripts/chatgpt-checker/` is derived from zetaloop/chatgpt-checker-next
   v4.3.4 at commit `6c153995ae03073c90f090ea8f5a8aa41b65762d`, with local
   compatibility fixes. It retains AGPLv3 licensing and its upstream attribution;
   the full license is included in that directory.
 - Files under `userscripts/sht-helper/` were imported from
   `silencoo/sht-helper`. The upstream documentation identifies the userscript
   as MIT licensed.
-- `userscripts/netease-music-toolkit/netease-music-toolkit.user.js` is a
+- `userscripts/netease-music/netease-music-toolkit.user.js` is a
   snapshot of Cinvin's `myuserscripts` NetEase Music userscript. Its source
   header identifies Cinvin as the author and declares the MIT license.
 - `userscripts/gemini-toolkit/vendor/gargantua-core.js` is a

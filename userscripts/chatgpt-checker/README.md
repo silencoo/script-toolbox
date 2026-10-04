@@ -125,8 +125,8 @@ ChatGPT 界面仍使用这个旧字段。入口开关仅在响应包含布尔字
 无额外依赖，使用 Node.js 24+：
 
 ```powershell
-node --check userscripts/chatgpt-checker-next/chatgpt-checker-next.user.js
-node --test userscripts/chatgpt-checker-next/tests/compatibility.test.cjs
+node --check userscripts/chatgpt-checker/chatgpt-checker-next.user.js
+node --test userscripts/chatgpt-checker/tests/compatibility.test.cjs
 ```
 
 可选实站资源匹配检查：将当前页面公开的 `4813494d-*.js` 和
@@ -134,7 +134,7 @@ node --test userscripts/chatgpt-checker-next/tests/compatibility.test.cjs
 
 ```powershell
 $env:CHECKER_ASSET_DIR = 'C:\path\to\public-assets'
-node --test userscripts/chatgpt-checker-next/tests/compatibility.test.cjs
+node --test userscripts/chatgpt-checker/tests/compatibility.test.cjs
 ```
 
 测试覆盖当前/旧版资源发现、异常引导数据、资源 URL 限制、早到响应、年龄字段三态、

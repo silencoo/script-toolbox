@@ -1,6 +1,6 @@
 # Workstation utilities initializer
 
-`workstation-utils` sets up desktop applications, everyday utilities, and
+`workstation` sets up desktop applications, everyday utilities, and
 development tools. It includes a unified Windows 10/11 menu for utility
 profiles, developer environments, and WSL 2; macOS utility and Zsh/Ghostty terminal setup;
 and desktop application installation for Debian 13.
@@ -49,7 +49,7 @@ manually: their file associations and Explorer integration overlap.
 
 ## Linux (Debian 13)
 
-Run with Python 3.9+ from `workstation-utils`:
+Run with Python 3.9+ from `workstation`:
 
 ```sh
 python3 linux/setup.py plan apps
@@ -260,7 +260,7 @@ configuration behavior, and
 including the relocated `shared/ghostty-setup.sh` Linux desktop installer and
 `shared/ghostty-ssh-terminfo.sh` repair helper. These replace the former
 top-level `ghostty/` directory. Server terminfo installation remains in
-[`linux-server-toolkit`](../linux-server-toolkit/).
+[`server-toolkit`](../server-toolkit/).
 
 The macOS `core` profile includes [VSCodium](https://formulae.brew.sh/cask/vscodium).
 Homebrew also provides the `codium` command, so `codium .` opens the current

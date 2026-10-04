@@ -22,7 +22,7 @@ SSH hosts.
 
 ## Quick start
 
-Run from `workstation-utils`. On macOS, use the `terminal` profile to install
+Run from `workstation`. On macOS, use the `terminal` profile to install
 Ghostty through the filtered Homebrew catalog and configure its SSH integration.
 The same profile now adds a complete Zsh prompt/plugin environment and terminal
 tools; see [macOS terminal setup](macos-terminal.md).

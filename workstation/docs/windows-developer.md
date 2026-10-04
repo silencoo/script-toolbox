@@ -43,7 +43,7 @@ installers skip them when already installed. The utility catalog's alternative
 
 ## Quick start
 
-Run these commands from `workstation-utils/windows`. Open PowerShell and
+Run these commands from `workstation/windows`. Open PowerShell and
 inspect the plan before applying it:
 
 ```powershell
@@ -335,7 +335,7 @@ A future layout could separate the machine catalog from editor and stack
 configuration:
 
 ```text
-workstation-utils/windows/
+workstation/windows/
 ├── setup.ps1
 ├── utilities.ps1
 ├── developer.ps1

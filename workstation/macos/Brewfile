@@ -1,4 +1,4 @@
-# This is the source catalog for workstation-utils/macos/setup.sh.
+# This is the source catalog for workstation/macos/setup.sh.
 #
 # Entries are deliberately disabled when this file is passed directly to
 # `brew bundle`: installing the complete catalog would silently bypass profile

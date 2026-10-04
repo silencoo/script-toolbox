@@ -92,7 +92,7 @@ jobs:
         working-directory: proxy-rules
         run: npm run check
       - name: Check Bash syntax
-        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh workstation-utils/shared/ghostty-setup.sh workstation-utils/shared/ghostty-ssh-terminfo.sh workstation-utils/tests/ghostty-setup-test.sh workstation-utils/tests/ghostty-ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/macos/terminal-setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
+        run: bash -n debian-ai-workstation/setup.sh server-toolkit/server-toolkit.sh server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh workstation/shared/ghostty-setup.sh workstation/shared/ghostty-ssh-terminfo.sh workstation/tests/ghostty-setup-test.sh workstation/tests/ghostty-ssh-terminfo-test.sh workstation/macos/setup.sh workstation/macos/terminal-setup.sh workstation/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
       - name: Test Mihomo Console
         env:
           MIHOMO_TEST_BINARY: ${{ runner.temp }}/mihomo
@@ -107,11 +107,11 @@ jobs:
         run: python -m unittest discover -s sing-box/tests -v
       - name: Test Linux server toolkit safety
         run: |
-          ./linux-server-toolkit/tests/test_init_safety.sh
-          python3 linux-server-toolkit/tests/test_benchmarks.py
-          python3 linux-server-toolkit/tests/test_menu_navigation.py
-          python3 linux-server-toolkit/tests/test_yazi.py
-          python3 linux-server-toolkit/tests/test_history.py
+          ./server-toolkit/tests/test_init_safety.sh
+          python3 server-toolkit/tests/test_benchmarks.py
+          python3 server-toolkit/tests/test_menu_navigation.py
+          python3 server-toolkit/tests/test_yazi.py
+          python3 server-toolkit/tests/test_history.py
       - name: Validate shared agent TUI
         run: |
           npm ci
@@ -128,18 +128,18 @@ jobs:
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
       - name: Check zsh kit syntax
         run: |
-          zsh -n workstation-utils/macos/zshrc.zsh
+          zsh -n workstation/macos/zshrc.zsh
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.zshrc
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.config/sbx-manager/completions/_claude
       - name: Test Ghostty setup
         run: |
-          ./workstation-utils/tests/ghostty-setup-test.sh
-          ./workstation-utils/tests/ghostty-ssh-terminfo-test.sh
+          ./workstation/tests/ghostty-setup-test.sh
+          ./workstation/tests/ghostty-ssh-terminfo-test.sh
       - name: Test workstation utility planners
         run: |
-          ./workstation-utils/tests/macos-test.sh
-          python -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v
-          python -m unittest discover -s workstation-utils/tests -p 'test_linux.py' -v
+          ./workstation/tests/macos-test.sh
+          python -B -m unittest discover -s workstation/tests -p 'test_macos*.py' -v
+          python -m unittest discover -s workstation/tests -p 'test_linux.py' -v
       - name: Install Worker tooling
         run: npm ci
         working-directory: workers/cloudflare-vless
@@ -220,22 +220,22 @@ jobs:
           node agent/tui/dist/toolbox-tui.mjs --help
       - name: Test Sunshine VDD configuration scripts
         shell: pwsh
-        run: ./sunshine-vdd-setup/tests/ConfigScripts.Tests.ps1
+        run: ./sunshine-vdd/tests/ConfigScripts.Tests.ps1
       - name: Test Windows workstation setup with Windows PowerShell 5.1
         shell: powershell
         run: |
-          ./workstation-utils/tests/windows-test.ps1
-          ./workstation-utils/tests/windows-menu-test.ps1
-          ./workstation-utils/tests/windows-developer-test.ps1
-          ./workstation-utils/tests/wsl-test.ps1
+          ./workstation/tests/windows-test.ps1
+          ./workstation/tests/windows-menu-test.ps1
+          ./workstation/tests/windows-developer-test.ps1
+          ./workstation/tests/wsl-test.ps1
       - name: Test Windows PowerShell managers
         shell: pwsh
         run: |
           ./docker-sandboxes/tests/sbx-manager-test.ps1
-          ./workstation-utils/tests/windows-test.ps1
-          ./workstation-utils/tests/windows-menu-test.ps1
-          ./workstation-utils/tests/windows-developer-test.ps1
-          ./workstation-utils/tests/wsl-test.ps1
+          ./workstation/tests/windows-test.ps1
+          ./workstation/tests/windows-menu-test.ps1
+          ./workstation/tests/windows-developer-test.ps1
+          ./workstation/tests/wsl-test.ps1
 
   validate-agent-bash-3:
     name: macOS · system Bash 3.2 agent suite
@@ -268,7 +268,7 @@ jobs:
           PATH="$compat_bin:$PATH" /bin/bash ./agent/test.sh
       - name: Test macOS terminal setup with system Bash and Zsh
         run: |
-          /bin/bash ./workstation-utils/tests/macos-test.sh
-          /bin/bash -n workstation-utils/macos/terminal-setup.sh
-          zsh -n workstation-utils/macos/zshrc.zsh
-          python -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v
+          /bin/bash ./workstation/tests/macos-test.sh
+          /bin/bash -n workstation/macos/terminal-setup.sh
+          zsh -n workstation/macos/zshrc.zsh
+          python -B -m unittest discover -s workstation/tests -p 'test_macos*.py' -v
