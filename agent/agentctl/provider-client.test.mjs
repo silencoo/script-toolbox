@@ -34,14 +34,14 @@ function run(args, expectedStatus = 0, environment = {}) {
   const requestedHome = environment.HOME;
   const result = spawnSync(process.execPath, [CLIENT, ...args], {
     encoding: "utf8",
-    env: {
+    env: Object.fromEntries(Object.entries({
       ...process.env,
       NO_COLOR: "1",
       ...environment,
       ...(process.platform === "win32" && requestedHome
         ? { HOME: requestedHome.replaceAll("\\", "/"), USERPROFILE: requestedHome }
         : {})
-    }
+    }).filter(([, value]) => value !== undefined))
   });
   assert.equal(
     result.status,
@@ -94,11 +94,13 @@ test("MiniMax TUI list, plan and use accept environment keys without persisting 
     const environment = {
       HOME: root,
       AGENTCTL_AGENT_ROOT: join(root, "agents"),
-      minimax_api_key: "",
-      MINIMAX_API_KEY: "",
+      // Omit the unused spelling: Windows merges environment names without
+      // regard to case, so an empty duplicate can hide the populated value.
+      minimax_api_key: undefined,
+      MINIMAX_API_KEY: undefined,
       [variable]: key,
       EXPECTED_TEST_KEY: key,
-      TEST_KEY_PATH: join(root, "key-path")
+      TEST_KEY_PATH: join(root, "key-path").replaceAll("\\", "/")
     };
     const command = (args, status = 0, env = environment) => {
       const result = run([...args, ...common(root), "--json"], status, env);
@@ -142,7 +144,7 @@ test("MiniMax TUI list, plan and use accept environment keys without persisting 
       await assert.rejects(readFile(temporaryKey), { code: "ENOENT" });
       assert.deepEqual(command(["status"]).missing_secrets, []);
 
-      const noKey = { ...environment, minimax_api_key: "", MINIMAX_API_KEY: "" };
+      const noKey = { ...environment, minimax_api_key: undefined, MINIMAX_API_KEY: undefined };
       assert.equal(command(["plan", "minimax-cn", "--target", "claude"], 1, noKey).ready, false);
       // Explicit file input must override the ambient key and remain reusable.
       const keyFile = join(root, "explicit.key");
