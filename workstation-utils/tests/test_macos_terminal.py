@@ -62,7 +62,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('Include these optional additions?', output)
         self.assertIn('Install the missing packages in this plan?', output)
         bundle = self.bundle.read_text()
-        for token in ['starship', 'btop', 'ncdu', 'duf']:
+        for token in ['starship', 'yazi', 'btop', 'ncdu', 'duf']:
             self.assertIn('brew "' + token + '"', bundle)
         self.assertNotIn('keepassxc', bundle)
         self.assertTrue(self.config.exists())
@@ -148,6 +148,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertNotIn('Choose an action', output)
         self.assertIn('cask "keepassxc"', self.bundle.read_text())
         self.assertNotIn('ghostty', self.bundle.read_text())
+        self.assertNotIn('brew "yazi"', self.bundle.read_text())
 
     def test_menu_custom_brewfile_limits_selection_to_that_catalog(self):
         catalog = self.root / 'custom.Brewfile'
@@ -164,6 +165,8 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('Ghostty configuration:', plan)
         self.assertIn('Zsh terminal configuration:', plan)
         self.assertIn('zsh-autosuggestions', plan)
+        self.assertIn('brew   yazi', plan)
+        self.assertIn('adds y to open Yazi', plan)
         self.assertIn('font-jetbrains-mono-nerd-font', plan)
         preview = self.run_setup('install', 'terminal', '--dry-run')
         self.assertIn('ghostty-setup.sh --config-only', preview)
@@ -177,7 +180,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.run_setup('install', 'terminal', '--yes')
         self.assertIn('cask "ghostty"', self.bundle.read_text())
         self.assertNotIn('keepassxc', self.bundle.read_text())
-        for token in ['starship', 'fzf', 'zoxide', 'eza', 'bat', 'ripgrep', 'fd',
+        for token in ['starship', 'fzf', 'zoxide', 'eza', 'bat', 'ripgrep', 'fd', 'yazi',
                       'tmux', 'neovim', 'uv', 'zsh-autosuggestions',
                       'zsh-syntax-highlighting', 'zsh-completions']:
             self.assertIn('brew "' + token + '"', self.bundle.read_text())
@@ -206,6 +209,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('cask "keepassxc"', self.bundle.read_text())
         self.assertEqual(self.bundle.read_text().count('brew "sevenzip"'), 1)
         self.assertEqual(self.bundle.read_text().count('brew "zstd"'), 1)
+        self.assertEqual(self.bundle.read_text().count('brew "yazi"'), 1)
         self.assertEqual(self.log.read_text().count('GHOSTTY:+validate-config'), 1)
 
     def test_optional_terminal_monitors_are_selected_without_other_profile_options(self):

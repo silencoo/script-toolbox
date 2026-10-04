@@ -75,13 +75,14 @@ versions and configuration details.
 | Terminal and icon font | `ghostty` and `font-jetbrains-mono-nerd-font` (casks) |
 | Prompt and navigation | `starship`, `zoxide`, `fzf` |
 | Zsh suggestions, highlighting, and completions | `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions` |
-| Files and search | `eza`, `bat`, `ripgrep`, `fd` |
+| Files, search, and file manager | `eza`, `bat`, `ripgrep`, `fd`, `yazi` |
 | Editor and sessions | `neovim`, `tmux` |
 | Data, Git diff viewing, and help | `jq`, `yq`, `git-delta`, `tealdeer` |
 | Archives and Python projects | `sevenzip`, `zstd`, `uv` |
 | Optional terminal monitors | `btop`, `ncdu`, `duf` |
 
 Package identifiers and Homebrew plugin paths were verified on 2026-10-04.
+Yazi includes `yazi` and `ya`; a guarded `y` shell wrapper returns to its selected directory.
 The profile installs missing packages without upgrades, manages a validated
 `.zshrc` block, and configures Ghostty's SSH integration. Font preferences are
 preserved; JetBrains Mono Nerd Font becomes the default only when no font or
@@ -89,6 +90,7 @@ included configuration is already present. See [macOS terminal setup](../docs/ma
 for configuration, backups, symlink handling, and the equivalent Linux features.
 
 Primary references: [Starship](https://formulae.brew.sh/formula/starship),
+[Yazi](https://formulae.brew.sh/formula/yazi),
 [Zsh completions](https://formulae.brew.sh/formula/zsh-completions),
 [autosuggestions](https://formulae.brew.sh/formula/zsh-autosuggestions),
 [syntax highlighting](https://formulae.brew.sh/formula/zsh-syntax-highlighting),

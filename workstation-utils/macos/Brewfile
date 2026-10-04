@@ -106,6 +106,9 @@ brew "ripgrep" if false
 # workstation-package|terminal|brew|fd|Fast file search|required
 brew "fd" if false
 
+# workstation-package|terminal|brew|yazi|Yazi terminal file manager|required
+brew "yazi" if false
+
 # workstation-package|terminal|brew|tmux|Terminal multiplexer|required
 brew "tmux" if false
 

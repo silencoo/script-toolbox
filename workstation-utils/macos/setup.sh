@@ -132,7 +132,7 @@ select_menu_profiles() {
 
   printf '\nChoose profiles\n'
   printf '  1. Core          Everyday apps, archives, transfer, and window layout\n'
-  printf '  2. Terminal      Ghostty, Starship, Zsh plugins, font, and CLI tools\n'
+  printf '  2. Terminal      Ghostty, Starship, Zsh plugins, Yazi, and CLI tools\n'
   printf '  3. Media         Download, inspect, and convert media\n'
   printf '  4. Maintenance   Disk inspection, monitoring, and backups\n'
   printf '  5. Desktop       LocalSend, Rectangle, and wake control\n'
@@ -246,7 +246,7 @@ show_profiles() {
   printf '  %-13s %s\n' admin \
     'Explicit networking, remote access, and encryption tools'
   printf '  %-13s %s\n' terminal \
-    'Ghostty, Starship, Zsh plugins, navigation, completion, and CLI tools'
+    'Ghostty, Starship, Zsh plugins, Yazi, navigation, and CLI tools'
   printf '\nUse --include-optional for AppCleaner, mpv, Maccy, Raycast, VeraCrypt, btop, ncdu, and duf.\n'
   printf 'The admin profile may require elevation, extensions, or account setup.\n'
 }
@@ -330,6 +330,9 @@ show_plan() {
     printf '  - enables Starship, fuzzy history/completion, and smart directory navigation\n'
     printf '  - loads autosuggestions, syntax highlighting, and Homebrew completions\n'
     printf '  - adds icon-aware file aliases and preserves existing aliases/editor settings\n'
+    if key_is_selected 'brew:yazi'; then
+      printf '  - adds y to open Yazi and return to the selected directory when it exits\n'
+    fi
     printf '  - updates a managed block in %s/.zshrc, preserving other content with backups\n' "${ZDOTDIR:-$HOME}"
   fi
   printf '\nSafety boundary:\n'

@@ -30,7 +30,7 @@ identifier, built-in alternative, opt-in choice, and safety note.
 | `maintenance` | Manual uninstall/duplicate inspection, Mole, qpdf, drive health, hardware monitoring, restic, and rclone |
 | `desktop` | Screenshot or wake tools, LocalSend/layout tools, and opt-in launchers/clipboard history |
 | `admin` | Explicit system/network inspection, private networking, Moonlight/Sunshine streaming, recovery, and encryption tools |
-| `terminal` | Ghostty, Starship, Zsh plugins, navigation, completion, CLI tools, and Nerd Font on macOS |
+| `terminal` | Ghostty, Starship, Zsh plugins, Yazi file manager, navigation, completion, CLI tools, and Nerd Font on macOS |
 
 Profiles compose freely and duplicate packages are installed once. Optional
 packages require an additional explicit switch. Linux currently supports `core`,
@@ -245,12 +245,14 @@ file that can override these settings produces a warning. Open a new Ghostty
 window after installation to load the integration.
 
 The profile includes Ghostty, JetBrains Mono Nerd Font, Starship, zoxide, fzf,
-eza, bat, ripgrep, fd, tmux, Neovim, uv, jq, yq, git-delta, tealdeer, 7-Zip,
+eza, bat, ripgrep, fd, Yazi, tmux, Neovim, uv, jq, yq, git-delta, tealdeer, 7-Zip,
 Zstandard, and the Homebrew Zsh plugins/completions. `--include-optional` adds
 btop, ncdu, and duf. An existing Ghostty font choice is retained; otherwise
 JetBrains Mono Nerd Font is selected when no included config supplies settings.
 The `.zshrc` block respects exported `ZDOTDIR`, preserves symlinks and user
 aliases/editor choices, and is validated before replacement.
+Run `yazi` to browse files, or `y` to return to the selected directory on exit;
+an existing `y` alias or function is preserved.
 
 See [macOS terminal setup](docs/macos-terminal.md) for packages, aliases, and
 configuration behavior, and

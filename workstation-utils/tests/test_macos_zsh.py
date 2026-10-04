@@ -49,7 +49,7 @@ class MacOSZshTest(unittest.TestCase):
             'zoxide': "printf 'function __zoxide_z() { :; }; function z() { :; }\\n'",
             'fzf': "printf 'function fzf-history-widget() { :; }\\n'",
             'uv': "printf 'compdef _files uv\\n'",
-            'eza': ':', 'bat': ':', 'nvim': ':',
+            'eza': ':', 'bat': ':', 'nvim': ':', 'yazi': ':',
         }
         for name, body in tools.items():
             executable = self.prefix / 'bin' / name
@@ -146,13 +146,14 @@ class MacOSZshTest(unittest.TestCase):
     def test_actual_zsh_session_initializes_tools_completion_aliases_and_plugins(self):
         self.make_tools()
         self.configure()
-        out, err = self.shell('print -r -- "PROMPT=$PROMPT" "EDITOR=$EDITOR" "LS=${aliases[ls]}" "CAT=${aliases[cat]}"; whence -w z; print -r -- "HISTORY=$HISTSIZE/$SAVEHIST"; print -rl -- $fpath')
+        out, err = self.shell('print -r -- "PROMPT=$PROMPT" "EDITOR=$EDITOR" "LS=${aliases[ls]}" "CAT=${aliases[cat]}"; whence -w z y; print -r -- "HISTORY=$HISTSIZE/$SAVEHIST"; print -rl -- $fpath')
         self.assertEqual(err, '')
         self.assertIn('PROMPT=toolbox-test', out)
         self.assertIn('EDITOR=nvim', out)
         self.assertIn('LS=eza --icons', out)
         self.assertIn('CAT=bat --paging=never', out)
         self.assertIn('z: function', out)
+        self.assertIn('y: function', out)
         self.assertIn('HISTORY=10000/10000', out)
         self.assertIn(str(self.prefix / 'share/zsh-completions'), out)
         self.assertEqual(self.log.read_text().splitlines(),
@@ -173,10 +174,68 @@ class MacOSZshTest(unittest.TestCase):
 
     def test_missing_optional_executables_do_not_break_shell_startup(self):
         self.configure()
-        out, err = self.shell('print -r -- shell-started')
+        out, err = self.shell('print -r -- shell-started; print -r -- "Y_WRAPPER=${+functions[y]}"')
         self.assertEqual(err, '')
         self.assertIn('shell-started', out)
+        self.assertIn('Y_WRAPPER=0', out)
         self.assertFalse(self.log.exists())
+
+    def test_yazi_wrapper_preserves_arguments_status_directory_names_and_cleans_up(self):
+        self.make_tools()
+        executable = self.prefix / 'bin/yazi'
+        record = self.root / 'cwd-file-record'
+        argument = self.root / 'argument-record'
+        executable.write_text('''#!/bin/sh
+printf '%s' "$1" > "$ARGUMENT_RECORD"
+for arg do
+    case "$arg" in --cwd-file=*) cwd_file=${arg#--cwd-file=};; esac
+done
+printf '%s' "$SELECTED_DIRECTORY" > "$cwd_file"
+printf '%s' "$cwd_file" > "$CWD_RECORD"
+exit "$YAZI_EXIT"
+''')
+        self.configure()
+        for selected, status in [('selected directory', 0), ('selected\ndirectory', 7),
+                                 ('', 0), ('missing-directory', 0)]:
+            with self.subTest(selected=selected, status=status):
+                directory = self.root / selected if selected else None
+                if selected not in ('', 'missing-directory'):
+                    directory.mkdir()
+                self.env.update(SELECTED_DIRECTORY=str(directory) if directory else '',
+                                CWD_RECORD=str(record), ARGUMENT_RECORD=str(argument),
+                                YAZI_EXIT=str(status))
+                out, err = self.shell('y "argument with spaces"; result=$?; '
+                                      'print -r -- "RESULT=$result" "PWD=$PWD"')
+                self.assertEqual(err, '')
+                self.assertIn('RESULT=' + str(status), out)
+                expected = directory if directory and directory.is_dir() else Path.cwd()
+                self.assertIn('PWD=' + str(expected), out)
+                self.assertEqual(argument.read_text(), 'argument with spaces')
+                self.assertFalse(Path(record.read_text()).exists())
+
+    def test_yazi_wrapper_preserves_user_aliases_and_functions(self):
+        self.make_tools()
+        for declaration, check in [("alias y='echo custom-y'\n", 'print -r -- "Y=${aliases[y]}"'),
+                                   ("y() { print -r -- custom-function; }\n", 'y')]:
+            with self.subTest(declaration=declaration):
+                self.rc.write_text(declaration)
+                self.configure()
+                out, err = self.shell(check)
+                self.assertEqual(err, '')
+                self.assertIn('custom-', out)
+                self.assertNotIn('yazi:', self.log.read_text())
+
+    def test_yazi_wrapper_stops_if_temporary_file_creation_fails(self):
+        self.make_tools()
+        executable = self.prefix / 'bin/mktemp'
+        executable.write_text('#!/bin/sh\nexit 1\n')
+        executable.chmod(0o755)
+        self.configure()
+        self.env['PATH'] = str(self.prefix / 'bin') + os.pathsep + self.env['PATH']
+        out, err = self.shell('y; result=$?; print -r -- "RESULT=$result"')
+        self.assertEqual(err, '')
+        self.assertIn('RESULT=1', out)
+        self.assertNotIn('yazi:', self.log.read_text())
 
 
 if __name__ == '__main__':

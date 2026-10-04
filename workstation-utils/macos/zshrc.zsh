@@ -43,6 +43,21 @@ if (( $+commands[uv] )); then
   eval "$(uv generate-shell-completion zsh)"
 fi
 
+# Return to the directory selected in Yazi, preserving an existing y command.
+if (( $+commands[yazi] && ! $+aliases[y] && ! $+functions[y] )); then
+  function y() {
+    local tmp cwd="" result=0
+    tmp="$(mktemp -t yazi-cwd.XXXXXX)" || return 1
+    command yazi "$@" --cwd-file="$tmp" || result=$?
+    IFS= read -r -d '' cwd < "$tmp" || true
+    if [[ -n "$cwd" && "$cwd" != "$PWD" && -d "$cwd" ]]; then
+      builtin cd -- "$cwd" || result=$?
+    fi
+    command rm -f -- "$tmp"
+    return "$result"
+  }
+fi
+
 # Preserve user-defined aliases/functions and any explicit editor setting.
 if (( $+commands[nvim] )); then
   export EDITOR="${EDITOR:-nvim}"

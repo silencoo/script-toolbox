@@ -36,7 +36,7 @@ Combine this profile with `core` to install everyday applications too:
 | Prompt | Starship |
 | Navigation and fuzzy history/completion | zoxide, fzf |
 | Zsh plugins and completion | zsh-autosuggestions, zsh-syntax-highlighting, zsh-completions |
-| File listing, viewing, and search | eza, bat, ripgrep, fd |
+| File listing, viewing, search, and navigation | eza, bat, ripgrep, fd, Yazi |
 | Terminal editing and sessions | Neovim, tmux |
 | Data and command help | jq, yq, git-delta, tealdeer (`tldr`) |
 | Archives | 7-Zip CLI, Zstandard |
@@ -48,6 +48,14 @@ The Zsh block enables fuzzy history search through fzf, `z` navigation through
 zoxide, autosuggestions, command highlighting, Homebrew completions, and uv
 completion. History limits are raised to at least 10,000 entries, retaining an
 existing history-file location or larger limits.
+
+Run `yazi` to open the terminal file manager, or `y` to return to the directory
+selected in Yazi when it exits. The `y` wrapper preserves an existing alias or
+function, passes arguments through, and cleans up its temporary directory file
+on success or failure. The Homebrew `yazi` formula supplies both `yazi` and `ya`.
+The profile already includes the archive, JSON, search, fuzzy-navigation, and
+font tools used by Yazi. Extra video/PDF/SVG/font previews depend on optional
+external tools listed in [Yazi's installation guide](https://yazi-rs.github.io/docs/installation/).
 
 These aliases are added only when their target tool exists and you have not
 already defined that alias or function:
@@ -115,6 +123,8 @@ python3 -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -
 ```
 
 Upstream references: [Starship](https://starship.rs/guide/),
+[Yazi installation](https://yazi-rs.github.io/docs/installation/),
+[Yazi shell wrapper](https://yazi-rs.github.io/docs/quick-start/#shell-wrapper),
 [fzf shell integration](https://github.com/junegunn/fzf#setting-up-shell-integration),
 [Homebrew Zsh completions](https://formulae.brew.sh/formula/zsh-completions),
 [autosuggestions](https://formulae.brew.sh/formula/zsh-autosuggestions),
