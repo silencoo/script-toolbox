@@ -10,13 +10,14 @@
  * - Await every service check and call $done exactly once.
  * - Replace the obsolete chat.openai.com probe with chatgpt.com.
  * - Treat unknown responses as errors instead of false unlock results.
+ * - Retain the upstream YouTube google.cn China-region fallback.
  * - Use a narrow, linear htmlMessage that Quantumult X renders reliably.
  *
  * [task_local]
  * event-interaction StreamingCheck-QX.js, tag=Streaming availability, img-url=arrowtriangle.right.square.system, enabled=true
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const POLICY = getPolicy();
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 const DISNEY_AUTH = "ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84";
@@ -81,15 +82,29 @@ async function checkYouTube() {
     timeout: 6500,
     headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache" }
   });
+  return parseYouTubeResponse(response);
+}
+
+// Keep this parser in sync with the other standalone YouTube UIAction.
+// tests/youtube-region.test.mjs runs the same response corpus against both.
+function parseYouTubeResponse(response) {
   const status = statusCode(response);
-  const body = String(response.body || "");
   if (status !== 200) return { state: "error", detail: "HTTP " + (status || "error") };
-  if (/Premium is not available in your country/i.test(body)) {
-    return { state: "blocked", detail: "Premium unavailable" };
-  }
+  const body = String(response.body || "").replace(/\\"/g, '"');
   const match = body.match(/"GL"\s*:\s*"([A-Z]{2})"/i)
     || body.match(/"countryCode"\s*:\s*"([A-Z]{2})"/i);
-  return { state: "available", detail: "Premium available", region: match ? match[1].toUpperCase() : "" };
+  // Upstream uses google.cn when YouTube omits GL. Explicit region fields
+  // take precedence; an incidental link must not override a reported region.
+  const chinaMarker = /(?:^|[^a-z0-9.-])www\.google\.cn(?=$|[^a-z0-9.-])/i.test(body);
+  const region = match ? match[1].toUpperCase() : chinaMarker ? "CN" : "";
+  if (region === "CN") return { state: "blocked", detail: "YouTube marked as China", region };
+  if (/Premium\s+is\s+not\s+available\s+in\s+your\s+country/i.test(body)) {
+    return { state: "blocked", detail: "Premium unavailable", region };
+  }
+  // HTTP 200 alone can be a consent, challenge or otherwise unknown page.
+  // Neither invent a US region nor report Premium available without evidence.
+  if (!region) return { state: "error", detail: "Region unavailable" };
+  return { state: "available", detail: "Premium available", region };
 }
 
 async function checkDisney() {
