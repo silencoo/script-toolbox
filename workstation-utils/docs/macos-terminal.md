@@ -5,7 +5,16 @@ plugins used by the [Linux server toolkit](../../linux-server-toolkit/), using
 Homebrew packages and the Zsh already supplied by macOS. It manages a block in
 your `.zshrc` and configures Ghostty for SSH and terminal icons.
 
-Run from the repository root as your desktop user:
+Run from the repository root as your desktop user. Without arguments, the
+initializer opens a menu: choose Install profiles, select `2` for Terminal
+(or `1,2` for Core and Terminal), choose whether to include optional additions,
+then review and confirm the plan:
+
+```sh
+./workstation-utils/macos/setup.sh
+```
+
+Explicit commands are also available:
 
 ```sh
 ./workstation-utils/macos/setup.sh plan terminal

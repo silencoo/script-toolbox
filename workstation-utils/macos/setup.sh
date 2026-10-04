@@ -4,7 +4,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 brewfile="$script_dir/Brewfile"
-command_name="plan"
+command_name="menu"
 include_optional=0
 assume_yes=0
 dry_run=0
@@ -17,6 +17,7 @@ uninstall_labels=()
 usage() {
   cat <<'USAGE'
 Usage:
+  ./setup.sh [menu] [options]
   ./setup.sh plan [profiles...] [options]
   ./setup.sh install [profiles...] [options]
   ./setup.sh uninstall [profiles...] [options]
@@ -34,6 +35,7 @@ Options:
   -h, --help          Show this help
 
 Examples:
+  ./setup.sh
   ./setup.sh plan core media
   ./setup.sh install core desktop
   ./setup.sh install terminal
@@ -121,6 +123,115 @@ uninstall_key_is_selected() {
   return 1
 }
 
+select_menu_profiles() {
+  local reply
+  local item
+  local selected_profile
+  local valid
+  local -a items=()
+
+  printf '\nChoose profiles\n'
+  printf '  1. Core          Everyday apps, archives, transfer, and window layout\n'
+  printf '  2. Terminal      Ghostty, Starship, Zsh plugins, font, and CLI tools\n'
+  printf '  3. Media         Download, inspect, and convert media\n'
+  printf '  4. Maintenance   Disk inspection, monitoring, and backups\n'
+  printf '  5. Desktop       LocalSend, Rectangle, and wake control\n'
+  printf '  6. Admin         Networking, remote access, and encryption\n'
+  printf '  0. Cancel\n'
+
+  while true; do
+    printf '\nEnter profile numbers separated by commas or spaces [1]: '
+    IFS= read -r reply || return 1
+    case "$reply" in
+      0|q|Q|quit|QUIT|cancel|CANCEL) return 1 ;;
+    esac
+    reply="${reply//,/ }"
+    IFS=$' \t' read -r -a items <<< "$reply"
+    profiles=()
+    valid=1
+    for item in "${items[@]+"${items[@]}"}"; do
+      case "$item" in
+        1) selected_profile=core ;;
+        2) selected_profile=terminal ;;
+        3) selected_profile=media ;;
+        4) selected_profile=maintenance ;;
+        5) selected_profile=desktop ;;
+        6) selected_profile=admin ;;
+        *) valid=0; break ;;
+      esac
+      add_profile "$selected_profile"
+    done
+    if [[ "$valid" -eq 1 ]]; then
+      if [[ "${#profiles[@]}" -eq 0 ]]; then
+        profiles=(core)
+      fi
+      return 0
+    fi
+    printf 'WARN Choose numbers from 1 to 6, or 0 to cancel.\n'
+  done
+}
+
+select_menu_optional_packages() {
+  local metadata
+  local available_profiles
+  local package_kind
+  local token
+  local label
+  local optional_state
+  local optional_count=0
+  local reply
+
+  [[ -f "$brewfile" ]] || die "Brewfile not found: $brewfile"
+  while IFS='|' read -r metadata available_profiles package_kind token \
+      label optional_state; do
+    [[ "$metadata" == '# workstation-package' ]] || continue
+    [[ "$optional_state" == optional ]] || continue
+    profile_is_selected "$available_profiles" || continue
+    if [[ "$optional_count" -eq 0 ]]; then
+      printf '\nOptional additions for these profiles:\n'
+    fi
+    printf '  %-32s %s\n' "$token" "$label"
+    optional_count="$((optional_count + 1))"
+  done < <(grep '^# workstation-package|' "$brewfile")
+
+  [[ "$optional_count" -gt 0 && "$include_optional" -eq 0 ]] || return 0
+  while true; do
+    printf 'Include these optional additions? [y/N, 0 to cancel]: '
+    IFS= read -r reply || return 1
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss]) include_optional=1; return 0 ;;
+      ''|[Nn]|[Nn][Oo]) return 0 ;;
+      0|q|Q|quit|QUIT|cancel|CANCEL) return 1 ;;
+      *) printf 'WARN Enter y, n, or 0 to cancel.\n' ;;
+    esac
+  done
+}
+
+run_setup_menu() {
+  local reply
+
+  [[ "${#profiles[@]}" -eq 0 ]] ||
+    die 'Use install or plan with profile arguments, or choose profiles in the menu.'
+  printf '\nmacOS workstation setup\n'
+  printf '  1. Install profiles\n'
+  printf '  2. Preview profiles\n'
+  printf '  3. Uninstall packages\n'
+  printf '  0. Exit\n'
+  while true; do
+    printf '\nChoose an action [0]: '
+    IFS= read -r reply || return 1
+    case "$reply" in
+      1) command_name=install; break ;;
+      2) command_name=plan; break ;;
+      3) command_name=uninstall; return 0 ;;
+      ''|0|q|Q|quit|QUIT|cancel|CANCEL) return 1 ;;
+      *) printf 'WARN Choose 1, 2, 3, or 0.\n' ;;
+    esac
+  done
+  select_menu_profiles || return 1
+  select_menu_optional_packages || return 1
+}
+
 show_profiles() {
   printf '\nWorkstation utilities for macOS\n'
   printf '%s\n' '--------------------------------------------------------------------'
@@ -178,6 +289,7 @@ show_plan() {
   else
     printf 'Optional packages: excluded\n\n'
   fi
+  printf 'Selected packages (Homebrew skips those already installed):\n\n'
 
   while IFS='|' read -r metadata available_profiles package_kind token \
       label optional_state; do
@@ -231,7 +343,8 @@ confirm_install() {
   if [[ "$assume_yes" -eq 1 || "$dry_run" -eq 1 ]]; then
     return 0
   fi
-  read -r -p 'Install the missing packages in this plan? [y/N] ' reply
+  printf 'Install the missing packages in this plan? [y/N] '
+  IFS= read -r reply || return 1
   [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
@@ -562,7 +675,7 @@ generate_selected_brewfile() {
 
 if [[ "$#" -gt 0 ]]; then
   case "$1" in
-    plan|install|uninstall|list)
+    menu|plan|install|uninstall|list)
       command_name="$1"
       shift
       ;;
@@ -570,11 +683,9 @@ if [[ "$#" -gt 0 ]]; then
       usage
       exit 0
       ;;
-    -*)
-      die "Unknown command or option '$1'."
-      ;;
+    -*) ;;
     *)
-      die "Unknown command '$1'. Expected plan, install, uninstall, or list."
+      die "Unknown command '$1'. Expected menu, plan, install, uninstall, or list."
       ;;
   esac
 fi
@@ -613,6 +724,15 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$command_name" == menu ]]; then
+  [[ "${#uninstall_requests[@]}" -eq 0 ]] ||
+    die '--packages is valid only with the uninstall command.'
+  if ! run_setup_menu; then
+    printf 'WARN Setup cancelled; no changes were made.\n'
+    exit 0
+  fi
+fi
 
 if [[ "$command_name" == 'uninstall' ]]; then
   run_uninstall

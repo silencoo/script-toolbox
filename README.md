@@ -37,7 +37,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`sunshine-vdd-setup/`](./sunshine-vdd-setup/SKILL.md) | Plan, configure, troubleshoot, and verify Sunshine + Moonlight setups using MTT VDD |
-| [`workstation-utils/`](./workstation-utils/) | Set up desktop applications and utilities on Debian 13, Windows, and macOS; Windows developer/WSL menu, macOS Zsh/Ghostty setup, and utility uninstall menus |
+| [`workstation-utils/`](./workstation-utils/) | Set up desktop applications and utilities on Debian 13, Windows, and macOS; Windows developer/WSL menu, macOS profile menu and Zsh/Ghostty setup, and utility uninstall menus |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
 ## Raw URL changes

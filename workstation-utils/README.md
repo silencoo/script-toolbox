@@ -5,8 +5,8 @@ development tools. It includes a unified Windows 10/11 menu for utility
 profiles, developer environments, and WSL 2; macOS utility and Zsh/Ghostty terminal setup;
 and desktop application installation for Debian 13.
 
-The Windows entry point opens a menu when invoked without arguments.
-Explicit `plan` commands and the macOS/Linux default actions only show plans.
+The Windows and macOS entry points open menus when invoked without arguments.
+Explicit `plan` commands and the Linux default action only show plans.
 Installation is profile-based, deduplicated, and rerunnable. The scripts install missing packages only; they
 never delete user data or run the installed cleanup tools. Windows developer
 setup also configures Git and PowerShell profiles; WSL and the Windows long-path
@@ -198,8 +198,26 @@ current catalog availability.
 
 ## macOS
 
-The macOS initializer requires [Homebrew](https://brew.sh/) for installation.
-Planning remains available without Homebrew:
+The macOS initializer opens an interactive menu when run without arguments:
+
+```sh
+./macos/setup.sh
+```
+
+Choose Install, Preview, or Uninstall. Install and Preview offer a numbered
+profile picker; enter multiple numbers separated by commas or spaces. Empty
+profile input selects `core`, and `0` cancels. Optional additions from the
+selected profiles are listed with a separate yes/no prompt. Installation shows
+the complete selected package plan and asks before applying it; Homebrew skips
+packages already installed. Empty action input or end-of-input cancels safely.
+Uninstall opens the existing installed-package picker and confirmation.
+
+Use `menu --dry-run` to walk through the menu and preview operations. Explicit
+commands remain available for automation; `plan` and `install` with no profile
+arguments select `core` without the profile picker.
+
+The initializer requires [Homebrew](https://brew.sh/) for installation.
+Previewing and explicit planning remain available without Homebrew:
 
 ```sh
 ./macos/setup.sh plan core media

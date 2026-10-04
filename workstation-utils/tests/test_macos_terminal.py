@@ -55,6 +55,109 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.config.write_text('font-size = 14\nshell-integration-features = title\n')
         return self.config.read_text()
 
+    def test_default_menu_installs_selected_terminal_profile_with_optional_monitors(self):
+        output = self.run_setup(input='1\n2\ny\ny\n')
+        self.assertIn('macOS workstation setup', output)
+        self.assertIn('Plan: terminal profile(s)', output)
+        self.assertIn('Include these optional additions?', output)
+        self.assertIn('Install the missing packages in this plan?', output)
+        bundle = self.bundle.read_text()
+        for token in ['starship', 'btop', 'ncdu', 'duf']:
+            self.assertIn('brew "' + token + '"', bundle)
+        self.assertNotIn('keepassxc', bundle)
+        self.assertTrue(self.config.exists())
+        self.assertTrue((self.home / '.zshrc').exists())
+
+    def test_menu_preview_combines_and_deduplicates_profile_numbers(self):
+        output = self.run_setup('menu', input='2\n1, 5 1\nn\n')
+        self.assertIn('Plan: core desktop profile(s)', output)
+        self.assertIn('maccy', output)
+        self.assertIn('raycast', output)
+        self.assertNotIn('[optional]', output)
+        self.assertEqual(output.count('cask   localsend'), 1)
+        self.assertIn('Selected packages (Homebrew skips those already installed)', output)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.home.exists())
+
+    def test_menu_preview_optional_flag_does_not_prompt_again(self):
+        output = self.run_setup('menu', '--include-optional', input='2\n2\n')
+        self.assertIn('Optional packages: included', output)
+        self.assertIn('btop', output)
+        self.assertNotIn('Include these optional additions?', output)
+        self.assertFalse(self.log.exists())
+
+    def test_menu_defaults_empty_profile_selection_to_core(self):
+        output = self.run_setup(input='2\n\n')
+        self.assertIn('Plan: core profile(s)', output)
+        self.assertNotIn('Include these optional additions?', output)
+        self.assertFalse(self.log.exists())
+
+    def test_menu_optional_no_keeps_optional_packages_excluded(self):
+        output = self.run_setup(input='2\n2\nn\n')
+        self.assertIn('Optional packages: excluded', output)
+        self.assertNotIn('[optional]', output)
+        self.assertFalse(self.log.exists())
+
+    def test_menu_invalid_choices_retry_without_selecting_partial_profiles(self):
+        output = self.run_setup(input='bad\n2\n1,7\n2\nmaybe\nn\n')
+        self.assertIn('WARN Choose 1, 2, 3, or 0.', output)
+        self.assertIn('WARN Choose numbers from 1 to 6', output)
+        self.assertIn('WARN Enter y, n, or 0', output)
+        self.assertIn('Plan: terminal profile(s)', output)
+        self.assertNotIn('cask   keepassxc', output)
+        self.assertFalse(self.log.exists())
+
+    def test_menu_cancel_or_eof_at_each_step_makes_no_changes(self):
+        for input in ['', '\n', '0\n', 'q\n', '1\n', '1\n0\n',
+                      '1\n2\n', '1\n2\n0\n', '1\n2\nn\n', '1\n2\nn\nn\n']:
+            with self.subTest(input=input):
+                output = self.run_setup(input=input)
+                self.assertIn('cancelled; no changes were made', output)
+                self.assertFalse(self.log.exists())
+                self.assertFalse(self.home.exists())
+
+    def test_menu_dry_run_previews_install_without_applying_it(self):
+        output = self.run_setup('--dry-run', input='1\n2\ny\n')
+        self.assertIn('brew bundle install --no-upgrade', output)
+        self.assertIn('no changes were made', output)
+        self.assertNotIn('Install the missing packages in this plan?', output)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.home.exists())
+
+    def test_menu_uninstall_reuses_package_selection_and_confirmation(self):
+        output = self.run_setup(input='3\n1\nUNINSTALL\n')
+        self.assertIn('Enter package numbers separated by commas', output)
+        self.assertIn('Type UNINSTALL', output)
+        self.assertIn('BREW:uninstall --cask keepassxc', self.log.read_text())
+        self.assertNotIn('BREW:bundle', self.log.read_text())
+        self.assertFalse(self.home.exists())
+
+    def test_menu_rejects_profile_arguments_and_uninstall_package_flags(self):
+        for args in [('menu', 'terminal'), ('menu', '--packages', 'ghostty')]:
+            with self.subTest(args=args):
+                self.run_setup(*args, status=1)
+                self.assertFalse(self.log.exists())
+                self.assertFalse(self.home.exists())
+
+    def test_explicit_plan_and_install_keep_the_default_core_profile(self):
+        plan = self.run_setup('plan')
+        self.assertIn('Plan: core profile(s)', plan)
+        self.assertNotIn('Choose an action', plan)
+        output = self.run_setup('install', '--yes')
+        self.assertIn('Plan: core profile(s)', output)
+        self.assertNotIn('Choose an action', output)
+        self.assertIn('cask "keepassxc"', self.bundle.read_text())
+        self.assertNotIn('ghostty', self.bundle.read_text())
+
+    def test_menu_custom_brewfile_limits_selection_to_that_catalog(self):
+        catalog = self.root / 'custom.Brewfile'
+        catalog.write_text('# workstation-package|core|brew|sevenzip|7-Zip CLI|required\n'
+                           'brew "sevenzip" if false\n')
+        output = self.run_setup('menu', '--brewfile', str(catalog), input='2\n1\n')
+        self.assertIn('brew   sevenzip', output)
+        self.assertNotIn('cask   keepassxc', output)
+        self.assertFalse(self.log.exists())
+
     def test_plan_and_dry_run_do_not_install_or_configure(self):
         plan = self.run_setup('plan', 'terminal')
         self.assertIn('cask   ghostty', plan)
