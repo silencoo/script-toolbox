@@ -2,7 +2,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $rootDir = Split-Path -Parent $PSScriptRoot
-$setupScript = Join-Path $rootDir 'wsl.ps1'
+$setupScript = Join-Path $rootDir 'windows\wsl.ps1'
 $fixture = Join-Path $PSScriptRoot 'fixtures\wsl.ps1'
 $testTmpDir = Join-Path ([IO.Path]::GetTempPath()) (
   'wsl2-setup-test-' + [guid]::NewGuid().ToString('N')
@@ -143,7 +143,9 @@ try {
     '--yes', '--no-distro', 'setup'
   )
   $env:WINDOWS_DEV_SETUP_WSL_EMBEDDED = $null
-  if ($embeddedExitCode -ne 3010) {
+  # POSIX process exit statuses retain only the low byte; Windows retains 3010.
+  $restartExitCode = if ($env:OS -eq 'Windows_NT') { 3010 } else { 3010 % 256 }
+  if ($embeddedExitCode -ne $restartExitCode) {
     Stop-Test (
       'embedded platform initialization did not request a restart; exit ' +
       "code was $embeddedExitCode"

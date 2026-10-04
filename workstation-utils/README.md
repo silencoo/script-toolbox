@@ -1,16 +1,21 @@
 # Workstation utilities initializer
 
-`workstation-utils` installs a deliberately separate set of everyday desktop
-and maintenance utilities for Windows 10/11 and macOS, plus desktop applications
-for Debian 13. It complements
-[`windows-dev-setup`](../windows-dev-setup/) without mixing frequently changing
-personal utilities into the developer toolchain.
+`workstation-utils` sets up desktop applications, everyday utilities, and
+development tools. It includes a unified Windows 10/11 menu for utility
+profiles, developer environments, and WSL 2; macOS utility and Zsh/Ghostty terminal setup;
+and desktop application installation for Debian 13.
 
-The default action is always `plan`. Installation is profile-based,
-deduplicated, and rerunnable. The scripts install missing packages only; they
-never delete data, clear caches, change security settings, or run any of the
-installed cleanup tools. Uninstallation happens only through the explicit
-menu described below.
+The Windows entry point opens a menu when invoked without arguments.
+Explicit `plan` commands and the macOS/Linux default actions only show plans.
+Installation is profile-based, deduplicated, and rerunnable. The scripts install missing packages only; they
+never delete user data or run the installed cleanup tools. Windows developer
+setup also configures Git and PowerShell profiles; WSL and the Windows long-path
+setting remain explicit choices. Uninstallation happens only through the
+explicit utility menu described below.
+
+On macOS, the `terminal` profile configures a Starship-powered Zsh environment
+and Ghostty's SSH/font settings for the current user, preserving unrelated
+settings and backing up changes.
 
 See the [cross-platform package catalog](shared/packages.md) for every package
 identifier, built-in alternative, opt-in choice, and safety note.
@@ -25,11 +30,12 @@ identifier, built-in alternative, opt-in choice, and safety note.
 | `maintenance` | Manual uninstall/duplicate inspection, Mole, qpdf, drive health, hardware monitoring, restic, and rclone |
 | `desktop` | Screenshot or wake tools, LocalSend/layout tools, and opt-in launchers/clipboard history |
 | `admin` | Explicit system/network inspection, private networking, Moonlight/Sunshine streaming, recovery, and encryption tools |
+| `terminal` | Ghostty, Starship, Zsh plugins, navigation, completion, CLI tools, and Nerd Font on macOS |
 
 Profiles compose freely and duplicate packages are installed once. Optional
 packages require an additional explicit switch. Linux currently supports `core`,
 `desktop`, `admin`, and `apps`; its catalog is limited to the seven applications
-in the `apps` row. The macOS profiles are unchanged and do not include `apps`.
+in the `apps` row. macOS supports `terminal` and does not include `apps`.
 
 The Linux and Windows application installers formerly in `desktop-dotfiles`
 are maintained here. `desktop-dotfiles` retains desktop components and their
@@ -82,7 +88,53 @@ Application IDs live in [`linux/packages.json`](linux/packages.json).
 ## Windows
 
 WinGet is supplied by Microsoft App Installer on supported Windows 10 and
-Windows 11 systems. Open PowerShell in this directory and inspect a plan:
+Windows 11 systems. Open PowerShell in this directory and start the menu:
+
+```powershell
+.\windows\setup.ps1
+```
+
+Choose everyday utility profiles, developer core, developer standard, developer
+full, WSL 2 setup, or the utility uninstall menu. Utility profiles can be
+combined by entering numbers separated by commas. Each installer shows its
+plan and asks before applying it; enter `0` or leave the menu input blank to
+cancel. `-DryRun` previews the chosen operation without applying it.
+
+The developer choices are:
+
+| Choice | Contents |
+| --- | --- |
+| Core | VSCodium, PowerShell 7, Windows Terminal, Git, GitHub CLI, NanaZip, and modern shell/CLI tools |
+| Standard (`default`) | Core plus Python, uv, Node.js, Java, Go, Rust, .NET, and native build tools |
+| Full | Standard plus Docker Desktop, Kubernetes tools, Terraform, and developer applications |
+
+Developer setup configures Starship, zoxide, history suggestions, `eza`
+shortcuts, and `codium --wait` editor commands in PowerShell, preserving existing
+profile content and its first backup. It also applies Git defaults. Use
+`-NoShellConfig` or `-NoGitConfig` to skip those layers. WSL integration requires
+`-IncludeWSL`; installing the developer full profile alone does not enable it.
+See [Windows developer setup and WSL management](docs/windows-developer.md)
+for the runtime pins, configuration details, and WSL commands.
+
+The former top-level `windows-dev-setup/` is now maintained under `windows/`.
+The unified entry point delegates utility installation to `utilities.ps1`,
+developer setup to `developer.ps1`, and WSL management to `wsl.ps1`.
+
+Command-line use remains available:
+
+```powershell
+.\windows\setup.ps1 plan -Mode developer -Profile core
+.\windows\setup.ps1 install -Mode developer -Profile default
+.\windows\setup.ps1 doctor -Mode developer -Profile default
+.\windows\wsl.ps1 info
+```
+
+VSCodium and NanaZip are shared by the developer and utility catalogs. Both
+installers skip those packages when already installed. The `core` developer
+profile is separate from the utility `core` profile; use `-Mode developer` and
+`-Profile` for developer commands, or `-Profiles` for utility selections.
+
+Inspect an everyday utility plan:
 
 ```powershell
 .\windows\setup.ps1 plan -Profiles core,media
@@ -127,8 +179,10 @@ uninstall as part of installation.
 Additional switches:
 
 ```text
-setup.ps1 [plan|install|uninstall|list]
+setup.ps1 [menu|plan|install|uninstall|list|setup|doctor]
+  -Mode utilities|developer
   -Profiles apps,core,media,maintenance,desktop,admin,power-archive
+  -Profile core|default|full  (developer mode)
   -PackageIds ID1,ID2
   -ConfigFile PATH
   -IncludeOptional
@@ -151,6 +205,42 @@ Planning remains available without Homebrew:
 ./macos/setup.sh plan core media
 ./macos/setup.sh install core desktop
 ```
+
+Set up the Zsh prompt, plugins, terminal tools, and Ghostty with the `terminal`
+profile:
+
+```sh
+./macos/setup.sh plan terminal
+./macos/setup.sh install terminal --dry-run
+./macos/setup.sh install terminal
+```
+
+The installer runs the selected Homebrew catalog with `--no-upgrade`, then
+enables `ssh-env` and `ssh-terminfo` in `~/.config/ghostty/config.ghostty` for
+the user running the script. It also creates or updates a managed `.zshrc`
+block for Starship, fzf, zoxide, autosuggestions, syntax highlighting,
+completions, history, and modern file aliases. Run it as your desktop user.
+Existing settings are preserved, changed configurations are backed up, and
+reruns are idempotent.
+Planning and dry runs never write configuration. A later macOS configuration
+file that can override these settings produces a warning. Open a new Ghostty
+window after installation to load the integration.
+
+The profile includes Ghostty, JetBrains Mono Nerd Font, Starship, zoxide, fzf,
+eza, bat, ripgrep, fd, tmux, Neovim, uv, jq, yq, git-delta, tealdeer, 7-Zip,
+Zstandard, and the Homebrew Zsh plugins/completions. `--include-optional` adds
+btop, ncdu, and duf. An existing Ghostty font choice is retained; otherwise
+JetBrains Mono Nerd Font is selected when no included config supplies settings.
+The `.zshrc` block respects exported `ZDOTDIR`, preserves symlinks and user
+aliases/editor choices, and is validated before replacement.
+
+See [macOS terminal setup](docs/macos-terminal.md) for packages, aliases, and
+configuration behavior, and
+[Ghostty setup and manual SSH terminfo repair](docs/ghostty.md) for SSH details,
+including the relocated `shared/ghostty-setup.sh` Linux desktop installer and
+`shared/ghostty-ssh-terminfo.sh` repair helper. These replace the former
+top-level `ghostty/` directory. Server terminfo installation remains in
+[`linux-server-toolkit`](../linux-server-toolkit/).
 
 The macOS `core` profile includes [VSCodium](https://formulae.brew.sh/cask/vscodium).
 Homebrew also provides the `codium` command, so `codium .` opens the current
@@ -186,6 +276,7 @@ Additional options:
 
 ```text
 setup.sh [plan|install|uninstall|list] [profiles...]
+  profiles: core,media,maintenance,desktop,admin,terminal
   --include-optional
   --yes
   --dry-run
@@ -270,10 +361,16 @@ The portable macOS planner tests can run from any Bash host:
 
 ```sh
 ./tests/macos-test.sh
+python3 -B -m unittest discover -s tests -p 'test_macos*.py' -v
+./tests/ghostty-setup-test.sh
+./tests/ghostty-ssh-terminfo-test.sh
 ```
 
 On Windows, run the PowerShell parser and profile tests:
 
 ```powershell
 .\tests\windows-test.ps1
+.\tests\windows-menu-test.ps1
+.\tests\windows-developer-test.ps1
+.\tests\wsl-test.ps1
 ```

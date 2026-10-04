@@ -1,4 +1,4 @@
-# setup.ps1
+# developer.ps1
 # Opinionated, repeatable Windows 10/11 development workstation bootstrap.
 # Compatible with Windows PowerShell 5.1 and PowerShell 7+.
 
@@ -11,7 +11,7 @@ param(
   [ValidateSet('core', 'default', 'full')]
   [string] $Profile = 'default',
 
-  [string] $ConfigFile = (Join-Path $PSScriptRoot 'packages.psd1'),
+  [string] $ConfigFile = (Join-Path $PSScriptRoot 'developer-packages.psd1'),
 
   [switch] $Yes,
   [switch] $DryRun,
@@ -39,6 +39,8 @@ $script:SelectedGroups = @()
 $script:SelectedPackages = @()
 $script:Failures = New-Object 'System.Collections.Generic.List[string]'
 $script:RestartRequired = $false
+# Keep the existing markers and backup suffix so migration updates the old
+# managed block without duplicating shell initialization or replacing its backup.
 $script:MarkerStart = '# >>> windows-dev-setup >>>'
 $script:MarkerEnd = '# <<< windows-dev-setup <<<'
 
@@ -213,7 +215,7 @@ function Import-SetupConfig {
     Stop-Setup "Profile '$Profile' is not defined in $ConfigFile."
   }
   if ([string]::IsNullOrWhiteSpace($loaded.PythonVersion)) {
-    Stop-Setup 'PythonVersion must be set in packages.psd1.'
+    Stop-Setup 'PythonVersion must be set in developer-packages.psd1.'
   }
 
   foreach ($profileName in $loaded.Profiles.Keys) {
@@ -679,9 +681,9 @@ function Set-PowerShellProfiles {
   Write-Section 'Configuring PowerShell profiles'
   $profileBlock = @'
 # >>> windows-dev-setup >>>
-$env:EDITOR = 'code --wait'
-$env:VISUAL = 'code --wait'
-$env:GIT_EDITOR = 'code --wait'
+$env:EDITOR = 'codium --wait'
+$env:VISUAL = 'codium --wait'
+$env:GIT_EDITOR = 'codium --wait'
 
 if (Get-Command fnm -ErrorAction SilentlyContinue) {
   fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
@@ -1003,7 +1005,7 @@ function Show-Summary {
     )
   } elseif (-not $DryRun -and $Command -eq 'setup') {
     Write-Host 'Open a new PowerShell 7 terminal, then run:'
-    Write-Host "  .\setup.ps1 doctor -Profile $Profile"
+    Write-Host "  .\setup.ps1 doctor -Mode developer -Profile $Profile"
   }
 }
 

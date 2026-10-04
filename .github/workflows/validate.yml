@@ -92,7 +92,7 @@ jobs:
         working-directory: proxy-rules
         run: npm run check
       - name: Check Bash syntax
-        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh ghostty/tests/setup-test.sh ghostty/tests/ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
+        run: bash -n debian-ai-workstation/setup.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tests/test_init_safety.sh docker-sandboxes/sbx-manager.sh workstation-utils/shared/ghostty-setup.sh workstation-utils/shared/ghostty-ssh-terminfo.sh workstation-utils/tests/ghostty-setup-test.sh workstation-utils/tests/ghostty-ssh-terminfo-test.sh workstation-utils/macos/setup.sh workstation-utils/macos/terminal-setup.sh workstation-utils/tests/macos-test.sh mihomo-console/setup.sh sing-box/install-node.sh
       - name: Test Mihomo Console
         env:
           MIHOMO_TEST_BINARY: ${{ runner.temp }}/mihomo
@@ -126,15 +126,17 @@ jobs:
         run: python -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
       - name: Check zsh kit syntax
         run: |
+          zsh -n workstation-utils/macos/zshrc.zsh
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.zshrc
           zsh -n docker-sandboxes/kits/zsh-shell/files/home/.config/sbx-manager/completions/_claude
       - name: Test Ghostty setup
         run: |
-          ./ghostty/tests/setup-test.sh
-          ./ghostty/tests/ssh-terminfo-test.sh
+          ./workstation-utils/tests/ghostty-setup-test.sh
+          ./workstation-utils/tests/ghostty-ssh-terminfo-test.sh
       - name: Test workstation utility planners
         run: |
           ./workstation-utils/tests/macos-test.sh
+          python -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v
           python -m unittest discover -s workstation-utils/tests -p 'test_linux.py' -v
       - name: Install Worker tooling
         run: npm ci
@@ -217,16 +219,21 @@ jobs:
       - name: Test Sunshine VDD configuration scripts
         shell: pwsh
         run: ./sunshine-vdd-setup/tests/ConfigScripts.Tests.ps1
-      - name: Test workstation utilities with Windows PowerShell 5.1
+      - name: Test Windows workstation setup with Windows PowerShell 5.1
         shell: powershell
-        run: ./workstation-utils/tests/windows-test.ps1
+        run: |
+          ./workstation-utils/tests/windows-test.ps1
+          ./workstation-utils/tests/windows-menu-test.ps1
+          ./workstation-utils/tests/windows-developer-test.ps1
+          ./workstation-utils/tests/wsl-test.ps1
       - name: Test Windows PowerShell managers
         shell: pwsh
         run: |
           ./docker-sandboxes/tests/sbx-manager-test.ps1
           ./workstation-utils/tests/windows-test.ps1
-          ./windows-dev-setup/tests/windows-dev-setup-test.ps1
-          ./windows-dev-setup/tests/wsl-test.ps1
+          ./workstation-utils/tests/windows-menu-test.ps1
+          ./workstation-utils/tests/windows-developer-test.ps1
+          ./workstation-utils/tests/wsl-test.ps1
 
   validate-agent-bash-3:
     name: macOS · system Bash 3.2 agent suite
@@ -257,3 +264,9 @@ jobs:
           compat_bin="$(mktemp -d "${RUNNER_TEMP}/script-toolbox-bash3.XXXXXX")"
           ln -s /bin/bash "$compat_bin/bash"
           PATH="$compat_bin:$PATH" /bin/bash ./agent/test.sh
+      - name: Test macOS terminal setup with system Bash and Zsh
+        run: |
+          /bin/bash ./workstation-utils/tests/macos-test.sh
+          /bin/bash -n workstation-utils/macos/terminal-setup.sh
+          zsh -n workstation-utils/macos/zshrc.zsh
+          python -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v

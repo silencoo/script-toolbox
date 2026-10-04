@@ -1,4 +1,4 @@
-# Utility catalog
+# Workstation package catalog
 
 This catalog records the choices made by the platform installers. Initial package
 identifiers were checked against the WinGet community manifests and the
@@ -27,8 +27,8 @@ Windows uses [`windows/packages.psd1`](../windows/packages.psd1).
 Linux `core` selects Firefox, VSCodium, KeePassXC, LocalSend, and Loupe;
 `desktop` selects LocalSend, Discord, and Loupe; `admin` selects Moonlight.
 The remaining tables describe the broader Windows/macOS utility profiles.
-Windows `apps` adds VSCodium alongside the separate `windows-dev-setup` catalog's
-VS Code choice. Application preferences and i3 integration stay in
+Windows `apps` and developer profiles share the same VSCodium package. Both
+installation modes skip it when already installed. Application preferences and i3 integration stay in
 `desktop-dotfiles`; the installers here only manage software installation.
 
 Package-manager behavior: [APT](https://manpages.debian.org/trixie/apt/apt-get.8.en.html)
@@ -39,7 +39,7 @@ and [Flatpak](https://docs.flatpak.org/en/latest/flatpak-command-reference.html)
 | Purpose | Windows | macOS |
 | --- | --- | --- |
 | Password management | KeePassXC (`KeePassXCTeam.KeePassXC`) | KeePassXC (`keepassxc`) |
-| Text/code editor | VS Code via `windows-dev-setup` | VSCodium (`vscodium`) |
+| Text/code editor | VSCodium (`VSCodium.VSCodium`, `apps` or developer mode) | VSCodium (`vscodium`) |
 | GUI archives | NanaZip (`M2Team.NanaZip`) | Keka (`keka`) |
 | Archive CLI | Zstandard (`Meta.Zstandard`) | 7-Zip (`sevenzip`) and Zstandard (`zstd`) |
 | Disk usage | WinDirStat (`WinDirStat.WinDirStat`) | GrandPerspective (`grandperspective`) |
@@ -53,6 +53,47 @@ The Windows `power-archive` profile substitutes
 `mcmilk.7zip-zstd` for NanaZip. The installer refuses to silently combine
 NanaZip, standard 7-Zip, and 7-Zip ZS because their associations and Explorer
 integrations overlap.
+
+## Developer tools (Windows)
+
+The Windows menu includes `core`, `default`, and `full` developer profiles,
+maintained in [`developer-packages.psd1`](../windows/developer-packages.psd1).
+They install VSCodium, Git, PowerShell 7, Windows Terminal, and shell/CLI tools;
+`default` adds language runtimes and build tools, and `full` adds Docker and
+DevOps applications. The [VSCodium WinGet ID](https://github.com/VSCodium/vscodium#install-with-windows-package-manager-winget)
+is `VSCodium.VSCodium`; its command is `codium`.
+
+Developer setup also manages Git defaults and PowerShell prompt/navigation
+integration. WSL 2 and the Windows long-path setting remain opt-in. The
+[developer setup documentation](../docs/windows-developer.md) records runtime
+versions and configuration details.
+
+## Terminal (macOS)
+
+| Purpose | Homebrew tokens |
+| --- | --- |
+| Terminal and icon font | `ghostty` and `font-jetbrains-mono-nerd-font` (casks) |
+| Prompt and navigation | `starship`, `zoxide`, `fzf` |
+| Zsh suggestions, highlighting, and completions | `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions` |
+| Files and search | `eza`, `bat`, `ripgrep`, `fd` |
+| Editor and sessions | `neovim`, `tmux` |
+| Data, Git diff viewing, and help | `jq`, `yq`, `git-delta`, `tealdeer` |
+| Archives and Python projects | `sevenzip`, `zstd`, `uv` |
+| Optional terminal monitors | `btop`, `ncdu`, `duf` |
+
+Package identifiers and Homebrew plugin paths were verified on 2026-10-04.
+The profile installs missing packages without upgrades, manages a validated
+`.zshrc` block, and configures Ghostty's SSH integration. Font preferences are
+preserved; JetBrains Mono Nerd Font becomes the default only when no font or
+included configuration is already present. See [macOS terminal setup](../docs/macos-terminal.md)
+for configuration, backups, symlink handling, and the equivalent Linux features.
+
+Primary references: [Starship](https://formulae.brew.sh/formula/starship),
+[Zsh completions](https://formulae.brew.sh/formula/zsh-completions),
+[autosuggestions](https://formulae.brew.sh/formula/zsh-autosuggestions),
+[syntax highlighting](https://formulae.brew.sh/formula/zsh-syntax-highlighting),
+[Ghostty](https://formulae.brew.sh/cask/ghostty), and
+[JetBrains Mono Nerd Font](https://formulae.brew.sh/cask/font-jetbrains-mono-nerd-font).
 
 ## Media
 

@@ -13,6 +13,7 @@ MANAGED_END='# <<< script-toolbox Ghostty shell integration <<<'
 ASSUME_YES=0
 CONFIG_ONLY=0
 SKIP_VALIDATE=0
+FONT_IF_UNSET=''
 TEMP_FILE=''
 TEMP_DIR=''
 
@@ -43,6 +44,7 @@ Options:
   --config-only  Write or update the configuration without installing Ghostty.
   --yes, -y      Accept community Linux package-source prompts.
   --no-validate  Do not run 'ghostty +validate-config' after writing.
+  --font-if-unset NAME  Set a default font only when no font or included config is configured.
   --help, -h     Show this help.
 
 The managed setting is:
@@ -55,6 +57,12 @@ while [ "$#" -gt 0 ]; do
     --config-only) CONFIG_ONLY=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     --no-validate) SKIP_VALIDATE=1 ;;
+    --font-if-unset)
+      [ "$#" -ge 2 ] || die '--font-if-unset requires a font family name.'
+      FONT_IF_UNSET="$2"
+      [[ -n "$FONT_IF_UNSET" && "$FONT_IF_UNSET" != *$'\n'* && "$FONT_IF_UNSET" != *$'\r'* ]] \
+        || die 'The font family must be a non-empty single line.'
+      shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -335,6 +343,21 @@ install_linux() {
   success "Ghostty was installed."
 }
 
+font_is_configured() {
+  local file
+  for file in \
+    "$CONFIG_FILE" "$CONFIG_DIR/config" \
+    "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty" \
+    "$HOME/Library/Application Support/com.mitchellh.ghostty/config"; do
+    [ -f "$file" ] || continue
+    # Included configurations may supply a font; preserve that choice too.
+    if grep -Eq '^[[:space:]]*(font-family(-bold|-italic|-bold-italic)?|config-file)[[:space:]]*=' "$file"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 write_config() {
   info "Configuring Ghostty at $CONFIG_FILE..."
   mkdir -p "$CONFIG_DIR"
@@ -343,6 +366,10 @@ write_config() {
   local source_file=/dev/null
   if [ -f "$CONFIG_FILE" ]; then
     source_file="$CONFIG_FILE"
+  elif [ -f "$CONFIG_DIR/config" ]; then
+    # Carry forward settings from the older XDG filename when creating the
+    # preferred config.ghostty file; retain the original as-is.
+    source_file="$CONFIG_DIR/config"
   fi
 
   awk \
@@ -376,6 +403,10 @@ write_config() {
 
   if [ -s "$TEMP_FILE" ]; then
     printf '\n' >> "$TEMP_FILE"
+  fi
+  if [ -n "$FONT_IF_UNSET" ] && ! font_is_configured; then
+    printf '# Default icon font; existing font preferences are preserved.\nfont-family = %s\n\n' \
+      "$FONT_IF_UNSET" >> "$TEMP_FILE"
   fi
   printf '%s\n' \
     "$MANAGED_BEGIN" \

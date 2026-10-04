@@ -55,9 +55,9 @@
         Command = 'gh'
       }
       @{
-        Id = 'Microsoft.VisualStudioCode'
-        Name = 'Visual Studio Code'
-        Command = 'code'
+        Id = 'VSCodium.VSCodium'
+        Name = 'VSCodium'
+        Command = 'codium'
       }
       @{
         Id = 'M2Team.NanaZip'

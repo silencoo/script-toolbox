@@ -1,6 +1,6 @@
 # Ghostty Setup
 
-`setup.sh` installs Ghostty on macOS or Linux and maintains one portable
+`shared/ghostty-setup.sh` installs Ghostty on macOS or Linux and maintains one portable
 configuration file:
 
 ```text
@@ -22,21 +22,28 @@ SSH hosts.
 
 ## Quick start
 
+Run from `workstation-utils`. On macOS, use the `terminal` profile to install
+Ghostty through the filtered Homebrew catalog and configure its SSH integration.
+The same profile now adds a complete Zsh prompt/plugin environment and terminal
+tools; see [macOS terminal setup](macos-terminal.md).
+
 ```bash
-chmod +x setup.sh
-./setup.sh
+./macos/setup.sh plan terminal
+./macos/setup.sh install terminal
 ```
 
-Configure an existing Ghostty installation without installing a package:
+Configure an existing Ghostty installation without installing a package or
+changing Zsh configuration:
 
 ```bash
-./setup.sh --config-only
+./shared/ghostty-setup.sh --config-only
 ```
 
-Use `--yes` for a non-interactive community Linux package-source confirmation:
+The standalone helper retains Linux desktop installation support. Use
+`--yes` for a non-interactive community Linux package-source confirmation:
 
 ```bash
-./setup.sh --yes
+./shared/ghostty-setup.sh --yes
 ```
 
 The installer uses:
@@ -56,7 +63,11 @@ before enabling a community source unless `--yes` is supplied.
 
 ## Existing configuration
 
-Other options in `~/.config/ghostty/config.ghostty` are preserved. An existing
+Other options in `~/.config/ghostty/config.ghostty` are preserved. The macOS
+terminal profile also requests JetBrains Mono Nerd Font only when no font or
+included configuration is already present. The standalone helper accepts
+`--font-if-unset "JetBrainsMono Nerd Font"` for that behavior. Settings in the
+older XDG `config` filename are carried forward when creating `config.ghostty`. An existing
 active `shell-integration-features` line is replaced by a marked managed block.
 When the content changes, the previous file is copied to a timestamped
 `config.ghostty.bak.*` backup.
@@ -95,11 +106,11 @@ ssh user@example.com
 ## Manual SSH terminfo installation
 
 Ghostty's automatic `ssh-terminfo` integration is the preferred option. For
-hosts where the shell wrapper is unavailable, run `ssh-terminfo.sh` without
+hosts where the shell wrapper is unavailable, run `shared/ghostty-ssh-terminfo.sh` without
 options to choose an action from an interactive menu:
 
 ```bash
-./ssh-terminfo.sh
+./shared/ghostty-ssh-terminfo.sh
 ```
 
 Choose the system-wide option when programs run through `sudo` need to resolve
@@ -110,13 +121,13 @@ To skip the menu, use an explicit option. This copies the local
 `xterm-ghostty` entry to a remote user's `~/.terminfo`:
 
 ```bash
-./ssh-terminfo.sh --user user@example.com
+./shared/ghostty-ssh-terminfo.sh --user user@example.com
 ```
 
 Install it system-wide as well:
 
 ```bash
-./ssh-terminfo.sh --system user@example.com
+./shared/ghostty-ssh-terminfo.sh --system user@example.com
 ```
 
 The system mode first installs a per-user copy and then runs the equivalent of:
@@ -130,14 +141,14 @@ It uses `doas` when `sudo` is unavailable. You can also run the helper directly
 inside an interactive Ghostty SSH session:
 
 ```bash
-./ssh-terminfo.sh --system
+./shared/ghostty-ssh-terminfo.sh --system
 ```
 
 Check an existing installation without changing it:
 
 ```bash
-./ssh-terminfo.sh --check user@example.com
-./ssh-terminfo.sh --check --system user@example.com
+./shared/ghostty-ssh-terminfo.sh --check user@example.com
+./shared/ghostty-ssh-terminfo.sh --check --system user@example.com
 ```
 
 The helper reports the current or remote `TERM` during verification. In an
@@ -163,9 +174,9 @@ The regression test only uses `--config-only`. It does not install Ghostty or
 enable package repositories:
 
 ```bash
-bash -n setup.sh ssh-terminfo.sh tests/setup-test.sh tests/ssh-terminfo-test.sh
-./tests/setup-test.sh
-./tests/ssh-terminfo-test.sh
+bash -n shared/ghostty-setup.sh shared/ghostty-ssh-terminfo.sh tests/ghostty-setup-test.sh tests/ghostty-ssh-terminfo-test.sh
+./tests/ghostty-setup-test.sh
+./tests/ghostty-ssh-terminfo-test.sh
 ```
 
 Official references:

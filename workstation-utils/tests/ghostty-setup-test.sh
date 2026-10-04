@@ -24,7 +24,7 @@ shell-integration-features = title
 EOF_CONFIG
 
 HOME="$TEST_TMP_DIR/home" \
-  "$ROOT_DIR/setup.sh" --config-only --no-validate \
+  "$ROOT_DIR/shared/ghostty-setup.sh" --config-only --no-validate \
   > "$TEST_TMP_DIR/first-output" 2>&1
 
 grep -Fqx 'font-size = 14' "$CONFIG_FILE" \
@@ -44,7 +44,7 @@ backup_count="$(find "$(dirname "$CONFIG_FILE")" \
 
 first_checksum="$(cksum "$CONFIG_FILE")"
 HOME="$TEST_TMP_DIR/home" \
-  "$ROOT_DIR/setup.sh" --config-only --no-validate \
+  "$ROOT_DIR/shared/ghostty-setup.sh" --config-only --no-validate \
   > "$TEST_TMP_DIR/second-output" 2>&1
 second_checksum="$(cksum "$CONFIG_FILE")"
 [ "$first_checksum" = "$second_checksum" ] \
@@ -56,12 +56,12 @@ backup_count="$(find "$(dirname "$CONFIG_FILE")" \
   || fail "an idempotent setup created an unnecessary backup"
 
 HOME="$TEST_TMP_DIR/empty-home" \
-  "$ROOT_DIR/setup.sh" --config-only --no-validate \
+  "$ROOT_DIR/shared/ghostty-setup.sh" --config-only --no-validate \
   > "$TEST_TMP_DIR/empty-output" 2>&1
 [ -f "$TEST_TMP_DIR/empty-home/.config/ghostty/config.ghostty" ] \
   || fail "setup did not create the XDG Ghostty configuration"
 
-"$ROOT_DIR/setup.sh" --help > "$TEST_TMP_DIR/help-output"
+"$ROOT_DIR/shared/ghostty-setup.sh" --help > "$TEST_TMP_DIR/help-output"
 grep -Fq -- '--config-only' "$TEST_TMP_DIR/help-output" \
   || fail "help output is missing --config-only"
 

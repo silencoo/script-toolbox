@@ -23,7 +23,7 @@ Usage:
   ./setup.sh list
 
 Profiles:
-  core  media  maintenance  desktop  admin
+  core  media  maintenance  desktop  admin  terminal
 
 Options:
   --include-optional  Include opt-in apps and alternatives
@@ -36,6 +36,7 @@ Options:
 Examples:
   ./setup.sh plan core media
   ./setup.sh install core desktop
+  ./setup.sh install terminal
   ./setup.sh install maintenance --include-optional --yes
   ./setup.sh uninstall
   ./setup.sh uninstall maintenance
@@ -72,7 +73,7 @@ add_profile() {
     )"
     [[ -n "$profile_name" ]] || continue
     case "$profile_name" in
-      core|media|maintenance|desktop|admin) ;;
+      core|media|maintenance|desktop|admin|terminal) ;;
       *) die "Unknown profile '$profile_name'. Run './setup.sh list'." ;;
     esac
     if ! contains_profile "$profile_name"; then
@@ -133,7 +134,9 @@ show_profiles() {
     'Transfer, window layout, wake control, and opt-in launchers'
   printf '  %-13s %s\n' admin \
     'Explicit networking, remote access, and encryption tools'
-  printf '\nUse --include-optional for AppCleaner, mpv, Maccy, Raycast, and VeraCrypt.\n'
+  printf '  %-13s %s\n' terminal \
+    'Ghostty, Starship, Zsh plugins, navigation, completion, and CLI tools'
+  printf '\nUse --include-optional for AppCleaner, mpv, Maccy, Raycast, VeraCrypt, btop, ncdu, and duf.\n'
   printf 'The admin profile may require elevation, extensions, or account setup.\n'
 }
 
@@ -201,6 +204,22 @@ show_plan() {
     die 'The selected profiles did not resolve to any packages.'
 
   show_builtin_tools
+  if key_is_selected 'cask:ghostty'; then
+    printf '\nGhostty configuration:\n'
+    printf '  - enables SSH environment forwarding and remote terminfo setup\n'
+    printf '  - preserves other settings and backs up changed configuration\n'
+    printf '  - configures ~/.config/ghostty/config.ghostty for the current user\n'
+    if key_is_selected 'cask:font-jetbrains-mono-nerd-font'; then
+      printf '  - uses JetBrains Mono Nerd Font when no font preference is configured\n'
+    fi
+  fi
+  if key_is_selected 'brew:starship'; then
+    printf '\nZsh terminal configuration:\n'
+    printf '  - enables Starship, fuzzy history/completion, and smart directory navigation\n'
+    printf '  - loads autosuggestions, syntax highlighting, and Homebrew completions\n'
+    printf '  - adds icon-aware file aliases and preserves existing aliases/editor settings\n'
+    printf '  - updates a managed block in %s/.zshrc, preserving other content with backups\n' "${ZDOTDIR:-$HOME}"
+  fi
   printf '\nSafety boundary:\n'
   printf '  - installs missing packages only; Homebrew upgrades are disabled\n'
   printf '  - the install action never uninstalls applications or deletes files\n'
@@ -222,6 +241,23 @@ install_packages() {
   printf '    $ <filtered Brewfile> | '
   printf 'brew bundle install --no-upgrade --file=-\n'
 
+  local ghostty_setup="$script_dir/../shared/ghostty-setup.sh"
+  local zsh_setup="$script_dir/terminal-setup.sh"
+  local -a ghostty_options=(--config-only)
+  if key_is_selected 'cask:font-jetbrains-mono-nerd-font'; then
+    ghostty_options+=(--font-if-unset 'JetBrainsMono Nerd Font')
+  fi
+  if key_is_selected 'cask:ghostty'; then
+    [[ -f "$ghostty_setup" ]] || die "Ghostty configuration helper not found: $ghostty_setup"
+    printf '    $ bash %q' "$ghostty_setup"
+    printf ' %q' "${ghostty_options[@]}"
+    printf '\n'
+  fi
+  if key_is_selected 'brew:starship'; then
+    [[ -f "$zsh_setup" && -f "$script_dir/zshrc.zsh" ]] || die 'Zsh configuration helper or template not found.'
+    printf '    $ bash %q\n' "$zsh_setup"
+  fi
+
   if [[ "$dry_run" -eq 1 ]]; then
     printf 'OK   Dry run completed; no changes were made\n'
     return 0
@@ -234,6 +270,13 @@ install_packages() {
 
   generate_selected_brewfile |
     brew bundle install --no-upgrade --file=-
+
+  if key_is_selected 'cask:ghostty'; then
+    bash "$ghostty_setup" "${ghostty_options[@]}"
+  fi
+  if key_is_selected 'brew:starship'; then
+    bash "$zsh_setup"
+  fi
 
   printf 'OK   Requested utility packages are installed\n'
 }

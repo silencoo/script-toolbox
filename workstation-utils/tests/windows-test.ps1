@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 $projectDirectory = Split-Path -Parent $PSScriptRoot
 $setupScript = Join-Path $projectDirectory 'windows\setup.ps1'
+$utilityScript = Join-Path $projectDirectory 'windows\utilities.ps1'
 $configFile = Join-Path $projectDirectory 'windows\packages.psd1'
 $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
 
@@ -40,6 +41,15 @@ $errors = $null
 ) | Out-Null
 if ($errors.Count -gt 0) {
   Stop-Test "PowerShell parser reported $($errors.Count) setup error(s)."
+}
+
+$utilityTokens = $null
+$utilityErrors = $null
+[Management.Automation.Language.Parser]::ParseFile(
+  $utilityScript, [ref] $utilityTokens, [ref] $utilityErrors
+) | Out-Null
+if ($utilityErrors.Count -gt 0) {
+  Stop-Test "PowerShell parser reported $($utilityErrors.Count) utility error(s)."
 }
 
 $configTokens = $null
@@ -103,7 +113,8 @@ foreach ($requiredId in @(
   }
 }
 
-$setupSource = Get-Content -LiteralPath $setupScript -Raw
+$setupSource = (Get-Content -LiteralPath $setupScript -Raw) +
+  (Get-Content -LiteralPath $utilityScript -Raw)
 if ($setupSource -match '(?i)Remove-Item|Clear-RecycleBin') {
   Stop-Test 'Installer source contains a file or data cleanup command.'
 }

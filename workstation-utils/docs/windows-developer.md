@@ -1,8 +1,9 @@
-# Opinionated Windows developer setup
+# Windows developer setup and WSL management
 
-`setup.ps1` bootstraps a repeatable development workstation on Windows 10 or
-Windows 11. It uses WinGet for applications, the official Python Install
-Manager for CPython, `fnm` for Node.js, and `rustup` for Rust. The companion
+`windows/setup.ps1` provides a menu and command-line entry point for a
+repeatable development workstation on Windows 10 or Windows 11. Developer
+operations are implemented in `windows/developer.ps1`. It uses WinGet for
+applications, the official Python Install Manager for CPython, `fnm` for Node.js, and `rustup` for Rust. The companion
 `wsl.ps1` owns WSL 2 initialization, inspection, distribution management, and
 maintenance.
 
@@ -14,7 +15,7 @@ checks happen before installation.
 
 | Profile | Contents |
 | --- | --- |
-| `core` | PowerShell 7, Windows Terminal, Git, GitHub CLI, VS Code, NanaZip, and modern command-line tools |
+| `core` | PowerShell 7, Windows Terminal, Git, GitHub CLI, VSCodium, NanaZip, and modern command-line tools |
 | `default` | Everything in `core`, plus Python 3.14.6, uv, Temurin JDK 25 LTS, Node.js LTS, Go, Rust, .NET 10 LTS, CMake, Ninja, Visual Studio C++ Build Tools, and LLVM |
 | `full` | Everything in `default`, plus Docker Desktop, kubectl, Helm, Terraform, Bruno, DBeaver, and JetBrains Toolbox |
 
@@ -31,25 +32,24 @@ Java projects should commit and use Maven Wrapper (`mvnw`) or Gradle Wrapper
 (`gradlew`) instead of relying on a workstation-wide build-tool version.
 
 The package catalog and profiles are plain PowerShell data in
-[`packages.psd1`](packages.psd1). Edit that file to add, remove, or regroup
-packages without changing the installer logic.
+[`developer-packages.psd1`](../windows/developer-packages.psd1). Edit that file
+to add, remove, or regroup packages without changing the installer logic.
 
 Everyday applications—including PowerToys, media utilities, backup tools, and
-system inspection software—belong to
-[`workstation-utils`](../workstation-utils/). NanaZip is the deliberate shared
-exception: a graphical archive handler is useful in both a general workstation
-and this GUI-oriented Windows development environment. Both installers skip it
-when already installed. The utility catalog's alternative `power-archive`
-profile still requires manually removing NanaZip first.
+system inspection software—are available in the same [workstation menu](../README.md).
+VSCodium and NanaZip are shared by the developer and utility catalogs; both
+installers skip them when already installed. The utility catalog's alternative
+`power-archive` profile still requires manually removing NanaZip first.
 
 ## Quick start
 
-Open PowerShell and inspect the plan before applying it:
+Run these commands from `workstation-utils/windows`. Open PowerShell and
+inspect the plan before applying it:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\setup.ps1 plan -Profile default
-.\setup.ps1 setup -Profile default
+.\setup.ps1 plan -Mode developer -Profile default
+.\setup.ps1 setup -Mode developer -Profile default
 ```
 
 The setup shows the full package list and asks once before it starts. WSL may
@@ -57,7 +57,7 @@ ask separately before enabling Windows features or converting an existing WSL
 1 distribution. For unattended setup:
 
 ```powershell
-.\setup.ps1 setup -Profile default -Yes
+.\setup.ps1 setup -Mode developer -Profile default -Yes
 ```
 
 With `-IncludeWSL`, `-Yes` also accepts the WSL feature-enable and WSL 1
@@ -67,13 +67,13 @@ combination on a machine with WSL 1.
 Preview every command without changing the machine:
 
 ```powershell
-.\setup.ps1 setup -Profile full -DryRun
+.\setup.ps1 setup -Mode developer -Profile full -DryRun
 ```
 
 Run the health check from a new PowerShell 7 terminal:
 
 ```powershell
-.\setup.ps1 doctor -Profile default
+.\setup.ps1 doctor -Mode developer -Profile default
 ```
 
 ## Optional Windows features
@@ -82,7 +82,7 @@ WSL and the Win32 long-path registry setting are explicit because their first
 setup can require an Administrator terminal, and WSL can require a reboot:
 
 ```powershell
-.\setup.ps1 setup -Profile full -IncludeWSL -EnableLongPaths
+.\setup.ps1 setup -Mode developer -Profile full -IncludeWSL -EnableLongPaths
 ```
 
 `-IncludeWSL` runs the bundled WSL lifecycle manager and installs
@@ -90,9 +90,9 @@ setup can require an Administrator terminal, and WSL can require a reboot:
 direct web download path, or skip the WSL update:
 
 ```powershell
-.\setup.ps1 setup -IncludeWSL -WSLDistro Debian
-.\setup.ps1 setup -IncludeWSL -WSLWebDownload
-.\setup.ps1 setup -IncludeWSL -WSLSkipUpdate
+.\setup.ps1 setup -Mode developer -IncludeWSL -WSLDistro Debian
+.\setup.ps1 setup -Mode developer -IncludeWSL -WSLWebDownload
+.\setup.ps1 setup -Mode developer -IncludeWSL -WSLSkipUpdate
 ```
 
 WSL requires Windows 11 or Windows 10 version 2004/build 19041 or newer, a
@@ -161,24 +161,28 @@ Unless disabled, setup:
 - initializes WSL 2 and the selected distribution when `-IncludeWSL` is used;
 - configures Git for `main`, fast-forward-only pulls, pruning, LF commits,
   Windows long Git paths, Git Credential Manager, and `delta`;
+- uses `codium --wait` for `EDITOR`, `VISUAL`, and `GIT_EDITOR`;
 - adds a clearly marked block to both Windows PowerShell and PowerShell 7
   profiles for `fnm`, `zoxide`, Starship, PSReadLine predictions, `ll`, and
   `lt`.
 
 The script never changes Git `user.name` or `user.email`. Existing PowerShell
 profiles are preserved, and the first edit creates a sibling
-`.windows-dev-setup.bak` backup.
+`.windows-dev-setup.bak` backup. The original managed-block markers and
+backup suffix are retained after the directory merge, so existing installations
+update in place without duplicating initialization or overwriting their first
+backup.
 
 Disable either opinionated configuration layer when desired:
 
 ```powershell
-.\setup.ps1 setup -NoGitConfig -NoShellConfig
+.\setup.ps1 setup -Mode developer -NoGitConfig -NoShellConfig
 ```
 
 ## Commands and switches
 
 ```text
-setup.ps1 [setup|plan|list|doctor] [options]
+setup.ps1 [setup|install|plan|list|doctor] -Mode developer [options]
 
   -Profile core|default|full
   -ConfigFile PATH
@@ -194,18 +198,18 @@ setup.ps1 [setup|plan|list|doctor] [options]
   -FailFast
 ```
 
-By default, invoking `setup.ps1` with no command only prints the `default`
-plan. The bootstrap does not uninstall software. To update installed WinGet
-packages later, use:
+Invoking the unified `setup.ps1` with no arguments opens the workstation
+menu. Explicit developer `plan` commands only show the selected plan. The
+bootstrap does not uninstall software. To update installed WinGet packages later, use:
 
 ```powershell
 winget upgrade --all --accept-package-agreements --accept-source-agreements
-.\setup.ps1 setup -Profile default -Yes
+.\setup.ps1 setup -Mode developer -Profile default -Yes
 ```
 
 The second command refreshes the Node.js LTS and Rust stable toolchains while
-preserving the exact Python pin. Change `PythonVersion` in `packages.psd1` when
-the workstation's CPython pin should advance.
+preserving the exact Python pin. Change `PythonVersion` in
+`developer-packages.psd1` when the workstation's CPython pin should advance.
 
 Python environments should be project-local:
 
@@ -231,9 +235,9 @@ host.
 These are ideas for future releases; they are not installed by the current
 script.
 
-### VS Code profiles and extensions
+### VSCodium profiles and extensions
 
-Add an `extensions.psd1` catalog and install small, purpose-specific VS Code
+Add an `extensions.psd1` catalog and install small, purpose-specific VSCodium
 profiles instead of enabling every extension in one environment:
 
 - `base`: PowerShell, YAML, TOML, Docker, and EditorConfig;
@@ -245,9 +249,9 @@ profiles instead of enabling every extension in one environment:
 - `native`: clangd and CMake Tools;
 - `remote`: WSL and Dev Containers.
 
-VS Code supports creating profiles and installing extensions into a selected
-profile through its command-line interface. Keep the base profile lean and let
-users select only the language profiles they need.
+Future editor automation should use `codium` and verify VSCodium extension
+availability and compatibility before adding these profiles. Keep the base
+profile lean and let users select only the language profiles they need.
 
 Reference: [VS Code command-line interface](https://code.visualstudio.com/docs/configure/command-line)
 
@@ -331,10 +335,13 @@ A future layout could separate the machine catalog from editor and stack
 configuration:
 
 ```text
-windows-dev-setup/
+workstation-utils/windows/
 ├── setup.ps1
+├── utilities.ps1
+├── developer.ps1
 ├── wsl.ps1
 ├── packages.psd1
+├── developer-packages.psd1
 ├── extensions.psd1
 └── stacks/
     ├── python.psd1
@@ -348,11 +355,11 @@ windows-dev-setup/
 Potential command-line improvements:
 
 ```powershell
-.\setup.ps1 install -Profile default -Stacks python,web
-.\setup.ps1 install -Profile full -Stacks java,containers
-.\setup.ps1 doctor -AsJson
-.\setup.ps1 update
-.\setup.ps1 export-lock
+.\setup.ps1 install -Mode developer -Profile default -Stacks python,web
+.\setup.ps1 install -Mode developer -Profile full -Stacks java,containers
+.\setup.ps1 doctor -Mode developer -AsJson
+.\setup.ps1 update -Mode developer
+.\setup.ps1 export-lock -Mode developer
 ```
 
 The stack list, update command, machine-readable doctor output, and catalog
@@ -365,8 +372,9 @@ destructive changes by default.
 Parse and exercise the non-mutating plan commands on Windows:
 
 ```powershell
-.\tests\windows-dev-setup-test.ps1
-.\tests\wsl-test.ps1
+..\tests\windows-menu-test.ps1
+..\tests\windows-developer-test.ps1
+..\tests\wsl-test.ps1
 ```
 
 The WSL regression test uses a simulated `wsl.exe`; it does not enable Windows

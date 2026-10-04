@@ -36,10 +36,8 @@ documentation so scripts can evolve without crowding the repository root.
 | [`mihomo-console/`](./mihomo-console/) | TUI, diagnostics, backups, safe automatic updates, and Docker/NAS deployment for complete Mihomo profiles |
 | [`linux-server-toolkit/`](./linux-server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
-| [`windows-dev-setup/`](./windows-dev-setup/) | Bootstrap a Windows 10/11 development workstation and manage WSL 2 |
 | [`sunshine-vdd-setup/`](./sunshine-vdd-setup/SKILL.md) | Plan, configure, troubleshoot, and verify Sunshine + Moonlight setups using MTT VDD |
-| [`workstation-utils/`](./workstation-utils/) | Install desktop applications on Debian 13, Windows, and macOS; utility uninstall menus on Windows/macOS |
-| [`ghostty/`](./ghostty/) | Install Ghostty on macOS/Linux and configure SSH-safe shell integration |
+| [`workstation-utils/`](./workstation-utils/) | Set up desktop applications and utilities on Debian 13, Windows, and macOS; Windows developer/WSL menu, macOS Zsh/Ghostty setup, and utility uninstall menus |
 | [`cf-turnstile-autoclick/`](./cf-turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
 ## Raw URL changes
@@ -52,8 +50,12 @@ Moving the scripts into categories changes their GitHub raw URLs:
 | `substore-ios-adapter.js` | `sub-store/ios-adapter.js` |
 | `quanx.js` | `quantumult-x/resource-parser.js` |
 | `workers.js` | `workers/cloudflare-vless/worker.js` |
-| `windows-wsl2/setup.ps1` | `windows-dev-setup/wsl.ps1` |
+| `windows-wsl2/setup.ps1` | `workstation-utils/windows/wsl.ps1` |
+| `windows-dev-setup/setup.ps1` | `workstation-utils/windows/developer.ps1` (or the unified `windows/setup.ps1` menu) |
+| `windows-dev-setup/wsl.ps1` | `workstation-utils/windows/wsl.ps1` |
 | `debian-13/setup.sh` | `debian-ai-workstation/setup.sh` |
+| `ghostty/setup.sh` | `workstation-utils/shared/ghostty-setup.sh` |
+| `ghostty/ssh-terminfo.sh` | `workstation-utils/shared/ghostty-ssh-terminfo.sh` |
 
 Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
@@ -193,15 +195,16 @@ Shell scripts under `agent/` can be syntax-checked with:
 The standalone deployment scripts can be checked with:
 
 ```sh
-bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tools/cloudflare-ddns-ipv4.sh linux-server-toolkit/tools/vnstat-traffic-firewall.sh docker-sandboxes/sbx-manager.sh ghostty/setup.sh ghostty/ssh-terminfo.sh workstation-utils/macos/setup.sh mihomo-console/setup.sh
+bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh linux-server-toolkit/server-toolkit.sh linux-server-toolkit/tools/cloudflare-ddns-ipv4.sh linux-server-toolkit/tools/vnstat-traffic-firewall.sh docker-sandboxes/sbx-manager.sh workstation-utils/shared/ghostty-setup.sh workstation-utils/shared/ghostty-ssh-terminfo.sh workstation-utils/macos/setup.sh workstation-utils/macos/terminal-setup.sh mihomo-console/setup.sh
 ./linux-server-toolkit/tests/test_init_safety.sh
 python3 -m unittest discover -s linux-server-toolkit/tests -p 'test_terminal.py' -v
 python3 -m unittest discover -s linux-server-toolkit/tests -p 'test_terminfo.py' -v
 ./linux-server-toolkit/tests/cloudflare-ddns-test.sh
 ./linux-server-toolkit/tests/vnstat-traffic-firewall-test.sh
-./ghostty/tests/setup-test.sh
-./ghostty/tests/ssh-terminfo-test.sh
+./workstation-utils/tests/ghostty-setup-test.sh
+./workstation-utils/tests/ghostty-ssh-terminfo-test.sh
 ./workstation-utils/tests/macos-test.sh
+python3 -B -m unittest discover -s workstation-utils/tests -p 'test_macos*.py' -v
 python3 -m unittest discover -s workstation-utils/tests -p 'test_linux.py' -v
 python3 mihomo-console/test_manager.py
 python3 -m py_compile linux-server-toolkit/tools/user-agent-capture-server.py
@@ -219,8 +222,9 @@ On Windows, validate the PowerShell tools with:
 ```powershell
 .\docker-sandboxes\tests\sbx-manager-test.ps1
 .\workstation-utils\tests\windows-test.ps1
-.\windows-dev-setup\tests\windows-dev-setup-test.ps1
-.\windows-dev-setup\tests\wsl-test.ps1
+.\workstation-utils\tests\windows-menu-test.ps1
+.\workstation-utils\tests\windows-developer-test.ps1
+.\workstation-utils\tests\wsl-test.ps1
 ```
 
 ## License

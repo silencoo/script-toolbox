@@ -70,7 +70,7 @@ PATH="$FAKE_BIN:/usr/bin:/bin" \
 HOME="$TEST_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" --user > "$TEST_TMP_DIR/user-output"
+  "$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" --user > "$TEST_TMP_DIR/user-output"
 
 [ -f "$TEST_HOME/.terminfo/xterm-ghostty.compiled" ] \
   || fail "the per-user terminfo entry was not compiled"
@@ -83,7 +83,7 @@ PATH="$FAKE_BIN:/usr/bin:/bin" \
 HOME="$TEST_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" --system > "$TEST_TMP_DIR/system-output"
+  "$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" --system > "$TEST_TMP_DIR/system-output"
 
 grep -Fq 'sudo tic -x -' "$TEST_LOG" \
   || fail "the system installation did not use sudo tic"
@@ -97,7 +97,7 @@ printf '2\n' | \
   HOME="$TEST_HOME" \
   TERM=xterm-ghostty \
   TEST_LOG="$TEST_LOG" \
-    "$ROOT_DIR/ssh-terminfo.sh" > "$TEST_TMP_DIR/menu-output"
+    "$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" > "$TEST_TMP_DIR/menu-output"
 
 grep -Fq 'Ghostty SSH terminfo setup' "$TEST_TMP_DIR/menu-output" \
   || fail "running without an operation flag did not open the menu"
@@ -111,7 +111,7 @@ HOME="$TEST_HOME" \
 REMOTE_HOME="$REMOTE_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" --user server.example.com \
+  "$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" --user server.example.com \
   > "$TEST_TMP_DIR/remote-user-output"
 
 [ -f "$REMOTE_HOME/.terminfo/xterm-ghostty.compiled" ] \
@@ -126,13 +126,13 @@ HOME="$TEST_HOME" \
 REMOTE_HOME="$REMOTE_HOME" \
 TERM=xterm-ghostty \
 TEST_LOG="$TEST_LOG" \
-  "$ROOT_DIR/ssh-terminfo.sh" --system server.example.com \
+  "$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" --system server.example.com \
   > "$TEST_TMP_DIR/remote-system-output"
 
 grep -Fq 'was installed system-wide' "$TEST_TMP_DIR/remote-system-output" \
   || fail "the remote system installation was not confirmed"
 
-"$ROOT_DIR/ssh-terminfo.sh" --help > "$TEST_TMP_DIR/help-output"
+"$ROOT_DIR/shared/ghostty-ssh-terminfo.sh" --help > "$TEST_TMP_DIR/help-output"
 grep -Fq -- '--system' "$TEST_TMP_DIR/help-output" \
   || fail "help output is missing --system"
 grep -Fq -- '--user' "$TEST_TMP_DIR/help-output" \

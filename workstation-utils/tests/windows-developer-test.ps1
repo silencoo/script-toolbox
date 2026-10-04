@@ -1,13 +1,13 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$setupDir = Split-Path -Parent $PSScriptRoot
+$projectDirectory = Split-Path -Parent $PSScriptRoot
+$setupDir = Join-Path $projectDirectory 'windows'
 $setupScript = Join-Path $setupDir 'setup.ps1'
+$developerScript = Join-Path $setupDir 'developer.ps1'
 $wslScript = Join-Path $setupDir 'wsl.ps1'
-$configFile = Join-Path $setupDir 'packages.psd1'
-$utilityConfigFile = Join-Path (
-  Split-Path -Parent $setupDir
-) 'workstation-utils\windows\packages.psd1'
+$configFile = Join-Path $setupDir 'developer-packages.psd1'
+$utilityConfigFile = Join-Path $setupDir 'packages.psd1'
 $powerShell = (Get-Process -Id $PID -ErrorAction Stop).Path
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) (
   'windows-dev-setup-test-' + [guid]::NewGuid().ToString('N')
@@ -66,16 +66,78 @@ try {
       'Rustlang.Rustup',
       'Schniz.fnm',
       'astral-sh.uv',
-      'M2Team.NanaZip'
+      'M2Team.NanaZip',
+      'VSCodium.VSCodium'
     )) {
     if (-not $identifiers.ContainsKey($required)) {
       Stop-Test "Required package is missing: $required"
     }
   }
 
+  if ($identifiers.ContainsKey('Microsoft.VisualStudioCode')) {
+    Stop-Test 'Developer catalog still installs VS Code.'
+  }
+  $editor = @($config.Groups.core | Where-Object { $_.Id -eq 'VSCodium.VSCodium' })
+  if ($editor.Count -ne 1 -or $editor[0].Command -ne 'codium') {
+    Stop-Test 'VSCodium must use the codium command for health checks.'
+  }
+
+  # Exercise migration of an existing managed profile using the real writer,
+  # entirely inside the test directory rather than the user's shell profiles.
+  $developerTokens = $null
+  $developerErrors = $null
+  $developerAst = [Management.Automation.Language.Parser]::ParseFile(
+    $developerScript, [ref] $developerTokens, [ref] $developerErrors
+  )
+  if ($developerErrors.Count -gt 0) { Stop-Test 'Developer implementation has parser errors.' }
+  foreach ($definition in $developerAst.FindAll({
+      param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Set-ManagedProfileBlock', 'Write-Skip', 'Write-Success')
+    }, $true)) {
+    Invoke-Expression $definition.Extent.Text
+  }
+  $developerSource = Get-Content -LiteralPath $developerScript -Raw
+  $blockMatch = [regex]::Match($developerSource, "(?ms)^\s*\`$profileBlock = @'\r?\n(.*?)\r?\n'@")
+  if (-not $blockMatch.Success) { Stop-Test 'Managed PowerShell block was not found.' }
+  $block = $blockMatch.Groups[1].Value
+  if ([regex]::Matches($block, "'codium --wait'").Count -ne 3 -or $block -match "'code --wait'") {
+    Stop-Test 'Shell editor settings must all use codium --wait.'
+  }
+  $script:MarkerStart = '# >>> windows-dev-setup >>>'
+  $script:MarkerEnd = '# <<< windows-dev-setup <<<'
+  $profilePath = Join-Path $testDirectory 'existing-profile.ps1'
+  Set-Content -LiteralPath $profilePath -Value @'
+# User configuration stays intact
+$env:MY_CUSTOM_SETTING = 'keep'
+# >>> windows-dev-setup >>>
+$env:EDITOR = 'code --wait'
+# <<< windows-dev-setup <<<
+'@
+  $originalProfile = [IO.File]::ReadAllBytes($profilePath)
+  Set-ManagedProfileBlock -Path $profilePath -Block $block
+  $updatedProfile = Get-Content -LiteralPath $profilePath -Raw
+  if ($updatedProfile -notmatch 'MY_CUSTOM_SETTING' -or
+      [regex]::Matches($updatedProfile, [regex]::Escape($script:MarkerStart)).Count -ne 1 -or
+      $updatedProfile -match "'code --wait'") {
+    Stop-Test 'Profile migration lost user settings or duplicated the managed block.'
+  }
+  $backupPath = "$profilePath.windows-dev-setup.bak"
+  if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($backupPath)) -ne
+      [Convert]::ToBase64String($originalProfile)) {
+    Stop-Test 'The first profile backup did not preserve the original bytes.'
+  }
+  Set-ManagedProfileBlock -Path $profilePath -Block $block
+  if ((Get-Content -LiteralPath $profilePath -Raw) -ne $updatedProfile -or
+      [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupPath)) -ne
+      [Convert]::ToBase64String($originalProfile)) {
+    Stop-Test 'Repeat profile migration changed configuration or overwrote the first backup.'
+  }
+
   $utilityConfig = Import-PowerShellDataFile -LiteralPath $utilityConfigFile
   $allowedSharedIdentifiers = @{
     'M2Team.NanaZip' = $true
+    'VSCodium.VSCodium' = $true
   }
   foreach ($id in $identifiers.Keys) {
     $isAllowedShared = $allowedSharedIdentifiers.ContainsKey($id)
@@ -98,7 +160,7 @@ try {
   foreach ($profileName in @('core', 'default', 'full')) {
     $outputFile = Join-Path $testDirectory "$profileName-plan.txt"
     & $powerShell -NoProfile -ExecutionPolicy Bypass -File $setupScript `
-      plan -Profile $profileName *> $outputFile
+      plan -Mode developer -Profile $profileName *> $outputFile
     $output = Get-Content -LiteralPath $outputFile -Raw
     if ($LASTEXITCODE -ne 0) {
       Stop-Test (
@@ -113,6 +175,10 @@ try {
 
   $defaultOutput = Get-Content `
     -LiteralPath (Join-Path $testDirectory 'default-plan.txt') -Raw
+  if ($defaultOutput -notmatch 'VSCodium\.VSCodium' -or
+      $defaultOutput -match 'Microsoft\.VisualStudioCode') {
+    Stop-Test 'Developer plan must install VSCodium instead of VS Code.'
+  }
   if ($defaultOutput -notmatch 'Python: exact CPython 3\.14\.6') {
     Stop-Test 'Default plan did not show the exact Python pin.'
   }
@@ -122,7 +188,7 @@ try {
 
   $wslPlanFile = Join-Path $testDirectory 'wsl-plan.txt'
   & $powerShell -NoProfile -ExecutionPolicy Bypass -File $setupScript `
-    plan -Profile default -IncludeWSL -WSLDistro Debian *> $wslPlanFile
+    plan -Mode developer -Profile default -IncludeWSL -WSLDistro Debian *> $wslPlanFile
   $wslPlan = Get-Content -LiteralPath $wslPlanFile -Raw
   if ($LASTEXITCODE -ne 0) {
     Stop-Test (
@@ -133,7 +199,7 @@ try {
     Stop-Test 'WSL plan did not show the selected distribution.'
   }
 
-  Write-Output 'PASS: Windows dev setup, WSL parser, catalog, and plans'
+  Write-Output 'PASS: Windows developer setup, VSCodium catalog, WSL parser, and plans'
 } finally {
   if (Test-Path -LiteralPath $testDirectory) {
     Remove-Item -LiteralPath $testDirectory -Recurse -Force

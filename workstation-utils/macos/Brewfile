@@ -9,9 +9,9 @@
 cask "keepassxc" if false
 # workstation-package|core|cask|vscodium|VSCodium|required
 cask "vscodium" if false
-# workstation-package|core|brew|sevenzip|7-Zip CLI|required
+# workstation-package|core,terminal|brew|sevenzip|7-Zip CLI|required
 brew "sevenzip" if false
-# workstation-package|core|brew|zstd|Zstandard CLI|required
+# workstation-package|core,terminal|brew|zstd|Zstandard CLI|required
 brew "zstd" if false
 # workstation-package|core|cask|keka|Keka|required
 cask "keka" if false
@@ -81,3 +81,69 @@ brew "lizardbyte/homebrew/sunshine" if false
 cask "cryptomator" if false
 # workstation-package|admin|cask|veracrypt|VeraCrypt|optional
 cask "veracrypt" if false
+
+# workstation-package|terminal|cask|ghostty|Ghostty|required
+cask "ghostty" if false
+
+# workstation-package|terminal|brew|starship|Starship prompt|required
+brew "starship" if false
+
+# workstation-package|terminal|brew|zoxide|Smart directory navigation|required
+brew "zoxide" if false
+
+# workstation-package|terminal|brew|fzf|Fuzzy history and completion|required
+brew "fzf" if false
+
+# workstation-package|terminal|brew|eza|Modern file listing|required
+brew "eza" if false
+
+# workstation-package|terminal|brew|bat|Syntax-aware file viewing|required
+brew "bat" if false
+
+# workstation-package|terminal|brew|ripgrep|Fast text search|required
+brew "ripgrep" if false
+
+# workstation-package|terminal|brew|fd|Fast file search|required
+brew "fd" if false
+
+# workstation-package|terminal|brew|tmux|Terminal multiplexer|required
+brew "tmux" if false
+
+# workstation-package|terminal|brew|neovim|Neovim terminal editor|required
+brew "neovim" if false
+
+# workstation-package|terminal|brew|uv|uv Python project tools|required
+brew "uv" if false
+
+# workstation-package|terminal|brew|jq|JSON tools|required
+brew "jq" if false
+
+# workstation-package|terminal|brew|yq|YAML tools|required
+brew "yq" if false
+
+# workstation-package|terminal|brew|git-delta|Git diff viewer|required
+brew "git-delta" if false
+
+# workstation-package|terminal|brew|tealdeer|Fast tldr command help|required
+brew "tealdeer" if false
+
+# workstation-package|terminal|brew|zsh-autosuggestions|Zsh history suggestions|required
+brew "zsh-autosuggestions" if false
+
+# workstation-package|terminal|brew|zsh-syntax-highlighting|Zsh command highlighting|required
+brew "zsh-syntax-highlighting" if false
+
+# workstation-package|terminal|brew|zsh-completions|Additional Zsh completions|required
+brew "zsh-completions" if false
+
+# workstation-package|terminal|cask|font-jetbrains-mono-nerd-font|JetBrains Mono Nerd Font|required
+cask "font-jetbrains-mono-nerd-font" if false
+
+# workstation-package|terminal|brew|btop|Resource monitor|optional
+brew "btop" if false
+
+# workstation-package|terminal|brew|ncdu|Terminal disk usage|optional
+brew "ncdu" if false
+
+# workstation-package|terminal|brew|duf|Disk space overview|optional
+brew "duf" if false
