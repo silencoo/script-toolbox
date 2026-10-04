@@ -110,6 +110,8 @@ jobs:
           ./linux-server-toolkit/tests/test_init_safety.sh
           python3 linux-server-toolkit/tests/test_benchmarks.py
           python3 linux-server-toolkit/tests/test_menu_navigation.py
+          python3 linux-server-toolkit/tests/test_yazi.py
+          python3 linux-server-toolkit/tests/test_history.py
       - name: Validate shared agent TUI
         run: |
           npm ci

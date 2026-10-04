@@ -3842,12 +3842,73 @@ if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
     source "$ZSH/oh-my-zsh.sh"
 fi
 
+# Persistent command history, shared by SSH sessions.
+HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
+HISTSIZE=100000
+SAVEHIST=50000
+setopt EXTENDED_HISTORY APPEND_HISTORY SHARE_HISTORY
+setopt HIST_IGNORE_DUPS HIST_FIND_NO_DUPS HIST_SAVE_NO_DUPS
+setopt HIST_EXPIRE_DUPS_FIRST HIST_REDUCE_BLANKS HIST_IGNORE_SPACE
+unsetopt INC_APPEND_HISTORY INC_APPEND_HISTORY_TIME
+
+# Import saved commands as history entries. fc reads data; it does not run it.
+() {
+    local seed_file="${TOOLKIT_HISTORY_SEEDS:-$HOME/.config/linux-server-toolkit/command-history}" filtered_file
+    [[ -r "$HISTFILE" ]] && builtin fc -RI "$HISTFILE"
+    if [[ -r "$seed_file" ]]; then
+        # fc needs a regular file rather than a process-substitution pipe.
+        filtered_file="$(mktemp -t toolkit-history.XXXXXX)" || return 0
+        if command awk 'NF && $0 !~ /^[[:space:]]*#/ {print}' "$seed_file" > "$filtered_file"; then
+            builtin fc -RI "$filtered_file" || true
+        fi
+        command rm -f -- "$filtered_file"
+    fi
+}
+
+# Ctrl-R searches history even when fzf is unavailable.
+bindkey -M emacs '^R' history-incremental-search-backward
+bindkey -M viins '^R' history-incremental-search-backward
+if command -v fzf > /dev/null 2>&1; then
+    () {
+        local integration key_bindings
+        if integration="$(fzf --zsh 2>/dev/null)"; then
+            eval "$integration"
+        else
+            # Older Debian/Ubuntu packages ship the integration separately.
+            for key_bindings in \
+                /usr/share/doc/fzf/examples/key-bindings.zsh \
+                /usr/share/fzf/key-bindings.zsh \
+                /usr/share/fzf/shell/key-bindings.zsh \
+                "$HOME/.fzf/shell/key-bindings.zsh"; do
+                if [[ -r "$key_bindings" ]]; then
+                    source "$key_bindings"
+                    break
+                fi
+            done
+        fi
+    }
+fi
+
 # Optional prompt and navigation tools.
 if command -v starship > /dev/null 2>&1; then
     eval "$(starship init zsh)"
 fi
 if command -v zoxide > /dev/null 2>&1; then
     eval "$(zoxide init zsh)"
+fi
+if command -v yazi > /dev/null 2>&1; then
+    # Return to the selected directory after quitting Yazi.
+    y() {
+        local tmp cwd="" result=0
+        tmp="$(mktemp -t yazi-cwd.XXXXXX)" || return 1
+        command yazi "$@" --cwd-file="$tmp" || result=$?
+        IFS= read -r -d '' cwd < "$tmp" || true
+        if [[ -n "$cwd" && "$cwd" != "$PWD" && -d "$cwd" ]]; then
+            builtin cd -- "$cwd" || result=$?
+        fi
+        command rm -f -- "$tmp"
+        return "$result"
+    }
 fi
 
 # Define aliases only for commands that are actually installed.
@@ -9248,7 +9309,7 @@ profile_module_description() {
         backup_restore) ui_text 'Back up and restore with restic/borg' 'restic/borg 备份恢复' ;;
         security_audit) ui_text 'Audit security with Lynis/debsums' 'Lynis/debsums 安全审计' ;;
         runtime) ui_text 'Manage Node/Python/PHP/Java/Go/.NET runtimes' 'Node/Python/PHP/Java/Go/.NET Runtime 管理器' ;;
-        terminal) ui_text 'Configure a Zsh/Starship/Neovim/Eza terminal environment' 'Zsh/Starship/Neovim/Eza 终端环境' ;;
+        terminal) ui_text 'Configure a Zsh/Starship/Neovim/Eza/Yazi terminal environment' 'Zsh/Starship/Neovim/Eza/Yazi 终端环境' ;;
         network_tools) ui_text 'Install network tools such as mtr/httpie/nmap' 'mtr/httpie/nmap 等网络工具' ;;
         rclone) ui_text 'Install the prebuilt rclone binary' 'rclone 预编译二进制安装' ;;
         croc) ui_text 'Install the croc file-transfer tool' 'croc 文件传输工具' ;;
@@ -9283,7 +9344,7 @@ profile_module_impact() {
         backup_restore) ui_text 'Tools: restic/borg; file: /root/.config/init-script/restic.env; timer: init-restic-backup.' '工具: restic/borg；文件: /root/.config/init-script/restic.env；timer: init-restic-backup。' ;;
         security_audit) ui_text 'Packages: lynis/debsums; output: /var/log/lynis-report.dat.' '包: lynis/debsums；输出: /var/log/lynis-report.dat。' ;;
         runtime) ui_text 'Installs selected language runtimes and may modify user shell configuration.' '按选择安装语言运行时；可能修改用户 shell 配置。' ;;
-        terminal) ui_text 'Packages/tools: zsh/starship/neovim/eza; files: ~/.zshrc and ~/.bashrc.' '包/工具: zsh/starship/neovim/eza；文件: ~/.zshrc, ~/.bashrc。' ;;
+        terminal) ui_text 'Packages/tools: zsh/starship/neovim/eza/yazi/ya; files: ~/.local/bin, ~/.zshrc and ~/.bashrc.' '包/工具: zsh/starship/neovim/eza/yazi/ya；文件: ~/.local/bin, ~/.zshrc, ~/.bashrc。' ;;
         network_tools) ui_text 'apt packages: diagnostic tools such as mtr/httpie/nmap/jq/dig.' 'apt 包: mtr/httpie/nmap/jq/dig 等诊断工具。' ;;
         rclone) ui_text 'Downloads the prebuilt rclone archive and installs it to /usr/bin/rclone.' '下载 rclone 预编译包并安装到 /usr/bin/rclone。' ;;
         croc) ui_text 'Tries apt first and uses the official installer if necessary.' '优先 apt 安装 croc，必要时使用官方安装脚本。' ;;
@@ -10470,6 +10531,117 @@ function action_install_rclone() {
 }
 
 
+terminal_history_defaults() {
+    cat <<'EOF'
+# Saved commands for Ctrl-R and Zsh history suggestions.
+# Add one command per line. Blank lines and # comments are ignored.
+claude --dangerously-skip-permissions
+claude --continue
+claude --resume
+tmux new-session -A -s work
+docker compose logs --follow --tail 100
+journalctl -u sing-box -f
+ss -tulpen
+EOF
+}
+
+install_terminal_history() {
+    local seed_dir="$INSTALL_HOME/.config/linux-server-toolkit"
+    local seed_file="$seed_dir/command-history" uid gid
+    if [ -f "$seed_file" ]; then
+        ui_log_info "Keeping saved history commands: $seed_file" "保留已保存的历史命令: $seed_file"
+        return 0
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info "[DRY RUN] Would create saved history commands: $seed_file" "[DRY RUN] 创建预设历史命令: $seed_file"
+        return 0
+    fi
+    run_as_user "$(shell_join mkdir -p "$seed_dir")" || return 1
+    uid="$(id -u "$INSTALL_USER")" || return 1
+    gid="$(id -g "$INSTALL_USER")" || return 1
+    write_file_atomic "$seed_file" \
+        "$(ui_text 'Saved history commands' '预设历史命令')" 600 "$uid" "$gid" \
+        < <(terminal_history_defaults) || return 1
+    ui_log_success "Saved history commands installed; press Ctrl-R and search for claude" "预设历史命令已安装；按 Ctrl-R 搜索 claude"
+}
+
+terminal_yazi_pair_version() {
+    local yazi_output ya_output yazi_version ya_version
+    yazi_output="$(run_as_user "$(shell_join "$1" --version)" 2>/dev/null)" || return 1
+    ya_output="$(run_as_user "$(shell_join "$2" --version)" 2>/dev/null)" || return 1
+    [[ "$yazi_output" == 'Yazi '* && "$ya_output" == 'Ya '* ]] || return 1
+    yazi_version="$(printf '%s\n' "$yazi_output" | awk 'NR == 1 {print $2}')"
+    ya_version="$(printf '%s\n' "$ya_output" | awk 'NR == 1 {print $2}')"
+    [ -n "$yazi_version" ] && [ "$yazi_version" = "$ya_version" ] || return 1
+    printf '%s\n' "$yazi_version"
+}
+
+install_terminal_yazi() {
+    local yazi_path ya_path installed_version
+    yazi_path="$(terminal_user_command_path yazi || true)"
+    ya_path="$(terminal_user_command_path ya || true)"
+    if [ -n "$yazi_path" ] && [ -n "$ya_path" ] && \
+       installed_version="$(terminal_yazi_pair_version "$yazi_path" "$ya_path")"; then
+        ui_log_info "Yazi and ya are already installed: $installed_version" "Yazi 和 ya 已安装: $installed_version"
+        return 0
+    fi
+
+    # Official musl builds also work on older Debian/Ubuntu glibc versions.
+    # Pins come from https://github.com/sxyazi/yazi/releases/tag/v26.9.1.
+    local version="26.9.1" arch target expected_sha
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64)
+            target="x86_64-unknown-linux-musl"
+            expected_sha="9b9c39decccf8cb0ff53a7d637d38f8a79d93bbd0099f4ea9c619ef6bb392f5d"
+            ;;
+        aarch64|arm64)
+            target="aarch64-unknown-linux-musl"
+            expected_sha="dd569daecaae914185f295634109295ccd25c1b42b02eb89a74f651970024f2e"
+            ;;
+        *)
+            ui_log_warning "No pinned Yazi build is available for this architecture: $arch" "当前架构没有固定摘要的 Yazi 构建: $arch"
+            return 1
+            ;;
+    esac
+
+    local bin_dir="$INSTALL_HOME/.local/bin"
+    if [ "$DRY_RUN" = "1" ]; then
+        ui_log_info \
+            "[DRY RUN] Would download Yazi $version ($target), verify its pinned SHA256, and install yazi/ya to $bin_dir" \
+            "[DRY RUN] 下载 Yazi $version ($target)，校验固定 SHA256，并安装 yazi/ya 到 $bin_dir"
+        return 0
+    fi
+
+    local stage archive source_dir url uid gid binary operation_start
+    stage="$(mktemp -d /tmp/init-yazi.XXXXXX)" || return 1
+    register_temp_file "$stage"
+    archive="$stage/yazi.zip"
+    source_dir="$stage/yazi-$target"
+    url="https://github.com/sxyazi/yazi/releases/download/v$version/yazi-$target.zip"
+    download_and_verify_sha256 "$url" "$expected_sha" "$archive" "Yazi $version ($target)" || return 1
+    unzip -q "$archive" "yazi-$target/yazi" "yazi-$target/ya" -d "$stage" || return 1
+    [ -f "$source_dir/yazi" ] && [ -f "$source_dir/ya" ] || return 1
+    chmod 755 "$stage" "$source_dir" "$source_dir/yazi" "$source_dir/ya" || return 1
+    if ! installed_version="$(terminal_yazi_pair_version "$source_dir/yazi" "$source_dir/ya")" || \
+       [ "$installed_version" != "$version" ]; then
+        ui_log_error "The staged Yazi/ya binaries failed version verification" "暂存的 Yazi/ya 二进制版本验证失败"
+        return 1
+    fi
+
+    run_as_user "$(shell_join mkdir -p "$bin_dir")" || return 1
+    uid="$(id -u "$INSTALL_USER")" || return 1
+    gid="$(id -g "$INSTALL_USER")" || return 1
+    operation_start="${#OPERATION_TARGETS[@]}"
+    for binary in yazi ya; do
+        if ! write_file_atomic "$bin_dir/$binary" "Yazi $version ($binary)" 755 "$uid" "$gid" < "$source_dir/$binary"; then
+            rollback_operations_from "$operation_start" || return 1
+            return 1
+        fi
+    done
+    ui_log_success "Yazi and ya $version installed for $INSTALL_USER; run yazi or y" "已为 $INSTALL_USER 安装 Yazi 和 ya ${version}；运行 yazi 或 y"
+}
+
 function action_install_terminal_tools() {
     ui_log_info "Initializing the terminal environment..." "开始初始化终极终端环境..."
     determine_target_user
@@ -10485,10 +10657,11 @@ function action_install_terminal_tools() {
     ui_log_info "Updating the system and installing core dependencies..." "更新系统并安装基础依赖..."
     update_apt_once || return 1
     local -a core_packages=(
-        git curl wget unzip tar build-essential zsh tmux xz-utils bzip2
+        git curl wget unzip tar build-essential zsh tmux xz-utils bzip2 file
     )
     local -a enhancement_candidates=(
-        ripgrep fd-find p7zip-full zstd lz4 pigz fzf jq yq btop ncdu duf git-delta
+        ripgrep fd-find zstd lz4 pigz fzf jq yq btop ncdu duf git-delta
+        ffmpeg poppler-utils imagemagick resvg
     )
     local -a enhancement_packages=()
     local -a rar_candidates=(unrar p7zip-rar unrar-free unar)
@@ -10502,6 +10675,14 @@ function action_install_terminal_tools() {
             enhancement_packages+=("$package")
         else
             ui_log_warning "The configured APT repositories do not provide this optional package; skipped: $package" "当前 APT 源没有可安装的可选包，已跳过: $package"
+        fi
+    done
+
+    # Prefer modern 7zip; keep p7zip-full for older repositories.
+    for package in 7zip p7zip-full; do
+        if apt_package_has_candidate "$package"; then
+            enhancement_packages+=("$package")
+            break
         fi
     done
 
@@ -10528,6 +10709,11 @@ function action_install_terminal_tools() {
     if ! run_cmd "$(ui_text "Install tldr" "安装 tldr")" "apt-get install -y tldr"; then
         ui_log_warning "Failed to install tldr; trying tealdeer as an alternative..." "tldr 安装失败，尝试安装 tealdeer 作为替代..."
         run_cmd "$(ui_text "Install tealdeer" "安装 tealdeer")" "apt-get install -y tealdeer"
+    fi
+
+    ui_log_info "Installing Yazi (terminal file manager)..." "安装 Yazi (终端文件管理器)..."
+    if ! install_terminal_yazi; then
+        ui_log_warning "Skipped Yazi installation; continuing terminal setup" "已跳过 Yazi 安装；继续终端环境配置"
     fi
     
     # Eza
@@ -10671,6 +10857,7 @@ function action_install_terminal_tools() {
     fi
     
     # .zshrc
+    install_terminal_history || return 1
     ui_log_info "Generating .zshrc..." "生成配置文件 .zshrc ..."
     local zshrc_file="$user_home/.zshrc"
     local zsh_marker_start="### INIT.SH ZSHRC BEGIN"
@@ -11196,7 +11383,7 @@ show_dev_menu() {
             "$(ui_text "Development and terminal" "开发与终端")" \
             "$(ui_text "Language runtimes, shell environment, and development tools." "语言运行时、Shell 环境和常用开发工具。")"
         menu_option "$GREEN" "1" "Runtime manager (Node/Python/PHP/Java/Go/.NET)" "Runtime 安装管理器（Node/Python/PHP/Java/Go/.NET）"
-        menu_option "$GREEN" "2" "Terminal environment (Zsh / Starship / Neovim / Eza)" "终端环境（Zsh / Starship / Neovim / Eza）"
+        menu_option "$GREEN" "2" "Terminal environment (Zsh / Starship / Neovim / Eza / Yazi)" "终端环境（Zsh / Starship / Neovim / Eza / Yazi）"
         menu_option "$GREEN" "3" "Toggle Zsh icons" "切换 Zsh 图标显示"
         menu_option "$GREEN" "4" "Network/HTTP tools" "网络/HTTP 工具集"
         menu_back_and_exit

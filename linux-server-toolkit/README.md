@@ -202,12 +202,37 @@ sudo env TARGET_USER=alice ./server-toolkit.sh
 
 重新 SSH 后可用 `getent passwd "$USER" | cut -d: -f7` 检查账户的默认登录 Shell；
 已有的 tmux/screen 会话不会因账户设置变化而自动从 Bash 变成 Zsh，需要结束旧会话。
-Oh My Zsh、Starship、Zoxide、uv、Eza、Bat 和 Neovim 属于可选增强项；生成的
+Oh My Zsh、Starship、Zoxide、uv、Eza、Bat、Neovim 和 Yazi 属于可选增强项；生成的
 `.zshrc` 会先检测对应文件或命令，未安装的增强项不会在每次登录时产生报错。
 安装过程也会分别验证 Oh My Zsh 的 `oh-my-zsh.sh` 以及 Starship/uv 的实际可执行
 路径；仅有 `.oh-my-zsh` 目录不再被视为安装成功，避免插件目录造成假阳性。
 Starship、uv、Zoxide 和 Oh My Zsh 的官方安装器按其要求使用 POSIX `sh` 执行；
 其他明确需要 Bash 的远程脚本仍使用 Bash，避免解释器不匹配导致假安装。
+
+“开发环境” → `2 Terminal environment` 会安装 Yazi 终端文件管理器及配套的 `ya`。
+已有可运行且版本一致的 `yazi`/`ya` 会保留；否则从
+[官方发布](https://github.com/sxyazi/yazi/releases/tag/v26.9.1) 下载固定版本 `26.9.1`
+的 x86_64 或 ARM64 musl 二进制，校验固定 SHA256，并在暂存目录验证两者的版本后，
+原子写入目标用户的 `~/.local/bin`。下载沿用工具箱的外部资源访问策略；不支持的
+架构、拒绝下载或安装失败只会跳过 Yazi，不会中止其余终端配置。
+预览增强包 `ffmpeg`、`poppler-utils`、`imagemagick`、`resvg` 和 `7zip` 按 APT
+候选版本安装，已有的 `p7zip-full` 继续作为旧发行版的解压支持。
+重新 SSH 后运行 `yazi` 启动文件管理器，或用 `y` 在退出时切换到所选目录。
+
+终端模块还会配置持久化 Zsh 命令历史：内存保留最多 100,000 条，文件保留最多
+50,000 条，并在 SSH 会话之间共享。按 `Ctrl-R` 搜索历史；有 `fzf` 时使用模糊
+搜索，按 Enter 选中后填入命令行，再按 Enter 执行。旧版 Debian/Ubuntu 的独立
+按键脚本也会自动检测，未安装 `fzf` 时使用 Zsh 原生搜索。已安装 Zsh autosuggestions 时，
+输入 `claude` 等前缀也能显示历史建议，按右方向键接受。
+
+首次设置会创建仅目标用户可读写的
+`~/.config/linux-server-toolkit/command-history`，预置
+`claude --dangerously-skip-permissions`、`claude --continue`、`claude --resume`
+以及 Tmux、Docker 日志等常用命令。这个文件每行放一条命令，空行和 `#` 注释忽略；
+可直接编辑以添加或删除预置项，再运行 `source ~/.zshrc` 导入。导入只添加历史
+条目，不会执行命令；重复加载不会重复添加同一条目。重新运行终端安装会保留此
+文件的自定义内容。已有历史文件和自定义 `HISTFILE` 路径也会保留；设置
+`TOOLKIT_HISTORY_SEEDS` 可指定其他预置文件。
 
 ## 时区、Swap 与 sysctl
 
