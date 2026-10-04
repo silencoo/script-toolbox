@@ -36,7 +36,9 @@ class MacOSZshTest(unittest.TestCase):
         return output
 
     def shell(self, code):
-        child = subprocess.run([ZSH, '-i', '-c', code], env=self.env,
+        # Read the managed user rc while isolating host-wide startup files.
+        # Ubuntu's global rc can prompt from compinit before our rc is loaded.
+        child = subprocess.run([ZSH, '-d', '-i', '-c', code], env=self.env,
                                capture_output=True, text=True, timeout=15)
         self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
         return child.stdout, child.stderr
