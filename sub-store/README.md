@@ -12,6 +12,13 @@ Standalone scripts intended for use with Sub-Store.
 Use the raw URL required by your Sub-Store configuration. Review each script's
 header and settings before enabling it.
 
+`convert-v2.js` routes the canonical `proxy-rules/sources/openai.rules` through
+the `AI` group before generic CDN rules. This includes `openai.com`,
+`chatgpt.com`, `oaistatic.com`, `oaiusercontent.com`, and their subdomains,
+plus the source's narrowly scoped third-party endpoints. Regenerate and reload
+the profile after updating the script; the late general AI geosite rule cannot
+override an earlier CDN match.
+
 `convert-v2.js` preserves subscription traffic and expiry labels in the
 `Account Info` group, but converts those display-only entries to named Mihomo
 `direct` outbounds. Manual delay checks use Vivo's mainland China connectivity
