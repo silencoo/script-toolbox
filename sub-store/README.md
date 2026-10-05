@@ -12,10 +12,12 @@ Standalone scripts intended for use with Sub-Store.
 Use the raw URL required by your Sub-Store configuration. Review each script's
 header and settings before enabling it.
 
-`convert-v2.js` routes the canonical `proxy-rules/sources/openai.rules` through
-the `AI` group before generic CDN rules. This includes `openai.com`,
-`chatgpt.com`, `oaistatic.com`, `oaiusercontent.com`, and their subdomains,
-plus the source's narrowly scoped third-party endpoints. Regenerate and reload
+`convert-v2.js` routes the canonical `proxy-rules/sources/openai.rules` and
+`proxy-rules/sources/claude.rules` through the `AI` group before generic CDN
+rules. This includes `openai.com`, `chatgpt.com`, `oaistatic.com`,
+`oaiusercontent.com`, `anthropic.com`, `claude.ai`, `claude.com`,
+`claudeusercontent.com`, and their subdomains, plus the OpenAI source's narrowly
+scoped third-party endpoints. Regenerate and reload
 the profile after updating the script; the late general AI geosite rule cannot
 override an earlier CDN match.
 

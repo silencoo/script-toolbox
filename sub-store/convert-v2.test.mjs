@@ -181,66 +181,98 @@ test("keeps Gemini isolated while general Google traffic stays normal", async ()
   assert.ok(profile.rules.includes("RULE-SET,PrivateTracker,Direct"));
 });
 
-test("routes OpenAI assets through AI before CDN and geosite fallbacks", async () => {
-  const convert = await loadConverter();
-  const profile = convert({
-    proxies: [{ name: "[pro] Residential AI", type: "ss" }],
+for (const { name, sourceFile, hosts, unrelatedHosts } of [
+  {
+    name: "OpenAI",
+    sourceFile: "openai.rules",
+    hosts: [
+      "api.openai.com",
+      "chatgpt.com",
+      "oaistatic.com",
+      "cdn.oaistatic.com",
+      "persistent.oaistatic.com",
+      "oaiusercontent.com",
+      "files.oaiusercontent.com",
+      "web-sandbox.oaiusercontent.com",
+      "openaicom.imgix.net",
+      "chat.openai.com.cdn.cloudflare.net",
+    ],
+    unrelatedHosts: [
+      "unrelated.cloudflare.net",
+      "unrelated.imgix.net",
+      "unrelated.blob.core.windows.net",
+      "cdn.oaistatic.com.example.org",
+    ],
+  },
+  {
+    name: "Claude",
+    sourceFile: "claude.rules",
+    hosts: [
+      "anthropic.com",
+      "api.anthropic.com",
+      "a-cdn.anthropic.com",
+      "s-cdn.anthropic.com",
+      "www-cdn.anthropic.com",
+      "assets-proxy.anthropic.com",
+      "claude.ai",
+      "claude.com",
+      "platform.claude.com",
+      "claudeusercontent.com",
+      "example.frame.claudeusercontent.com",
+    ],
+    unrelatedHosts: [
+      "unrelated.cloudflare.net",
+      "unrelated.blob.core.windows.net",
+      "api.anthropic.com.example.org",
+      "notclaudeusercontent.com",
+    ],
+  },
+]) {
+  test(`routes ${name} assets through AI before CDN and geosite fallbacks`, async () => {
+    const convert = await loadConverter();
+    const profile = convert({
+      proxies: [{ name: "[pro] Residential AI", type: "ss" }],
+    });
+    const provider = profile["rule-providers"][name];
+    assert.equal(provider.type, "http");
+    assert.equal(provider.behavior, "classical");
+    assert.equal(provider.format, "text");
+    assert.equal(
+      provider.url,
+      `https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/${sourceFile}`,
+    );
+
+    const serviceRule = profile.rules.indexOf(`RULE-SET,${name},AI`);
+    assert.ok(serviceRule >= 0);
+    for (const fallback of [
+      "RULE-SET,StaticResources,CDN",
+      "RULE-SET,CDNResources,CDN",
+      "RULE-SET,AdditionalCDNResources,CDN",
+      "GEOSITE,CATEGORY-AI-!CN,AI",
+      "GEOSITE,GFW,Proxies",
+      "MATCH,Proxies",
+    ]) {
+      assert.ok(profile.rules.indexOf(fallback) > serviceRule, fallback);
+    }
+
+    const source = await readFile(
+      new URL(`../proxy-rules/sources/${sourceFile}`, import.meta.url),
+      "utf8",
+    );
+    const domainRules = source.split(/\r?\n/).map((line) => line.split(","));
+    const matchesService = (host) => domainRules.some(([type, value]) =>
+      type === "DOMAIN" ? host === value :
+        type === "DOMAIN-SUFFIX" &&
+          (host === value || host.endsWith(`.${value}`)),
+    );
+    for (const host of hosts) {
+      assert.ok(matchesService(host), host);
+    }
+    for (const host of unrelatedHosts) {
+      assert.equal(matchesService(host), false, host);
+    }
   });
-  const provider = profile["rule-providers"].OpenAI;
-  assert.equal(provider.type, "http");
-  assert.equal(provider.behavior, "classical");
-  assert.equal(provider.format, "text");
-  assert.equal(
-    provider.url,
-    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/openai.rules",
-  );
-
-  const openai = profile.rules.indexOf("RULE-SET,OpenAI,AI");
-  assert.ok(openai >= 0);
-  for (const fallback of [
-    "RULE-SET,StaticResources,CDN",
-    "RULE-SET,CDNResources,CDN",
-    "RULE-SET,AdditionalCDNResources,CDN",
-    "GEOSITE,CATEGORY-AI-!CN,AI",
-    "GEOSITE,GFW,Proxies",
-    "MATCH,Proxies",
-  ]) {
-    assert.ok(profile.rules.indexOf(fallback) > openai, fallback);
-  }
-
-  const source = await readFile(
-    new URL("../proxy-rules/sources/openai.rules", import.meta.url),
-    "utf8",
-  );
-  const domainRules = source.split(/\r?\n/).map((line) => line.split(","));
-  const matchesOpenAI = (host) => domainRules.some(([type, value]) =>
-    type === "DOMAIN" ? host === value :
-      type === "DOMAIN-SUFFIX" &&
-        (host === value || host.endsWith(`.${value}`)),
-  );
-  for (const host of [
-    "api.openai.com",
-    "chatgpt.com",
-    "oaistatic.com",
-    "cdn.oaistatic.com",
-    "persistent.oaistatic.com",
-    "oaiusercontent.com",
-    "files.oaiusercontent.com",
-    "web-sandbox.oaiusercontent.com",
-    "openaicom.imgix.net",
-    "chat.openai.com.cdn.cloudflare.net",
-  ]) {
-    assert.ok(matchesOpenAI(host), host);
-  }
-  for (const host of [
-    "unrelated.cloudflare.net",
-    "unrelated.imgix.net",
-    "unrelated.blob.core.windows.net",
-    "cdn.oaistatic.com.example.org",
-  ]) {
-    assert.equal(matchesOpenAI(host), false, host);
-  }
-});
+}
 
 test("defaults AI traffic to Proxies when no dedicated AI node exists", async () => {
   const convert = await loadConverter();

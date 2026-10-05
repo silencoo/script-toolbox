@@ -424,6 +424,14 @@ const ruleProviders = {
     url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/openai.rules",
     path: "./ruleset/OpenAI.list",
   },
+  Claude: {
+    type: "http",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/sources/claude.rules",
+    path: "./ruleset/Claude.list",
+  },
   AIModels: {
     type: "http",
     behavior: "classical",
@@ -530,8 +538,9 @@ const staticRules = [
   // Speed tests must stay above CDN, Netflix, and generic direct fallbacks.
   "RULE-SET,Speedtest,Speedtest",
 
-  // OpenAI assets and user content must use the AI exit before CDN rules.
+  // AI service assets and user content must use the AI exit before CDN rules.
   "RULE-SET,OpenAI,AI",
+  "RULE-SET,Claude,AI",
 
   // Model hubs and their large downloads must stay above generic CDN rules.
   "RULE-SET,AIModels,AI Models",

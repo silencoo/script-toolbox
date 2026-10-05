@@ -1,6 +1,7 @@
 # NAME: Claude
 # GENERATED: scripts/build.mjs; edit sources/*.rules instead
-# TOTAL: 3
+# TOTAL: 4
 HOST-SUFFIX,anthropic.com,AI
 HOST-SUFFIX,claude.ai,AI
+HOST-SUFFIX,claude.com,AI
 HOST-SUFFIX,claudeusercontent.com,AI
