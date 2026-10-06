@@ -1,6 +1,6 @@
 # NAME: OpenAI
 # GENERATED: scripts/build.mjs; edit sources/*.rules instead
-# TOTAL: 13
+# TOTAL: 22
 HOST-SUFFIX,ai.com,AI
 HOST-SUFFIX,chatgpt.com,AI
 HOST-SUFFIX,openai.com,AI
@@ -14,3 +14,12 @@ HOST,production-openaicom-storage.azureedge.net,AI
 HOST-SUFFIX,chatgpt.livekit.cloud,AI
 HOST-SUFFIX,openaiapi-site.azureedge.net,AI
 HOST-SUFFIX,openaicom.imgix.net,AI
+HOST-SUFFIX,oaistatsig.com,AI
+HOST,cdn.openaimerge.com,AI
+HOST,challenges.cloudflare.com,AI
+HOST,cdn.workos.com,AI
+HOST,forwarder.workos.com,AI
+HOST,frontend-apps-multi-region.workos.com,AI
+HOST,setup.workos.com,AI
+HOST,images.workoscdn.com,AI
+HOST,workos.imgix.net,AI

@@ -4,12 +4,12 @@ on:
   push:
     paths:
       - 'quantumult-x/**'
-      - 'proxy-rules/templates/quantumult-x.conf'
+      - 'proxy-rules/**'
       - '.github/workflows/quantumult-x.yml'
   pull_request:
     paths:
       - 'quantumult-x/**'
-      - 'proxy-rules/templates/quantumult-x.conf'
+      - 'proxy-rules/**'
       - '.github/workflows/quantumult-x.yml'
   workflow_dispatch:
 
@@ -28,3 +28,6 @@ jobs:
           node-version: 22
       - name: Test standalone UIActions
         run: node --test quantumult-x/tests/*.test.mjs
+      - name: Validate AI routing and generated rule resources
+        working-directory: proxy-rules
+        run: npm run check
