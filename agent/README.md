@@ -77,6 +77,12 @@ dashboard on the relevant section. Use `interactive` when you want the older
 line-oriented guided flow. See [`tui/`](./tui/) for the views, keys, safety
 confirmations, and build contract.
 
+The Shell controllers enable Node's environment-proxy support by default.
+On Node.js 22.21+ or 24+, remote requests honor `HTTP_PROXY`, `HTTPS_PROXY`,
+and `NO_PROXY` (including lowercase equivalents), using the proxy already
+configured in your shell. Use `NODE_USE_ENV_PROXY=0 agentctl` to opt out for
+one invocation. Earlier Node.js versions need an upgrade for this support.
+
 To make those names available from any directory, preview and apply the
 standalone installer:
 

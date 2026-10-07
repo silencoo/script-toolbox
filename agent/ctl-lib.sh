@@ -7,6 +7,10 @@
 
 # shellcheck shell=bash
 
+# Let Node use the same HTTP(S)_PROXY / NO_PROXY settings as curl. Keep an
+# explicit caller override (including NODE_USE_ENV_PROXY=0) for direct access.
+export NODE_USE_ENV_PROXY="${NODE_USE_ENV_PROXY-1}"
+
 log()  { printf '%s\n' "$*"; }
 info() { printf '▸ %s\n' "$*"; }
 ok()   { printf '✓ %s\n' "$*"; }
