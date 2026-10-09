@@ -22,7 +22,8 @@ class RefreshTests(unittest.TestCase):
                   'collect_status': self.console.status, 'backup_rows': [],
                   'fetch_journal': ['new log'], 'collect_core_status': {'version': 'test'},
                   'proxy_groups': {'test': {'all': ['DIRECT']}},
-                  'controller_request': {'mode': 'rule'}}
+                  'controller_request': {'mode': 'rule'},
+                  'collect_web_ui_status': {'installed': True, 'state': 'active', 'pid': '42', 'address': 'http://127.0.0.1:28743'}}
         for name, value in values.items():
             self.readers[name] = self.stack.enter_context(mock.patch.object(manager, name, return_value=value))
 

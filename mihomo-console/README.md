@@ -14,14 +14,15 @@
 - 查看策略组、选择手动策略组的节点、测试延迟，保存规则/全局/直连模式。
 - TUI 概览 Mihomo 服务、更新 timer、当前订阅、配置摘要和最近错误。
 - 添加、切换、dry-run 和更新完整订阅，不显示订阅 URL。
-- 保存最近 50 次脱敏的更新/回滚历史。
+- 保存最近 50 次移除 URL 的更新/回滚历史。
 - 查看最近 8 份配置备份，校验后手动恢复。
 - 在 TUI 中查看更新服务与 Mihomo 的 journald 日志。
+- 通过带令牌登录的 Web UI 添加、编辑、校验和应用订阅，设置自动更新计划。
 - 通过 systemd timer 无人值守更新，CLI 子命令保持适合脚本调用。
 
 每次实际更新按以下顺序执行：
 
-1. 下载当前订阅，URL 不写入输出或历史。
+1. 下载当前订阅，下载器不输出 URL，历史记录移除 URL。
 2. 将 `/etc/mihomo/local-overrides.yaml` 深度合并到远端配置之上。
 3. 用 `mihomo -t` 校验候选配置。
 4. 备份旧配置并原子替换 `/etc/mihomo/config.yaml`。
@@ -39,15 +40,18 @@
 ./setup.sh
 ```
 
-安装脚本会请求 `sudo`，检查 systemd、Python/PyYAML 和 CA 证书，然后：
+安装脚本会请求 `sudo`，检查 systemd、Python 3.9+ 和 CA 证书，在
+`/usr/local/lib/mihomo-console/venv/` 安装独立的 Python 依赖，然后：
 
-1. 安装 Console、文档和订阅刷新单元。
+1. 安装 Console、Web UI、文档及 systemd 单元。
 2. 内核缺失时从 `MetaCubeX/mihomo` 官方稳定版下载匹配架构的发布包，校验
    GitHub 发布资产的 SHA-256，再验证内核版本；缺少校验值时停止安装。
 3. 创建缺失的管理配置、本地覆盖及初始直连配置。默认代理端口
    `127.0.0.1:7890`，控制器 `127.0.0.1:9090`，自动生成控制器密钥。
 4. 创建缺失的 `mihomo.service`，验证配置、启动并设置开机启动。
-5. 在交互终端中引导添加订阅、校验和应用；成功应用后询问是否启用自动刷新，
+5. 启用并启动 `mihomo-console-web.service`，默认地址 `http://localhost:28743`。
+   `--no-start` 会跳过新服务的启用和启动。
+6. 在交互终端中引导添加订阅、校验和应用；成功应用后询问是否启用自动刷新，
    并让用户选择更新间隔，最后打开 TUI。
 
 已有内核、主服务、管理配置、当前配置和本地覆盖不会被覆盖；已有服务的
@@ -68,7 +72,8 @@
 桌面系统代理、启用 TUN 或更改路由。后续订阅更新会继续保留本地端口、控制器
 和模式覆盖。
 
-只更新 Console 文件及订阅刷新单元，不下载内核或初始化主配置：
+更新 Console、Web UI 和 systemd 单元，并启用、启动 Web UI；不下载内核或
+初始化主配置，保留已有 Mihomo 和订阅 timer 的状态：
 
 ```bash
 ./setup.sh --install-only
@@ -79,6 +84,71 @@
 ```bash
 sudo mihomo-console
 ```
+
+### 原生 systemd Web UI
+
+`setup.sh` 安装完成后 Web UI 在后台运行，随系统启动，异常退出后自动重启；
+关闭终端不会停止 Web UI。现有安装执行 `./setup.sh --install-only` 即可添加服务。
+若管理配置尚未初始化，安装器只安装服务；初始化后再执行启用命令。
+
+```bash
+sudo systemctl enable --now mihomo-console-web.service
+sudo systemctl status mihomo-console-web.service
+sudo /usr/local/sbin/mihomo-console web-token
+# 查看日志（不会打印登录令牌）：
+sudo journalctl -u mihomo-console-web.service -e
+```
+
+浏览器访问 `http://localhost:28743`，使用上面显式读取的令牌登录。
+也可以直接运行 `sudo /usr/local/sbin/mihomo-console` 打开 TUI，按 `w` 或 `8` 进入
+**Web UI** 页面，查看服务状态和地址；按 `v` 显示登录令牌，再按 `v` 或 `Esc`
+隐藏。令牌在切页、刷新、切换语言、退出或 60 秒后自动隐藏，不写入操作历史。
+页面读取运行中服务的环境配置，因此设置了自定义端口或 `MIHOMO_WEB_TOKEN`
+时也能显示实际地址和令牌；不会生成或更换令牌。
+令牌保存在 `/etc/mihomo/web-token`，权限 0600；重启服务不会更换令牌。
+Web UI 不依赖 Mihomo 的启停，因此应用订阅、重启内核时 Web UI 仍然运行。
+
+需要从同一局域网的其他设备访问时，在 TUI 按 `w` 或 `8` 打开 **Web UI**，
+按 `o` 切换 **仅本机 / 局域网**，操作结束后按 Enter 返回。页面显示访问范围和
+局域网地址，例如 `http://192.168.1.50:28743`；按 `v` 查看登录令牌。
+开启后监听 `0.0.0.0`，再按 `o` 恢复 `127.0.0.1`。登录仍然需要原有令牌。
+更改会重启正在运行的 Web UI，因此浏览器需要重新登录；Mihomo 内核不会重启。
+如果页面显示服务未运行或失败，按 `k` 启动/重启 Web UI；该操作会清除
+`start-limit-hit`，不修改令牌、端口或访问范围。
+订阅更新进行中会拒绝切换，Web UI 重启失败时恢复原访问设置。
+如果无法检测主机 IP，页面用 `<server-ip>` 提示填写实际地址。
+
+安装或更新时也可直接选择访问范围：
+
+```bash
+./setup.sh --install-only --web-lan
+# 恢复仅本机访问：
+./setup.sh --install-only --web-local
+# 已安装后直接切换，无需重新安装：
+sudo mihomo-console web-access --lan
+sudo mihomo-console web-access --local
+```
+
+访问设置保存在 `/etc/default/mihomo-console-web-access`，权限 0600，
+仅覆盖 `MIHOMO_WEB_HOST`，不更改端口或令牌；重启和普通更新会保留设置。
+首次安装不指定选项时仍默认仅本机访问。局域网模式开放主机的 IPv4 网络接口，
+不修改防火墙或路由器端口转发。HTTP 令牌和会话没有传输加密，只用于可信局域网；
+其他网络访问请使用下面的 HTTPS 反向代理。
+
+Web UI 不返回完整订阅 URL、控制器 Secret 或节点凭据；登录后仍能看到订阅名称、
+来源域名、User-Agent、更新状态和历史。界面截图也可能包含这些信息。
+历史移除 URL，Web 错误另会替换当前配置中识别到的凭据；这不是对所有日志的
+完整脱敏保证。Mihomo 校验输出、journald 和容器日志保留原文，可能包含配置片段，
+只应供可信管理员读取，分享日志前请检查并移除凭据。
+
+需要调整端口或配置 HTTPS 反向代理时，使用
+`sudoedit /etc/default/mihomo-console-web` 设置相应 `MIHOMO_WEB_*` 环境变量，
+然后 `sudo systemctl restart mihomo-console-web.service`。默认仅监听
+`127.0.0.1:28743`；可选局域网访问、SSH 转发或 HTTPS 反向代理。
+停止或取消开机启动使用 `sudo systemctl disable --now mihomo-console-web.service`。
+服务复用订阅更新的文件锁，沙箱允许写入管理配置和订阅 timer 的设置目录。
+修改自定义配置路径后运行 `sudo mihomo-console configure-systemd-sandbox`，
+会同步更新订阅服务和 Web UI 的沙箱路径。
 
 ### 内核与服务管理
 
@@ -141,6 +211,74 @@ Docker 版本把 Mihomo 内核、Console 和自动更新循环放在同一容器
 MetaCubeXD Dashboard。它不在容器中模拟 systemd：PID 1 监督 Mihomo，Console
 通过容器运行时安全重启内核，原有的校验、原子替换和失败回滚流程保持不变。
 
+### Web UI 与令牌登录
+
+Mihomo Console 自带订阅管理 Web UI，与 MetaCubeXD 的节点选择面板是两个入口。
+Web UI 支持添加/编辑订阅、仅校验、应用配置、选择自动更新订阅、删除订阅、
+设置更新间隔及查看最近结果。提供中英文和系统/浅色/深色主题。
+
+默认 Compose 把 Web UI 发布到 NAS **本机** `127.0.0.1:28743`。通过 SSH 隧道
+访问，无需开放额外管理端口：
+
+```bash
+ssh -L 28743:127.0.0.1:28743 USER@NAS_IP
+# 在本机浏览器打开 http://127.0.0.1:28743
+```
+
+在 NAS 上执行以下命令取得登录令牌，然后在登录页粘贴：
+
+```bash
+docker exec -it mihomo-console mihomo-console web-token
+```
+
+令牌与 Mihomo Controller Secret **分开管理**。未设置 `MIHOMO_WEB_TOKEN` 时，
+首次启动会生成随机令牌并保存到 `/data/manager/web-token`，权限 0600；重建容器
+后保持不变。启动日志不会打印令牌。可设置至少 24 字符的 `MIHOMO_WEB_TOKEN`
+覆盖它。修改令牌后重建容器，已有登录会话随服务重启失效。
+
+需要直接从浏览器访问 NAS 时，配置 NAS 的 **HTTPS 反向代理**，上游指向
+`http://127.0.0.1:28743`；代理在同一 Docker 网络中时，也可使用
+`http://mihomo-console:28743`。为主容器增加以下环境变量并重建：
+
+```yaml
+MIHOMO_WEB_PUBLIC_URL: "https://mihomo.example.com"
+MIHOMO_WEB_SECURE_COOKIE: "true"
+```
+
+`MIHOMO_WEB_PUBLIC_URL` 必须是完整 HTTPS Origin，不含路径；它用于校验浏览器
+请求来源，并自动启用 Secure Cookie。反向代理应保留 Host。可选
+`MIHOMO_WEB_TRUSTED_HOSTS` 用逗号列出允许的主机名，禁止其他 Host 请求。
+公网部署还应由反向代理提供额外身份验证；登录令牌面板面向单用户管理。
+
+登录在服务器校验令牌后创建最长 12 小时的 HttpOnly、SameSite=Strict 会话。
+写操作校验 CSRF 令牌及同源请求，登录失败有速率限制。浏览器不持久化原始
+令牌；偏好存储只包含主题和语言。订阅地址不会回显到列表或编辑表单：编辑时
+留空保留已有地址。后台任务运行时，页面仍可查看状态；CLI、定时更新和 Web
+写入共用操作锁。首次保存不会自动应用配置，除非点击“保存并应用”。
+
+删除当前订阅会清除自动更新的订阅选择，保留当前运行配置，不会自动改为更新
+另一订阅。重新选择订阅后，原有启用的计划继续使用新选择。
+
+Web UI 默认端口为 28743，原生安装监听 `127.0.0.1`。可用
+`MIHOMO_WEB_ENABLED=false` 禁用容器内 Web UI，或用 `MIHOMO_WEB_PORT` 修改内端口
+（同时调整端口映射）。原生安装使用 systemd，在本目录更新后运行：
+
+```bash
+./setup.sh --install-only
+sudo /usr/local/sbin/mihomo-console web-token
+```
+
+开发时可在虚拟环境安装 `requirements.txt`，然后运行 `python web_server.py`。
+Web UI 要求 Flask 3.1+、Waitress 3.0.2+；原生安装器自动创建永久虚拟环境，
+已安装 CLI、timer 和 Web UI 共用该环境，不依赖较旧系统包的 Flask 版本。
+
+五个独立图标概念位于 `design/icons/masters/`，均为不透明的 1024×1024 PNG。
+原始 ImageGen 输出保存在 `design/icons/originals/`，16/32/68/128 像素证明图位于
+`design/icons/proofs/`；[概念对比](design/icons/comparison-light.png) 和
+[原尺寸检查](design/icons/native-size-proofs.png) 用于选型。
+生成提示保存在 `design/icon-prompts.json`。已选用第 4 款 **Console Cat**，用于登录页、
+应用页眉、浏览器 favicon 和 Apple 主屏幕图标；Web 图标位于 `web/`，直接从原稿缩放导出。
+
 镜像支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`：
 
 ```text
@@ -163,6 +301,7 @@ docker compose up -d
 - `18080`：MetaCubeXD Dashboard。
 - `19090`：Mihomo Controller API。
 - `17890`：HTTP/SOCKS mixed proxy。
+- `28743`：Console Web UI，默认只发布到 NAS 本机。
 
 如果 `MIHOMO_SECRET` 留空，首次启动会生成 64 位随机 Secret，并只写入持久化
 目录。查看它并在 Dashboard 中填写：
@@ -257,6 +396,9 @@ HTTP/SOCKS 代理，不是透明网关。Dashboard、Controller 和 mixed proxy 
 
 ### 手动安装
 
+以下步骤只安装 CLI 和订阅 timer。需要 Web UI 自动运行时请使用
+`./setup.sh --install-only` 安装完整 Console 及 Web 服务。
+
 ```bash
 sudo apt install python3-yaml
 sudo install -m 0755 mihomo_console.py /usr/local/sbin/mihomo-console
@@ -295,12 +437,14 @@ sudo mihomo-console
   `e` 开机启动，`t` 自动刷新启停，`f` 设置更新频率。
 - `7` 节点：方向键选择，`Enter` 打开组或使用节点，`Esc` 返回组列表，
   `d` 测试延迟，`m` 设置运行模式。
+- `8` Web UI：查看服务状态、地址，`v` 显示/隐藏登录令牌；长令牌用方向键滚动。
+  `o` 切换本机/局域网访问，`k` 启动/重启 Web UI（原生 systemd）；任何页面均可按 `w` 打开。
 - 全局：`Tab` 切页，`r` 刷新，`l` 切换中英文，`?` 帮助，`q` 退出。
 
 TUI 中需要输入 URL、确认危险操作或等待更新时，会临时返回普通终端；操作
 结束后按 Enter 回到控制台。TUI 至少需要 70×18 的终端。
-窄终端会显示当前页面附近的导航项，可用 `1`–`7` 或 `Tab` 切换全部页面。
-页面先显示缓存，后台每 5 秒刷新状态；备份、日志、内核和节点仅在进入对应
+窄终端会显示当前页面附近的导航项，可用 `1`–`8` 或 `Tab` 切换全部页面。
+页面先显示缓存，后台每 5 秒刷新状态；备份、日志、内核、节点和 Web UI 仅在进入对应
 页面后读取。切页不会等待 systemd、日志或控制器请求；`r` 强制重新读取，
 加载时仍可切页或退出。
 Docker 内可管理节点、模式、自动更新频率和重启内核；内核升级、容器启停及开机启动仍由
@@ -409,6 +553,7 @@ systemd drop-in，避免 `ProtectSystem=strict` 阻止写入。
 ## 文件与安全边界
 
 - `/etc/mihomo/subscription-manager.json`：订阅 URL、脱敏历史，权限 0600。
+- `/etc/mihomo/web-token`：Web UI 登录令牌，权限 0600。
 - `/etc/mihomo/local-overrides.yaml`：本地 Secret 和控制器设置，权限 0600。
 - `/etc/mihomo/backups/`：最近 8 份完整配置，目录 0700、文件 0600。
 - `/etc/mihomo/config.yaml`：成功应用后为 0600，并尽量保留原属主。

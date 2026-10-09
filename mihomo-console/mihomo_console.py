@@ -13,6 +13,7 @@ import argparse
 import copy
 import contextlib
 import io
+import ipaddress
 import platform
 import queue
 import datetime as dt
@@ -26,6 +27,7 @@ import re
 import secrets
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -203,8 +205,44 @@ EN_MESSAGES: dict[str, str] = {
     "\n错误：{exc}": "\nError: {exc}",
     "\n已取消。": "\nCancelled.",
     "\n按 Enter 返回 Mihomo Console……": "\nPress Enter to return to Mihomo Console…",
-    "全局：1-7 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。": "Global: 1-7 select pages, Tab/Shift-Tab cycle pages, r refreshes, l switches language, q quits.\nOverview: u updates the active subscription; d downloads and validates only.\nProfiles: arrows select, Enter activates, u updates, d validates, a adds, x deletes.\nBackups: arrows select; Enter validates and restores, with automatic recovery on failure.\nLogs: arrows scroll; t switches between updater and Mihomo service logs.\n\nThe TUI does not display subscription URLs, secrets or proxy credentials.",
+    "全局：1-8 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\n常规状态页面不显示订阅 URL、控制器 Secret 或节点凭据；日志保留原文，分享前请检查。": "Global: 1-8 select pages, Tab/Shift-Tab cycle pages, r refreshes, l switches language, q quits.\nOverview: u updates the active subscription; d downloads and validates only.\nProfiles: arrows select, Enter activates, u updates, d validates, a adds, x deletes.\nBackups: arrows select; Enter validates and restores, with automatic recovery on failure.\nLogs: arrows scroll; t switches between updater and Mihomo service logs.\n\nStatus pages omit subscription URLs, controller secrets and proxy credentials; logs preserve raw output. Check logs before sharing.",
     "快捷键": "Keyboard shortcuts",
+    "Web UI": "Web UI",
+    "Web UI 登录": "Web UI login",
+    "服务状态": "Service status",
+    "浏览器地址": "Browser address",
+    "访问范围": "Access",
+    "仅本机": "Local only",
+    "局域网": "LAN",
+    "Web UI 访问设置": "Web UI access settings",
+    "v 令牌 · o 局域网访问 · r 刷新 · Tab 切换": "v Token · o LAN access · r Refresh · Tab Pages",
+    "v 令牌 · o 局域网 · k 启动/重启 · r 刷新": "v Token · o LAN · k Start/restart · r Refresh",
+    "Web UI 未运行；k 启动/重启 · o 访问范围 · r 刷新": "Web UI is stopped; k Start/restart · o Access · r Refresh",
+    "重启 Web UI 服务": "Restart Web UI service",
+    "无法启动 Web UI；请查看该服务的 journalctl 日志。": "Cannot start Web UI; check journalctl for its service.",
+    "Web UI 设置仍在加载，请稍后重试。": "Web UI settings are loading; try again shortly.",
+    "容器的局域网访问请通过 Compose 端口映射设置。": "Configure container LAN access through Compose port mappings.",
+    "无法修改 Web UI 访问设置。": "Cannot change Web UI access settings.",
+    "Web UI 启动失败，已还原访问设置。": "Web UI failed to start; access settings were restored.",
+    "访问设置已还原，请手动重启 Web UI 服务。": "Access settings were restored; restart the Web UI service manually.",
+    "无法还原 Web UI 访问设置；请检查服务配置。": "Cannot restore Web UI access settings; check the service configuration.",
+    "已设置 Web UI 访问范围：{access}": "Web UI access set to: {access}",
+    "设置 Web UI 的本机或局域网访问": "Configure local or LAN access to the Web UI",
+    "开放到局域网": "Open to LAN",
+    "仅允许本机访问": "Allow local access only",
+    "只保存设置，不重启 Web UI": "Save settings without restarting the Web UI",
+    "登录令牌": "Login token",
+    "已隐藏；按 v 显示": "Hidden; press v to reveal",
+    "正在读取登录令牌……": "Reading login token…",
+    "v 显示/隐藏令牌 · r 刷新 · Tab 切换": "v Show/hide token · r Refresh · Tab Pages",
+    "↑↓ 滚动令牌 · v 隐藏 · Tab 切换": "↑↓ Scroll token · v Hide · Tab Pages",
+    "令牌将在 60 秒后自动隐藏。": "The token hides automatically after 60 seconds.",
+    "Web UI 尚未安装；请运行 setup.sh --install-only。": "Web UI is not installed; run setup.sh --install-only.",
+    "Web UI 未运行；请先启动 Web UI 服务。": "Web UI is not running; start its service first.",
+    "无法读取 Web UI 设置；请用 sudo 打开控制台。": "Cannot read Web UI settings; open the console with sudo.",
+    "无法读取登录令牌；请重启 Web UI 服务后重试。": "Cannot read the login token; restart the Web UI service and retry.",
+    "登录令牌无法安全显示在终端中。": "The login token cannot be displayed safely in this terminal.",
+    "Web UI：w 或 8 打开，v 令牌，o 局域网访问，k 启动/重启；令牌 60 秒后隐藏。": "Web UI: w or 8 opens it; v reveals the token, o toggles LAN access, k starts/restarts it. The token hides after 60 seconds.",
     "尚未设置当前订阅。": "No active subscription is set.",
     "校验当前订阅": "Validate active subscription",
     "更新当前订阅": "Update active subscription",
@@ -517,6 +555,8 @@ DEFAULT_MANAGER_CONFIG = Path(
 )
 DEFAULT_UPDATER_SERVICE = "mihomo-subscription-update.service"
 DEFAULT_UPDATER_TIMER = "mihomo-subscription-update.timer"
+DEFAULT_WEB_SERVICE = "mihomo-console-web.service"
+DEFAULT_WEB_ACCESS_FILE = Path("/etc/default/mihomo-console-web-access")
 DEFAULT_SCHEDULE_DROPIN = Path("/etc/systemd/system") / f"{DEFAULT_UPDATER_TIMER}.d" / "zz-mihomo-console.conf"
 DEFAULT_SYSTEMD_DROPIN = (
     Path("/etc/systemd/system") / f"{DEFAULT_UPDATER_SERVICE}.d" / "paths.conf"
@@ -800,7 +840,15 @@ def sanitize_history_error(registry: dict[str, Any], error: object) -> str:
     """Keep a useful one-line error while removing known URLs and control bytes."""
 
     lines = [line.strip() for line in str(error).splitlines() if line.strip()]
-    message = lines[-1] if lines else type(error).__name__
+    # Mihomo ends validation failures with a temporary-path summary. Prefer the
+    # preceding diagnostic so users can actually identify an invalid proxy/rule.
+    actionable = [line for line in lines if not re.fullmatch(r"configuration file .+ test failed", line)]
+    message = actionable[-1] if actionable else "Mihomo configuration validation failed."
+    if not lines:
+        message = type(error).__name__
+    log_message = re.search(r'\bmsg="(.*)"$', message)
+    if log_message:
+        message = log_message.group(1)
     for details in registry.get("subscriptions", {}).values():
         if not isinstance(details, dict):
             continue
@@ -849,9 +897,12 @@ def download_profile(subscription: dict[str, Any]) -> bytes:
                 raise ManagerError(tr("订阅响应超过 20 MiB，已拒绝"))
             if response.headers.get("Content-Encoding", "").lower() == "gzip":
                 try:
-                    data = gzip.decompress(data)
-                except gzip.BadGzipFile as exc:
+                    with gzip.GzipFile(fileobj=io.BytesIO(data)) as compressed:
+                        data = compressed.read(MAX_DOWNLOAD_BYTES + 1)
+                except (OSError, EOFError, zlib.error) as exc:
                     raise ManagerError(tr("订阅服务器返回了无效的 gzip 内容")) from exc
+                if len(data) > MAX_DOWNLOAD_BYTES:
+                    raise ManagerError(tr("订阅响应超过 20 MiB，已拒绝"))
     except urllib.error.HTTPError as exc:
         raise ManagerError(tr("下载失败：HTTP {value1}", value1=exc.code)) from exc
     except urllib.error.URLError as exc:
@@ -1083,6 +1134,15 @@ def install_systemd_sandbox(
             render_systemd_sandbox_dropin(manager_config, registry),
             mode=0o644,
         )
+        # The Web UI performs the same updates and also edits the timer schedule.
+        # Keep its sandbox in sync when paths change after initial installation.
+        unit_dir = dropin.parent.parent
+        if (unit_dir / DEFAULT_WEB_SERVICE).is_file():
+            timer_dir = unit_dir / f"{DEFAULT_UPDATER_TIMER}.d"
+            timer_dir.mkdir(parents=True, exist_ok=True)
+            web_paths = render_systemd_sandbox_dropin(manager_config, registry)
+            web_paths += f"ReadWritePaths={quote_systemd_path(timer_dir)}\n".encode()
+            secure_atomic_write(unit_dir / f"{DEFAULT_WEB_SERVICE}.d" / "paths.conf", web_paths, mode=0o644)
     except OSError as exc:
         raise ManagerError(tr("无法写入 systemd drop-in {dropin}: {exc}", dropin=dropin, exc=exc)) from exc
 
@@ -1136,90 +1196,82 @@ def _update_profile_impl(
     if name not in subscriptions:
         raise ManagerError(tr("找不到订阅：{name}", name=name))
 
-    lock_path = Path(str(registry["lock_file"]))
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("w", encoding="utf-8") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ConcurrentUpdateError(tr("另一个更新任务正在运行")) from exc
+    print(tr("正在下载订阅“{name}”……", name=name))
+    remote_bytes = download_profile(subscriptions[name])
+    overlay_path = Path(str(registry["overlay_file"]))
+    overlay = read_yaml_mapping(overlay_path, missing_ok=True)
+    rendered = render_profile(remote_bytes, overlay)
+    result_details["summary"] = profile_summary_from_bytes(rendered)
 
-        print(tr("正在下载订阅“{name}”……", name=name))
-        remote_bytes = download_profile(subscriptions[name])
-        overlay_path = Path(str(registry["overlay_file"]))
-        overlay = read_yaml_mapping(overlay_path, missing_ok=True)
-        rendered = render_profile(remote_bytes, overlay)
-        result_details["summary"] = profile_summary_from_bytes(rendered)
+    target = Path(str(registry["target_config"]))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, candidate_name = tempfile.mkstemp(prefix=".mihomo-candidate.", suffix=".yaml", dir=target.parent)
+    candidate = Path(candidate_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(candidate, 0o600)
 
-        target = Path(str(registry["target_config"]))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, candidate_name = tempfile.mkstemp(prefix=".mihomo-candidate.", suffix=".yaml", dir=target.parent)
-        candidate = Path(candidate_name)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(rendered)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(candidate, 0o600)
+        print(tr("正在用 Mihomo 校验候选配置……"))
+        validate_with_mihomo(registry, candidate)
+        digest = hashlib.sha256(rendered).hexdigest()
+        result_details["sha256"] = digest
+        if dry_run:
+            result_details["status"] = "validated"
+            print(tr("校验通过（仅校验，SHA-256: {value1}…），未替换配置。", value1=digest[:12]))
+            return False
 
-            print(tr("正在用 Mihomo 校验候选配置……"))
-            validate_with_mihomo(registry, candidate)
-            digest = hashlib.sha256(rendered).hexdigest()
-            result_details["sha256"] = digest
-            if dry_run:
-                result_details["status"] = "validated"
-                print(tr("校验通过（仅校验，SHA-256: {value1}…），未替换配置。", value1=digest[:12]))
-                return False
-
-            if target.exists() and target.read_bytes() == rendered:
-                result_details["status"] = "unchanged"
-                print(tr("生成结果与当前配置相同，无需重启 Mihomo。"))
-                registry["active"] = name
-                subscriptions[name]["last_success"] = now_iso()
-                subscriptions[name]["last_sha256"] = digest
-                save_registry(manager_config, registry)
-                return False
-
-            backup = make_backup(registry, target)
-            old_owner = target if target.exists() else None
-            if old_owner and os.geteuid() == 0:
-                stat = old_owner.stat()
-                os.chown(candidate, stat.st_uid, stat.st_gid)
-            os.replace(candidate, target)
-            os.chmod(target, 0o600)
-            fsync_directory(target.parent)
-
-            try:
-                print(tr("配置已原子替换，正在重启 Mihomo……"))
-                restart_mihomo(registry)
-            except ManagerError as restart_error:
-                if backup is None:
-                    raise ManagerError(tr("{restart_error}；没有旧配置可回滚", restart_error=restart_error)) from restart_error
-                eprint(tr("重启失败，正在恢复上一份配置……"))
-                restore_backup(target, backup)
-                try:
-                    restart_mihomo(registry)
-                except ManagerError as rollback_error:
-                    raise ManagerError(
-                        tr("新配置启动失败，且回滚后重启也失败。原备份位于 {backup}。\n回滚错误：{rollback_error}", backup=backup, rollback_error=rollback_error)
-                    ) from rollback_error
-                result_details["rolled_back"] = True
-                raise ManagerError(tr("新配置启动失败，已成功回滚：{restart_error}", restart_error=restart_error)) from restart_error
-
-            result_details["status"] = "updated"
+        if target.exists() and target.read_bytes() == rendered:
+            result_details["status"] = "unchanged"
+            print(tr("生成结果与当前配置相同，无需重启 Mihomo。"))
             registry["active"] = name
             subscriptions[name]["last_success"] = now_iso()
             subscriptions[name]["last_sha256"] = digest
             save_registry(manager_config, registry)
-            prune_backups(registry, target)
-            print(tr("更新成功，当前订阅为“{name}”。", name=name))
-            return True
-        finally:
-            if candidate.exists():
-                candidate.unlink()
+            return False
+
+        backup = make_backup(registry, target)
+        old_owner = target if target.exists() else None
+        if old_owner and os.geteuid() == 0:
+            stat = old_owner.stat()
+            os.chown(candidate, stat.st_uid, stat.st_gid)
+        os.replace(candidate, target)
+        os.chmod(target, 0o600)
+        fsync_directory(target.parent)
+
+        try:
+            print(tr("配置已原子替换，正在重启 Mihomo……"))
+            restart_mihomo(registry)
+        except ManagerError as restart_error:
+            if backup is None:
+                raise ManagerError(tr("{restart_error}；没有旧配置可回滚", restart_error=restart_error)) from restart_error
+            eprint(tr("重启失败，正在恢复上一份配置……"))
+            restore_backup(target, backup)
+            try:
+                restart_mihomo(registry)
+            except ManagerError as rollback_error:
+                raise ManagerError(
+                    tr("新配置启动失败，且回滚后重启也失败。原备份位于 {backup}。\n回滚错误：{rollback_error}", backup=backup, rollback_error=rollback_error)
+                ) from rollback_error
+            result_details["rolled_back"] = True
+            raise ManagerError(tr("新配置启动失败，已成功回滚：{restart_error}", restart_error=restart_error)) from restart_error
+
+        result_details["status"] = "updated"
+        registry["active"] = name
+        subscriptions[name]["last_success"] = now_iso()
+        subscriptions[name]["last_sha256"] = digest
+        save_registry(manager_config, registry)
+        prune_backups(registry, target)
+        print(tr("更新成功，当前订阅为“{name}”。", name=name))
+        return True
+    finally:
+        if candidate.exists():
+            candidate.unlink()
 
 
-def update_profile(
+def _update_profile_locked(
     manager_config: Path,
     registry: dict[str, Any],
     name: str,
@@ -1240,8 +1292,7 @@ def update_profile(
             result_details=details,
         )
     except (ManagerError, OSError) as exc:
-        # The update lock has been released by this point. Reload the latest state
-        # before recording the failure so a concurrent invocation is never erased.
+        # Record the failed attempt while still holding the shared operation lock.
         if not isinstance(exc, ConcurrentUpdateError):
             try:
                 latest = load_registry(manager_config)
@@ -1283,6 +1334,17 @@ def update_profile(
     }
     append_history(manager_config, registry, event)
     return changed
+
+
+def update_profile(
+    manager_config: Path, registry: dict[str, Any], name: str, *, dry_run: bool = False,
+) -> bool:
+    # Web edits, scheduled updates and history writes share one transaction.
+    with operation_lock(registry):
+        latest = load_registry(manager_config)
+        registry.clear()
+        registry.update(latest)
+        return _update_profile_locked(manager_config, registry, name, dry_run=dry_run)
 
 
 def list_backup_paths(registry: dict[str, Any]) -> list[Path]:
@@ -2087,7 +2149,13 @@ def proxy_groups(registry: dict[str, Any]) -> dict[str, Any]:
     }
     if any(not isinstance(node, str) for group in groups.values() for node in group["all"]):
         raise ManagerError(tr("控制器返回了无效响应。"))
-    return groups
+    # The response map is alphabetical; GLOBAL's members retain the running
+    # profile order. Filter out individual nodes, then retain any extra groups
+    # (including GLOBAL itself) without changing their member lists.
+    order = groups.get("GLOBAL", {}).get("all", [])
+    ordered = {name: groups[name] for name in order if name in groups}
+    ordered.update((name, details) for name, details in groups.items() if name not in ordered)
+    return ordered
 
 
 def select_proxy(registry: dict[str, Any], group: str, node: str) -> None:
@@ -2242,14 +2310,15 @@ def add_subscription(manager_config: Path, registry: dict[str, Any]) -> None:
     proxy_url = ask(tr("下载代理 URL（可留空；例如 http://127.0.0.1:7890）"))
     if proxy_url:
         validate_subscription_url(proxy_url)
-    registry["subscriptions"][name] = {
-        "url": url,
-        "user_agent": user_agent,
-        "download_proxy": proxy_url or None,
-    }
-    if registry.get("active") is None or confirm(tr("设为当前订阅吗"), True):
-        registry["active"] = name
-    save_registry(manager_config, registry)
+    select = registry.get("active") is None or confirm(tr("设为当前订阅吗"), True)
+    with operation_lock(registry):
+        latest = load_registry(manager_config)
+        latest["subscriptions"][name] = {"url": url, "user_agent": user_agent, "download_proxy": proxy_url or None}
+        if select:
+            latest["active"] = name
+        save_registry(manager_config, latest)
+        registry.clear()
+        registry.update(latest)
     print(tr("已保存订阅“{name}”；URL 仅保存在权限 0600 的管理配置中。", name=name))
 
 
@@ -2267,10 +2336,14 @@ def list_subscriptions(registry: dict[str, Any]) -> None:
 
 
 def activate(manager_config: Path, registry: dict[str, Any], name: str) -> None:
-    if name not in registry["subscriptions"]:
-        raise ManagerError(tr("找不到订阅：{name}", name=name))
-    registry["active"] = name
-    save_registry(manager_config, registry)
+    with operation_lock(registry):
+        latest = load_registry(manager_config)
+        if name not in latest["subscriptions"]:
+            raise ManagerError(tr("找不到订阅：{name}", name=name))
+        latest["active"] = name
+        save_registry(manager_config, latest)
+        registry.clear()
+        registry.update(latest)
     print(tr("当前订阅已切换为“{name}”。运行 update-active 才会下载并应用。", name=name))
 
 
@@ -2279,10 +2352,16 @@ def remove_subscription(manager_config: Path, registry: dict[str, Any], name: st
         raise ManagerError(tr("找不到订阅：{name}", name=name))
     if not confirm(tr("确认删除订阅“{name}”吗（不会删除当前 Mihomo 配置）", name=name), False):
         return
-    del registry["subscriptions"][name]
-    if registry.get("active") == name:
-        registry["active"] = next(iter(registry["subscriptions"]), None)
-    save_registry(manager_config, registry)
+    with operation_lock(registry):
+        latest = load_registry(manager_config)
+        if name not in latest["subscriptions"]:
+            raise ManagerError(tr("找不到订阅：{name}", name=name))
+        del latest["subscriptions"][name]
+        if latest.get("active") == name:
+            latest["active"] = next(iter(latest["subscriptions"]), None)
+        save_registry(manager_config, latest)
+        registry.clear()
+        registry.update(latest)
     print(tr("已删除订阅“{name}”。", name=name))
 
 
@@ -2367,7 +2446,7 @@ def fit_display(value: str, width: int) -> str:
 class ConsoleTUI:
     """Small dependency-free curses dashboard for SSH administration."""
 
-    PAGES = ("概览", "订阅", "历史", "备份", "日志", "内核", "节点")
+    PAGES = ("概览", "订阅", "历史", "备份", "日志", "内核", "节点", "Web UI")
 
     def __init__(self, screen: Any, curses_module: Any, manager_config: Path):
         self.screen = screen
@@ -2390,6 +2469,11 @@ class ConsoleTUI:
         self.group_index = 0
         self.node_index = 0
         self.open_group: str | None = None
+        self.web_status: dict[str, Any] = {}
+        self.web_token: str | None = None
+        self.web_token_requested = False
+        self.web_token_deadline = 0.0
+        self.web_token_scroll = 0
         self._results: queue.Queue = queue.Queue()
         self._pending: set[str] = set()
         self._checked: dict[str, float] = {}
@@ -2398,13 +2482,17 @@ class ConsoleTUI:
         self._closed = False
 
     def page_source(self) -> str:
-        return {3: "backups", 4: "logs", 5: "core", 6: "proxies"}.get(self.page, "registry")
+        return {3: "backups", 4: "logs", 5: "core", 6: "proxies", 7: "web"}.get(self.page, "registry")
 
     def invalidate(self) -> None:
         # Old readers may still finish, but must never overwrite post-action data.
         self._generation += 1
         self._checked.clear()
         self._errors.clear()
+        self.web_token = None
+        self.web_token_requested = False
+        self.web_token_deadline = 0.0
+        self.web_token_scroll = 0
 
     def request_read(self, source: str, action: Callable[[], Any]) -> None:
         if self._closed or source in self._pending:
@@ -2422,7 +2510,7 @@ class ConsoleTUI:
                 error = str(exc)
             self._results.put((source, generation, log_unit, value, error))
 
-        # At most one reader per source (six in total); slow I/O never holds the
+        # At most one reader per source; slow I/O never holds the
         # curses thread or delays exit. Workers only read independent snapshots.
         threading.Thread(target=read, name=f"console-{source}", daemon=True).start()
 
@@ -2444,9 +2532,16 @@ class ConsoleTUI:
             self.request_read(source, lambda: collect_core_status(registry))
         elif source == "proxies":
             self.request_read(source, lambda: (proxy_groups(registry), controller_request(registry, "/configs")))
+        elif source == "web":
+            self.request_read(source, lambda: collect_web_ui_status(registry))
+            if self.web_token_requested and self.web_token is None and "web" in self._checked:
+                self.request_read("web_token", lambda: read_web_ui_token(self.manager_config, registry))
 
     def poll_refresh(self) -> bool:
         changed = False
+        if self.web_token is not None and time.monotonic() >= self.web_token_deadline:
+            self.invalidate()
+            changed = True
         while not self._results.empty():
             source, generation, unit, value, error = self._results.get_nowait()
             self._pending.discard(source)
@@ -2459,6 +2554,8 @@ class ConsoleTUI:
             self._checked[source] = time.monotonic()
             if error:
                 self._errors[source] = error
+                if source == "web_token":
+                    self.web_token_requested = False
                 continue
             self._errors.pop(source, None)
             if source == "status":
@@ -2475,6 +2572,13 @@ class ConsoleTUI:
                 self.group_index = min(self.group_index, max(0, len(self.groups) - 1))
                 if self.open_group not in self.groups:
                     self.open_group = None
+            elif source == "web":
+                if self.web_token is not None and (value.get("state") != "active" or value.get("pid") != self.web_status.get("pid")):
+                    self.invalidate()
+                self.web_status = value
+            elif source == "web_token" and self.page == 7 and self.web_token_requested:
+                self.web_token = value
+                self.web_token_deadline = time.monotonic() + 60
         self.subscription_index = min(
             self.subscription_index,
             max(0, len(self.registry.get("subscriptions", {})) - 1),
@@ -2488,8 +2592,12 @@ class ConsoleTUI:
     def close(self) -> None:
         self._closed = True
         self.invalidate()
+        self.screen.erase()
+        self.screen.refresh()
 
     def change_page(self, index: int) -> None:
+        if self.web_token is not None or self.web_token_requested:
+            self.invalidate()
         self.page = index % len(self.PAGES)
         self.log_scroll = 0
         self.refresh(force=False)
@@ -2521,7 +2629,7 @@ class ConsoleTUI:
             self.put(0, 19, tr("安全订阅与运行管理"))
         service = f"mihomo {format_state(self.status.get('mihomo_service'))}"
         self.put(0, max(1, width - display_width(service) - 2), service, service_attr)
-        self.put(1, 1, tr("l 中文 / English · ? 帮助 · q 退出"), self.curses.A_DIM)
+        self.put(1, 1, tr("l 中文 / English · ? 帮助 · q 退出") + " · w Web UI", self.curses.A_DIM)
 
         nav_column = 1
         nav_width = sum(display_width(tr(name)) + 7 for name in self.PAGES)
@@ -2551,11 +2659,14 @@ class ConsoleTUI:
             self.draw_logs(5)
         elif self.page == 5:
             self.draw_core(5)
-        else:
+        elif self.page == 6:
             self.draw_proxies(5)
+        else:
+            self.draw_web_ui(5)
 
         self.put(height - 2, 0, "─" * max(1, width - 1), self.curses.color_pair(4))
-        error = next((self._errors[s] for s in ("registry", self.page_source(), "status") if s in self._errors), None)
+        sources = ("registry", self.page_source(), "status") + (("web_token",) if self.page == 7 else ())
+        error = next((self._errors[s] for s in sources if s in self._errors), None)
         if error:
             self.message = tr("刷新失败（r 重试）：{error}", error=error)
         elif self._pending & {"registry", "status", self.page_source()}:
@@ -2730,6 +2841,65 @@ class ConsoleTUI:
         mode = ask(tr("运行模式"), str(self.live_config.get("mode") or "rule"))
         set_proxy_mode(self.registry, mode)
 
+    def draw_web_ui(self, start: int) -> None:
+        self.put(start, 2, tr("Web UI 登录"), self.curses.A_BOLD)
+        self.put(start + 1, 3, tr("服务状态") + ": " + format_state(self.web_status.get("state")))
+        self.put(start + 2, 3, tr("浏览器地址") + ": " + self.web_status.get("address", "—"))
+        access = tr("局域网") if self.web_status.get("lan") else tr("仅本机")
+        self.put(start + 3, 3, tr("访问范围") + ": " + (access if self.web_status else "—"))
+        self.put(start + 4, 3, tr("登录令牌"), self.curses.A_BOLD)
+        if self.web_token is None:
+            label = tr("正在读取登录令牌……") if self.web_token_requested else tr("已隐藏；按 v 显示")
+            self.put(start + 5, 3, label, self.curses.A_DIM)
+        else:
+            height, width = self.screen.getmaxyx()
+            available = max(1, height - (start + 5) - 3)
+            # Wrap by terminal cell width, never silently truncate a credential.
+            chunks, chunk, used = [], "", 0
+            for character in self.web_token:
+                cells = display_width(character)
+                if used + cells > width - 7:
+                    chunks.append(chunk)
+                    chunk, used = "", 0
+                chunk += character
+                used += cells
+            chunks.append(chunk)
+            self.web_token_scroll = min(self.web_token_scroll, max(0, len(chunks) - available))
+            for offset, text in enumerate(chunks[self.web_token_scroll:self.web_token_scroll + available]):
+                self.put(start + 5 + offset, 3, text)
+            self.put(height - 3, 3, tr("令牌将在 60 秒后自动隐藏。"), self.curses.A_DIM)
+        self.message = tr("↑↓ 滚动令牌 · v 隐藏 · Tab 切换") if self.web_token else tr("v 显示/隐藏令牌 · r 刷新 · Tab 切换")
+        if not self.web_token and self.registry.get("service_backend", "systemd") == "systemd":
+            self.message = tr("v 令牌 · o 局域网 · k 启动/重启 · r 刷新")
+            if self.web_status.get("installed") and self.web_status.get("state") != "active":
+                self.message = tr("Web UI 未运行；k 启动/重启 · o 访问范围 · r 刷新")
+        if self.web_status and not self.web_status.get("installed"):
+            self.message = tr("Web UI 尚未安装；请运行 setup.sh --install-only。")
+
+    def handle_web_ui_key(self, key: int) -> None:
+        if key in (ord("k"), ord("K")):
+            self.run_external(tr("重启 Web UI 服务"), lambda: restart_web_ui(self.registry))
+        elif key in (ord("o"), ord("O")):
+            if self.registry.get("service_backend", "systemd") != "systemd":
+                self.run_external(tr("Web UI 访问设置"), lambda: configure_web_access(self.registry, lan=True))
+            elif "web" not in self._checked:
+                self.message = tr("Web UI 设置仍在加载，请稍后重试。")
+            else:
+                lan = not self.web_status.get("lan", False)
+                self.run_external(tr("Web UI 访问设置"), lambda: configure_web_access(self.registry, lan=lan))
+        elif key in (ord("v"), ord("V")):
+            if self.web_token_requested or self.web_token is not None:
+                self.invalidate()
+            else:
+                self.web_token_requested = True
+                self._checked.pop("web_token", None)
+                self._errors.pop("web_token", None)
+            self.refresh(force=False)
+        elif key in (27, 8, 127):
+            self.invalidate()
+        elif self.web_token is not None and key in (self.curses.KEY_UP, self.curses.KEY_DOWN):
+            self.web_token_scroll = max(0, self.web_token_scroll + (1 if key == self.curses.KEY_DOWN else -1))
+
     def handle_core_key(self, key: int) -> None:
         if key == ord("i"):
             self.run_external(tr("安装内核与主服务"), lambda: bootstrap_install(self.manager_config))
@@ -2807,17 +2977,22 @@ class ConsoleTUI:
     def show_help(self) -> None:
         def help_text() -> None:
             print(
-                tr("全局：1-7 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\nTUI 不会显示订阅 URL、Secret 或节点凭据。")
+                tr("全局：1-8 切换页面，Tab/Shift-Tab 前后切换，r 刷新，l 切换语言，q 退出。\n概览：u 更新当前订阅，d 仅下载并校验。\n订阅：方向键选择，Enter 激活，u 更新，d 校验，a 添加，x 删除。\n备份：方向键选择，Enter 校验并恢复；恢复失败会自动还原。\n日志：方向键滚动，t 在更新服务和 Mihomo 服务之间切换。\n\n常规状态页面不显示订阅 URL、控制器 Secret 或节点凭据；日志保留原文，分享前请检查。")
             )
             print(tr("内核：i 安装，u 升级，b 回退，s/x/k 启动/停止/重启，e 开机启动，t 自动刷新。"))
             print(tr("更新频率：内核页面按 f 设置，t 启用或停用自动刷新。"))
             print(tr("节点：Enter 打开组或使用节点，Esc 返回，d 测试延迟，m 保存运行模式。"))
+            print(tr("Web UI：w 或 8 打开，v 令牌，o 局域网访问，k 启动/重启；令牌 60 秒后隐藏。"))
 
         self.run_external(tr("快捷键"), help_text)
 
     def handle_key(self, key: int) -> bool:
         if key in (ord("q"), ord("Q")):
+            self.invalidate()
             return False
+        if key in (ord("w"), ord("W")):
+            self.change_page(7)
+            return True
         if key in (ord("l"), ord("L")):
             set_language("en_US" if LANGUAGE == "zh_CN" else "zh_CN")
             self.refresh()
@@ -2844,6 +3019,9 @@ class ConsoleTUI:
             return True
         if self.page == 6:
             self.handle_proxy_key(key)
+            return True
+        if self.page == 7:
+            self.handle_web_ui_key(key)
             return True
 
         if self.page == 0 and key in (ord("u"), ord("d")):
@@ -2992,6 +3170,175 @@ def show_secret(registry: dict[str, Any]) -> None:
     print(str(secret))
 
 
+def web_ui_runtime(registry: dict[str, Any], *, include_token: bool = False) -> tuple[dict[str, str], dict[str, str]]:
+    """Read the running server's settings, without caching credentials in status."""
+    keys = {"MIHOMO_WEB_HOST", "MIHOMO_WEB_PORT", "MIHOMO_WEB_PUBLIC_URL"}
+    if include_token:
+        keys.add("MIHOMO_WEB_TOKEN")
+    if registry.get("service_backend") == "container":
+        environment = {key: os.environ[key] for key in keys if key in os.environ}
+        enabled = os.environ.get("MIHOMO_WEB_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        running = False
+        if enabled:
+            try:
+                with socket.create_connection(("127.0.0.1", int(environment.get("MIHOMO_WEB_PORT", "28743"))), timeout=2):
+                    running = True
+            except (OSError, ValueError):
+                pass
+        return {"LoadState": "loaded", "ActiveState": "active" if running else "inactive"}, environment
+    result = command_output(["systemctl", "show", DEFAULT_WEB_SERVICE,
+                             "--property=LoadState,ActiveState,MainPID"], timeout=10)
+    properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    environment = {}
+    if properties.get("ActiveState") == "active":
+        pid = properties.get("MainPID", "0")
+        if not pid.isdecimal() or int(pid) <= 0:
+            raise ManagerError(tr("无法读取 Web UI 设置；请用 sudo 打开控制台。"))
+        try:
+            with Path(f"/proc/{pid}/environ").open("rb") as stream:
+                data = stream.read(1024 * 1024)
+            for entry in data.split(b"\0"):
+                key, separator, value = entry.partition(b"=")
+                name = key.decode("utf-8", errors="replace")
+                if separator and name in keys:
+                    environment[name] = value.decode("utf-8")
+        except (OSError, UnicodeError):
+            raise ManagerError(tr("无法读取 Web UI 设置；请用 sudo 打开控制台。")) from None
+    elif properties.get("LoadState") == "loaded":
+        try:
+            setting = DEFAULT_WEB_ACCESS_FILE.read_text(encoding="utf-8").strip()
+            if setting in {"MIHOMO_WEB_HOST=0.0.0.0", "MIHOMO_WEB_HOST=127.0.0.1"}:
+                environment["MIHOMO_WEB_HOST"] = setting.split("=", 1)[1]
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeError):
+            raise ManagerError(tr("无法读取 Web UI 设置；请用 sudo 打开控制台。")) from None
+    return properties, environment
+
+
+def lan_ipv4_address() -> str | None:
+    """Find a host address locally, without contacting an external service."""
+    try:
+        result = command_output(["ip", "-j", "-4", "address", "show", "up", "scope", "global"], timeout=5)
+        if result.returncode:
+            return None
+        interfaces = json.loads(result.stdout)
+        candidates = []
+        for interface in interfaces:
+            virtual = str(interface.get("ifname", "")).startswith(("docker", "br-", "veth", "virbr"))
+            for info in interface.get("addr_info", []):
+                address = ipaddress.IPv4Address(info.get("local", ""))
+                if not address.is_loopback and not address.is_link_local and not address.is_unspecified:
+                    candidates.append((virtual, not address.is_private, str(address)))
+        return min(candidates)[2] if candidates else None
+    except (ManagerError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def collect_web_ui_status(registry: dict[str, Any]) -> dict[str, Any]:
+    properties, environment = web_ui_runtime(registry)
+    try:
+        port = int(environment.get("MIHOMO_WEB_PORT", "28743"))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise ManagerError(tr("无法读取 Web UI 设置；请用 sudo 打开控制台。")) from None
+    host = environment.get("MIHOMO_WEB_HOST", "127.0.0.1")
+    lan = host not in {"127.0.0.1", "::1", "localhost"}
+    if host in {"0.0.0.0", "*"} and registry.get("service_backend", "systemd") == "systemd":
+        host = lan_ipv4_address() or "<server-ip>"
+    host = {"0.0.0.0": "127.0.0.1", "::": "::1", "*": "127.0.0.1"}.get(host, host)
+    authority = f"[{host}]" if ":" in host else host
+    address = f"http://{authority}:{port}"
+    public = environment.get("MIHOMO_WEB_PUBLIC_URL", "")
+    parsed = urllib.parse.urlsplit(public)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and not (parsed.username or parsed.password or parsed.query or parsed.fragment):
+        address = public
+    return {"state": properties.get("ActiveState", "unknown"),
+            "installed": properties.get("LoadState", "") == "loaded",
+            "address": address, "pid": properties.get("MainPID", ""), "lan": lan}
+
+
+def _restart_web_ui_service() -> bool:
+    """An explicit restart can recover from start-limit-hit without weakening automatic restart limits."""
+    try:
+        for action in ("reset-failed", "restart"):
+            if command_output(["systemctl", action, DEFAULT_WEB_SERVICE]).returncode:
+                return False
+        # Type=simple may report active before imports or bind fail.
+        time.sleep(2)
+        return command_output(["systemctl", "is-active", "--quiet", DEFAULT_WEB_SERVICE], timeout=10).returncode == 0
+    except ManagerError:
+        return False
+
+
+def restart_web_ui(registry: dict[str, Any]) -> None:
+    if registry.get("service_backend", "systemd") != "systemd":
+        raise ManagerError(tr("容器的局域网访问请通过 Compose 端口映射设置。"))
+    require_native_root(registry)
+    with operation_lock(registry):
+        result = command_output(["systemctl", "show", DEFAULT_WEB_SERVICE, "--property=LoadState"], timeout=10)
+        if result.returncode or "LoadState=loaded" not in result.stdout.splitlines():
+            raise ManagerError(tr("Web UI 尚未安装；请运行 setup.sh --install-only。"))
+        if not _restart_web_ui_service():
+            raise ManagerError(tr("无法启动 Web UI；请查看该服务的 journalctl 日志。"))
+
+
+def configure_web_access(registry: dict[str, Any], *, lan: bool, restart: bool = True) -> None:
+    """Persist only the bind address; leave ports, tokens and other env files alone."""
+    if registry.get("service_backend", "systemd") != "systemd":
+        raise ManagerError(tr("容器的局域网访问请通过 Compose 端口映射设置。"))
+    require_native_root(registry)
+    with operation_lock(registry):
+        result = command_output(["systemctl", "show", DEFAULT_WEB_SERVICE, "--property=LoadState,ActiveState"], timeout=10)
+        properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if result.returncode or properties.get("LoadState") != "loaded":
+            raise ManagerError(tr("Web UI 尚未安装；请运行 setup.sh --install-only。"))
+        path = DEFAULT_WEB_ACCESS_FILE
+        try:
+            if path.is_symlink():
+                raise OSError
+            before = path.read_bytes() if path.exists() else None
+            secure_atomic_write(path, f"MIHOMO_WEB_HOST={'0.0.0.0' if lan else '127.0.0.1'}\n".encode(), mode=0o600)
+        except OSError:
+            raise ManagerError(tr("无法修改 Web UI 访问设置。")) from None
+        if restart and properties.get("ActiveState") == "active":
+            if not _restart_web_ui_service():
+                try:
+                    if before is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        secure_atomic_write(path, before, mode=0o600)
+                except OSError:
+                    raise ManagerError(tr("无法还原 Web UI 访问设置；请检查服务配置。")) from None
+                if not _restart_web_ui_service():
+                    raise ManagerError(tr("访问设置已还原，请手动重启 Web UI 服务。")) from None
+                raise ManagerError(tr("Web UI 启动失败，已还原访问设置。")) from None
+    print(tr("已设置 Web UI 访问范围：{access}", access=tr("局域网") if lan else tr("仅本机")))
+
+
+def read_web_ui_token(manager_config: Path, registry: dict[str, Any]) -> str:
+    """Reveal only on request; reuse the running server's token without rotating it."""
+    properties, environment = web_ui_runtime(registry, include_token=True)
+    if properties.get("LoadState") != "loaded":
+        raise ManagerError(tr("Web UI 尚未安装；请运行 setup.sh --install-only。"))
+    if properties.get("ActiveState") != "active":
+        raise ManagerError(tr("Web UI 未运行；请先启动 Web UI 服务。"))
+    token = environment.get("MIHOMO_WEB_TOKEN", "").strip()
+    if not token:
+        path = manager_config.parent / "web-token"
+        try:
+            if path.is_symlink():
+                raise OSError
+            with path.open(encoding="utf-8") as stream:
+                token = stream.read(65537).strip()
+        except (OSError, UnicodeError):
+            raise ManagerError(tr("无法读取登录令牌；请重启 Web UI 服务后重试。")) from None
+    if len(token) < 24 or len(token) > 65536 or any(unicodedata.category(character).startswith("C") for character in token):
+        raise ManagerError(tr("登录令牌无法安全显示在终端中。"))
+    return token
+
+
 class ConsoleHelpFormatter(argparse.HelpFormatter):
     def _format_usage(self, usage: Any, actions: Any, groups: Any, prefix: Any) -> str:
         return super()._format_usage(
@@ -3084,6 +3431,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=tr("按当前路径生成自动更新服务的 systemd 沙箱配置"),
     )
     subparsers.add_parser("show-secret", help=tr("显式输出当前 Secret"))
+    web_parser = subparsers.add_parser("web", help="Run the token-protected web UI")
+    web_parser.add_argument("--host", default=os.environ.get("MIHOMO_WEB_HOST", "127.0.0.1"))
+    web_parser.add_argument("--port", type=int, default=os.environ.get("MIHOMO_WEB_PORT", "28743"))
+    subparsers.add_parser("web-token", help="Explicitly show the web UI login token")
+    access_parser = subparsers.add_parser("web-access", help=tr("设置 Web UI 的本机或局域网访问"))
+    access_options = access_parser.add_mutually_exclusive_group(required=True)
+    access_options.add_argument("--lan", action="store_true", help=tr("开放到局域网"))
+    access_options.add_argument("--local", action="store_true", help=tr("仅允许本机访问"))
+    access_parser.add_argument("--no-restart", action="store_true", help=tr("只保存设置，不重启 Web UI"))
     return parser
 
 
@@ -3113,7 +3469,27 @@ def main() -> int:
                 onboard(manager_config)
             return 0
         registry = load_registry(manager_config)
-        if command == "core":
+        if command in {"web", "web-token"}:
+            library = Path("/usr/local/lib/mihomo-console")
+            if library.is_dir():
+                sys.path.append(str(library))
+            try:
+                from web_server import access_token, make_server
+            except ImportError as exc:
+                raise ManagerError("Web UI dependencies/files are missing. Install requirements.txt or update with setup.sh.") from exc
+            if command == "web-token":
+                print(access_token(manager_config))
+            else:
+                server = make_server(manager_config, args.host, args.port)
+                print(f"Mihomo Console: http://{args.host}:{args.port}", flush=True)
+                print("Retrieve the login token with: sudo mihomo-console web-token", flush=True)
+                try:
+                    server.run()
+                finally:
+                    server.close()
+        elif command == "web-access":
+            configure_web_access(registry, lan=args.lan, restart=not args.no_restart)
+        elif command == "core":
             if args.action == "status":
                 info = collect_core_status(registry)
                 for label, key in ((tr("内核版本"), "version"), (tr("内核文件"), "binary"),

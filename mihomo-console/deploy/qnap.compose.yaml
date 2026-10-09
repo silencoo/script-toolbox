@@ -7,10 +7,13 @@ services:
     environment:
       TZ: "Asia/Tokyo"
       MIHOMO_SECRET: ""
+      MIHOMO_WEB_HOST: "0.0.0.0"
+      MIHOMO_WEB_TOKEN: ""
       DASHBOARD_ORIGINS: "http://192.168.1.50:18080"
       UPDATE_START_DELAY_SECONDS: "600"
       UPDATE_INTERVAL_SECONDS: "3600"
     ports:
+      - "127.0.0.1:28743:28743"
       - "17890:7890"
       - "19090:9090"
     volumes:

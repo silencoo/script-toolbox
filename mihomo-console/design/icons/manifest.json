@@ -1,0 +1,72 @@
+{
+  "method": "Built-in ImageGen; deterministic sRGB exports with Pillow",
+  "platform": "Web app; Console Cat selected and integrated",
+  "master_dimensions": [
+    1024,
+    1024
+  ],
+  "proof_sizes": [
+    16,
+    32,
+    68,
+    128
+  ],
+  "concepts": [
+    {
+      "name": "01-switchboard",
+      "title": "Switchboard",
+      "original_dimensions": [
+        1254,
+        1254
+      ],
+      "master": "mihomo-console/design/icons/masters/01-switchboard.png"
+    },
+    {
+      "name": "02-paper-sync",
+      "title": "Paper Sync",
+      "original_dimensions": [
+        1254,
+        1254
+      ],
+      "master": "mihomo-console/design/icons/masters/02-paper-sync.png"
+    },
+    {
+      "name": "03-token-gate",
+      "title": "Token Gate",
+      "original_dimensions": [
+        1254,
+        1254
+      ],
+      "master": "mihomo-console/design/icons/masters/03-token-gate.png"
+    },
+    {
+      "name": "04-console-cat",
+      "title": "Console Cat",
+      "original_dimensions": [
+        1254,
+        1254
+      ],
+      "master": "mihomo-console/design/icons/masters/04-console-cat.png"
+    },
+    {
+      "name": "05-mc-relay",
+      "title": "MC Relay",
+      "original_dimensions": [
+        1254,
+        1254
+      ],
+      "master": "mihomo-console/design/icons/masters/05-mc-relay.png"
+    }
+  ],
+  "selected": {
+    "name": "04-console-cat",
+    "title": "Console Cat",
+    "assets": {
+      "app_icon": "mihomo-console/web/app-icon.png",
+      "favicon": "mihomo-console/web/favicon.ico",
+      "favicon_png": "mihomo-console/web/favicon-32.png",
+      "apple_touch_icon": "mihomo-console/web/apple-touch-icon.png"
+    },
+    "export_method": "Lanczos exports directly from the original approved artwork; sRGB PNGs; no regeneration"
+  }
+}

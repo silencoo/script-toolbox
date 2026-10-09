@@ -10,6 +10,8 @@ on:
       - "mihomo-console/requirements.txt"
       - "mihomo-console/mihomo_console.py"
       - "mihomo-console/container_runtime.py"
+      - "mihomo-console/web_server.py"
+      - "mihomo-console/web/**"
       - ".github/workflows/mihomo-console-image.yml"
 
 permissions:
@@ -28,7 +30,7 @@ jobs:
         run: |
           python -m pip install -r mihomo-console/requirements.txt
           python -m unittest discover -s mihomo-console -v
-          python -m py_compile mihomo-console/container_runtime.py
+          python -m py_compile mihomo-console/container_runtime.py mihomo-console/web_server.py
           NAS_IP=192.0.2.10 docker compose -f mihomo-console/compose.yaml config --quiet
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3

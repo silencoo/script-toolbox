@@ -87,6 +87,18 @@ class LiveCoreTests(unittest.TestCase):
             self.process.terminate()
             self.process.wait(timeout=10)
 
+    def test_proxy_groups_match_live_profile_order(self):
+        self.stop_core()
+        target = Path(self.registry['target_config'])
+        profile = manager.read_yaml_mapping(target)
+        names = [self.group, 'Zulu', 'Alpha', '香港']
+        profile['proxy-groups'] = [{'name': name, 'type': 'select', 'proxies': ['REJECT', 'DIRECT']} for name in names]
+        manager.secure_atomic_write(target, manager.yaml.safe_dump(profile).encode(), mode=0o600)
+        self.start_core()
+        groups = manager.proxy_groups(self.registry)
+        self.assertEqual(list(groups), names + ['GLOBAL'])
+        self.assertEqual(groups[self.group]['all'], ['REJECT', 'DIRECT'])
+
     def test_node_and_mode_selection_survive_restart(self):
         manager.select_proxy(self.registry, self.group, 'REJECT')
         manager.set_proxy_mode(self.registry, 'global')
@@ -95,6 +107,10 @@ class LiveCoreTests(unittest.TestCase):
         self.assertEqual(manager.controller_request(self.registry, '/configs')['mode'], 'global')
         self.stop_core()
         self.start_core()
+        # The controller can publish groups before cached selections are restored.
+        deadline = time.monotonic() + 5
+        while manager.controller_request(self.registry, path)['now'] != 'REJECT' and time.monotonic() < deadline:
+            time.sleep(0.05)
         self.assertEqual(manager.controller_request(self.registry, path)['now'], 'REJECT')
         self.assertEqual(manager.controller_request(self.registry, '/configs')['mode'], 'global')
         self.assertEqual(manager.read_yaml_mapping(Path(self.registry['overlay_file']))['mode'], 'global')

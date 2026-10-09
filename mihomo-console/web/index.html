@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Mihomo Console</title>
+  <link rel="icon" href="/assets/favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M19 11a7 7 0 0 0-12-5l-3 3m16 6-3 3a7 7 0 0 1-12-5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l4-1L20 7a3 3 0 0 0-4-4L4 15v5Z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Zm0 6v5m0 3v1"/></symbol>
+  </svg>
+
+  <main id="login-view" class="login-layout" hidden>
+    <form id="login-form" class="login-form">
+      <h1><img class="brand-icon" src="/assets/app-icon.png" width="40" height="40" alt="">Mihomo Console</h1>
+      <label for="access-token" data-i18n="accessToken">Access token</label>
+      <input id="access-token" name="token" type="password" autocomplete="current-password" required aria-describedby="login-error" spellcheck="false">
+      <p id="login-error" class="field-error" role="alert" hidden></p>
+      <button type="submit" class="button primary" data-i18n="logIn">Log in</button>
+    </form>
+  </main>
+
+  <div id="app-view" class="app-layout" hidden>
+    <header class="app-header">
+      <a class="brand" href="/"><img class="brand-icon" src="/assets/app-icon.png" width="32" height="32" alt=""><span>Mihomo Console</span></a>
+      <span id="service-state" class="service-state"><span class="status-dot"></span><span data-i18n="checkingService">Checking Mihomo…</span></span>
+    </header>
+    <nav class="navigation" role="tablist" aria-label="Main navigation">
+      <button id="tab-subscriptions" role="tab" aria-selected="true" aria-controls="subscriptions-panel" data-page="subscriptions" data-i18n="subscriptions">Subscriptions</button>
+      <button id="tab-settings" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-page="settings" data-i18n="settings">Settings</button>
+    </nav>
+    <main class="app-main">
+      <div id="page-error" class="notice error-notice" role="alert" hidden>
+        <span id="page-error-text"></span><button id="retry" class="button small" data-i18n="retry">Retry</button>
+      </div>
+      <section id="subscriptions-panel" role="tabpanel" aria-labelledby="tab-subscriptions">
+        <div class="page-heading">
+          <h1 data-i18n="subscriptions">Subscriptions</h1>
+          <div class="heading-actions">
+            <button id="refresh" class="icon-button" aria-label="Refresh" data-i18n-label="refresh"><svg class="icon"><use href="#i-refresh"/></svg></button>
+            <button id="update-selected" class="button" data-i18n="updateSelected">Update selected</button>
+            <button id="add-subscription" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span data-i18n="addSubscription">Add subscription</span></button>
+          </div>
+        </div>
+        <div id="operation-notice" class="notice operation-notice" role="status" aria-live="polite" hidden></div>
+        <div class="workspace">
+          <div class="subscription-region">
+            <p id="loading" class="loading-line" role="status" data-i18n="loadingSubscriptions">Loading subscriptions…</p>
+            <div id="empty" class="empty-state" hidden>
+              <svg class="empty-icon"><use href="#i-layers"/></svg>
+              <h2 data-i18n="noSubscriptions">No subscriptions yet</h2>
+              <p data-i18n="emptyHelp">Add a Clash/Mihomo subscription URL to get started.</p>
+              <button id="empty-add" class="button" data-i18n="addSubscription">Add subscription</button>
+            </div>
+            <div id="subscription-list" class="subscription-list"></div>
+          </div>
+          <aside class="activity-region">
+            <section class="schedule-summary">
+              <div class="section-heading"><h2 data-i18n="automaticUpdates">Automatic updates</h2><button id="change-schedule" class="text-button" data-i18n="change">Change</button></div>
+              <p id="schedule-summary" class="schedule-value">—</p>
+              <p id="schedule-source" class="muted"></p>
+              <p id="schedule-next" class="muted"></p>
+            </section>
+            <section class="recent-activity">
+              <h2 data-i18n="recentResults">Recent results</h2>
+              <p id="no-history" class="muted" data-i18n="noResults">No updates yet.</p>
+              <ol id="history-list" class="history-list"></ol>
+            </section>
+          </aside>
+        </div>
+      </section>
+      <section id="settings-panel" role="tabpanel" aria-labelledby="tab-settings" hidden>
+        <div class="page-heading"><h1 data-i18n="settings">Settings</h1></div>
+        <div class="settings-content">
+          <form id="schedule-form" class="settings-section">
+            <h2 data-i18n="automaticUpdates">Automatic updates</h2>
+            <p id="schedule-selected" class="muted"></p>
+            <label class="check-field"><input id="schedule-enabled" type="checkbox"><span data-i18n="enableAutomatic">Enable automatic updates</span></label>
+            <label for="schedule-interval" data-i18n="updateInterval">Update interval</label>
+            <div class="interval-row"><input id="schedule-interval" type="text" value="1h" required maxlength="10" aria-describedby="interval-help"><button type="submit" class="button" data-i18n="saveSchedule">Save schedule</button></div>
+            <p id="interval-help" class="field-help" data-i18n="intervalHelp">For example: 30m, 6h, or 1d. Between 1 minute and 30 days.</p>
+            <p id="schedule-error" class="field-error" role="alert" hidden></p>
+          </form>
+          <section class="settings-section">
+            <h2 data-i18n="appearance">Appearance</h2>
+            <div class="preference-grid">
+              <div><label for="theme" data-i18n="theme">Theme</label><select id="theme"><option value="system" data-i18n="system">System</option><option value="light" data-i18n="light">Light</option><option value="dark" data-i18n="dark">Dark</option></select></div>
+              <div><label for="language" data-i18n="language">Language</label><select id="language"><option value="en">English</option><option value="zh">简体中文</option></select></div>
+            </div>
+          </section>
+          <section class="settings-section"><h2 data-i18n="session">Session</h2><button id="logout" class="button" data-i18n="logOut">Log out</button></section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="subscription-dialog" aria-labelledby="subscription-dialog-title">
+    <form id="subscription-form" class="dialog-form">
+      <div class="dialog-heading"><h2 id="subscription-dialog-title" data-i18n="addSubscription">Add subscription</h2><button type="button" class="icon-button dialog-close" aria-label="Close" data-i18n-label="close"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="form-fields">
+        <label for="subscription-name" data-i18n="name">Name</label><input id="subscription-name" type="text" required maxlength="120" autocomplete="off">
+        <label for="subscription-url" data-i18n="subscriptionUrl">Subscription URL</label><input id="subscription-url" type="password" required maxlength="8192" autocomplete="off" spellcheck="false" aria-describedby="url-help">
+        <p id="url-help" class="field-help" data-i18n="urlHelp">Use a URL that returns a complete Clash/Mihomo YAML configuration.</p>
+        <details class="advanced-fields"><summary data-i18n="downloadOptions">Download options</summary>
+          <label for="user-agent" data-i18n="userAgent">User-Agent</label><input id="user-agent" type="text" value="clash.meta" maxlength="200" autocomplete="off">
+          <label for="download-proxy" data-i18n="downloadProxy">Download proxy (optional)</label><input id="download-proxy" type="password" maxlength="8192" autocomplete="off" spellcheck="false">
+          <label id="clear-proxy-field" class="check-field" hidden><input id="clear-proxy" type="checkbox"><span data-i18n="removeDownloadProxy">Remove saved download proxy</span></label>
+        </details>
+        <p id="subscription-error" class="field-error" role="alert" hidden></p>
+      </div>
+      <div class="dialog-actions"><button type="button" class="button dialog-close" data-i18n="cancel">Cancel</button><button type="submit" name="save" value="only" class="button" data-i18n="saveOnly">Save only</button><button type="submit" name="save" value="apply" class="button primary" data-i18n="saveAndApply">Save & apply</button></div>
+    </form>
+  </dialog>
+  <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
+    <form id="remove-form" class="dialog-form">
+      <div class="dialog-heading"><h2 id="remove-title" data-i18n="deleteSubscription">Delete subscription</h2><button type="button" class="icon-button dialog-close" aria-label="Close" data-i18n-label="close"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="form-fields"><p id="remove-description"></p><p id="remove-error" class="field-error" role="alert" hidden></p></div>
+      <div class="dialog-actions"><button type="button" class="button dialog-close" data-i18n="cancel">Cancel</button><button type="submit" class="button destructive" data-i18n="delete">Delete</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

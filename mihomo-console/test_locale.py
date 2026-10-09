@@ -200,7 +200,7 @@ class LocaleTests(unittest.TestCase):
 
     def test_english_lock_contention_does_not_write_failure_history(self):
         manager.set_language('en_US')
-        with (mock.patch.object(manager, '_update_profile_impl',
+        with (mock.patch.object(manager, 'operation_lock',
                                 side_effect=manager.ConcurrentUpdateError(manager.tr('另一个更新任务正在运行'))),
               mock.patch.object(manager, 'load_registry') as load):
             with self.assertRaisesRegex(manager.ConcurrentUpdateError, 'Another update'):

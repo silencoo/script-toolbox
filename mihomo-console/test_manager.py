@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import gzip
+import io
 import os
 import subprocess
 import tempfile
@@ -25,6 +27,41 @@ class ManagerTests(unittest.TestCase):
     @staticmethod
     def command_result(returncode=0, stdout=""):
         return subprocess.CompletedProcess([], returncode, stdout=stdout)
+
+    def download_gzip_fixture(self, compressed, limit=1024):
+        response = io.BytesIO(compressed)
+        response.headers = {
+            "Content-Encoding": "gzip",
+            "Content-Length": str(len(compressed)),
+        }
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with (
+            mock.patch.object(manager, "MAX_DOWNLOAD_BYTES", limit),
+            mock.patch.object(manager.urllib.request, "build_opener", return_value=opener),
+        ):
+            return manager.download_profile({"url": "https://fixture.invalid/sub"})
+
+    def test_download_accepts_gzip_at_expanded_limit(self):
+        payload = b"x" * 1024
+        self.assertEqual(self.download_gzip_fixture(gzip.compress(payload)), payload)
+
+    def test_download_rejects_gzip_expansion_over_limit(self):
+        compressed = gzip.compress(b"x" * 8192)
+        self.assertLess(len(compressed), 1024)
+        with self.assertRaisesRegex(manager.ManagerError, "20 MiB"):
+            self.download_gzip_fixture(compressed)
+
+    def test_download_limits_concatenated_gzip_members(self):
+        compressed = gzip.compress(b"x" * 600) + gzip.compress(b"y" * 600)
+        with self.assertRaisesRegex(manager.ManagerError, "20 MiB"):
+            self.download_gzip_fixture(compressed)
+
+    def test_download_rejects_malformed_or_truncated_gzip(self):
+        for compressed in [b"invalid gzip", gzip.compress(b"fixture")[:-4]]:
+            with self.subTest(compressed=compressed):
+                with self.assertRaisesRegex(manager.ManagerError, "无效的 gzip"):
+                    self.download_gzip_fixture(compressed)
 
     def test_overlay_replaces_remote_controller_and_secret(self):
         remote = b"""
@@ -463,6 +500,39 @@ proxies:
             self.assertEqual(dropin.stat().st_mode & 0o777, 0o644)
             self.assertEqual((root / "backups").stat().st_mode & 0o777, 0o700)
             command.assert_called_once_with(["systemctl", "daemon-reload"], timeout=60)
+
+    def test_installed_web_sandbox_follows_custom_paths_and_allows_timer_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit_dir = root / "units"
+            unit_dir.mkdir()
+            (unit_dir / manager.DEFAULT_WEB_SERVICE).write_text("[Service]\n")
+            home = root / "home"
+            home.mkdir()
+            registry = {
+                **manager.DEFAULTS,
+                "target_config": str(root / "first" / "config.yaml"),
+                "mihomo_home": str(home),
+                "overlay_file": str(root / "overlay.yaml"),
+                "backup_dir": str(root / "backups"),
+                "lock_file": str(root / "locks" / "manager.lock"),
+            }
+            dropin = unit_dir / (manager.DEFAULT_UPDATER_SERVICE + ".d") / "paths.conf"
+            web_dropin = unit_dir / (manager.DEFAULT_WEB_SERVICE + ".d") / "paths.conf"
+            with mock.patch.object(manager.os, "geteuid", return_value=0), mock.patch.object(
+                manager, "command_output", return_value=self.command_result()
+            ):
+                manager.install_systemd_sandbox(root / "manager.json", registry, dropin=dropin)
+                self.assertIn(manager.quote_systemd_path(root / "first"), web_dropin.read_text())
+                registry["target_config"] = str(root / "second" / "config.yaml")
+                manager.install_systemd_sandbox(root / "manager.json", registry, dropin=dropin)
+            rendered = web_dropin.read_text()
+            timer_dir = unit_dir / (manager.DEFAULT_UPDATER_TIMER + ".d")
+            self.assertTrue(timer_dir.is_dir())
+            self.assertIn(manager.quote_systemd_path(timer_dir), rendered)
+            self.assertIn(manager.quote_systemd_path(root / "second"), rendered)
+            self.assertNotIn(manager.quote_systemd_path(root / "first"), rendered)
+            self.assertEqual(web_dropin.stat().st_mode & 0o777, 0o644)
 
     def test_history_is_bounded_and_updates_subscription_status(self):
         with tempfile.TemporaryDirectory() as directory:

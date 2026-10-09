@@ -358,6 +358,13 @@ class ContainerRuntime:
         signal.signal(signal.SIGINT, self.request_stop)
         signal.signal(signal.SIGUSR1, self.request_restart)
 
+        web = None
+        if env_bool("MIHOMO_WEB_ENABLED", True):
+            from web_server import make_server
+            web = make_server(MANAGER_CONFIG, os.environ.get("MIHOMO_WEB_HOST", "127.0.0.1"),
+                              env_int("MIHOMO_WEB_PORT", 28743, minimum=1))
+            threading.Thread(target=web.run, name="web-ui", daemon=True).start()
+            print("Mihomo Console web UI is ready. Retrieve its token with: mihomo-console web-token", flush=True)
         threading.Thread(target=self.update_loop, name="updater", daemon=True).start()
         restart_delay = 1.0
         try:
@@ -386,6 +393,8 @@ class ContainerRuntime:
                     continue
                 self.stop_event.wait(0.2)
         finally:
+            if web is not None:
+                web.close()
             self.write_state(mihomo_state="stopping", next_update=None)
             self.stop_mihomo()
             self.write_state(mihomo_pid=None, mihomo_state="stopped")
@@ -402,7 +411,11 @@ def healthcheck() -> int:
             return 1
         port = env_int("CONTROLLER_PORT", 9090, minimum=1)
         with socket.create_connection(("127.0.0.1", port), timeout=2):
-            return 0
+            pass
+        if env_bool("MIHOMO_WEB_ENABLED", True):
+            with socket.create_connection(("127.0.0.1", env_int("MIHOMO_WEB_PORT", 28743, minimum=1)), timeout=2):
+                pass
+        return 0
     except (OSError, ValueError, json.JSONDecodeError, manager.ManagerError):
         return 1
 

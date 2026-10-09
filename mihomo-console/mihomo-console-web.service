@@ -1,0 +1,31 @@
+[Unit]
+Description=Mihomo Console subscription Web UI
+Documentation=file:/usr/local/share/doc/mihomo-console/README.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/mihomo/subscription-manager.json
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MIHOMO_WEB_HOST=127.0.0.1
+Environment=MIHOMO_WEB_PORT=28743
+EnvironmentFile=-/etc/default/mihomo-console-web
+EnvironmentFile=-/etc/default/mihomo-console-web-access
+ExecStart=/usr/local/lib/mihomo-console/venv/bin/python /usr/local/lib/mihomo-console/web_server.py --manager-config /etc/mihomo/subscription-manager.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/etc/mihomo /run/lock /etc/systemd/system/mihomo-subscription-update.timer.d
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

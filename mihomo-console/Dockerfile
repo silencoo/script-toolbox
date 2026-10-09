@@ -18,13 +18,15 @@ RUN install -d -m 0755 /usr/local/lib/mihomo-console
 COPY --chmod=0755 mihomo_console.py /usr/local/sbin/mihomo-console
 COPY --chmod=0755 container_runtime.py /usr/local/lib/mihomo-console/container_runtime.py
 COPY mihomo_console.py /usr/local/lib/mihomo-console/mihomo_console.py
+COPY web_server.py /usr/local/lib/mihomo-console/web_server.py
+COPY web/ /usr/local/lib/mihomo-console/web/
 RUN sed -i 's/\r$//' \
     /usr/local/sbin/mihomo-console \
     /usr/local/lib/mihomo-console/container_runtime.py \
     /usr/local/lib/mihomo-console/mihomo_console.py
 
 VOLUME ["/data"]
-EXPOSE 7890 9090
+EXPOSE 7890 9090 28743
 
 ENV MIHOMO_MANAGER_CONFIG=/data/manager/subscription-manager.json
 

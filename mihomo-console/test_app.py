@@ -318,6 +318,44 @@ class AppTests(unittest.TestCase):
         self.assertNotIn('test-secret', str(error.exception))
         self.assertNotIn('secret.invalid', str(error.exception))
 
+    def test_proxy_groups_preserve_profile_and_node_order_in_tui_and_cli(self):
+        names = ['Proxies', '香港', 'Auto', 'AI', 'GLOBAL']
+        entries = {name: {'type': 'Selector', 'all': ['node-z', 'node-a'], 'now': 'node-z'} for name in sorted(names)}
+        entries['GLOBAL']['all'] = ['DIRECT', 'node-z', *names[:-1]]
+        entries['node-z'] = {'type': 'Direct'}
+        with mock.patch.object(manager, 'controller_request', return_value={'proxies': entries}) as request:
+            groups = manager.proxy_groups(self.registry)
+            request.assert_called_once_with(self.registry, '/proxies')
+            self.assertEqual(list(groups), names)
+            self.assertEqual(groups['Proxies']['all'], ['node-z', 'node-a'])
+            with mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+                manager.print_proxy_groups(self.registry)
+            self.assertEqual([line.split(' [')[0] for line in output.getvalue().splitlines() if not line.startswith(' ')], names)
+        console = make_console(30, 120)
+        console.page = 6
+        console.groups = groups
+        console.draw()
+        text = console.screen.text
+        self.assertEqual(sorted(names, key=lambda name: text.index(name + ' [')), names)
+        console.handle_proxy_key(console.curses.KEY_DOWN)
+        console.handle_proxy_key(10)
+        self.assertEqual(console.open_group, '香港')
+        self.assertEqual(console.node_index, 0)
+
+    def test_proxy_groups_reject_invalid_responses(self):
+        for value in (None, [], {'test': {'all': [42]}}, {'GLOBAL': {'all': ['DIRECT', 42]}}):
+            with self.subTest(value=value), mock.patch.object(manager, 'controller_request', return_value={'proxies': value}):
+                with self.assertRaises(manager.ManagerError):
+                    manager.proxy_groups(self.registry)
+
+    def test_proxy_groups_keep_extra_groups_and_support_missing_global(self):
+        entries = {'AI': {'all': ['DIRECT']}, 'Extra': {'all': []},
+                   'GLOBAL': {'all': ['DIRECT', 'Proxies', 'AI', 'Proxies']}, 'Proxies': {'all': ['REJECT', 'DIRECT']}}
+        with mock.patch.object(manager, 'controller_request', return_value={'proxies': entries}):
+            self.assertEqual(list(manager.proxy_groups(self.registry)), ['Proxies', 'AI', 'Extra', 'GLOBAL'])
+            entries.pop('GLOBAL')
+            self.assertEqual(list(manager.proxy_groups(self.registry)), ['AI', 'Extra', 'Proxies'])
+
     def test_select_proxy_checks_group_type_membership_and_encodes_path(self):
         group = '日本 / test?'
         groups = {group: {'type': 'Selector', 'all': ['DIRECT', '日本 01']}}
