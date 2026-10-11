@@ -33,9 +33,15 @@ for resource options.
 ## Scope of the OpenAI additions
 
 The feature/asset domain `oaistatsig.com`, exact `cdn.openaimerge.com` host,
-Cloudflare challenge endpoint and exact WorkOS login/asset endpoints are taken
+and exact WorkOS login/asset endpoints are taken
 from [OpenAI's network recommendations](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps).
 They now use the same canonical source in both clients.
+
+The shared `challenges.cloudflare.com` endpoint is deliberately excluded from
+OpenAI routing. Its verification requests follow the profile's remaining rules,
+including when initiated by ChatGPT, so unrelated websites do not inherit the
+AI exit merely because they use Cloudflare verification. OpenAI's own domains
+and the remaining listed dependencies continue to use `AI`.
 
 Shared service providers remain **exact-host exceptions**, not catch-all suffixes
 for `cloudflare.com`, `workos.com`, `workoscdn.com` or `imgix.net`. Requests from

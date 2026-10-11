@@ -27,7 +27,6 @@ function firstHostRule(rules, host) {
 // Exact shared endpoints from OpenAI's network recommendations. A hostname
 // match necessarily applies to other sites using that same endpoint too.
 const sharedEndpoints = [
-  "challenges.cloudflare.com",
   "cdn.workos.com",
   "forwarder.workos.com",
   "frontend-apps-multi-region.workos.com",
@@ -94,6 +93,7 @@ for (const { name, source, hosts } of services) {
 
   test(`${name}: excludes unrelated tenants and lookalike hostnames`, () => {
     for (const host of [
+      "challenges.cloudflare.com", "child.challenges.cloudflare.com",
       "unrelated.cloudflare.com", "unrelated.cloudflare.net",
       "unrelated.azureedge.net", "unrelated.azurefd.net",
       "unrelated.blob.core.windows.net", "unrelated.imgix.net",
@@ -162,7 +162,7 @@ test("AI hosts win modeled remote overlaps while unrelated CDN traffic keeps its
         assert.equal(firstHostRule(orderedRules, host)?.[2], "AI", `${host}: ${fallbackPolicy}`);
       }
     }
-    for (const host of ["unrelated.cloudflare.com", "unrelated.workos.com",
+    for (const host of ["challenges.cloudflare.com", "unrelated.cloudflare.com", "unrelated.workos.com",
       "unrelated.azureedge.net", "unrelated.imgix.net"]) {
       assert.equal(firstHostRule(orderedRules, host)?.[2], fallbackPolicy, host);
     }
