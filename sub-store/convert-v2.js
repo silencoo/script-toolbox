@@ -1458,6 +1458,9 @@ function main(e) {
     "log-level": "info",
     ipv6: ipv6Enabled,
     "external-controller": formatHostPort(controllerHost, controllerPort),
+    tun: {
+      "strict-route": true,
+    },
     profile: {
       "store-selected": true,
       "store-fake-ip": enhancedMode === "fake-ip",

@@ -39,6 +39,9 @@ with `full=true`). `controllerhost`, `controllerport`, and `controllersecret`
 can override it. A non-loopback `controllerhost` is accepted only when
 `controllersecret` is non-empty.
 
+Generated profiles include `tun.strict-route: true`. Enable TUN mode in your
+client to use this setting.
+
 Country groups use URL tests by default. Pass `loadbalance=true` to use
 health-checked load balancing and optionally set `loadbalancestrategy` to
 `consistent-hashing`, `round-robin`, or `sticky-sessions`. URL-test intervals
