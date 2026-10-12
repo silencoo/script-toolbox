@@ -1,0 +1,6 @@
+# Quantumult X hostname fallback; keep its generated resource last.
+# A hostname match selects Final without an upstream lookup for IP evaluation.
+# Literal IP requests remain eligible for the template's IP/GeoIP rules.
+# Do not copy this blanket rule into filter_local ahead of remote service lists.
+
+DOMAIN-KEYWORD,.

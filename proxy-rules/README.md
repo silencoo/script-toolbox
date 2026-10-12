@@ -16,9 +16,11 @@ expensive residential node.
   plus exact flags and proxy-client icons from the general catalog.
 - Mihomo/Clash profile generation remains in `../sub-store/convert-v2.js` instead
   of duplicating a second client implementation here.
-- The Quantumult X template binds `*.placudoshai.fun` to the provider's
-  `https://jeeyio.com/api/dns-query` endpoint. The domain-scoped `doh-server`
-  form keeps the template's normal DNS servers in use for every other domain.
+- The Quantumult X template encrypts local/direct DNS with AliDNS over HTTPS
+  and keeps the provider's `*.placudoshai.fun` / `jeeyio.com` DoH exception.
+  Chinese domains use `ChinaMaxNoIP` after the specific service resources;
+  the generated `HostnameFallback.list` is the last enabled remote resource
+  so unmatched hostnames can use `Final` before local IP-based DNS evaluation.
 - GOODBYEADS domain and allow outputs are merged with Cats-Team AdRules' native
   Quantumult X output by `scripts/update-ads.mjs`. The result is normalized,
   deduplicated, and filtered so GOODBYEADS allow rules take precedence over
@@ -153,6 +155,89 @@ one, to avoid duplicate rules and unnecessary memory use.
 The scheduled workflow runs every 12 hours and commits only changed generated
 outputs. It deliberately avoids GOODBYEADS' force-push and workflow-history
 deletion behavior.
+
+## DNS and China routing
+
+The template balances mainland-site access with remote resolution for proxy
+traffic. It uses [AliDNS DoH](https://alidns.com/) for local/direct lookups,
+[ChinaMaxNoIP](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/QuantumultX/ChinaMaxNoIP/README.md)
+for Chinese service domains (including `.com`), and a final hostname rule for
+unmatched domains. The provider's node-domain DoH exception stays scoped.
+
+```ini
+[dns]
+no-ipv6
+no-system
+doh-server=https://223.5.5.5/dns-query
+doh-server=/*.placudoshai.fun/https://jeeyio.com/api/dns-query
+address=/raw.githubusercontent.com/185.199.110.133
+```
+
+`no-system` alone does not encrypt DNS or put local resolution through the
+proxy. Do not retain the previous plain `server=223.5.5.5`,
+`server=114.114.114.114`, or `server=119.29.29.29` entries. The global DoH
+endpoint uses an IP address so resolving that endpoint does not require a
+separate DNS bootstrap query. DoH protects transport to the resolver; the
+resolver still sees the names it is asked to resolve.
+
+### Resource ordering
+
+Keep local hostname overrides and the existing service resources. Load the
+broad Chinese-domain resource after specific service resources, then load the
+hostname fallback **last** among enabled `[filter_remote]` entries:
+
+```ini
+https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/ChinaMaxNoIP/ChinaMaxNoIP.list, tag=China Sites, force-policy=China Sites, update-interval=172800, opt-parser=false, enabled=true
+https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/HostnameFallback.list, tag=Hostname Fallback, update-interval=172800, opt-parser=false, enabled=true
+```
+
+Select `direct` in `China Sites` and a proxy node/policy in `Final`. The fallback
+contains `HOST-KEYWORD,.,Final`; its source is `sources/hostname-fallback.rules`.
+The [official QuanX sample](https://github.com/crossutility/Quantumult-X/blob/master/sample.conf)
+documents this hostname-match approach to skipping DNS for unmatched hosts.
+Keep the catch-all in its final remote resource: adding it to `[filter_local]`
+can shadow the remote AI, ad and China rules, as reported in
+[QuanX issue #251](https://github.com/crossutility/Quantumult-X/issues/251).
+No `inserted-resource` priority changes are needed by this template.
+
+The IP/GeoIP rules remain available for traffic without a hostname match,
+including literal IP connections. Hostnames selected by the fallback no longer
+need local resolution solely to try those IP rules. This means a Chinese site
+missing from the domain list uses `Final`; add an exact host/suffix override to
+`China Sites` when appropriate. Single-label hosts and domains explicitly in
+`dns_exclusion_list` need separate inspection. Keep that exclusion list limited
+to required carrier/banking compatibility exceptions.
+
+### Apply and verify
+
+Update an existing private profile selectively: replace its DNS defaults,
+replace the broad `ASN.China.list` entry with the domain resource near the end,
+and append `HostnameFallback.list` last. Keep subscription credentials, policy
+selections, personal overrides and task entries. Moving resources is part of
+migration; merely refreshing downloaded rules does not change their order.
+The generated fallback file must be published at its `main`-branch URL before
+applying that URL to a live profile. Editing this clone alone does not publish
+it or modify a running QuanX configuration.
+
+After saving the profile, refresh both resources, confirm they load without
+errors, and reconnect QuanX. Check representative Chinese `.cn` and `.com`
+services (for example Baidu, Taobao and WeChat), then AI/media services and an
+unlisted overseas hostname. Confirm their selected policies in QuanX Activity.
+Run an extended DNS test through the proxy and compare its web exit with the
+resolver providers. A proxy node can itself use Chinese DNS; the test reports
+resolver egress, not which device sent the first query or whether it was DoH.
+
+Chinese resolvers are expected for intentionally direct Chinese traffic.
+Overseas hostname traffic should not need local mainland resolution for rule
+classification. The template is not a guarantee that every app/query stays
+inside the VPN: carrier exclusions, browser/app DNS, resolver failures and the
+selected proxy server's DNS still require live verification. Do not replace
+the local default blindly with Cloudflare DoH when that endpoint is reachable
+only through your proxy.
+
+`npm run check` validates encrypted defaults, resource ordering and generated
+fallback content offline. It does not emulate QuanX's tunnel/DNS engine or
+certify a live leak test.
 
 ## Upstream research
 

@@ -70,6 +70,16 @@ const ruleSets = [
       "# MODIFIED: 2026-08-05; normalized client-neutral source",
     ],
   },
+  {
+    source: "hostname-fallback.rules",
+    name: "Hostname Fallback",
+    file: "HostnameFallback",
+    policy: "Final",
+    notices: [
+      "# LOAD: last enabled filter_remote resource, after all domain/service lists",
+      "# PURPOSE: select the hostname route before IP rules require local DNS",
+    ],
+  },
 ];
 
 const qxType = new Map([

@@ -1,0 +1,6 @@
+# NAME: Hostname Fallback
+# GENERATED: scripts/build.mjs; edit sources/*.rules instead
+# LOAD: last enabled filter_remote resource, after all domain/service lists
+# PURPOSE: select the hostname route before IP rules require local DNS
+# TOTAL: 1
+HOST-KEYWORD,.,Final

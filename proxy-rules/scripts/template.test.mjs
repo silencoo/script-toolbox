@@ -52,3 +52,54 @@ test("APNs rules cover push hosts and both IP families without broad Apple routi
   assert.ok(!rules.some((line) => line.startsWith("IP-CIDR6,")));
   assert.ok(!rules.includes("IP-CIDR,17.0.0.0/8,APNs"));
 });
+
+const activeLines = (text) => text.split(/\r?\n/).map((line) => line.trim())
+  .filter((line) => line && !/^(?:#|;|\/\/)/.test(line));
+const section = (name) => template.split(`[${name}]`)[1].split(/^\[/m)[0];
+const remoteResources = activeLines(section("filter_remote")).map((line) => {
+  const [url, ...fields] = line.split(",").map((field) => field.trim());
+  const options = Object.fromEntries(fields.map((field) => {
+    const index = field.indexOf("=");
+    return [field.slice(0, index), field.slice(index + 1)];
+  }));
+  return { url, options };
+}).filter(({ options }) => options.enabled !== "false");
+
+test("local DNS uses encrypted defaults without an ordinary plaintext fallback", () => {
+  const dns = activeLines(section("dns"));
+  assert.ok(dns.includes("no-system"));
+  assert.ok(dns.includes("no-ipv6"));
+  assert.ok(!dns.some((line) => /^server\s*=/.test(line)), "No plaintext DNS upstreams");
+  assert.deepEqual(dns.filter((line) => /^doh-server=https:/.test(line)),
+    ["doh-server=https://223.5.5.5/dns-query"]);
+});
+
+test("China domains follow service rules and the hostname fallback is the last enabled remote", () => {
+  const china = remoteResources.at(-2);
+  assert.equal(china.options.tag, "China Sites");
+  assert.equal(china.url,
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/ChinaMaxNoIP/ChinaMaxNoIP.list");
+  assert.equal(china.options["force-policy"], "China Sites");
+  assert.equal(china.options["opt-parser"], "false");
+  assert.ok(!remoteResources.some(({ url }) => url.includes("ASN.China.list")));
+
+  const fallback = remoteResources.at(-1);
+  assert.equal(fallback.options.tag, "Hostname Fallback");
+  assert.equal(fallback.url,
+    "https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/HostnameFallback.list");
+  assert.equal(fallback.options["opt-parser"], "false");
+  assert.equal(fallback.options["force-policy"], undefined);
+  assert.equal(remoteResources.filter(({ options }) => options.tag === "Hostname Fallback").length, 1);
+  assert.ok(remoteResources.every(({ options }) => options["inserted-resource"] !== "true"),
+    "Preserve local hostname override priority");
+  assert.ok(!activeLines(section("filter_local")).some((line) =>
+    /^host-keyword\s*,\s*\.\s*,/i.test(line)), "No local catch-all shadowing service resources");
+});
+
+test("generated hostname fallback selects Final without adding an IP or final catch-all", async () => {
+  const output = await readFile(new URL("../rules/quantumultx/HostnameFallback.list", import.meta.url), "utf8");
+  assert.deepEqual(activeLines(output), ["HOST-KEYWORD,.,Final"]);
+  assert.ok(activeLines(section("filter_local")).includes("geoip, cn, direct"),
+    "Keep the literal-IP regional fallback");
+  assert.ok(activeLines(section("filter_local")).includes("final, Final"));
+});
