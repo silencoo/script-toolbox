@@ -499,6 +499,10 @@
 		"message": "déplacer dans l'élément head les styles trouvés en dehors de celui-ci",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "appliquer une feuille de style personnalisée avant d'enregistrer la page",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "supprimer les styles inutilisés",
 		"description": "Options page label: 'remove unused styles'"
@@ -980,6 +984,10 @@
 	"topPanelError": {
 		"message": "Erreur SingleFile : ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Copier les détails",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Ouvrir image...",
