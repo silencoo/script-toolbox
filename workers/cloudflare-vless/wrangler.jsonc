@@ -4,14 +4,16 @@
   "main": "worker.js",
   "compatibility_date": "2026-07-20",
   "compatibility_flags": ["nodejs_compat"],
+  // The request path is the full VLESS URL, including its UUID credential.
+  // Invocation logs and traces record request URLs, so both stay disabled.
   "observability": {
     "enabled": true,
     "logs": {
-      "head_sampling_rate": 1
+      "head_sampling_rate": 1,
+      "invocation_logs": false
     },
     "traces": {
-      "enabled": true,
-      "head_sampling_rate": 0.01
+      "enabled": false
     }
   }
 }

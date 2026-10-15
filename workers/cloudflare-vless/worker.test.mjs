@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import worker from "./worker.js";
@@ -80,4 +81,12 @@ test("ignores malformed sources and ranks valid unique addresses by speed", asyn
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("keeps credential-bearing request URLs out of observability data", () => {
+  const source = readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+
+  assert.equal(config.observability.logs.invocation_logs, false);
+  assert.equal(config.observability.traces.enabled, false);
 });

@@ -19,10 +19,19 @@ A Userscript that adds "Extract & Preview" capabilities to RAR file links on any
 
 - **Core**: Powered by [libunrar-js](https://github.com/wcchoi/libunrar-js).
 - **Isolation**: Runs the extraction adapter inside a generated Web Worker.
-- **Caching**: Downloads and caches the upstream `libunrar.js` and memory file.
 - **Security boundary**: Archive processing stays in the browser, but the
-  userscript fetches executable code from the pinned upstream URL at runtime.
-  Review the configured source before installation.
+  userscript downloads `libunrar.js` and its memory file at runtime. Both are
+  pinned to an exact commit of
+  [silencoo/libunrar-js](https://github.com/silencoo/libunrar-js), whose files
+  match upstream byte for byte, and are refused unless their SHA-256 digests
+  match the values in `LIB_SOURCES`. Plain-HTTP pages, which lack
+  `crypto.subtle`, use a built-in SHA-256 implementation.
+
+Run the integrity tests with:
+
+```sh
+node --test userscripts/rar-attachment-extractor/tests/*.test.mjs
+```
 
 ## Configuration
 

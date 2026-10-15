@@ -121,6 +121,12 @@ node --check userscripts/gemini-toolkit/vendor/gargantua-core.js
 node --test userscripts/gemini-toolkit/tests/*.test.cjs
 ```
 
+The `@require` for `vendor/gargantua-core.js` is pinned to a commit and a
+SHA-256 digest, so userscript managers refuse a changed file. After updating
+the vendored core, push it, then point the `@require` at that commit and its
+new digest (`shasum -a 256 vendor/gargantua-core.js`). The metadata test fails
+until the digest matches.
+
 ## License
 
 Original repository code is covered by [MIT](../../LICENSE). The vendored

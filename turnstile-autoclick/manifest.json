@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cfpass CDP Extension",
-  "version": "1.0",
+  "version": "1.1",
   "permissions": [
     "debugger"
   ],
@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://challenges.cloudflare.com/*"
       ],
       "js": [
         "injected.js"
@@ -25,7 +25,7 @@
     },
     {
       "matches": [
-        "<all_urls>"
+        "https://challenges.cloudflare.com/*"
       ],
       "js": [
         "content.js"

@@ -206,3 +206,13 @@ test('帖子页等待真实内容渲染后再次校准样式', () => {
     );
     assert.match(source, /\['post style readiness', this\.syncPostPageStylesWhenReady\]/);
 });
+
+test('外部 @require/@resource 均带 SHA-256 完整性校验', () => {
+    const header = source.split('// ==/UserScript==')[0];
+    const externals = [...header.matchAll(/^\/\/ @(?:require|resource)\s+(?:\S+\s+)?(https:\/\/\S+)$/gmu)]
+        .map(match => match[1]);
+    assert.equal(externals.length, 3);
+    for (const url of externals) {
+        assert.match(url, /#sha256=[0-9a-f]{64}$/u, url);
+    }
+});

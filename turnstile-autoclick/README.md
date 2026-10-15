@@ -19,3 +19,16 @@
 5. 使用与验证
    - 安装后，打开目标网页（例如包含 Cloudflare/Turnstile 验证的页面），扩展会在合适的 iframe 内注入脚本并按逻辑工作。
    - 如需调试，可查看扩展页面中的背景页（background）日志或打开 DevTools 查看注入脚本的输出。
+
+## 安全限制
+
+- 内容脚本只注入 `https://challenges.cloudflare.com/*` 的 iframe，不再注入所有网站。
+- 后台只接受来自该主机名子框架的点击请求，且点击比例必须在 0–1 之间。
+- 按发起请求的框架实际加载的 URL（而非页面可改写的 `src` 属性）定位 Turnstile 框架，再用 `DOM.getFrameOwner` 找到对应 iframe；本标签页中必须恰好有一个匹配，否则不点击。
+- 点击前用 `DOM.getNodeForLocation` 检查目标点（按页面滚动偏移换算为文档坐标）；若被页面上的其他元素遮挡，则拒绝点击。
+
+测试：
+
+```sh
+node --test turnstile-autoclick/tests/*.test.mjs
+```

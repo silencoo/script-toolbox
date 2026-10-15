@@ -36,6 +36,10 @@ jobs:
         run: node --test userscripts/gemini-toolkit/tests/*.test.cjs
       - name: Test NodeSeek enhancer
         run: node --test userscripts/nodeseek/tests/*.test.mjs
+      - name: Test RAR attachment extractor integrity checks
+        run: node --test userscripts/rar-attachment-extractor/tests/*.test.mjs
+      - name: Test Turnstile autoclick click guards
+        run: node --test turnstile-autoclick/tests/*.test.mjs
       - name: Validate SHT Helper
         run: |
           npm ci

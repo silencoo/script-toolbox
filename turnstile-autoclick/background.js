@@ -1,5 +1,21 @@
 // background.js - CDP-based Turnstile detection and clicking
 const DEBUGGER_VERSION = "1.3";
+const TURNSTILE_HOST = "challenges.cloudflare.com";
+
+// Compare the parsed hostname; a substring check would also accept URLs such
+// as https://evil.example/?challenges.cloudflare.com
+function isTurnstileUrl(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === "https:" && url.hostname === TURNSTILE_HOST;
+    } catch {
+        return false;
+    }
+}
+
+function isRatio(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
 
 async function attachDebuggerWithRetry(tabId, maxRetries = 3, retryDelay = 500) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -36,6 +52,13 @@ async function attachDebuggerWithRetry(tabId, maxRetries = 3, retryDelay = 500) 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Ensure this is our action and it contains the required data
     if (request.action === "detectAndClickTurnstile" && request.payload) {
+        // Only a Turnstile subframe may ask for a click, and only inside its own box
+        const { xRatio, yRatio } = request.payload;
+        if (!sender.tab || !(sender.frameId > 0) || !isTurnstileUrl(sender.url) ||
+            !isRatio(xRatio) || !isRatio(yRatio)) {
+            sendResponse({ success: false, error: "Rejected click request" });
+            return;
+        }
         const tabId = sender.tab.id;
         (async () => {
             try {
@@ -47,7 +70,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 await send("Runtime.enable"); // Suggested: Runtime.* may be used later
                 await send("DOM.enable");     // Critical: enable the DOM domain
                 // 2. If attachment is successful, run your main logic
-                const clickResult = await findIframeAndClickAtRatio(tabId, request.payload);
+                const clickResult = await findIframeAndClickAtRatio(tabId, { xRatio, yRatio }, sender.url);
                 sendResponse(clickResult);
 
             } catch (error) {
@@ -64,45 +87,76 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
-async function findIframeAndClickAtRatio(tabId, payload) {
+// Find the <iframe> element hosting the frame that sent the request. Its src
+// attribute is page-controlled (srcdoc, or navigating the frame elsewhere, leaves
+// src unchanged), so match frames by committed URL and map back to their owner.
+async function findRequestingFrame(tabId, frameUrl) {
+    const send = (m, p) => chrome.debugger.sendCommand({ tabId }, m, p);
+    const frameIds = new Set();
+    // Turnstile sends Origin-Agent-Cluster, so Chrome normally runs it out of
+    // process (even on cloudflare.com sites) and lists it only as a target
+    for (const target of await chrome.debugger.getTargets()) {
+        if (target.url === frameUrl) frameIds.add(target.id);
+    }
+    // With site isolation off it stays in the page's frame tree instead
+    const { frameTree } = await send("Page.getFrameTree");
+    const pending = [frameTree];
+    while (pending.length) {
+        const { frame, childFrames = [] } = pending.pop();
+        if (frame.url === frameUrl) frameIds.add(frame.id);
+        pending.push(...childFrames);
+    }
+
+    const owners = [];
+    for (const frameId of frameIds) {
+        try {
+            const { backendNodeId } = await send("DOM.getFrameOwner", { frameId });
+            owners.push({ frameId, backendNodeId });
+        } catch {
+            // The target belongs to another tab
+        }
+    }
+    if (owners.length !== 1) {
+        throw new Error(owners.length
+            ? 'Several Turnstile frames share the requesting URL'
+            : 'Requesting Turnstile frame not found in this tab');
+    }
+    return owners[0];
+}
+
+async function findIframeAndClickAtRatio(tabId, payload, frameUrl) {
     const { xRatio, yRatio } = payload;
     const maxRetries = 3;
     const retryDelay = 1000;
+    const send = (m, p) => chrome.debugger.sendCommand({ tabId }, m, p);
 
     for (let i = 0; i < maxRetries; i++) {
         try {
-            function getAttr(attrs, name) {
-                if (!attrs) return undefined;
-                for (let i = 0; i < attrs.length; i += 2) {
-                    if (attrs[i] === name) return attrs[i + 1];
-                }
-            }
-            // Step 1: Get document root
-            const { nodes } = await chrome.debugger.sendCommand({ tabId }, "DOM.getFlattenedDocument", {
-                depth: -1,
-                pierce: true
+            const owner = await findRequestingFrame(tabId, frameUrl);
+            const { model: iframeBox } = await send("DOM.getBoxModel", {
+                backendNodeId: owner.backendNodeId
             });
 
-            // Find the Cloudflare/Turnstile iframe (match by src; you may also use title, etc.)
-            const iframeNode = nodes.find(n => {
-                if (n.nodeName !== 'IFRAME') return false;
-                const src = getAttr(n.attributes, 'src') || '';
-                return src.includes('challenges.cloudflare.com');
-            });
-            if (!iframeNode) throw new Error('Turnstile iframe not found in flattened document');
-
-            const { model: iframeBox } = await chrome.debugger.sendCommand({ tabId }, "DOM.getBoxModel", {
-                nodeId: iframeNode.nodeId
-            });
-
-            // Step 3: Compute exact absolute coordinates using the provided ratios
+            // Compute viewport coordinates using the provided ratios
             const [x_start, y_start, , , x_end, y_end] = iframeBox.content;
             const iframeWidth = x_end - x_start;
             const iframeHeight = y_end - y_start;
             const clickX = x_start + (iframeWidth * xRatio);
             const clickY = y_start + (iframeHeight * yRatio);
-            
-            // Step 4: Perform the click at the exact coordinates
+
+            // The trusted click lands on whatever is topmost at these coordinates,
+            // so refuse if the page has placed another element over the checkbox.
+            // getNodeForLocation takes document coordinates, so add the scroll offset.
+            const { cssVisualViewport: viewport } = await send("Page.getLayoutMetrics");
+            const hit = await send("DOM.getNodeForLocation", {
+                x: Math.round(clickX + viewport.pageX),
+                y: Math.round(clickY + viewport.pageY)
+            });
+            const hitsTurnstile = hit.backendNodeId === owner.backendNodeId ||
+                hit.frameId === owner.frameId;
+            if (!hitsTurnstile) throw new Error('Turnstile checkbox is covered by another element');
+
+            // Click at the viewport coordinates
             await clickAtCoordinates(tabId, clickX, clickY);
             return { success: true };
 

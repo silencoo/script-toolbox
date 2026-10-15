@@ -1,5 +1,5 @@
 // Ensure this runs only inside the target iframe
-if (window.top !== window.self && window.location.href.includes('challenges.cloudflare.com')) {
+if (window.top !== window.self && window.location.hostname === 'challenges.cloudflare.com') {
     // 1. Listen for messages from injected.js (MAIN world)
     window.addEventListener('message', (event) => {
         if (event.source === window && event.data && event.data.type === 'CHECKBOX_POSITION_RATIO') {  

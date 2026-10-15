@@ -37,6 +37,19 @@ Optional Worker query parameters:
 The ranking services measure from their own networks. Test the resulting nodes
 from your connection before relying on them.
 
+## Privacy
+
+The request path contains the full VLESS URL, including its UUID credential.
+Treat the subscription URL as a secret and do not share it.
+
+Workers invocation logs and traces record request URLs, so
+[`wrangler.jsonc`](./wrangler.jsonc) disables both. That setting applies only
+when you deploy with Wrangler. If you deploy by pasting the code in the
+Cloudflare dashboard, open the Worker's **Settings → Observability** and turn
+off Workers Logs and Workers Traces there. Logs already
+collected expire under your plan's retention period; rotate the UUID if they
+may have been shared.
+
 ## Test
 
 ```sh

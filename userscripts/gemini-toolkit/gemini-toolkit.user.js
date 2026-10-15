@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Toolkit: Defaults, Images & Conversations
 // @namespace    https://gemini.google.com/
-// @version      0.7.5
+// @version      0.7.6
 // @description  Keep Gemini defaults, download generated images, export full-size images individually, and safely manage conversations.
 // @author       silencoo
 // @match        https://gemini.google.com/*
@@ -12,7 +12,7 @@
 // @grant        unsafeWindow
 // @connect      lh3.googleusercontent.com
 // @connect      *.googleusercontent.com
-// @require      https://raw.githubusercontent.com/silencoo/script-toolbox/main/userscripts/gemini-toolkit/vendor/gargantua-core.js
+// @require      https://raw.githubusercontent.com/silencoo/script-toolbox/e777eeeb5121433d3e604c31d21c68e683d8566e/userscripts/gemini-toolkit/vendor/gargantua-core.js#sha256=cb18656544da2f136328b673dd7d0a75c8fadbba978b5bebabbacf1297640dc9
 // @noframes
 // ==/UserScript==
 

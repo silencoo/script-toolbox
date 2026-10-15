@@ -1,4 +1,4 @@
-if (window.top !== window.self && window.location.href.includes('challenges.cloudflare.com')) {
+if (window.top !== window.self && window.location.hostname === 'challenges.cloudflare.com') {
     window.dtp = 1
     function getRandomInt(min, max) {
         return Math.floor(Math.random() * (max - min + 1)) + min;
