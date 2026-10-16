@@ -4012,6 +4012,7 @@ fi
 
 # Define aliases only for commands that are actually installed.
 if command -v nvim > /dev/null 2>&1; then
+    alias vi="nvim"
     alias vim="nvim"
 fi
 if command -v eza > /dev/null 2>&1; then
