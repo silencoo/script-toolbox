@@ -243,6 +243,109 @@ Starship、uv、Zoxide 和 Oh My Zsh 的官方安装器按其要求使用 POSIX 
 文件的自定义内容。已有历史文件和自定义 `HISTFILE` 路径也会保留；设置
 `TOOLKIT_HISTORY_SEEDS` 可指定其他预置文件。
 
+## Network acceleration: BBR, Skyline Speeder, and XanMod
+
+Open **System and maintenance → 8 Network acceleration**, or
+**System Toolbox → 6**. Skyline is optional and is never part of default
+initialization. The toolkit now lives in `server-toolkit/`, not the old
+`linux-server-toolkit/` directory.
+
+- **BBR** enables the implementation provided by your running kernel; this does
+  not install BBR3 or upgrade the kernel.
+- **Skyline Speeder** is an alternative sender-side eBPF TCP congestion controller
+  for non-congestive packet loss. It is not an additive BBR setting or a guaranteed
+  speed improvement. It affects new TCP connections host-wide, and its default
+  redundancy consumes additional bandwidth. It does not accelerate UDP/QUIC.
+- Requires **Linux 6.12+**, readable `/sys/kernel/btf/vmlinux`, and the upstream
+  platform/cgroup/verifier checks. This toolkit remains Debian/Ubuntu-focused.
+  Unsupported kernels are rejected, not automatically replaced.
+
+The menu provides upstream compatibility checking, install/upgrade + activation,
+read-only status, removal restoring the previous CC/qdisc, and removal to BBR + fq.
+The remote check can install missing download prerequisites; it is not a strictly
+read-only local diagnostic. Installation may add a source-build toolchain when
+prebuilt binaries cannot run. Keep out-of-band console access when changing networking.
+
+### Trust and lifecycle
+
+Integration reviewed against upstream commit
+`1f2e700aaa8f6c4e00d27a5c708f4945c81db5e5`. Both the bootstrap SHA256 and its
+source archive SHA256 are pinned in `skyline_bootstrap`. The installer still
+selects the **latest published release**, so this is not a pin of all release
+binaries or dependencies. Those downloads use upstream's own verification rules,
+not the toolkit's remote-script policy. Review and update both pins together when
+updating the integration. Existing external-source and dangerous-action approvals
+remain required; unattended execution is not implicitly permitted. `DRY_RUN=1`
+does not download or execute the bootstrap.
+
+Upstream keeps the installer in `/usr/local/src/skyline-speeder`, configuration in
+`/etc/skyline-speeder/speeder.toml`, and logs in
+`/var/log/skyline-speeder-install.log`. Use `ssctl status` to inspect operation.
+The bootstrap reuses the retained local installer for removal when available;
+that local tree must remain trusted. Uninstall drains flows, removes services and
+installer-added packages, and retains configuration. Restoration of CC/qdisc is
+**for the current boot**; existing sysctl files control subsequent boots.
+For offline removal, run the retained installer directly:
+
+```sh
+sudo /usr/local/src/skyline-speeder/install.sh --uninstall --restore-pre-install
+```
+
+While Skyline is active or its service is installed, toolkit BBR enabling,
+system optimization, and sysctl presets are blocked to avoid conflicting settings.
+Remove Skyline through its menu before switching back to those presets.
+
+上游项目与操作说明：[Skyline Speeder](https://github.com/CYBERVERSE-Research/skyline-speeder)、
+[usage guide](https://github.com/CYBERVERSE-Research/skyline-speeder/blob/1f2e700aaa8f6c4e00d27a5c708f4945c81db5e5/docs/usage.md)。
+菜单支持中英文；Skyline 是独立拥塞控制方案，不是 BBR3。XanMod 内核安装为单独的显式选项，不自动重启。
+
+### Optional XanMod LTS kernel (BBRv3)
+
+In **Network acceleration → 7**, explicitly install the official XanMod LTS
+kernel. This is separate from Skyline and from enabling the current kernel's BBR.
+Option **8** checks the running kernel and congestion control after reboot.
+
+The integration deliberately selects `linux-xanmod-lts-x64v1`: **x64v1 describes
+baseline amd64 CPU instructions, not BBRv1**. Current official XanMod builds include
+BBRv3. See [XanMod's official features and APT instructions](https://xanmod.org/).
+
+Safety boundaries:
+
+- Only amd64 Debian/Ubuntu and explicitly recognized upstream suite names are
+  accepted. No fallback to a different distribution's repository. Containers,
+  chroots, and hosts without local GRUB plus the current kernel/initramfs are
+  rejected. Provider-managed boot arrangements need manual installation.
+- UEFI systems require `mokutil --sb-state` to report `SecureBoot disabled`.
+  The toolkit does not disable Secure Boot, sign kernels, or enroll keys.
+- The official ASCII-armored signing key is SHA256-pinned (reviewed 2026-10-16),
+  scoped with APT `signed-by`, and downloaded over HTTPS. Key rotation requires
+  review and updating the pin. Repository preferences disallow unrelated XanMod
+  packages; unresolved dependencies fail instead of relaxing that restriction.
+- Existing XanMod APT sources are not overwritten. The toolkit installs its
+  source, preferences and key as `toolkit-xanmod.list`, `toolkit-xanmod`, and
+  `toolkit-xanmod.asc` under the corresponding `/etc/apt/` directories.
+- The running kernel package is marked manually installed to protect it from
+  autoremove. APT simulation and installation both forbid package removals.
+  Kernel package hooks and `update-grub` can change the next boot default.
+- **No automatic reboot, no automatic BBR switch, no Skyline configuration
+  changes.** DKMS/storage/network drivers and available boot disk space still
+  need operator review. Compatibility checks cannot guarantee a bootable server;
+  retain provider console/rescue access before proceeding.
+
+After installation, reboot manually, select the new kernel if needed, then run
+option 8. Use **Enable kernel BBR** to select BBR; remove Skyline first if installed.
+The status check reports whether a XanMod-named kernel is running and BBR is
+selected; the `bbr` sysctl name alone cannot attest the algorithm version of a
+custom or old kernel.
+
+For recovery, choose the retained old kernel in **GRUB → Advanced options** via
+the provider console. Kernel installation is not undone by configuration rollback.
+Future XanMod upgrades use normal APT; rerunning the installer stops when it finds
+an existing source. On a failed APT/install step, the repository files and any
+partially installed packages can remain: inspect the error and repair APT manually
+rather than assuming the kernel was switched. No automatic kernel removal or
+bootloader-default rewriting is provided.
+
 ## 时区、Swap 与 sysctl
 
 默认不会修改服务器现有时区。需要统一时区时，传入有效的 IANA 时区名：

@@ -3043,6 +3043,7 @@ function action_install_essentials() {
 
 # --- 模块: 系统优化 (增强版) ---
 function action_optimize_system() {
+    skyline_require_uninstalled || return 1
     ui_log_info "Optimizing the system kernel..." "系统内核优化..."
     
     if [ "$DRY_RUN" = "1" ]; then
@@ -7544,14 +7545,245 @@ action_show_system_info() {
     df -h / || true
 }
 
+# Skyline is an alternative to BBR, not a BBR version or a kernel upgrade.
+# Keep these integrity pins in sync when reviewing a newer upstream revision.
+skyline_bootstrap() (
+    local ref='1f2e700aaa8f6c4e00d27a5c708f4945c81db5e5'
+    local REMOTE_SCRIPT_SHA256='cede45a8fcf54088b6168a7c4095e9d31a08ee3d0401173eb2ba54a8e3fbaf04'
+    export SKYLINE_SHA256='fda35f0c524d861c79eb1e65d879a0fe0cd50d61913c9cfd74a8ebb9850ac649'
+    run_remote_script \
+        "https://raw.githubusercontent.com/CYBERVERSE-Research/skyline-speeder/${ref}/scripts/bootstrap.sh" \
+        'Skyline Speeder (reviewed bootstrap; upstream release artifacts)' \
+        --repo CYBERVERSE-Research/skyline-speeder --ref "$ref" \
+        --src-dir /usr/local/src/skyline-speeder "$@"
+)
+
+skyline_kernel_supported() {
+    local release="$1"
+    [[ "$release" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+    (( 10#${BASH_REMATCH[1]} > 6 || (10#${BASH_REMATCH[1]} == 6 && 10#${BASH_REMATCH[2]} >= 12) ))
+}
+
+skyline_preflight() {
+    if [ "$(uname -s)" != Linux ] || ! skyline_kernel_supported "$(uname -r)"; then
+        ui_log_error "Skyline requires Linux 6.12+; no kernel is installed or upgraded by this action." "Skyline 需要 Linux 6.12+；此操作不会安装或升级内核。"
+        return 1
+    fi
+    if [ ! -r /sys/kernel/btf/vmlinux ]; then
+        ui_log_error "Skyline requires readable /sys/kernel/btf/vmlinux (kernel BTF)." "Skyline 需要可读取的 /sys/kernel/btf/vmlinux（内核 BTF）。"
+        return 1
+    fi
+    # The upstream installer checks cgroup v2, platform and verifier support.
+}
+
+skyline_require_uninstalled() {
+    local current=""
+    current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    if [ "$current" = skyline_cc ] || [ -f /etc/systemd/system/skyline-speederd.service ] || \
+       [ -f /etc/init.d/skyline-speederd ]; then
+        ui_log_error "Remove Skyline Speeder from the network acceleration menu before applying BBR/sysctl tuning (its boot service can re-enable skyline_cc)." "请先从网络加速菜单卸载 Skyline Speeder，再应用 BBR/sysctl 调优（其启动服务可能重新启用 skyline_cc）。"
+        return 1
+    fi
+}
+
+action_skyline_install() {
+    ui_log_warning "Skyline replaces the default congestion control for new TCP connections; it is not BBR3. Intended for non-congestive loss, not a universal speed boost. Default redundancy uses extra bandwidth." "Skyline 替换新 TCP 连接的默认拥塞控制，并非 BBR3；适用于非拥塞丢包，并非通用提速。默认冗余会增加带宽使用。"
+    ui_log_warning "Upstream installs the latest release (or a source-build toolchain if needed), changes qdiscs and enables boot services. Keep console access. Further artifacts are downloaded by upstream, outside the toolkit checksum policy." "上游安装最新发行版（必要时安装工具链并源码构建）、修改队列规则并启用启动服务。请保留控制台访问；后续依赖由上游下载，不受工具箱摘要策略保护。"
+    confirm_dangerous_action "$(ui_text 'Install/upgrade and enable Skyline Speeder' '安装/升级并启用 Skyline Speeder')" \
+        "$(ui_text 'This changes live host networking and may disrupt remote access.' '此操作会修改主机网络，可能影响远程访问。')" || return 1
+    if [ "$DRY_RUN" != 1 ]; then skyline_preflight || return 1; fi
+    skyline_bootstrap || return $?
+    ui_log_info "Inspect with ssctl status; configuration: /etc/skyline-speeder/speeder.toml; installer log: /var/log/skyline-speeder-install.log" "使用 ssctl status 检查；配置：/etc/skyline-speeder/speeder.toml；安装日志：/var/log/skyline-speeder-install.log"
+}
+
+action_skyline_check() {
+    ui_log_warning "Upstream preflight may install missing download prerequisites and fetch a temporary source tree; it does not enable Skyline." "上游预检查可能安装缺少的下载工具并获取临时源码，但不会启用 Skyline。"
+    if [ "$DRY_RUN" != 1 ]; then skyline_preflight || return 1; fi
+    skyline_bootstrap --check
+}
+
+action_skyline_status() {
+    printf 'TCP: %s\nQdisc: %s\n' \
+        "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)" \
+        "$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    if command -v ssctl >/dev/null 2>&1; then
+        ssctl status
+    else
+        ui_log_info "Skyline ssctl is not installed." "尚未安装 Skyline ssctl。"
+    fi
+}
+
+action_skyline_uninstall() {
+    local mode="${1:-restore}" args=(--uninstall)
+    case "$mode" in
+        restore) args+=(--restore-pre-install) ;;
+        bbr) ;;
+        *) return 1 ;;
+    esac
+    confirm_dangerous_action "$(ui_text 'Remove Skyline Speeder' '卸载 Skyline Speeder')" \
+        "$(ui_text 'Drains flows, removes services and installer-added packages; keeps configuration. Restores pre-install CC/qdisc or BBR + fq for this boot only; existing sysctl files decide after reboot. The bootstrap uses the retained local installer when present.' '排空连接、删除服务及安装器添加的软件包，保留配置。恢复安装前的拥塞控制/队列或 BBR + fq，仅本次启动有效；重启后由现有 sysctl 文件决定。若存在保留的本地安装器，则引导脚本使用它。')" || return 1
+    # Removal must remain available even after booting an unsupported kernel.
+    skyline_bootstrap "${args[@]}"
+}
+
+# Conservative server option: LTS x64v1 works on baseline amd64 CPUs.
+# x64v1 is an ISA level, not the BBR version. No remote shell installer.
+xanmod_suite() {
+    case "$1:$2" in
+        debian:bookworm|debian:trixie|debian:forky|debian:sid|ubuntu:noble|ubuntu:plucky|ubuntu:questing|ubuntu:resolute|ubuntu:stonking)
+            printf '%s\n' "$2" ;;
+        *) ui_log_error "Unsupported XanMod distribution/codename: $1/$2" "不支持的 XanMod 发行版/代号：$1/$2"; return 1 ;;
+    esac
+}
+
+xanmod_detect_suite() {
+    (. /etc/os-release; xanmod_suite "$ID" "${VERSION_CODENAME:-}")
+}
+
+xanmod_host_preflight() {
+    local secure_state="" container_status=0
+    if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ] || [ "$(dpkg --print-architecture 2>/dev/null)" != amd64 ]; then
+        ui_log_error "XanMod installation requires an amd64 Linux host." "安装 XanMod 需要 amd64 Linux 主机。"
+        return 1
+    fi
+    command -v systemd-detect-virt >/dev/null 2>&1 || return 1
+    systemd-detect-virt --container --quiet || container_status=$?
+    if [ "$container_status" != 1 ] || systemd-detect-virt --chroot --quiet || [ -d /proc/vz ]; then
+        ui_log_error "Cannot replace the kernel inside a container/chroot or an unrecognized virtualization environment." "无法在容器/chroot 或无法识别的虚拟化环境中替换内核。"
+        return 1
+    fi
+    if [ -d /sys/firmware/efi ]; then
+        secure_state="$(LC_ALL=C mokutil --sb-state 2>/dev/null || true)"
+        if [ "$secure_state" != 'SecureBoot disabled' ]; then
+            ui_log_error "UEFI Secure Boot must be verifiably disabled (mokutil required). Signing/enrollment is not automated." "必须通过 mokutil 确认 UEFI Secure Boot 已禁用；不自动签名或注册密钥。"
+            return 1
+        fi
+    fi
+    if [ ! -s /boot/grub/grub.cfg ] || ! command -v update-grub >/dev/null 2>&1 || \
+       [ ! -s "/boot/vmlinuz-$(uname -r)" ] || [ ! -s "/boot/initrd.img-$(uname -r)" ]; then
+        ui_log_error "Requires local GRUB plus the running kernel image/initramfs for recovery. Provider-managed kernels and other bootloaders require manual installation." "需要本地 GRUB 及当前内核镜像/initramfs 以便恢复；服务商管理的内核及其他引导器请手动安装。"
+        return 1
+    fi
+}
+
+xanmod_running_package() {
+    local package
+    package="$(dpkg-query -S "/boot/vmlinuz-$(uname -r)" 2>/dev/null | sed -n 's/: \/boot\/vmlinuz-.*$//p')"
+    [[ "$package" =~ ^linux-image-[a-zA-Z0-9.+:~-]+$ ]] || return 1
+    printf '%s\n' "$package"
+}
+
+action_install_xanmod() {
+    local suite running_package key_file
+    ui_log_warning "XanMod LTS includes BBRv3; this installs a kernel, not just a sysctl setting. Uses baseline x64v1 for CPU compatibility. DKMS/ZFS/NVIDIA modules may fail; keep provider console and GRUB recovery access." "XanMod LTS 包含 BBRv3；此操作安装内核，而非仅修改 sysctl。使用基线 x64v1 保证 CPU 兼容性。DKMS/ZFS/NVIDIA 模块可能失败；请保留服务商控制台与 GRUB 恢复入口。"
+    confirm_dangerous_action "$(ui_text 'Install XanMod LTS kernel (BBRv3)' '安装 XanMod LTS 内核（BBRv3）')" \
+        "$(ui_text 'APT kernel hooks update boot files and may change the next boot default. Retain the current kernel; never reboot automatically. Confirm console recovery is available.' 'APT 内核钩子会更新引导文件并可能改变下次默认启动内核。保留当前内核，不自动重启。请确认可通过控制台恢复。')" || return 1
+    if [ "$DRY_RUN" = 1 ]; then
+        ui_log_info "[DRY RUN] Would validate amd64/OS/GRUB/Secure Boot, pin the XanMod key, add a restricted APT repository, retain the running kernel and install linux-xanmod-lts-x64v1. No downloads, writes or reboot." "[DRY RUN] 将检查 amd64/系统/GRUB/Secure Boot，校验 XanMod 密钥，添加受限 APT 源，保留当前内核并安装 linux-xanmod-lts-x64v1。不下载、写入或重启。"
+        return 0
+    fi
+    [ "$(id -u)" -eq 0 ] || { ui_log_error 'Root is required.' '需要 root 权限。'; return 1; }
+    xanmod_host_preflight || return 1
+    suite="$(xanmod_detect_suite)" || return 1
+    running_package="$(xanmod_running_package)" || {
+        ui_log_error 'Cannot identify the installed running kernel package; stopping.' '无法识别当前内核的软件包，停止安装。'; return 1;
+    }
+    # Do not silently alter an existing operator-managed XanMod source.
+    if grep -Rqs 'deb.xanmod.org' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+        ui_log_error 'An existing XanMod APT source was found. Review/use it manually; no repository files were overwritten.' '发现现有 XanMod APT 源，请手动检查/使用；未覆盖源配置。'
+        return 1
+    fi
+    confirm_external_resource 'https://deb.xanmod.org' 'XanMod signed APT repository' || return 1
+    install_packages_batch ca-certificates curl || return 1
+    key_file="$(mktemp /tmp/init_xanmod_key.XXXXXX)" || return 1
+    register_temp_file "$key_file"
+    # Exact official ASCII-armored public key, reviewed 2026-10-16.
+    download_and_verify_sha256 'https://dl.xanmod.org/archive.key' \
+        'ed26eb39330fd296cd037b8229adccea0197b21989ec0a1ad4f4f74f5a41c7a7' \
+        "$key_file" 'XanMod archive signing key' || return 1
+    write_file_atomic /etc/apt/keyrings/toolkit-xanmod.asc 'XanMod signing key' 644 0 0 < "$key_file" || return 1
+    # Do not let this third-party repository replace unrelated system packages.
+    write_file_atomic /etc/apt/preferences.d/toolkit-xanmod 'XanMod package scope' 644 0 0 <<'PIN' || return 1
+Package: linux-*xanmod*
+Pin: origin "deb.xanmod.org"
+Pin-Priority: 600
+
+Package: *
+Pin: origin "deb.xanmod.org"
+Pin-Priority: -1
+PIN
+    write_file_atomic /etc/apt/sources.list.d/toolkit-xanmod.list 'XanMod repository' 644 0 0 <<REPO || return 1
+deb [arch=amd64 signed-by=/etc/apt/keyrings/toolkit-xanmod.asc] https://deb.xanmod.org ${suite} main
+REPO
+    APT_UPDATED=false
+    update_apt_once || return 1
+    run_command 'Retain the running kernel for recovery' apt-mark manual "$running_package" || return 1
+    run_command 'Simulate XanMod installation (no removals allowed)' \
+        apt-get -o DPkg::Lock::Timeout=120 --no-remove --simulate install linux-xanmod-lts-x64v1 || return 1
+    run_command 'Install XanMod LTS (no removals allowed)' \
+        apt-get -o DPkg::Lock::Timeout=120 --no-remove -y install linux-xanmod-lts-x64v1 || return 1
+    run_command 'Refresh GRUB recovery entries' update-grub || return 1
+    ui_log_success "XanMod packages installed; the running kernel is unchanged. Reboot manually when ready, then use XanMod status and Enable kernel BBR. If boot fails, choose the retained kernel under GRUB Advanced options." "XanMod 软件包已安装，当前运行内核未改变。准备就绪后手动重启，再检查 XanMod 状态并启用内核 BBR。若启动失败，在 GRUB 高级选项中选择保留的旧内核。"
+    ui_log_info 'Future XanMod updates use APT. No Skyline settings or BBR sysctls were changed.' '后续 XanMod 更新通过 APT 完成。未修改 Skyline 设置或 BBR sysctl。'
+}
+
+action_xanmod_status() {
+    local kernel current available
+    kernel="$(uname -r)"
+    current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    available="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    printf 'Kernel: %s\nTCP: %s\nAvailable: %s\n' "$kernel" "$current" "$available"
+    if [[ "$kernel" != *xanmod* ]]; then
+        ui_log_warning 'Not running a XanMod kernel. Installation alone does not switch kernels; check GRUB and reboot manually.' '当前未运行 XanMod 内核。安装不等于切换内核；请检查 GRUB 并手动重启。'
+        return 1
+    fi
+    if [ "$current" != bbr ]; then
+        ui_log_warning 'XanMod is running but BBR is not selected. Remove Skyline first if installed, then use Enable kernel BBR.' '已运行 XanMod，但未选择 BBR。若已安装 Skyline，请先卸载，再启用内核 BBR。'
+        return 1
+    fi
+    ui_log_success 'XanMod kernel is running with BBR selected. Official current XanMod builds include BBRv3; the sysctl name bbr alone does not prove its version.' '已运行 XanMod 内核并选择 BBR。当前官方 XanMod 构建包含 BBRv3；仅凭 sysctl 名称 bbr 无法证明版本。'
+}
+
+action_network_acceleration() {
+    local choice
+    while true; do
+        menu_header "$(ui_text 'Network acceleration' '网络加速')" \
+            "$(ui_text 'BBR or Skyline; optional XanMod LTS kernel for BBRv3 (manual reboot).' 'BBR 或 Skyline；可选安装 XanMod LTS 内核以使用 BBRv3（手动重启）。')"
+        menu_option "$GREEN" 1 'Enable kernel BBR (version depends on kernel)' '启用内核 BBR（版本由内核决定）'
+        menu_option "$GREEN" 2 'Skyline: compatibility check (external)' 'Skyline：兼容性检查（外部脚本）'
+        menu_option "$GREEN" 3 'Skyline: install/upgrade and enable' 'Skyline：安装/升级并启用'
+        menu_option "$GREEN" 4 'Skyline: status' 'Skyline：状态'
+        menu_option "$GREEN" 5 'Skyline: remove and restore pre-install CC/qdisc' 'Skyline：卸载并恢复安装前拥塞控制/队列'
+        menu_option "$GREEN" 6 'Skyline: remove and use BBR + fq' 'Skyline：卸载并使用 BBR + fq'
+        menu_option "$GREEN" 7 'Install XanMod LTS kernel (BBRv3; manual reboot)' '安装 XanMod LTS 内核（BBRv3；手动重启）'
+        menu_option "$GREEN" 8 'XanMod: post-reboot kernel / BBR status' 'XanMod：重启后内核 / BBR 状态'
+        menu_back_and_exit
+        ui_read choice 'Select: ' '请选择: '
+        case "$choice" in
+            1) run_menu_action action_enable_bbr ;;
+            2) run_menu_action action_skyline_check ;;
+            3) run_menu_action action_skyline_install ;;
+            4) run_menu_action action_skyline_status ;;
+            5) run_menu_action action_skyline_uninstall restore ;;
+            6) run_menu_action action_skyline_uninstall bbr ;;
+            7) run_menu_action action_install_xanmod ;;
+            8) run_menu_action action_xanmod_status ;;
+            b|B) return 0 ;;
+            0) exit 0 ;;
+            *) menu_invalid_choice ;;
+        esac
+    done
+}
+
 action_enable_bbr() {
+    skyline_require_uninstalled || return 1
     local current=""
     current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
     if [ "$current" = "bbr" ]; then
         ui_log_info "BBR is already enabled" "BBR 已启用"
         return 0
     fi
-    if [ "$DRY_RUN" != "1" ] && ! modprobe tcp_bbr 2>/dev/null; then
+    if [ "$DRY_RUN" != "1" ] && ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr && ! modprobe tcp_bbr 2>/dev/null; then
         ui_log_error "The current kernel does not provide the tcp_bbr module" "当前内核未提供 tcp_bbr 模块"
         return 1
     fi
@@ -7581,7 +7813,7 @@ function action_toolbox() {
         printf '%b\n' "${GREEN}[3]${PLAIN} $(ui_text "Configure MOTD (login message)" "配置炫酷 MOTD (登录欢迎信息)")"
         printf '%b\n' "${GREEN}[4]${PLAIN} $(ui_text "Clean unused packages and caches" "清理系统 (移除无用包/缓存)")"
         printf '%b\n' "${GREEN}[5]${PLAIN} $(ui_text "View system information" "查看系统信息")"
-        printf '%b\n' "${GREEN}[6]${PLAIN} $(ui_text "Enable BBR" "开启 BBR (如果未开启)")"
+        printf '%b\n' "${GREEN}[6]${PLAIN} $(ui_text "Network acceleration" "网络加速")"
         printf '%b\n' "${GREEN}[7]${PLAIN} $(ui_text "Clear traces/history (dangerous)" "清理痕迹/历史记录 (危险)")"
         printf '%b\n' "${GREEN}[8]${PLAIN} $(ui_text "Service health check (SSH/UFW/Fail2ban/Docker)" "服务健康检查 (SSH/UFW/Fail2ban/Docker)")"
         printf '%b\n' "${GREEN}[9]${PLAIN} $(ui_text "Performance presets (sysctl)" "性能优化预设 (sysctl)")"
@@ -7605,7 +7837,7 @@ function action_toolbox() {
             3) run_menu_action action_configure_motd ;;
             4) run_menu_action cleanup ;;
             5) run_menu_action action_show_system_info ;;
-            6) run_menu_action action_enable_bbr ;;
+            6) run_menu_flow action_network_acceleration ;;
             7) run_menu_action action_clean_traces ;;
             8) run_menu_action action_service_health ;;
             9) run_menu_action action_sysctl_presets ;;
@@ -7708,6 +7940,7 @@ EOF
 }
 
 function action_sysctl_presets() {
+    skyline_require_uninstalled || return 1
     ui_log_info "sysctl performance presets..." "sysctl 性能预设..."
     printf '%b\n' "${GREEN}[1]${PLAIN} $(ui_text "Conservative (includes BBR)" "保守 (conservative，含 BBR)")"
     printf '%b\n' "${GREEN}[2]${PLAIN} $(ui_text "Standard (includes BBR)" "标准 (standard，含 BBR)")"
@@ -11413,6 +11646,7 @@ show_system_menu() {
         menu_option "$GREEN" "5" "Automatic-update maintenance window" "自动更新维护窗口"
         menu_option "$GREEN" "6" "Remove unused packages" "清理无用包"
         menu_option "$GREEN" "7" "Roll back backed-up configuration" "回滚已备份配置"
+        menu_option "$GREEN" "8" "Network acceleration" "网络加速"
         menu_back_and_exit
         printf '%b\n' ""
         ui_read choice "Select: " "请选择: "
@@ -11424,6 +11658,7 @@ show_system_menu() {
             5) run_menu_action action_configure_maintenance_window ;;
             6) run_menu_action cleanup ;;
             7) run_menu_action rollback ;;
+            8) run_menu_flow action_network_acceleration ;;
             b|B) return ;;
             0) exit 0 ;;
             *) menu_invalid_choice ;;
