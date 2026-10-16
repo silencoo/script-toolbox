@@ -112,6 +112,8 @@ jobs:
       - name: Test Linux server toolkit safety
         run: |
           ./server-toolkit/tests/test_init_safety.sh
+          python3 server-toolkit/tests/test_skyline.py
+          python3 server-toolkit/tests/test_xanmod.py
           python3 server-toolkit/tests/test_benchmarks.py
           python3 server-toolkit/tests/test_menu_navigation.py
           python3 server-toolkit/tests/test_yazi.py

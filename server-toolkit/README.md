@@ -263,27 +263,40 @@ initialization. The toolkit now lives in `server-toolkit/`, not the old
 The menu provides upstream compatibility checking, install/upgrade + activation,
 read-only status, removal restoring the previous CC/qdisc, and removal to BBR + fq.
 The remote check can install missing download prerequisites; it is not a strictly
-read-only local diagnostic. Installation may add a source-build toolchain when
-prebuilt binaries cannot run. Keep out-of-band console access when changing networking.
+read-only local diagnostic. Installation uses the pinned x86_64/glibc release on
+glibc 2.39+; other platforms build the pinned source and may add a build toolchain.
+Keep out-of-band console access when changing networking.
 
 ### Trust and lifecycle
 
 Integration reviewed against upstream commit
 `1f2e700aaa8f6c4e00d27a5c708f4945c81db5e5`. Both the bootstrap SHA256 and its
-source archive SHA256 are pinned in `skyline_bootstrap`. The installer still
-selects the **latest published release**, so this is not a pin of all release
-binaries or dependencies. Those downloads use upstream's own verification rules,
-not the toolkit's remote-script policy. Review and update both pins together when
-updating the integration. Existing external-source and dangerous-action approvals
+source archive SHA256 are pinned in `skyline_bootstrap`. The binary path selects
+**v0.5.2**, whose x86_64/glibc archive is also SHA256-pinned. The toolkit verifies
+that archive before executing the bootstrap and passes it as a local artifact,
+with its trusted checksum. Missing or mismatched downloads stop installation;
+inherited `SKYLINE_ARTIFACT_URL` overrides are ignored. The release manifest names
+build commit `f369b3cb82c55742c90ca561f731874cace08de0`.
+
+Platforms that cannot run that binary use `--source` against the pinned source
+archive. Neither path selects the latest release. Build tools, package-manager
+dependencies, and source-build dependencies still follow upstream's verification
+rules, outside the toolkit checksum policy. Review the source ref, bootstrap and
+source hashes, release version, and artifact hash together when updating this
+integration. Existing external-source and dangerous-action approvals
 remain required; unattended execution is not implicitly permitted. `DRY_RUN=1`
 does not download or execute the bootstrap.
 
 Upstream keeps the installer in `/usr/local/src/skyline-speeder`, configuration in
 `/etc/skyline-speeder/speeder.toml`, and logs in
 `/var/log/skyline-speeder-install.log`. Use `ssctl status` to inspect operation.
-The bootstrap reuses the retained local installer for removal when available;
-that local tree must remain trusted. Uninstall drains flows, removes services and
-installer-added packages, and retains configuration. Restoration of CC/qdisc is
+The removal menu directly runs the retained local installer when available,
+without downloading a bootstrap or requiring remote-execution approval. That
+local tree must remain trusted. If it is absent, removal falls back to the pinned
+bootstrap and requires network access and the usual remote approvals. A failing
+local uninstall reports its error without switching to remote execution.
+Uninstall drains flows, removes services and installer-added packages, and
+retains configuration. Restoration of CC/qdisc is
 **for the current boot**; existing sysctl files control subsequent boots.
 For offline removal, run the retained installer directly:
 
@@ -291,9 +304,13 @@ For offline removal, run the retained installer directly:
 sudo /usr/local/src/skyline-speeder/install.sh --uninstall --restore-pre-install
 ```
 
-While Skyline is active or its service is installed, toolkit BBR enabling,
-system optimization, and sysctl presets are blocked to avoid conflicting settings.
-Remove Skyline through its menu before switching back to those presets.
+While Skyline is active or its service is installed, explicit BBR enabling is
+blocked. System optimization and sysctl presets continue, omitting
+`net.core.default_qdisc` and `net.ipv4.tcp_congestion_control` with a warning.
+They load only their own configuration file, so old BBR settings in other files
+are not reapplied. Custom initialization can therefore continue to later selected
+modules. Existing sysctl files still determine boot-time settings before Skyline's
+services start; remove Skyline through its menu before switching back to BBR.
 
 上游项目与操作说明：[Skyline Speeder](https://github.com/CYBERVERSE-Research/skyline-speeder)、
 [usage guide](https://github.com/CYBERVERSE-Research/skyline-speeder/blob/1f2e700aaa8f6c4e00d27a5c708f4945c81db5e5/docs/usage.md)。
@@ -321,30 +338,45 @@ Safety boundaries:
   scoped with APT `signed-by`, and downloaded over HTTPS. Key rotation requires
   review and updating the pin. Repository preferences disallow unrelated XanMod
   packages; unresolved dependencies fail instead of relaxing that restriction.
-- Existing XanMod APT sources are not overwritten. The toolkit installs its
-  source, preferences and key as `toolkit-xanmod.list`, `toolkit-xanmod`, and
+- Operator-managed or modified XanMod APT sources are not overwritten. An exact
+  toolkit source for the current suite is recognized and permits retries. The
+  toolkit installs its source, preferences and key as `toolkit-xanmod.list`, `toolkit-xanmod`, and
   `toolkit-xanmod.asc` under the corresponding `/etc/apt/` directories.
 - The running kernel package is marked manually installed to protect it from
   autoremove. APT simulation and installation both forbid package removals.
-  Kernel package hooks and `update-grub` can change the next boot default.
+  Before installing the kernel, the toolkit writes
+  `/etc/default/grub.d/99-toolkit-xanmod.cfg`, regenerates GRUB, and verifies a
+  stable entry for the running kernel as the persistent default. It verifies
+  that default again after installation. Unknown GRUB layouts and pending
+  one-time boot entries stop installation. This default guard remains even if
+  installation fails: configuration rollback cannot remove it while leaving a
+  partially installed kernel behind.
 - **No automatic reboot, no automatic BBR switch, no Skyline configuration
   changes.** DKMS/storage/network drivers and available boot disk space still
   need operator review. Compatibility checks cannot guarantee a bootable server;
   retain provider console/rescue access before proceeding.
 
-After installation, reboot manually, select the new kernel if needed, then run
-option 8. Use **Enable kernel BBR** to select BBR; remove Skyline first if installed.
+After installation, an ordinary reboot continues to use the retained kernel,
+including a reboot initiated by unattended-upgrades. During a supervised
+maintenance window, select XanMod from **GRUB → Advanced options**, then run
+option 8. Selecting it manually does not replace the persistent default.
+After testing, explicitly change `GRUB_DEFAULT` in
+`/etc/default/grub.d/99-toolkit-xanmod.cfg` to the desired entry and run
+`sudo update-grub`. Until then, later boots continue using the retained kernel,
+even after further kernel updates. Use **Enable kernel BBR** to select BBR;
+remove Skyline first if installed.
 The status check reports whether a XanMod-named kernel is running and BBR is
 selected; the `bbr` sysctl name alone cannot attest the algorithm version of a
 custom or old kernel.
 
 For recovery, choose the retained old kernel in **GRUB → Advanced options** via
 the provider console. Kernel installation is not undone by configuration rollback.
-Future XanMod upgrades use normal APT; rerunning the installer stops when it finds
-an existing source. On a failed APT/install step, the repository files and any
-partially installed packages can remain: inspect the error and repair APT manually
-rather than assuming the kernel was switched. No automatic kernel removal or
-bootloader-default rewriting is provided.
+Future XanMod upgrades use normal APT. A failed menu action offers file rollback
+interactively and rolls back by default noninteractively. If repository files are
+retained, an unchanged toolkit source can be reused on retry. Modified or broken
+sources and partially configured packages may still need manual APT repair.
+The persistent GRUB default guard is intentionally excluded from file rollback;
+kernel packages are not automatically removed.
 
 ## 时区、Swap 与 sysctl
 
@@ -359,8 +391,10 @@ PHP 配置和新生成的 CloudDrive2 Compose 配置会使用同一个时区；�
 
 标准快速初始化和四个内置 Profile 都不会自动创建 Swap，也不会应用宽泛的
 sysctl 调优。需要时，在“系统与维护”或“自定义初始化”中明确选择相应模块。
-“系统与维护”中的保守、标准和激进三档 sysctl 性能预设都会配置 `fq + BBR`；
-实际应用前会检查当前内核是否提供 `tcp_bbr`，应用后会验证两项配置均已生效。
+“系统与维护”中的保守、标准和激进三档 sysctl 性能预设通常配置 `fq + BBR`；
+实际应用前会检查当前内核是否提供 BBR，应用后会验证两项配置均已生效。
+已安装 Skyline 时，系统优化和性能预设会保留其拥塞控制/队列设置，仅应用其他参数；
+只加载本次写入的配置文件，不重新加载其他文件里的旧 BBR 设置。
 非交互执行显式选择的 Swap 模块时，可用 `SWAP_SIZE_MB=2048` 指定大小；未指定
 则使用脚本根据内存计算的建议值。
 
