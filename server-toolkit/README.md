@@ -109,6 +109,15 @@ PLAN_ONLY=1 INIT_PROFILE=minimal ./server-toolkit.sh
 sudo env INIT_PROFILE=minimal ./server-toolkit.sh
 ```
 
+### Fail2ban 日志与配置保护
+
+- journald 运行时，SSH jail 显式使用 `backend = systemd`，并安装/检查 `python3-systemd`；不要求存在 `/var/log/auth.log`。
+- 否则仅在 `/var/log/auth.log` 或 `/var/log/secure` 可读取时使用文件后端；没有日志来源就报错退出。
+- 保留现有 jail 端口、封禁策略和 action；没有自定义端口时从 `sshd -T` 获取全部端口，检测失败不回退到 22。新配置的封禁策略继承发行版/管理员配置，不再硬编码覆盖。
+- 重写 `jail.d/sshd.local` 时保留配置值，但会规范化格式并移除该文件中的注释；原文件由现有备份机制保存。
+- 在临时配置副本中执行 `fail2ban-client -t`，通过后才写入并重启 **Fail2ban**，不会重启 SSH。随后检查 `status sshd`；失败时输出诊断并回滚本次文件变更，原服务运行时尝试恢复。
+- 这只验证配置与 jail 启动，不替代实际封禁测试。已有故障 VPS 需要在该 VPS 上运行更新后的 Fail2ban 模块才能修复。
+
 ## 安全预览
 
 以 Dry Run 查看默认流程，不执行系统变更：

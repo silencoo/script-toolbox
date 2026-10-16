@@ -3181,42 +3181,128 @@ function action_configure_firewall() {
 }
 
 # --- 模块: Fail2ban 配置 (新增) ---
+# Select journald explicitly: Fail2Ban's "auto" backend only tries file readers.
+fail2ban_log_source() {
+    if command -v journalctl >/dev/null 2>&1 && systemctl is-active --quiet systemd-journald; then
+        printf 'systemd\n'
+    elif [ -f /var/log/auth.log ] && [ -r /var/log/auth.log ]; then
+        printf 'polling /var/log/auth.log\n'
+    elif [ -f /var/log/secure ] && [ -r /var/log/secure ]; then
+        printf 'polling /var/log/secure\n'
+    else
+        ui_log_error "No readable SSH log source found" "未找到可读取的 SSH 日志来源" >&2
+        return 1
+    fi
+}
+
+# Edit only the toolkit jail; retain policy/actions and other sections. Inherited
+# settings remain inherited, including custom ports in other local configuration.
+render_fail2ban_jail() {
+    python3 - "$@" <<'PY'
+import configparser
+import glob
+import os
+import sys
+root, backend, logpath, ports = sys.argv[1:]
+config = configparser.ConfigParser(interpolation=None, strict=False)
+config.read(os.path.join(root, 'jail.d', 'sshd.local'))
+custom = configparser.ConfigParser(interpolation=None, strict=False)
+custom.read(sorted(glob.glob(os.path.join(root, 'jail.d', '*.conf'))) +
+            [os.path.join(root, 'jail.local')] +
+            sorted(glob.glob(os.path.join(root, 'jail.d', '*.local'))))
+if not config.has_section('sshd'):
+    config.add_section('sshd')
+config.set('sshd', 'enabled', 'true')
+config.set('sshd', 'backend', backend)
+# Empty logpath also overrides inherited file paths for the systemd backend.
+config.set('sshd', 'logpath', logpath)
+if not (custom.has_option('sshd', 'port') or
+        custom.has_option(custom.default_section, 'port')):
+    config.set('sshd', 'port', ports)
+# Do not reset maxretry/bantime/findtime or actions on repeat runs.
+config.write(sys.stdout)
+PY
+}
+
+fail2ban_ssh_ready() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if fail2ban-client status sshd; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+fail2ban_diagnostics() {
+    journalctl -u fail2ban -n 40 --no-pager >&2 || true
+}
+
 function action_configure_fail2ban() {
     ui_log_info "Configuring Fail2ban..." "配置 Fail2ban..."
-    
-    if ! command -v fail2ban-client > /dev/null 2>&1; then
-        ui_log_info "Fail2ban is not installed; installing it..." "Fail2ban 未安装，正在安装..."
-        install_packages_batch "fail2ban"
-        
-        if ! command -v fail2ban-client > /dev/null 2>&1; then
-             ui_log_error "Fail2ban installation failed" "Fail2ban 安装失败"
-             return 1
-        fi
+    if [ "$DRY_RUN" = 1 ]; then
+        ui_log_info "[DRY RUN] Select SSH log backend, preserve policy, validate jail and restart only Fail2ban" \
+            "[DRY RUN] 选择 SSH 日志后端、保留策略、校验 jail 并仅重启 Fail2ban"
+        return 0
     fi
-    
-    # Detect SSH port
-    local ssh_port
-    ssh_port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
-    ssh_port="${ssh_port:-22}"
-    ui_log_info \
-        "Fail2ban detected SSH port: $ssh_port" \
-        "Fail2ban 检测到 SSH 端口: $ssh_port"
 
-    # 创建本地配置
-    write_file_atomic /etc/fail2ban/jail.d/sshd.local "Fail2ban SSH jail" 644 0 0 << EOF || return 1
-[sshd]
-enabled = true
-port = $ssh_port
-logpath = %(sshd_log)s
-maxretry = 5
-bantime = 3600
-findtime = 600
-EOF
-    
-    if enable_and_restart_service fail2ban; then
-        ui_log_success "Fail2ban configured and started" "Fail2ban 配置完成并已启动"
+    local source backend logpath='' ssh_config ssh_ports port stage
+    source="$(fail2ban_log_source)" || return 1
+    read -r backend logpath <<< "$source"
+    if [ "$backend" = systemd ]; then
+        install_packages_batch fail2ban python3-systemd || return 1
+        /usr/bin/python3 -c 'from systemd import journal' || return 1
     else
-        ui_log_error "Fail2ban failed to start" "Fail2ban 启动失败"
+        install_packages_batch fail2ban python3 || return 1
+    fi
+    command -v fail2ban-client >/dev/null 2>&1 || return 1
+
+    # Never silently protect port 22 when detection failed; handle all SSH ports.
+    if ! ssh_config="$(sshd -T 2>/dev/null)"; then
+        ui_log_error "Cannot detect SSH ports; Fail2ban configuration was not changed" \
+            "无法检测 SSH 端口；未修改 Fail2ban 配置"
+        return 1
+    fi
+    ssh_ports="$(printf '%s\n' "$ssh_config" | awk '$1 == "port" {print $2}')"
+    [ -n "$ssh_ports" ] || return 1
+    while IFS= read -r port; do validate_port "$port" || return 1; done <<< "$ssh_ports"
+    ssh_ports="$(printf '%s\n' "$ssh_ports" | paste -sd, -)"
+    ui_log_info "Detected SSH ports: $ssh_ports; existing jail port overrides are retained" \
+        "检测到 SSH 端口: ${ssh_ports}；保留现有 jail 端口覆盖配置"
+
+    # Test the complete configuration in a private staging tree before touching
+    # the live file or restarting a working daemon.
+    stage="$(mktemp -d)" || return 1
+    if ! cp -aL /etc/fail2ban/. "$stage/" || ! mkdir -p "$stage/jail.d" ||
+        ! render_fail2ban_jail /etc/fail2ban "$backend" "$logpath" "$ssh_ports" > "$stage/jail.d/sshd.local" ||
+        ! fail2ban-client -c "$stage" -t; then
+        rm -rf -- "$stage"
+        ui_log_error "Fail2ban validation failed; live configuration was not changed" \
+            "Fail2ban 校验失败；未修改现有配置"
+        return 1
+    fi
+
+    local operation_start="${#OPERATION_TARGETS[@]}" was_active=false
+    systemctl is-active --quiet fail2ban && was_active=true
+    if ! write_file_atomic /etc/fail2ban/jail.d/sshd.local "Fail2ban SSH jail" 644 0 0 < "$stage/jail.d/sshd.local"; then
+        rm -rf -- "$stage"
+        return 1
+    fi
+    rm -rf -- "$stage"
+    if enable_and_restart_service fail2ban && fail2ban_ssh_ready; then
+        ui_log_success "Fail2ban SSH jail is running (selected backend: $backend); existing policy retained" \
+            "Fail2ban SSH jail 已运行（选择的后端: ${backend}）；保留现有策略"
+    else
+        fail2ban_diagnostics
+        ui_log_error "Fail2ban SSH jail failed; restoring previous configuration" \
+            "Fail2ban SSH jail 启动失败；正在恢复之前的配置"
+        if rollback_operations_from "$operation_start" && [ "$was_active" = true ]; then
+            if ! systemctl restart fail2ban || ! fail2ban_ssh_ready; then
+                ui_log_error "Previous Fail2ban service could not be recovered; manual intervention required" \
+                    "未能恢复原 Fail2ban 服务；需要手动处理"
+            fi
+        fi
         return 1
     fi
 }
