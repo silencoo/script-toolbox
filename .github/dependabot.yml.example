@@ -1,3 +1,5 @@
+# Disabled while GitHub Actions quota is exhausted.
+# Rename to dependabot.yml to enable scheduled dependency updates.
 version: 2
 updates:
   - package-ecosystem: github-actions
