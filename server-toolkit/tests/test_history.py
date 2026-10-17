@@ -51,7 +51,15 @@ run_as_user() { bash -c "$1"; }
 
     def zsh(self, code, *, env=None):
         child = subprocess.run(
-            ['zsh', '-f', '-ic', 'source "$1"\n' + code,
+            ['zsh', '-f', '-ic', '''# Never load the developer's installed fzf integration in a pipe fixture.
+if [[ "${TOOLKIT_TEST_FZF_ENABLED:-0}" != 1 ]]; then
+    command() {
+        if [[ "$1" == '-v' && "$2" == fzf ]]; then return 1; fi
+        builtin command "$@"
+    }
+fi
+source "$1"
+''' + code,
              'history-session', str(self.history_script())],
             text=True, capture_output=True, timeout=15,
             env=dict(os.environ, HISTFILE=str(self.history_file),
@@ -149,6 +157,7 @@ EOF
         fake_fzf.chmod(0o755)
         output = self.zsh("bindkey -M emacs '^R'", env={
             'PATH': str(fake_bin) + ':' + os.environ['PATH'],
+            'TOOLKIT_TEST_FZF_ENABLED': '1',
         })
         self.assertIn('fzf-history-widget', output)
         self.assertNotIn('UNEXPECTED_SELECTION', output)

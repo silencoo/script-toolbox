@@ -6,11 +6,13 @@ on:
       - 'quantumult-x/**'
       - 'proxy-rules/**'
       - '.github/workflows/quantumult-x.yml'
+      - 'scripts/**'
   pull_request:
     paths:
       - 'quantumult-x/**'
       - 'proxy-rules/**'
       - '.github/workflows/quantumult-x.yml'
+      - 'scripts/**'
   workflow_dispatch:
 
 permissions:
@@ -22,12 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - name: Test standalone UIActions
-        run: node --test quantumult-x/tests/*.test.mjs
-      - name: Validate AI routing and generated rule resources
-        working-directory: proxy-rules
-        run: npm run check
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Validate Quantumult X and rules
+        run: python scripts/validate.py proxy-rules --install

@@ -1,12 +1,17 @@
 import { isIP } from "node:net";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { domainToASCII, fileURLToPath } from "node:url";
+
+import { assertSafeBlocks, assertReasonableChange, compactSuffixes, parseAds } from "./ads-safety.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const goodbyeAdsRoot =
   "https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules";
 
+// Known invalid legacy upstream entries. Reject any newly introduced unsafe
+// suffix with assertSafeBlocks; these three are explicitly discarded on import.
+const excludedSuffixes = ["dfirma.pl", "dkonto.pl", "in-addr.arpa"];
 const sources = {
   goodbyeAdsBlock: `${goodbyeAdsRoot}/ad-domain.txt`,
   goodbyeAdsAllow: `${goodbyeAdsRoot}/allow.txt`,
@@ -135,10 +140,26 @@ function quantumultXOutput(blockDomains, allowDomains) {
 async function emit(relativePath, content) {
   const path = resolve(root, relativePath);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content);
+  await writeFile(`${path}.tmp`, content);
+  await rename(`${path}.tmp`, path);
 }
 
 async function main() {
+  if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== "--compact")) {
+    throw new Error("Usage: update-ads.mjs [--compact]");
+  }
+  const previousText = await readFile(resolve(root, "rules/quantumultx/Ads.list"), "utf8");
+  const previous = parseAds(previousText);
+  if (process.argv.includes("--compact")) {
+    const unsafeRemoved = excludedSuffixes.filter(suffix => previous.blocks.delete(suffix)).length;
+    if (unsafeRemoved) console.warn(`Removed ${unsafeRemoved} invalid legacy public-suffix rules.`);
+    assertSafeBlocks(previous.blocks);
+    const blocks = compactSuffixes(previous.blocks);
+    const allows = compactSuffixes(previous.allows);
+    await emit("rules/quantumultx/Ads.list", quantumultXOutput([...blocks].sort(), [...allows].sort()));
+    console.log(`Compacted ${previous.blocks.size} to ${blocks.size} block rules without changing coverage.`);
+    return;
+  }
   const [goodbyeAdsBlockText, goodbyeAdsAllowText, catsTeamBlockText] =
     await Promise.all([
       download(sources.goodbyeAdsBlock),
@@ -153,6 +174,8 @@ async function main() {
     goodbyeAds.domains.has(domain),
   ).length;
   const mergedBlockSet = new Set([...goodbyeAds.domains, ...catsTeam.domains]);
+  for (const suffix of excludedSuffixes) mergedBlockSet.delete(suffix);
+  assertSafeBlocks(mergedBlockSet);
   let removedByAllow = 0;
 
   for (const domain of [...mergedBlockSet]) {
@@ -173,8 +196,12 @@ async function main() {
     );
   }
 
-  const blockDomains = [...mergedBlockSet].sort();
-  const allowDomains = [...allowSet].sort();
+  const blocks = compactSuffixes(mergedBlockSet);
+  const allows = compactSuffixes(allowSet);
+  if (blocks.size < 150_000) throw new Error(`Compacted block list is unexpectedly small: ${blocks.size}`);
+  assertReasonableChange(previous, { blocks, allows });
+  const blockDomains = [...blocks].sort();
+  const allowDomains = [...allows].sort();
 
   await Promise.all([
     emit(

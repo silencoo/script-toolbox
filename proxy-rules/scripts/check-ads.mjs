@@ -1,4 +1,5 @@
-import { isIP } from "node:net";
+import { normalizeDomain } from "./update-ads.mjs";
+import { assertSafeBlocks, assertRoutingOrder, compactSuffixes } from "./ads-safety.mjs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,7 @@ if (!Number.isInteger(declaredTotal)) {
 
 const seenDomains = new Set();
 const allowDomains = new Set();
+const blockDomains = new Set();
 let allowCount = 0;
 let blockCount = 0;
 let reachedBlocks = false;
@@ -35,7 +37,7 @@ for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
   if (!match) throw new Error(`${path}:${index + 1}: invalid rule: ${rawLine}`);
 
   const [, domain, policy] = match;
-  if (domain.includes("*") || isIP(domain)) {
+  if (normalizeDomain(domain) !== domain) {
     throw new Error(`${path}:${index + 1}: invalid domain: ${domain}`);
   }
   if (seenDomains.has(domain)) {
@@ -53,6 +55,7 @@ for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
       }
       candidate = candidate.slice(candidate.indexOf(".") + 1);
     }
+    blockDomains.add(domain);
     reachedBlocks = true;
     blockCount += 1;
   } else {
@@ -71,3 +74,19 @@ if (declaredTotal !== blockCount + allowCount) {
   );
 }
 console.log(`Validated ${blockCount} block rules and ${allowCount} allow rules.`);
+
+assertSafeBlocks(blockDomains);
+if (compactSuffixes(blockDomains).size !== blockDomains.size ||
+    compactSuffixes(allowDomains).size !== allowDomains.size) {
+  throw new Error("Redundant suffix rules: run npm run compact:ads");
+}
+const template = await readFile(resolve(root, "templates/quantumult-x.conf"), "utf8");
+const remoteSection = template.split("[filter_remote]")[1]?.split(/\n\[/)[0] ?? "";
+const resources = [];
+for (const line of remoteSection.split(/\r?\n/)) {
+  if (line.trim().startsWith("#") || /enabled=false/.test(line)) continue;
+  const name = line.match(/\/rules\/quantumultx\/([^/,]+\.list),/)?.[1];
+  if (name) resources.push({ name, text: name === "Ads.list" ? "" :
+    await readFile(resolve(root, "rules/quantumultx", name), "utf8") });
+}
+assertRoutingOrder(blockDomains, resources);

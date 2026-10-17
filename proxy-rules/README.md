@@ -69,6 +69,7 @@ expensive residential node.
 Run:
 
 ```sh
+npm ci
 npm run build
 npm run update:external
 npm run check
@@ -105,7 +106,7 @@ https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules
 https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy-rules/rules/quantumultx/Docker.list, tag=Docker, update-interval=172800, opt-parser=false, enabled=true
 ```
 
-Keep the Gemini resource above Ads and YouTube. This preserves a consistent
+Keep Docker above Ads, and the Gemini resource above Ads and YouTube. This preserves a consistent
 Gemini exit for shared exact Google hosts while routing the bulk YouTube video
 traffic independently.
 
@@ -155,6 +156,41 @@ one, to avoid duplicate rules and unnecessary memory use.
 The scheduled workflow runs every 12 hours and commits only changed generated
 outputs. It deliberately avoids GOODBYEADS' force-push and workflow-history
 deletion behavior.
+
+## Ad-list size and safety
+
+`npm run compact:ads` compacts the checked-in list offline. Both this command and
+the updater remove child suffix rules already covered by a parent, without
+changing block coverage or the priority of allow rules. The October 18 cleanup
+removed 9,931 redundant block entries and three invalid public-suffix entries,
+reducing the file from 9,819,691 to 9,348,838 bytes (4.8%). It keeps the existing
+`main/proxy-rules/rules/quantumultx/Ads.list` subscription URL.
+
+The pinned `tldts` public-suffix data covers ICANN and private suffixes such as
+`co.uk` and `github.io`. Validation rejects blocking a public suffix or the GitHub
+hosts used to retrieve subscriptions. Three known invalid legacy upstream
+entries (`dfirma.pl`, `dkonto.pl`, `in-addr.arpa`) are discarded during import;
+new unsafe suffixes fail the update. Updates also stop when either additions or
+removals exceed 10% of the previous compacted block/allow set (minimum 10 rules).
+This catches replacements even when the total stays constant. A failed update
+requires review of the upstream diff before manually accepting a new baseline;
+there is no unattended bypass flag.
+
+The checker detects curated service hosts/suffixes shadowed by Ads in the
+provided template. Docker and Gemini precede Ads so their deliberate exceptions
+retain their service policy. Existing private profiles must move Docker above
+Ads themselves; refreshing a subscription cannot reorder resources. The check
+does not fetch or compare third-party routing resources.
+
+Compaction reduces the current payload, but it cannot remove old Git objects.
+For substantially less repository growth, publish generated Ads/PT outputs on a
+separate `generated-rules` branch with one snapshot commit (or release assets),
+then migrate subscriptions and the Raw URL changes table before retiring the
+old URLs. That change has not been activated here: immediately removing Ads
+from `main` would break existing subscribers. Replacing snapshots on a separate
+branch prevents future rule history in `main`; reducing existing clone history
+requires a separately coordinated history rewrite. For a small checkout today,
+use `git clone --depth 1`.
 
 ## DNS and China routing
 

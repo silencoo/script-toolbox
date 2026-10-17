@@ -11,7 +11,7 @@ if [ -r "$COMMON_LIB" ]; then
 else
   command -v curl >/dev/null 2>&1 || { printf '%s\n' "curl is required" >&2; exit 1; }
   COMMON_LIB="$(mktemp)"
-  curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/setup-lib.sh > "$COMMON_LIB"
+  curl -fsSL https://raw.githubusercontent.com/silencoo/script-toolbox/b8e1ef4f3083c6e5985fef30617b4e32e494ff09/agent/setup-lib.sh > "$COMMON_LIB"
   # shellcheck source=../setup-lib.sh
   . "$COMMON_LIB"
   rm -f "$COMMON_LIB"

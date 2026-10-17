@@ -81,7 +81,7 @@ current_release="$(marker_value release_id)"
 [ -z "$installed_prefix" ] || PREFIX="$installed_prefix"
 [ -z "$installed_runtime" ] || RUNTIME_DIR="$installed_runtime"
 if [ -z "$current_release" ]; then
-  current_release="$(git -C "${SCRIPT_DIR}/.." rev-parse HEAD 2>/dev/null || true)"
+  current_release="$(git -C "${SCRIPT_DIR}/.." log -1 --format=%H -- agent 2>/dev/null || true)"
 fi
 
 while [ $# -gt 0 ]; do
@@ -163,25 +163,38 @@ resolve_local_source() {
     die "local update source does not contain agent/install-commands.sh: $requested"
   fi
   if [ -z "$RELEASE_ID" ]; then
-    RELEASE_ID="$(git -C "$SOURCE_ROOT" rev-parse HEAD 2>/dev/null || true)"
+    RELEASE_ID="$(git -C "$SOURCE_ROOT" log -1 --format=%H -- agent 2>/dev/null || true)"
   fi
   [ -n "$RELEASE_ID" ] || RELEASE_ID="local"
+}
+
+fetch_agent_revision() {
+  local ref="$1" latest_json="${TEMP_ROOT}/revision.json"
+  curl -fsSL --retry 2 \
+    "https://api.github.com/repos/${REPOSITORY}/commits?sha=${ref}&path=agent&per_page=1" \
+    -o "$latest_json" || return 1
+  node -e '
+    const fs = require("node:fs");
+    const values = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const value = Array.isArray(values) && values[0];
+    if (!value) process.exit(1);
+    if (!/^[a-f0-9]{40}$/.test(value.sha || "")) process.exit(1);
+    process.stdout.write(value.sha);
+  ' "$latest_json"
 }
 
 fetch_latest_release() {
   command -v curl >/dev/null 2>&1 || die "curl is required for ctl update"
   require_node22 "ctl update"
   TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/script-toolbox-update.XXXXXX")"
-  latest_json="${TEMP_ROOT}/latest.json"
-  curl -fsSL --retry 2 \
-    "https://api.github.com/repos/${REPOSITORY}/commits/main" \
-    -o "$latest_json" || die "could not query the latest ${REPOSITORY} revision"
-  RELEASE_ID="$(node -e '
-    const fs = require("node:fs");
-    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if (!/^[a-f0-9]{40}$/.test(value.sha || "")) process.exit(1);
-    process.stdout.write(value.sha);
-  ' "$latest_json")" || die "GitHub returned an invalid revision"
+  RELEASE_ID="$(fetch_agent_revision main)" || die "could not query a valid ${REPOSITORY} agent revision"
+  # Older installations recorded the repository HEAD, including unrelated bot
+  # commits. Normalize that marker without reinstalling identical agent files.
+  if [ "$current_release" != "$RELEASE_ID" ] &&
+      [[ "$current_release" =~ ^[a-f0-9]{40}$ ]]; then
+    current_release="$(fetch_agent_revision "$current_release")" ||
+      die "could not resolve the installed agent revision"
+  fi
 }
 
 if [ -n "$SOURCE_ROOT" ]; then

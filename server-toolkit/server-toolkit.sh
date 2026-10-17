@@ -6081,7 +6081,7 @@ verify_sshd_settings() {
         [ "$actual" != without-password ] || actual=prohibit-password
         if ! grep -Fxq -- "$expected" <<< "$actual"; then
             ui_log_error "SSH setting did not take effect: $key (expected $expected, got $actual)" \
-                "SSH 配置未生效: $key（期望 $expected，实际 $actual）"
+                "SSH 配置未生效: ${key}（期望 ${expected}，实际 ${actual}）"
             return 1
         fi
     done
@@ -9225,7 +9225,7 @@ run_docker_compose_backup_once() {
     ensure_log_file || return 1
     if ! backup_compose_project "$project_dir" "$backup_dir" "$compose_cmd" "$compose_file" "$include_volumes" >> "$LOG_FILE" 2>&1; then
         ui_log_error "Compose backup failed; see $LOG_FILE. Partial files may remain in $backup_dir" \
-            "Compose 备份失败，请查看 $LOG_FILE；$backup_dir 中可能保留不完整文件"
+            "Compose 备份失败，请查看 ${LOG_FILE}；$backup_dir 中可能保留不完整文件"
         return 1
     fi
 
@@ -10058,7 +10058,7 @@ apply_profile_modules() {
     for module in $modules; do
         if [ "$NON_INTERACTIVE" = "1" ] && profile_module_requires_interaction "$module"; then
             ui_log_warning "[non-interactive] Skipped $module: select its parameters from the interactive menu" \
-                "[非交互] 已跳过 $module：请在交互菜单中选择所需参数"
+                "[非交互] 已跳过 ${module}：请在交互菜单中选择所需参数"
             deferred+=" $module"
             continue
         fi

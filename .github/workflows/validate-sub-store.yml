@@ -1,0 +1,55 @@
+name: Validate sub-store
+'on':
+  push:
+    paths:
+      - sub-store/**
+      - proxy-rules/sources/**
+      - .github/actions/mihomo/**
+      - scripts/**
+      - .github/workflows/validate-sub-store.yml
+  pull_request:
+    paths:
+      - sub-store/**
+      - proxy-rules/sources/**
+      - .github/actions/mihomo/**
+      - scripts/**
+      - .github/workflows/validate-sub-store.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - uses: ./.github/actions/mihomo
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Validate sub-store
+        run: python scripts/validate.py sub-store --install
+      - name: Validate generated configs with Mihomo
+        timeout-minutes: 5
+        run: |
+          mkdir -p "${RUNNER_TEMP}/mihomo-home"
+          node sub-store/generate-mihomo-fixture.mjs \
+            > "${RUNNER_TEMP}/convert-v2-default.json"
+          node sub-store/generate-mihomo-fixture.mjs loadbalance=true \
+            > "${RUNNER_TEMP}/convert-v2-load-balance.json"
+          "${RUNNER_TEMP}/mihomo" -t \
+            -d "${RUNNER_TEMP}/mihomo-home" \
+            -f "${RUNNER_TEMP}/convert-v2-default.json"
+          "${RUNNER_TEMP}/mihomo" -t \
+            -d "${RUNNER_TEMP}/mihomo-home" \
+            -f "${RUNNER_TEMP}/convert-v2-load-balance.json"

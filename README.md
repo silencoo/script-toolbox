@@ -172,66 +172,52 @@ independent from provider credentials and MCP configuration.
 
 ## Validation
 
-JavaScript syntax and the Cloudflare Worker tests run automatically in GitHub
-Actions. The Worker tests can also be run locally with:
+CI and local checks use the same component runner. Each validation workflow has
+path filters; a server-toolkit change runs its Linux suite, while agent and
+workstation changes retain their platform checks. Superseded runs are cancelled.
+No workflow is dispatched by the local commands below.
 
 ```sh
-node --test workers/cloudflare-vless/worker.test.mjs
+python3 scripts/validate.py --help
+python3 scripts/validate.py server-toolkit --install
+python3 scripts/validate.py agent --install
+python3 scripts/validate.py proxy-rules --install
 ```
 
-Generated proxy rules can be checked with:
+`--install` runs `npm ci` and installs the component's Python test dependencies
+into the active Python environment. Use a virtual environment for local Python
+packages. Omit it once dependencies are installed. Requirements: Python 3.10+,
+Node.js 22+, npm; Bash 4+ for server-toolkit; jq for agent tests; zsh for server,
+workstation and Docker sandbox shell tests. Put your newer Bash first in `PATH`
+on macOS; agent tests continue to support the system Bash 3.2.
 
-```sh
-npm run check --prefix proxy-rules
-```
+| Component | Checks |
+| --- | --- |
+| `server-toolkit` | All `test*.py` unit tests, `test_*.sh` and `*-test.sh` safety suites, shell syntax |
+| `agent` | TUI build, discovered shell/Node tests, Promptctl Python tests; Windows installer/Git Bash checks on Windows |
+| `docker-sandboxes` | Discovered Bash/Zsh or PowerShell tests for the current platform |
+| `workstation` | Shell/Python tests on Unix; PowerShell 5.1 and 7 tests on Windows |
+| `extensions` | Cookie Exporter, Aria Relay and User Agent Manager validation; SingleFile unit tests |
+| `userscripts` | Userscripts, JPopSuki, Turnstile and ChatGPT checker tests; SHT Helper build check |
+| `linux-do` | Playwright privacy tests; `--install` also installs Chromium |
+| `proxy-rules` | Quantumult X UIActions, generated rules, ad safety and routing order |
+| `sub-store` | Node syntax and discovered conversion tests |
+| `mihomo-console` | Python suite; add `--containers` for Docker Compose checks |
+| `sing-box` | Shell syntax and discovered Python tests |
+| `cloudflare-vless`, `toolbox-store` | Worker tests and local build validation; no deployment |
+| `sunshine-vdd` | PowerShell tests on Windows |
+| `misc` | Standalone installer syntax and validation-runner regressions |
 
-The Cookie Exporter extension can be type-checked, tested, and built with:
+Node discovery includes `*.test.mjs`, `*.test.cjs`, `*.test.js` and `test.mjs`,
+excluding dependencies/build output. Package test commands discover TypeScript
+tests. SingleFile's browser E2E suite remains an explicit optional check; see its
+README. Linux.do browser tests have a separate path-filtered workflow. CI additionally downloads a checksum-verified Mihomo test binary for
+Sub-Store/config integration. Locally, set `MIHOMO_TEST_BINARY` to an installed
+Mihomo executable to enable the Console's live-core tests.
 
-```sh
-npm ci --prefix extensions/cookie-exporter
-npm run validate --prefix extensions/cookie-exporter
-```
-
-Shell scripts under `agent/` can be syntax-checked with:
-
-```sh
-./agent/test.sh
-```
-
-The standalone deployment scripts can be checked with:
-
-```sh
-bash -n debian-ai-workstation/setup.sh dujiaoka-epusdt/install.sh sing-box/install-node.sh server-toolkit/server-toolkit.sh server-toolkit/tools/cloudflare-ddns-ipv4.sh server-toolkit/tools/vnstat-traffic-firewall.sh docker-sandboxes/sbx-manager.sh workstation/shared/ghostty-setup.sh workstation/shared/ghostty-ssh-terminfo.sh workstation/macos/setup.sh workstation/macos/terminal-setup.sh mihomo-console/setup.sh
-./server-toolkit/tests/test_init_safety.sh
-python3 -m unittest discover -s server-toolkit/tests -p 'test_terminal.py' -v
-python3 -m unittest discover -s server-toolkit/tests -p 'test_terminfo.py' -v
-./server-toolkit/tests/cloudflare-ddns-test.sh
-./server-toolkit/tests/vnstat-traffic-firewall-test.sh
-./workstation/tests/ghostty-setup-test.sh
-./workstation/tests/ghostty-ssh-terminfo-test.sh
-./workstation/tests/macos-test.sh
-python3 -B -m unittest discover -s workstation/tests -p 'test_macos*.py' -v
-python3 -m unittest discover -s workstation/tests -p 'test_linux.py' -v
-python3 mihomo-console/test_manager.py
-python3 -m py_compile server-toolkit/tools/user-agent-capture-server.py
-python3 sing-box/generate-client-config.py --help
-node --test jpopsuki-rss-autobrr/tests/userscript.test.cjs
-node --test userscripts/gemini-toolkit/tests/*.test.cjs
-python3 -m pytest -p no:cacheprovider -q agent/promptctl/tests
-node agent/agentctl/orchestrator-client.test.mjs
-python3 -m pytest agent/promptctl/advanced/claude/tests
-python3 -m pytest -p no:cacheprovider -q agent/promptctl/advanced/codex/tests
-```
-
-On Windows, validate the PowerShell tools with:
-
-```powershell
-.\docker-sandboxes\tests\sbx-manager-test.ps1
-.\workstation\tests\windows-test.ps1
-.\workstation\tests\windows-menu-test.ps1
-.\workstation\tests\windows-developer-test.ps1
-.\workstation\tests\wsl-test.ps1
-```
+Path filters reduce CI cost; they do not make `main` a tested-release channel.
+Raw URLs and agent updates still consume `main`. A `[skip ci]` commit bypasses
+validation and should include its local verification in the commit description.
 
 ## License
 

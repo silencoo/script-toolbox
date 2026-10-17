@@ -1,0 +1,37 @@
+name: Install test Mihomo
+description: Download and verify the stable Linux test binary
+runs:
+  using: composite
+  steps:
+    - name: Install latest stable Mihomo
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mihomo_asset="$(
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest |
+            jq -r '
+              [
+                .assets[]
+                | select(
+                    .name
+                    | test("^mihomo-linux-amd64-v[0-9]+\\.[0-9]+\\.[0-9]+\\.gz$")
+                  )
+              ][0]
+              | [.browser_download_url, .digest]
+              | @tsv
+            '
+        )"
+        IFS=$'\t' read -r mihomo_url mihomo_digest <<< "${mihomo_asset}"
+        test -n "${mihomo_url}" && test "${mihomo_url}" != "null"
+        test -n "${mihomo_digest}" && test "${mihomo_digest}" != "null"
+        curl -fsSL "${mihomo_url}" -o "${RUNNER_TEMP}/mihomo.gz"
+        printf '%s  %s\n' \
+          "${mihomo_digest#sha256:}" \
+          "${RUNNER_TEMP}/mihomo.gz" |
+          sha256sum --check -
+        gzip -dc "${RUNNER_TEMP}/mihomo.gz" > "${RUNNER_TEMP}/mihomo"
+        chmod +x "${RUNNER_TEMP}/mihomo"
+        "${RUNNER_TEMP}/mihomo" -v
+      shell: bash

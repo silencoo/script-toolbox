@@ -388,7 +388,7 @@ run_config_tests() {
     and .mcpServers.github._managed_by == "agent/claude-code/mcp.sh"
     and .mcpServers["chrome-devtools"].command == "npx"
     and .mcpServers["chrome-devtools"].args ==
-      ["-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]
+      ["-y", "chrome-devtools-mcp@1.6.0", "--executablePath", $executable]
     and .mcpServers["chrome-devtools"]._managed_by == "agent/claude-code/mcp.sh"
   ' "$test_home/.claude.json" >/dev/null || { rm -rf "$test_root"; return 1; }
   ! grep -q 'test-github' "$test_home/.claude.json" || {
@@ -504,7 +504,7 @@ EOF
   grep -q 'command = "npx"' "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
-  grep -qF "args = [\"-y\", \"chrome-devtools-mcp@latest\", \"--executablePath\", \"${fake_bin}/node\"]" \
+  grep -qF "args = [\"-y\", \"chrome-devtools-mcp@1.6.0\", \"--executablePath\", \"${fake_bin}/node\"]" \
     "$test_home/.codex/config.toml" || {
     rm -rf "$test_root"; return 1;
   }
@@ -561,7 +561,7 @@ EOF
     and .mcp.github._managed_by == "agent/opencode/mcp.sh"
     and .mcp["chrome-devtools"].type == "local"
     and .mcp["chrome-devtools"].command ==
-      ["npx", "-y", "chrome-devtools-mcp@latest", "--executablePath", $executable]
+      ["npx", "-y", "chrome-devtools-mcp@1.6.0", "--executablePath", $executable]
     and .mcp["chrome-devtools"]._managed_by == "agent/opencode/mcp.sh"
     and .provider["script-toolbox-google"].npm == "@ai-sdk/google"
     and .model == "script-toolbox-google/gemini-3.6-flash"
@@ -707,143 +707,8 @@ else
   fail=1
 fi
 
-if "$SCRIPT_DIR/claude-code/statusline-test.sh"; then
-  :
-else
-  echo "FAIL: Claude status-line preset tests" >&2
-  fail=1
-fi
-
-if "$SCRIPT_DIR/tests/install-client-test.sh"; then
-  :
-else
-  echo "FAIL: independent CLI installation tests" >&2
-  fail=1
-fi
-
-if "$SCRIPT_DIR/agentctl/test.sh"; then
-  :
-else
-  echo "FAIL: agentctl frontend tests" >&2
-  fail=1
-fi
-
-if "$SCRIPT_DIR/mcpctl/test.sh"; then
-  :
-else
-  echo "FAIL: mcpctl profile manager tests" >&2
-  fail=1
-fi
-
-if "$SCRIPT_DIR/promptctl/test.sh"; then
-  :
-else
-  echo "FAIL: promptctl Shell frontend tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/promptctl/prompt-remote.test.mjs"; then
-  :
-else
-  echo "FAIL: promptctl remote snapshot tests" >&2
-  fail=1
-fi
-
-if node "$SCRIPT_DIR/skillsctl/test.mjs"; then
-  :
-else
-  echo "FAIL: skillsctl pack manager tests" >&2
-  fail=1
-fi
-
-if node --test \
-  "$SCRIPT_DIR/module-entry.test.mjs" \
-  "$SCRIPT_DIR/platform-command.test.mjs" \
-  "$SCRIPT_DIR/platform-paths.test.mjs" \
-  "$SCRIPT_DIR/codex-compat.test.mjs"; then
-  :
-else
-  echo "FAIL: cross-platform Bash controller launcher tests" >&2
-  fail=1
-fi
-
-if node "$SCRIPT_DIR/remote-store.test.mjs"; then
-  :
-else
-  echo "FAIL: shared remote-store compatibility tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/workspace-client.test.mjs"; then
-  :
-else
-  echo "FAIL: unified Workspace integration tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/provider-client.test.mjs"; then
-  :
-else
-  echo "FAIL: portable provider Store tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/account-client.test.mjs"; then
-  :
-else
-  echo "FAIL: Codex official-account Store tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/provider-renderer.test.mjs"; then
-  :
-else
-  echo "FAIL: provider target renderer tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/failover-client.test.mjs"; then
-  :
-else
-  echo "FAIL: portable failover route and circuit tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/proxy-client.test.mjs"; then
-  :
-else
-  echo "FAIL: loopback provider proxy tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR/agentctl/pricing-client.test.mjs" \
-    "$SCRIPT_DIR/agentctl/proxy-observability.test.mjs"; then
-  printf '%s\n' "ok  : pricing/model/usage tests"
-  checked=$((checked + 1))
-else
-  printf '%s\n' "FAIL: pricing/model/usage tests" >&2
-  fail=1
-fi
-
-if node "$SCRIPT_DIR/agentctl/orchestrator-client.test.mjs"; then
-  :
-else
-  echo "FAIL: development preset and unified doctor tests" >&2
-  fail=1
-fi
-
-if node --test "$SCRIPT_DIR"/tui/test/*.test.mjs &&
-   node "$SCRIPT_DIR/tui/dist/toolbox-tui.mjs" --help >/dev/null; then
-  echo "ok  : shared Ink TUI model and committed bundle"
-else
-  echo "FAIL: shared Ink TUI model or committed bundle" >&2
-  fail=1
-fi
-
-if "$SCRIPT_DIR/tests/install-commands-test.sh"; then
-  :
-else
-  echo "FAIL: reversible command installer tests" >&2
+if ! node "$SCRIPT_DIR/run-tests.mjs"; then
+  echo "FAIL: discovered agent regression suites" >&2
   fail=1
 fi
 

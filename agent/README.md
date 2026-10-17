@@ -328,3 +328,21 @@ CloakBrowser-backed browser control, Radare2/LLDB, Ghidra, JADX/Apktool, IDA
 Pro, and Burp. Its optional Worker/R2 backend restores the catalog, profiles,
 and encrypted API-token cache from one recovery code without GitHub
 configuration. See [`mcpctl/`](./mcpctl/README.md).
+
+## Update revisions and installer pins
+
+`agentctl update` compares the most recent commit touching `agent/`, so generated
+proxy-rule changes do not advertise controller updates. Legacy whole-repository
+revision markers are normalized through the same GitHub path query. Downloads
+still use a commit-addressed repository archive: an agent-only release archive
+and tested-release channel would further reduce download size, but are not yet
+published by this repository.
+
+The legacy Claude Code, Codex and OpenCode MCP installers use the catalog's
+`chrome-devtools-mcp@1.6.0` and `cloakbrowser@0.6.3`. Existing installed client
+configuration is not changed until its installer is rerun. The five standalone
+setup entrypoints fetch `setup-lib.sh` from immutable revision
+`b8e1ef4f3083c6e5985fef30617b4e32e494ff09` when an adjacent local copy is absent.
+When changing the helper, publish/review its commit first and update those five
+fallback URLs together. These pins cover the helper and named npm dependencies;
+they do not pin every optional tool downloaded by setup.

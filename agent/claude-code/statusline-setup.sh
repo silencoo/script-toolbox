@@ -31,7 +31,7 @@ else
   }
   DOWNLOADED_LIB="$(mktemp)"
   curl -fsSL \
-    https://raw.githubusercontent.com/silencoo/script-toolbox/main/agent/setup-lib.sh \
+    https://raw.githubusercontent.com/silencoo/script-toolbox/b8e1ef4f3083c6e5985fef30617b4e32e494ff09/agent/setup-lib.sh \
     > "$DOWNLOADED_LIB"
   # shellcheck source=../setup-lib.sh
   . "$DOWNLOADED_LIB"

@@ -302,7 +302,7 @@ copy_runtime_tree() {
 resolve_release_id() {
   local git_release=""
   [ -z "$RELEASE_ID" ] || return 0
-  git_release="$(git -C "${SCRIPT_DIR}/.." rev-parse HEAD 2>/dev/null || true)"
+  git_release="$(git -C "${SCRIPT_DIR}/.." log -1 --format=%H -- agent 2>/dev/null || true)"
   if [ -n "$git_release" ]; then
     if ! git -C "${SCRIPT_DIR}/.." diff --quiet -- agent 2>/dev/null; then
       git_release="${git_release}-dirty"

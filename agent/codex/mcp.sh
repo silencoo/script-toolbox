@@ -134,7 +134,7 @@ P_MCP_URL=(
   "https://mcp.exa.ai/mcp"
   "https://mcp.context7.com/mcp"
   "https://api.githubcopilot.com/mcp/"
-  "npx -y chrome-devtools-mcp@latest"
+  "npx -y chrome-devtools-mcp@1.6.0"
 )
 P_HDR=("X-Subscription-Token" "Authorization" "Authorization" "Authorization" "")
 P_PREFIX=("" "Bearer " "Bearer " "Bearer " "")
@@ -194,9 +194,9 @@ resolve_cloakbrowser_executable() {
       die "--dry-run with CloakBrowser requires --cloakbrowser-executable PATH (dry-run will not download a browser)"
     fi
     info "Installing/resolving the CloakBrowser Chromium binary..."
-    npx -y cloakbrowser@latest install >/dev/null ||
-      die "CloakBrowser installation failed; run 'npx -y cloakbrowser@latest info' for diagnostics"
-    diagnostics="$(npx -y cloakbrowser@latest info --quick --json)" ||
+    npx -y cloakbrowser@0.6.3 install >/dev/null ||
+      die "CloakBrowser installation failed; run 'npx -y cloakbrowser@0.6.3 info' for diagnostics"
+    diagnostics="$(npx -y cloakbrowser@0.6.3 info --quick --json)" ||
       die "CloakBrowser diagnostics failed"
     CLOAKBROWSER_EXECUTABLE="$(
       printf '%s' "$diagnostics" | node -e '
@@ -463,7 +463,7 @@ validate_provider() {
       || die "${display} requires Node.js LTS"
     command -v npx >/dev/null 2>&1 \
       || die "${display} requires npm/npx"
-    npx -y chrome-devtools-mcp@latest --help >/dev/null 2>&1 \
+    npx -y chrome-devtools-mcp@1.6.0 --help >/dev/null 2>&1 \
       || die "${display} failed to start; check Node.js LTS and npm connectivity"
     if [ "$CHROME_BROWSER" = "cloak" ]; then
       "$CLOAKBROWSER_EXECUTABLE" --version >/dev/null 2>&1 ||
@@ -545,9 +545,9 @@ TMP_NEW="$(mktemp)"
       printf 'command = "npx"\n'
       if [ "$CHROME_BROWSER" = "cloak" ]; then
         escaped_executable="$(toml_escape "$CLOAKBROWSER_EXECUTABLE")"
-        printf 'args = ["-y", "chrome-devtools-mcp@latest", "--executablePath", "%s"]\n' "$escaped_executable"
+        printf 'args = ["-y", "chrome-devtools-mcp@1.6.0", "--executablePath", "%s"]\n' "$escaped_executable"
       else
-        printf 'args = ["-y", "chrome-devtools-mcp@latest"]\n'
+        printf 'args = ["-y", "chrome-devtools-mcp@1.6.0"]\n'
       fi
     else
       url="$(p_mcp_url "$p")"

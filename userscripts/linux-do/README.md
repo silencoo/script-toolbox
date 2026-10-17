@@ -21,3 +21,11 @@
 
 `tests/privacy.test.cjs` 使用 Playwright、独立浏览器上下文及虚构 GM 存储；所有网络请求均由测试截获。
 通过 `PLAYWRIGHT_MODULE` 指定 Playwright 模块路径，必要时通过 `CHROMIUM_EXECUTABLE` 指定浏览器。
+
+本地和 CI 使用相同入口（安装固定版本 Playwright 和 Chromium，仅在本地运行）：
+
+```sh
+python3 scripts/validate.py linux-do --install
+```
+
+从仓库根目录运行；依赖已安装时省略 `--install`。
