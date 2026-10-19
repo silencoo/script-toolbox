@@ -9,7 +9,7 @@
 		"64": "src/ui/resources/icon_64.png",
 		"128": "src/ui/resources/icon_128.png"
 	},
-	"version": "1.28.1",
+	"version": "1.31.3",
 	"description": "__MSG_extensionDescription__",
 	"content_scripts": [
 		{
@@ -128,7 +128,8 @@
 				"src/ui/pages/editor-note-web.css",
 				"src/ui/pages/editor-mask-web.css",
 				"src/ui/pages/editor-frame-web.css"
-			]
+			],
+			"use_dynamic_url": true
 		}
 	],
 	"oauth2": {
