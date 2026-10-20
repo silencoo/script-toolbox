@@ -3238,13 +3238,19 @@ PY
 }
 
 fail2ban_ssh_ready() {
-    local attempt
+    local attempt output=''
     for attempt in 1 2 3 4 5; do
-        if fail2ban-client status sshd; then
+        # The service can start before its socket/jail is ready. Keep failed
+        # probes quiet, but retain the last error if startup never completes.
+        if output="$(fail2ban-client status sshd 2>&1)"; then
+            printf '%s\n' "$output"
             return 0
         fi
-        sleep 1
+        if [ "$attempt" -lt 5 ]; then
+            sleep 1
+        fi
     done
+    printf '%s\n' "$output" >&2
     return 1
 }
 

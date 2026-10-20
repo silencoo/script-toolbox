@@ -64,6 +64,37 @@ systemctl() { [ "$*" = 'is-active --quiet systemd-journald' ]; }
 fail2ban_log_source
 '''))
 
+    def test_readiness_hides_transient_socket_errors_and_shows_ready_status(self):
+        out = self.shell('''fail2ban-client() {
+    printf 'probe\\n' >> "$TEST_TMP/probes"
+    if [ "$(wc -l < "$TEST_TMP/probes")" -lt 3 ]; then
+        echo 'ERROR Failed to access socket path' >&2
+        return 1
+    fi
+    echo 'Status for the jail: sshd'
+}
+sleep() { printf 'wait\\n' >> "$TEST_TMP/waits"; }
+fail2ban_ssh_ready
+''')
+        self.assertEqual(out, 'Status for the jail: sshd\n')
+        self.assertEqual(len((self.root / 'probes').read_text().splitlines()), 3)
+        self.assertEqual(len((self.root / 'waits').read_text().splitlines()), 2)
+
+    def test_readiness_reports_last_error_when_all_probes_fail(self):
+        out = self.shell('''fail2ban-client() {
+    printf 'probe\\n' >> "$TEST_TMP/probes"
+    local count
+    count="$(wc -l < "$TEST_TMP/probes" | tr -d ' ')"
+    echo "ERROR socket unavailable on attempt $count" >&2
+    return 1
+}
+sleep() { printf 'wait\\n' >> "$TEST_TMP/waits"; }
+fail2ban_ssh_ready
+''', status=1)
+        self.assertEqual(out, 'ERROR socket unavailable on attempt 5\n')
+        self.assertEqual(len((self.root / 'probes').read_text().splitlines()), 5)
+        self.assertEqual(len((self.root / 'waits').read_text().splitlines()), 4)
+
     def action(self, overrides='', status=0):
         return self.shell('''# Rewrite only the function's fixed config path into our fixture.
 definition="$(declare -f action_configure_fail2ban)"
