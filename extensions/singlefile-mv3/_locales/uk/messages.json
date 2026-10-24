@@ -499,6 +499,10 @@
 		"message": "переміщати в елемент head стилі, що знаходяться за його межами",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "застосувати користувацьку таблицю стилів перед збереженням сторінки",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "видалити невикористовувані стилі",
 		"description": "Options page label: 'remove unused styles'"
@@ -981,6 +985,10 @@
 		"message": "Помилка SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
 	},
+	"topPanelCopyDetailsButton": {
+		"message": "Скопіювати подробиці",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
+	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Відкрити зображення..",
 		"description": "Top panel button 'Open image...' when embedding an image"
@@ -1192,6 +1200,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Профіль за правилами та поточним вибором",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Пропущено: правило призначає цій сторінці вимкнений профіль",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "завантажити на REST Form Api",

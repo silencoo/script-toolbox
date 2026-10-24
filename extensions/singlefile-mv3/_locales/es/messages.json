@@ -499,6 +499,10 @@
 		"message": "mover al elemento de head los estilos que se encuentran fuera de él",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "aplicar una hoja de estilos personalizada antes de guardar la página",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "eliminar estilos no usados",
 		"description": "Options page label: 'remove unused styles'"
@@ -981,6 +985,10 @@
 		"message": "Error de SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
 	},
+	"topPanelCopyDetailsButton": {
+		"message": "Copiar detalles",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
+	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Abrir imagen...",
 		"description": "Top panel button 'Open image...' when embedding an image"
@@ -1192,6 +1200,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Perfil según las reglas y la selección actual",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Omitida: una regla asigna esta página al perfil desactivado",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "subir a un formulario REST Api",
