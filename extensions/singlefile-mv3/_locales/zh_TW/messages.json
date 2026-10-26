@@ -499,6 +499,10 @@
 		"message": "將 head 元素外的樣式移入其中",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "儲存頁面前套用自訂樣式表",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "移除未使用的樣式",
 		"description": "Options page label: 'remove unused styles'"
@@ -981,6 +985,10 @@
 		"message": "SingleFile 錯誤：",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
 	},
+	"topPanelCopyDetailsButton": {
+		"message": "複製詳細資訊",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
+	},
 	"topPanelEmbeddedImageButton": {
 		"message": "開啟圖片...",
 		"description": "Top panel button 'Open image...' when embedding an image"
@@ -1192,6 +1200,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "網址",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "依規則與目前選擇決定設定檔",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "已略過：規則將此頁面對應到已停用的設定檔",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "上傳到 REST Form API",
