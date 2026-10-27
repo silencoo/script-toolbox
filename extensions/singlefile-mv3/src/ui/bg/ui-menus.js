@@ -60,7 +60,7 @@ const menusTitleState = new Map();
 let menuItems = new Map();
 let contextMenuVisibleState = true;
 let allMenuVisibleState = true;
-let menusCreated, pendingRefresh, business, refreshMenusTimeout;
+let menusCreated, pendingRefresh, business, refreshMenusTimeout, createMenusPromise;
 Promise.resolve().then(initialize);
 if (BROWSER_MENUS_API_SUPPORTED) {
 	browser.storage.onChanged.addListener(onStorageChanged);
@@ -85,7 +85,12 @@ function onMessage(message) {
 	}
 }
 
-async function createMenus(tab) {
+function createMenus(tab) {
+	createMenusPromise = buildMenus(tab);
+	return createMenusPromise;
+}
+
+async function buildMenus(tab) {
 	const [profiles, allTabsData, menuLayout] = await Promise.all([config.getProfiles(), tabsData.get(), config.getMenuLayout()]);
 	let options = await config.getOptions(tab && tab.url);
 	if (BROWSER_MENUS_API_SUPPORTED && options) {
@@ -286,6 +291,7 @@ async function initialize() {
 	}
 	createMenus();
 	menus.onClicked.addListener(async (event, tab) => {
+		await createMenusPromise;
 		const item = menuItems.get(event.menuItemId);
 		if (!item) {
 			return;
@@ -448,15 +454,11 @@ async function refreshTab(tab) {
 					promises.push(menus.update(id, { visible: !options.openEditor || savedPageDetected }));
 				});
 				getItems("save-selection").forEach(([id]) => promises.push(menus.update(id, { visible: !options.saveRawPage })));
-				const [profiles, rule] = await Promise.all([config.getProfiles(), config.getRule(tab.url)]);
+				const [profiles, rule] = await Promise.all([config.getProfiles(), config.getRule(tab.url, true)]);
 				const profileNames = Object.keys(profiles);
 				if (profileNames.length > 1) {
-					let selectedProfileName = config.DEFAULT_PROFILE_NAME;
-					let ruleTitle = MENU_CREATE_DOMAIN_RULE_MESSAGE;
-					if (rule && rule.profile != config.DEFAULT_PROFILE_NAME && profiles[rule.profile]) {
-						selectedProfileName = rule.profile;
-						ruleTitle = MENU_UPDATE_RULE_MESSAGE;
-					}
+					const selectedProfileName = rule ? rule.profile : config.CURRENT_PROFILE_NAME;
+					const ruleTitle = rule ? MENU_UPDATE_RULE_MESSAGE : MENU_CREATE_DOMAIN_RULE_MESSAGE;
 					getItems("domain-rule").forEach(([id, item]) => {
 						if (item.profileName) {
 							promises.push(updateCheckedValue(id, item.profileName == selectedProfileName));
