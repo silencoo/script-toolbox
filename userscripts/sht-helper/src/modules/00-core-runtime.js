@@ -2,4 +2,4 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '3.2.0';
+    const SCRIPT_VERSION = '3.2.1';

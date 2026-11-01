@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SHT Helper - 附件、链接与搜索增强
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      3.2.0
+// @version      3.2.1
 // @description  为色花堂提供附件文本预览、ZIP/RAR 解压、ED2K/磁力链接聚合、图片控制、离线下载与搜索结果排序、高亮和过滤。
 // @author       silencoo
 // @license      MIT
@@ -31,7 +31,7 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '3.2.0';
+    const SCRIPT_VERSION = '3.2.1';
 
     /*********************** 请求、完整性、通知与诊断 ***********************/
     const REQUEST_DEFAULT_TIMEOUT = 30_000;
@@ -250,9 +250,18 @@
             const source = response.responseText || response.response || '';
             await assertSha256(source, spec.sha256, name);
             // 固定版本且通过 SHA-256 校验的资源，仅在用户触发对应功能时执行。
-            Function(`${source}\n//# sourceURL=${spec.url}`)();
-            const loaded = globalThis[spec.globalName];
+            // 通过 CommonJS 垫片直接拿到 UMD 导出：Safari Tampermonkey 等沙箱中，
+            // Function() 运行在真实全局作用域，写入 window/globalThis 的对象对脚本不可见。
+            const shimModule = { exports: {} };
+            Function('module', 'exports', 'define', `${source}\n//# sourceURL=${spec.url}`)
+                .call(shimModule.exports, shimModule, shimModule.exports, undefined);
+            const exported = shimModule.exports;
+            const loaded = (exported && (typeof exported === 'function' || Object.keys(exported).length))
+                ? exported
+                : globalThis[spec.globalName];
             if (!loaded) throw new Error(`${spec.globalName} 未注册`);
+            // 让沙箱内的裸标识符（如 jschardet.detect、new zip.ZipReader）可以解析到该库。
+            globalThis[spec.globalName] = loaded;
             return loaded;
         })().catch(error => {
             optionalLibraryPromises.delete(name);

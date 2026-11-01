@@ -55,6 +55,23 @@ test('optional library loader caches a successful request', async () => {
   assert.equal(requests, 1);
 });
 
+test('optional library loader captures UMD exports without relying on a shared global', async () => {
+  const start = infrastructureSource.indexOf('    const OPTIONAL_LIBRARIES');
+  const end = infrastructureSource.indexOf('    function ensureToastRegion', start);
+  const sandboxGlobal = {};
+  const context = vm.createContext({
+    Map, Promise, Error, Object, Function,
+    // Simulates a userscript sandbox whose globalThis is not the realm global the library writes to.
+    globalThis: sandboxGlobal,
+    shtRequest: async () => ({ status: 200, responseText: await readFile(resolve(root, 'vendor/zip-2.7.53.min.js'), 'utf8') }),
+    assertSha256: async () => {},
+  });
+  const load = vm.runInContext(`(() => {${infrastructureSource.slice(start, end)}; return loadOptionalLibrary;})()`, context);
+  const zip = await load('zip');
+  assert.equal(typeof zip.ZipReader, 'function');
+  assert.equal(sandboxGlobal.zip, zip);
+});
+
 test('vendored zip runtime matches the enforced digest', async () => {
   const bytes = await readFile(resolve(root, 'vendor/zip-2.7.53.min.js'));
   assert.equal(createHash('sha256').update(bytes).digest('hex'), 'c239c5a4914692dc41bb58027395c99ce7f1b93ab97059dc4035822303ea45d3');

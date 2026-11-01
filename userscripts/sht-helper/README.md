@@ -2,7 +2,7 @@
 
 A Tampermonkey / Violentmonkey userscript purpose-built for the [Sehuatang](https://sehuatang.org/) forum. It consolidates the routine tasks of reading a thread — previewing attachments, unpacking archives, collecting ED2K and magnet links, hiding visual clutter, and pushing downloads to cloud storage — into a single toolbar.
 
-[![Version](https://img.shields.io/badge/version-3.2.0-blue.svg)](https://github.com/silencoo/script-toolbox/tree/main/userscripts/sht-helper)
+[![Version](https://img.shields.io/badge/version-3.2.1-blue.svg)](https://github.com/silencoo/script-toolbox/tree/main/userscripts/sht-helper)
 [![Userscript](https://img.shields.io/badge/userscript-ready-green.svg)](#installation)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](../../LICENSE)
 
@@ -113,6 +113,10 @@ Edit the ordered fragments in `src/`, not the generated `sht-helper.user.js`. `n
 ---
 
 ## Changelog
+
+### 3.2.1
+
+- Fixed optional libraries (`jschardet`, ZIP) failing with "未注册" in sandboxed managers such as Safari Tampermonkey; the loader now captures UMD exports directly instead of reading a shared global
 
 ### 3.2.0
 
@@ -296,6 +300,10 @@ npm run check
 ---
 
 ## 更新日志
+
+### 3.2.1
+
+- 修复 Safari Tampermonkey 等沙箱环境中可选依赖（`jschardet`、ZIP）加载后报“未注册”的问题：加载器改为直接捕获 UMD 导出，不再依赖共享全局对象
 
 ### 3.2.0
 

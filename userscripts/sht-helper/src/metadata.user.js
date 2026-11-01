@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SHT Helper - 附件、链接与搜索增强
 // @namespace    https://github.com/silencoo/script-toolbox
-// @version      3.2.0
+// @version      3.2.1
 // @description  为色花堂提供附件文本预览、ZIP/RAR 解压、ED2K/磁力链接聚合、图片控制、离线下载与搜索结果排序、高亮和过滤。
 // @author       silencoo
 // @license      MIT
