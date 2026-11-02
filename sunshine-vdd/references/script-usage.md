@@ -120,7 +120,7 @@ Schedule it, then immediately disconnect every Moonlight client normally:
 .\scripts\Recover-PhysicalDisplayAccess.ps1 -ConfirmNormalDisconnect -Apply
 ```
 
-The temporary worker waits for the initial delay, polls `Get-SunshineVddState.ps1 -StreamingOnly`, waits out Sunshine's configured revert delay, confirms `Inactive` a second time, and only then runs `DisplaySwitch.exe /extend`. It times out without changing topology if the state remains `Active` or `Unknown`. The command does not require elevation and reports a log path under `%LOCALAPPDATA%\SunshineVddSetup`.
+The temporary worker waits for the initial delay, polls `Get-SunshineVddState.ps1 -StreamingOnly`, waits out Sunshine's configured revert delay, and confirms `Inactive` again. It validates native Extend, saves a restorable snapshot, rechecks the stream immediately before applying, and verifies that a physical display became attached. It times out without changing topology if the state remains `Active` or `Unknown`. Run from an interactive console session with display-configuration access (an elevated interactive PowerShell on restricted hosts). The log under `%LOCALAPPDATA%\SunshineVddSetup` includes native error codes and distinguishes an accepted API call from verified recovery.
 
 ## Closed-loop test
 

@@ -27,7 +27,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $inventoryScript = Join-Path $PSScriptRoot 'Get-SunshineVddState.ps1'
-$displaySwitch = Join-Path $env:SystemRoot 'System32\DisplaySwitch.exe'
+$topologyModule = Join-Path $PSScriptRoot 'DisplayTopology.psm1'
 $inventoryArguments = @{
     SunshineRoot = $SunshineRoot
     AsObject      = $true
@@ -47,7 +47,7 @@ $effectivePostInactiveDelaySeconds = [Math]::Max($PostInactiveDelaySeconds, $min
 
 $preview = [pscustomobject][ordered]@{
     Mode                       = if ($Apply) { 'Scheduling' } else { 'DryRun' }
-    Action                     = 'WaitForInactiveStreamThenRunDisplaySwitchExtend'
+    Action                     = 'WaitForInactiveStreamThenApplyVerifiedNativeExtend'
     InitialDelaySeconds        = $InitialDelaySeconds
     DisconnectTimeoutSeconds  = $DisconnectTimeoutSeconds
     PollIntervalSeconds        = $PollIntervalSeconds
@@ -55,7 +55,7 @@ $preview = [pscustomobject][ordered]@{
     ConfiguredRevertDelayMs    = $configuredRevertDelayMilliseconds
     StreamingState             = $state.Sunshine.Streaming
     DetachedPhysicalDisplays   = $detachedPhysical
-    DisplaySwitchPath          = $displaySwitch
+    TopologyModule             = $topologyModule
     ConfirmNormalDisconnect    = $ConfirmNormalDisconnect.IsPresent
 }
 
@@ -66,8 +66,8 @@ if (-not $Apply) {
 if (-not $ConfirmNormalDisconnect) {
     throw 'Rerun with -ConfirmNormalDisconnect only when you will immediately disconnect every Moonlight client normally. The recovery worker never changes topology while stream state is Active or Unknown.'
 }
-if (-not (Test-Path -LiteralPath $displaySwitch)) {
-    throw "DisplaySwitch.exe was not found: $displaySwitch"
+if (-not (Test-Path -LiteralPath $topologyModule)) {
+    throw "Display topology module was not found: $topologyModule"
 }
 
 [void](New-Item -ItemType Directory -Path $LogDirectory -Force)
@@ -83,7 +83,8 @@ function ConvertTo-SingleQuotedLiteral {
 $inventoryLiteral = ConvertTo-SingleQuotedLiteral -Value $inventoryScript
 $sunshineRootLiteral = ConvertTo-SingleQuotedLiteral -Value $SunshineRoot
 $configLiteral = ConvertTo-SingleQuotedLiteral -Value $resolvedConfigPath
-$displaySwitchLiteral = ConvertTo-SingleQuotedLiteral -Value $displaySwitch
+$moduleLiteral = ConvertTo-SingleQuotedLiteral -Value $topologyModule
+$backupLiteral = ConvertTo-SingleQuotedLiteral -Value ([IO.Path]::GetFullPath($LogDirectory))
 $logLiteral = ConvertTo-SingleQuotedLiteral -Value $logPath
 
 $payload = @"
@@ -92,6 +93,7 @@ function Write-RecoveryLog([string]`$Message) {
     ('{0:o} {1}' -f (Get-Date), `$Message) | Add-Content -LiteralPath $logLiteral -Encoding utf8
 }
 Write-RecoveryLog 'Recovery worker started.'
+Import-Module $moduleLiteral -Force
 Start-Sleep -Seconds $InitialDelaySeconds
 `$deadline = (Get-Date).AddSeconds($DisconnectTimeoutSeconds)
 do {
@@ -104,8 +106,18 @@ do {
             `$confirmedStream = & $inventoryLiteral -SunshineRoot $sunshineRootLiteral -SunshineConfigPath $configLiteral -StreamingOnly -AsObject
             Write-RecoveryLog ('Post-settle Sunshine stream state: {0}' -f `$confirmedStream.Status)
             if (`$confirmedStream.Status -eq 'Inactive') {
-                Start-Process -FilePath $displaySwitchLiteral -ArgumentList '/extend'
-                Write-RecoveryLog 'Started DisplaySwitch.exe /extend after Sunshine remained inactive through the settle interval.'
+                `$validation = Set-VddExtendedDisplayTopology
+                if (`$validation -ne 0) { Write-RecoveryLog ('Native Extend validation failed: {0}; no change applied.' -f `$validation); exit 3 }
+                `$backup = New-VddDisplayTopologyBackup -Directory $backupLiteral -Reason 'physical-recovery'
+                Write-RecoveryLog ('Recovery snapshot: {0}' -f `$backup)
+                `$finalStream = & $inventoryLiteral -SunshineRoot $sunshineRootLiteral -SunshineConfigPath $configLiteral -StreamingOnly -AsObject
+                if (`$finalStream.Status -ne 'Inactive') { Write-RecoveryLog 'Stream changed before apply; no change applied.'; exit 2 }
+                `$result = Set-VddExtendedDisplayTopology -Apply
+                if (`$result -ne 0) { Write-RecoveryLog ('Native Extend apply failed: {0}.' -f `$result); exit 3 }
+                Start-Sleep -Seconds 3
+                `$physical = @(Get-VddDisplayInventory | Where-Object { `$_.Attached -and -not `$_.IsMttVdd -and -not `$_.IsOtherVirtual })
+                if (`$physical.Count -eq 0) { Write-RecoveryLog 'Windows accepted Extend but no physical display is attached; recovery NOT verified.'; exit 4 }
+                Write-RecoveryLog ('Physical display recovery verified: {0}' -f ((`$physical | ForEach-Object { `$_.DeviceName }) -join ', '))
                 exit 0
             }
         }
@@ -126,7 +138,7 @@ $worker = Start-Process -FilePath $powerShellExe -ArgumentList @(
     '-NonInteractive',
     '-WindowStyle', 'Hidden',
     '-EncodedCommand', $encodedPayload
-) -PassThru
+    ) -WindowStyle Hidden -PassThru
 
 [pscustomobject][ordered]@{
     Mode                      = 'Scheduled'
@@ -135,6 +147,6 @@ $worker = Start-Process -FilePath $powerShellExe -ArgumentList @(
     DisconnectTimeoutSeconds = $DisconnectTimeoutSeconds
     PostInactiveDelaySeconds  = $effectivePostInactiveDelaySeconds
     LogPath                   = $logPath
-    NextAction                = 'Disconnect every Moonlight client normally now. The worker applies /extend only after Sunshine is positively Inactive.'
+    NextAction                = 'Disconnect every Moonlight client normally now. The worker validates, backs up and applies native Extend only after Sunshine is positively Inactive.'
     StreamingStateAtSchedule  = $state.Sunshine.Streaming
 }

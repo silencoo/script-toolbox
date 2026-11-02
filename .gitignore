@@ -19,3 +19,9 @@ jpopsuki-rss-autobrr/data/subscriptions.json
 
 # Editable Quantumult X profiles can contain account-bound subscription URLs.
 /proxy-rules/templates/quantumult-x.local.conf
+
+# Sunshine monitor runtime contains host identities, native snapshots and logs.
+/sunshine-vdd/monitor/settings.json
+/sunshine-vdd/monitor/guard.json
+/sunshine-vdd/monitor/data/
+/sunshine-vdd/monitor/backups/

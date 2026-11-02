@@ -43,7 +43,7 @@ Do not add many fallback modes merely to hide a mismatch. Decide whether the wor
 
 - Wait for normal no-signal wake latency.
 - Confirm Windows restored the physical path even if the panel is dark.
-- If Moonlight is the only working view, do not run `DisplaySwitch.exe` immediately during capture. Preview and schedule `Recover-PhysicalDisplayAccess.ps1 -ConfirmNormalDisconnect -Apply`, disconnect every Moonlight client normally, and let its one-shot worker wait for a positively detected inactive stream before running `/extend`.
+- If Moonlight is the only working view, do not switch displays immediately during capture. Preview and schedule `Recover-PhysicalDisplayAccess.ps1 -ConfirmNormalDisconnect -Apply`, disconnect every Moonlight client normally, and let its one-shot worker wait for a positively detected inactive stream before validating, backing up, and applying native Extend. Inspect its result: API success alone does not prove a physical display returned.
 - If a previous DDC/CI hard-off command was used, turn the monitor on physically once. Do not add DDC hard-off to the normal workflow.
 - Use the recorded topology and safe-mode/device-manager recovery path if display enumeration is broken.
 - Preview the reported native snapshot with `Restore-DisplayTopology.ps1`; if validation passes, every Moonlight client is disconnected, and recovery access is available, apply it from an elevated session with `-ConfirmNoActiveStream`. The restore operation saves the current topology before replacing it.
@@ -75,7 +75,23 @@ Prevention:
 
 UAC uses the secure desktop and may not appear in a Moonlight capture. Before requesting elevation, ensure the user can approve it on the physical monitor or through an authorized alternate channel. Do not repeatedly create hidden UAC prompts.
 
-## Logs
+## Optional monitor protection
+
+The versioned monitor in `monitor/` upgrades the existing diagnostic task. Observe
+mode records without correcting; Protect requires explicit user intent and verified
+physical-idle and VDD-stream baselines. See [monitor documentation](../monitor/README.md).
+
+Check `status.json.Protection` and `data/protection-notice.json` separately from
+capture health: a Healthy current stream does not prove the idle restore baseline
+exists, nor that automatic protection is enabled. A latched failure is not cleared
+by restarting the monitor. Do not blindly restart Sunshine after a privacy failure.
+
+If a baseline is missing or rejected after a reboot or device change, establish a
+healthy approved layout in Observe mode and let the monitor record it. Never replace
+a physical baseline with a temporary VDD-only state, copy a native snapshot from
+another boot, or change the configured monitor identity just to silence an alert.
+
+## Logs and evidence
 
 - Use normal Sunshine logging for verification.
 - Enable VDD debug logging only for a short reproduction window.

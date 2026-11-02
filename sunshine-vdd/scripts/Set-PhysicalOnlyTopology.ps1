@@ -42,7 +42,7 @@ if ($PhysicalDisplayNames) {
     }
     $targets = @($physical | Where-Object { $requestedNames -icontains $_.DeviceName })
     if ($targets.Count -ne $requestedNames.Count) {
-        $foundNames = @($targets.DeviceName)
+        $foundNames = @($targets | ForEach-Object { $_.DeviceName })
         $missing = @($requestedNames | Where-Object { $foundNames -inotcontains $_ })
         throw "The requested display is not one uniquely attached physical display: $($missing -join ', ')."
     }

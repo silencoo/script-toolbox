@@ -118,8 +118,16 @@ Do not call the setup complete until this connection/disconnection cycle passes.
 - `scripts/Restart-VddDevice.ps1`: guarded restart of one exact MTT VDD PnP instance.
 - `scripts/Set-PhysicalOnlyTopology.ps1`: persist the selected active physical display paths, detach other desktop paths without disabling drivers, and roll back a failed verification.
 - `scripts/Restore-DisplayTopology.ps1`: validate and restore a restorable topology snapshot; save the current topology before applying the restore.
-- `scripts/Recover-PhysicalDisplayAccess.ps1`: schedule a one-shot `/extend` recovery, wait until Sunshine is positively inactive, then reattach available displays without elevation.
+- `scripts/Recover-PhysicalDisplayAccess.ps1`: schedule one-shot native Extend recovery, wait until Sunshine is positively inactive, back up the topology, then verify that a physical display reattaches.
 - `scripts/Test-SunshineVddCycle.ps1`: read-only idle/stream/revert monitor.
+- `scripts/Install-Monitor.ps1`: install or upgrade the optional existing diagnostic task in Observe mode, backing up runtime files and task XML.
+- `scripts/Set-MonitorMode.ps1`: enable opt-in protection only after verified physical-idle and virtual-stream baselines exist, or return to Observe mode.
+
+## Optional protection monitor
+
+Read [monitor/README.md](monitor/README.md) when the user explicitly asks for background monitoring or automatic exclusive-display protection. Reuse the existing `SunshineDisplayDiagnosticMonitor` task rather than creating a parallel monitor. The monitor does not modify Sunshine binaries or settings. Installing it in Observe mode does not change displays or interrupt Sunshine.
+
+Only when the user explicitly authorizes automatic protection, the runtime may restore a previously verified exclusive VDD snapshot during a confirmed active stream, after confirming Windows is locked. This narrow opt-in exception does not authorize ad-hoc topology changes or driver reloads during a stream. Do not enable Protect until both current-boot baselines have been verified. Test failures with fixtures; perform the live normal connection/disconnection cycle with the user. Failure handling locks first and then stops Sunshine; service restart and clearing a failure latch remain deliberate actions.
 
 ## Troubleshooting
 

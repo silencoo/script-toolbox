@@ -525,6 +525,12 @@ namespace SunshineVddSkill
             return path;
         }
 
+        public static int RequestExtendedTopology(bool apply)
+        {
+            // SDC_TOPOLOGY_EXTEND requests Windows' saved extended configuration.
+            return SetDisplayConfig(0, null, 0, null, 0x4 | (apply ? SDC_APPLY : SDC_VALIDATE));
+        }
+
         public static TopologyOperation KeepOnlyDisplays(string[] displayNames, bool apply)
         {
             if (displayNames == null || displayNames.Length == 0)
@@ -684,4 +690,10 @@ function Set-VddSingleDisplayTopology {
     Set-VddSelectedDisplayTopology -DisplayNames @($DisplayName) -Apply:$Apply
 }
 
-Export-ModuleMember -Function Get-VddDisplayInventory, Get-VddDisplayTopologySnapshot, New-VddDisplayTopologyBackup, Restore-VddDisplayTopology, Set-VddSelectedDisplayTopology, Set-VddSingleDisplayTopology
+function Set-VddExtendedDisplayTopology {
+    [CmdletBinding()]
+    param([switch]$Apply)
+    [SunshineVddSkill.NativeDisplay]::RequestExtendedTopology($Apply.IsPresent)
+}
+
+Export-ModuleMember -Function Get-VddDisplayInventory, Get-VddDisplayTopologySnapshot, New-VddDisplayTopologyBackup, Restore-VddDisplayTopology, Set-VddSelectedDisplayTopology, Set-VddSingleDisplayTopology, Set-VddExtendedDisplayTopology

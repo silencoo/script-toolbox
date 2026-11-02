@@ -196,7 +196,7 @@ native_pen_touch = enabled
     Assert-True (@($recoveryParseErrors).Count -eq 0) 'The physical-display recovery script must parse successfully.'
     $recoveryText = Get-Content -LiteralPath $recoveryPath -Raw
     Assert-True ($recoveryText -match "Status -eq 'Inactive'") 'The recovery worker must require a positively inactive stream before changing topology.'
-    Assert-True ($recoveryText -match "ArgumentList '/extend'") 'The recovery worker must use Extend rather than Duplicate/Clone.'
+    Assert-True ($recoveryText -match 'Set-VddExtendedDisplayTopology -Apply') 'The recovery worker must use native Extend rather than Duplicate/Clone.'
 
     $restoreText = Get-Content -LiteralPath (Join-Path $root 'scripts/Restore-DisplayTopology.ps1') -Raw
     Assert-True ($restoreText -match "Status -eq 'Active'") 'Native topology restore must refuse an active Sunshine stream.'

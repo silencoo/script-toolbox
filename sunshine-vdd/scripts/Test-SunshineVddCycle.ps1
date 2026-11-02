@@ -50,7 +50,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module -Force (Join-Path $PSScriptRoot 'DisplayTopology.psm1')
 
-foreach ($name in @($ExpectedIdlePhysicalDisplays) + @($ExpectedStreamPhysicalDisplays)) {
+foreach ($name in (@($ExpectedIdlePhysicalDisplays) + @($ExpectedStreamPhysicalDisplays) | Where-Object { $null -ne $_ })) {
     if ($name -notmatch '^\\\\\.\\DISPLAY\d+$') {
         throw "Invalid expected physical display name '$name'. Re-inventory and use a current GDI name such as \\\\.\\DISPLAY3."
     }
@@ -144,7 +144,7 @@ if (-not (Test-IdleState $idleBefore)) {
 if ($IdleOnly) {
     $idleResult = [pscustomobject][ordered]@{
         Passed         = $errors.Count -eq 0
-        Errors         = @($errors)
+        Errors         = $errors.ToArray()
         IdleBefore     = $idleBefore
         StreamObserved = $null
         IdleAfter      = $null
@@ -176,7 +176,7 @@ if ($stream.Passed) {
 
 $result = [pscustomobject][ordered]@{
     Passed         = $errors.Count -eq 0
-    Errors         = @($errors)
+    Errors         = $errors.ToArray()
     IdleBefore     = $idleBefore
     StreamObserved = $stream
     IdleAfter      = $idleAfter

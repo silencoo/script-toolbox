@@ -1,0 +1,10 @@
+{
+  "Mode": "Observe",
+  "MaxAttempts": 2,
+  "RetrySeconds": 10,
+  "FaultSeconds": 5,
+  "StableSeconds": 4,
+  "MaxUnstableSeconds": 25,
+  "BaselineStableSeconds": 10,
+  "ServiceName": "SunshineService"
+}

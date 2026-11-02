@@ -92,7 +92,7 @@ Persisting a physical-only idle topology must:
 
 This avoids a hidden 800x600 fallback desktop and does not require a background helper.
 
-The physical-only topology is an **idle baseline**. It does not make exclusive VDD-only streaming fail-safe. For emergency recovery, `Recover-PhysicalDisplayAccess.ps1` schedules `DisplaySwitch.exe /extend`, polls the lightweight Sunshine stream state, waits for Sunshine's configured revert delay to settle, and applies the topology change only after a second positively detected `Inactive` state.
+The physical-only topology is an **idle baseline**. It does not make exclusive VDD-only streaming fail-safe. For emergency recovery, `Recover-PhysicalDisplayAccess.ps1` schedules native Extend, polls the lightweight Sunshine stream state, waits for Sunshine's configured revert delay to settle, validates and backs up the topology, and rechecks `Inactive` immediately before applying. It also verifies that a physical display actually reattached.
 
 ## Backups
 
