@@ -160,11 +160,11 @@
 		"description": "Badge label during initialization: '•••'"
 	},
 	"buttonSaveProgressTooltip": {
-		"message": "İlerlemeyi kaydet: ",
+		"message": "Kaydetme ilerlemesi: ",
 		"description": "Button title during save: 'Save progress: xx%'"
 	},
 	"buttonUploadProgressTooltip": {
-		"message": "İlerlemeyi yükle: ",
+		"message": "Yükleme ilerlemesi: ",
 		"description": "Button title during save: 'Upload progress: xx%'"
 	},
 	"buttonOKBadge": {
@@ -324,7 +324,7 @@
 		"description": "Options page label: 'replace emojis with text'"
 	},
 	"optionSaveFilenameTemplateData": {
-		"message": "dosya adı şablon verilerini sayfaya kaydetme",
+		"message": "dosya adı şablon verilerini sayfaya kaydet",
 		"description": "Options page label: 'save the filename template data into the page'"
 	},
 	"optionConfirmFilename": {
@@ -483,6 +483,10 @@
 		"message": "kullanılmayan yazı tiplerini kaldır",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "kullanılmayan glifleri kaldır",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "alternatif yazı tiplerini kaldır",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -498,6 +502,10 @@
 	"optionMoveStylesInHead": {
 		"message": "dışında bulunan stilleri baş öğesinde taşı",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
+	},
+	"optionCustomStylesheet": {
+		"message": "sayfayı kaydetmeden önce özel bir stil sayfası uygula",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
 	},
 	"optionRemoveUnusedStyles": {
 		"message": "kullanılmayan stilleri kaldır",
@@ -708,7 +716,7 @@
 		"description": "Title of the button 'warn if leaving page with unsaved changes'"
 	},
 	"optionDisplayInfobarInEditor": {
-		"message": "bilgi çubuğunu görüntüleme",
+		"message": "bilgi çubuğunu görüntüle",
 		"description": "Title of the button 'display the infobar'"
 	},
 	"optionsMiscSubTitle": {
@@ -914,8 +922,12 @@
 		"description": "Options help link"
 	},
 	"optionSynchronize": {
-		"message": "senkronizasyon seçenekleri",
+		"message": "seçenekleri senkronize et",
 		"description": "Options label: 'synchronize options'"
+	},
+	"optionSynchronizeError": {
+		"message": "Seçenekler senkronize depolama alanına kopyalanamadı; hâlâ yerel olarak saklanıyor.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
 	},
 	"optionsResetButton": {
 		"message": "Sıfırla",
@@ -953,6 +965,10 @@
 		"message": "İçe aktar",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "Seçenekler içe aktarılamadı; mevcut seçenekler değiştirilmedi.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Ertelenmiş içerik",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "SingleFile hata: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Ayrıntıları kopyala",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Resmi aç...",
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Kurallara ve geçerli seçime göre profil",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Atlandı: bir kural bu sayfayı devre dışı profile eşliyor",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "REST Form Api'ye Yükleme",

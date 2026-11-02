@@ -12,47 +12,47 @@
 		"description": "Command (Ctrl+Shift+U): 'Save all tabs'"
 	},
 	"commandCustomShortcut": {
-		"message": "Anpassad genväg",
+		"message": "Anpassat kortkommando",
 		"description": "Command label: 'Custom shortcut'"
 	},
 	"commandCustomShortcut0": {
-		"message": "Anpassad genväg #1",
+		"message": "Anpassat kortkommando #1",
 		"description": "Command label: 'Custom shortcut #1'"
 	},
 	"commandCustomShortcut1": {
-		"message": "Anpassad genväg #2",
+		"message": "Anpassat kortkommando #2",
 		"description": "Command label: 'Custom shortcut #2'"
 	},
 	"commandCustomShortcut2": {
-		"message": "Anpassad genväg #3",
+		"message": "Anpassat kortkommando #3",
 		"description": "Command label: 'Custom shortcut #3'"
 	},
 	"commandCustomShortcut3": {
-		"message": "Anpassad genväg #4",
+		"message": "Anpassat kortkommando #4",
 		"description": "Command label: 'Custom shortcut #4'"
 	},
 	"commandCustomShortcut4": {
-		"message": "Anpassad genväg #5",
+		"message": "Anpassat kortkommando #5",
 		"description": "Command label: 'Custom shortcut #5'"
 	},
 	"commandCustomShortcut5": {
-		"message": "Anpassad genväg #6",
+		"message": "Anpassat kortkommando #6",
 		"description": "Command label: 'Custom shortcut #6'"
 	},
 	"commandCustomShortcut6": {
-		"message": "Anpassad genväg #7",
+		"message": "Anpassat kortkommando #7",
 		"description": "Command label: 'Custom shortcut #7'"
 	},
 	"commandCustomShortcut7": {
-		"message": "Anpassad genväg #8",
+		"message": "Anpassat kortkommando #8",
 		"description": "Command label: 'Custom shortcut #8'"
 	},
 	"commandCustomShortcut8": {
-		"message": "Anpassad genväg #9",
+		"message": "Anpassat kortkommando #9",
 		"description": "Command label: 'Custom shortcut #9'"
 	},
 	"commandCustomShortcut9": {
-		"message": "Anpassad genväg #10",
+		"message": "Anpassat kortkommando #10",
 		"description": "Command label: 'Custom shortcut #10'"
 	},
 	"menuSavePage": {
@@ -72,7 +72,7 @@
 		"description": "Menu entry: 'Annotate and save the page...'"
 	},
 	"menuSaveWithProfile": {
-		"message": "Spara med profil",
+		"message": "Spara sidan med profil",
 		"description": "Menu entry: 'Save with profile'"
 	},
 	"menuViewPendingSaves": {
@@ -192,7 +192,7 @@
 		"description": "Accessible label of the icon opening the options in a new tab"
 	},
 	"optionsEditorLink": {
-		"message": "Öppna alternativredigeraren",
+		"message": "Öppna inställningsredigeraren",
 		"description": "Accessible label of the icon opening the options editor"
 	},
 	"optionsUserInterfaceSubTitle": {
@@ -248,11 +248,11 @@
 		"description": "Options page label: 'auto-close the tab after the page is saved'"
 	},
 	"optionCustomShortcut": {
-		"message": "kommando för tangentbordsgenväg",
+		"message": "kortkommando",
 		"description": "Options page label: 'keyboard shortcut command'"
 	},
 	"optionCustomShortcutDefault": {
-		"message": "standardgenväg",
+		"message": "standardkortkommando",
 		"description": "Options page label: 'default shortcut'"
 	},
 	"optionsFileNameSubTitle": {
@@ -483,6 +483,10 @@
 		"message": "ta bort oanvända teckensnitt",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "ta bort oanvända glyfer",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "ta bort alternativa teckensnitt",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -498,6 +502,10 @@
 	"optionMoveStylesInHead": {
 		"message": "flytta stilar som ligger utanför head-elementet till head-elementet",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
+	},
+	"optionCustomStylesheet": {
+		"message": "tillämpa en anpassad stilmall innan sidan sparas",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
 	},
 	"optionRemoveUnusedStyles": {
 		"message": "ta bort oanvända stilar",
@@ -576,7 +584,7 @@
 		"description": "Column header in the Auto-settings rules table: the complete or partial URL a rule matches against the page being saved"
 	},
 	"optionsAutoSettingsUrlPlaceholder": {
-		"message": "Ange en fullständig eller delvis URL (t.ex. example.com)",
+		"message": "Ange en fullständig URL eller en del av en URL (t.ex. example.com)",
 		"description": "Placeholder of the URL field in the Auto-settings rules table"
 	},
 	"optionsAutoSettingsProfile": {
@@ -632,7 +640,7 @@
 		"description": "Options page label: 'auto-save on page unload'"
 	},
 	"optionAutoSaveDiscard": {
-		"message": "spara automatiskt när en flik kasseras",
+		"message": "spara automatiskt när innehållet i en flik tas bort ur minnet",
 		"description": "Options page label: 'auto-save on tab discard'"
 	},
 	"optionAutoSaveRemove": {
@@ -692,7 +700,7 @@
 		"description": "Options page label: 'default mode > remove elements'"
 	},
 	"optionDefaultEditorModeCutExternal": {
-		"message": "ta bort externa element",
+		"message": "ta bort element utanför markeringen",
 		"description": "Options page label: 'default mode > remove external elements'"
 	},
 	"optionApplySystemTheme": {
@@ -917,6 +925,10 @@
 		"message": "synkronisera inställningar",
 		"description": "Options label: 'synchronize options'"
 	},
+	"optionSynchronizeError": {
+		"message": "Inställningarna kunde inte kopieras till den synkroniserade lagringen. De är fortfarande sparade lokalt.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
+	},
 	"optionsResetButton": {
 		"message": "Återställ",
 		"description": "Options button: 'Reset'"
@@ -953,6 +965,10 @@
 		"message": "Importera",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "Inställningarna kunde inte importeras. De nuvarande inställningarna är oförändrade.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Fördröjt innehåll",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "Fel i SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Kopiera detaljer",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Öppna bild…",
@@ -1078,11 +1098,11 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "Aktivera eller inaktivera borttagning av interna element",
+		"message": "Aktivera eller inaktivera borttagning av markerade element",
 		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "Aktivera eller inaktivera borttagning av externa element",
+		"message": "Aktivera eller inaktivera borttagning av element utanför markeringen",
 		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
 	},
 	"editorUndoCutPage": {
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Profil enligt reglerna och det aktuella valet",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Hoppades över: en regel kopplar den här sidan till den inaktiverade profilen",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "ladda upp till ett REST-formulär-API",
@@ -1390,7 +1418,7 @@
 		"description": "Menu editor option when no profile is bound to the entry"
 	},
 	"menusProfileHelp": {
-		"message": "Koppla alternativet till en profil för att spara med den i ett klick, oavsett vilken profil som är aktuell.",
+		"message": "Koppla alternativet till en profil för att spara med den genom ett enda klick, oavsett vilken profil som är aktuell.",
 		"description": "Menu editor help of the 'Profile' field"
 	},
 	"menusPresentationField": {
@@ -1422,7 +1450,7 @@
 		"description": "Menu editor field: 'Appears when right-clicking'"
 	},
 	"menusAltLabelHelp": {
-		"message": "Utan en anpassad etikett visar menyn ”$1” när du högerklickar på en sida.",
+		"message": "Utan en anpassad etikett visar menyn ”$1” när alternativet gäller sidan.",
 		"description": "Menu editor help about the alternative label of an entry"
 	},
 	"menusSubmenuField": {
@@ -1442,8 +1470,8 @@
 		"description": "Menu editor status when an entry is not allowed in a menu"
 	},
 	"menusJsonLabel": {
-		"message": "Menylayout som JSON",
-		"description": "Menu editor section: 'Layout as JSON'"
+		"message": "Menyer som JSON",
+		"description": "Menu editor section: 'menus as JSON'"
 	},
 	"menusJsonApplyButton": {
 		"message": "Tillämpa",

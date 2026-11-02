@@ -483,6 +483,10 @@
 		"message": "удалить неиспользуемые шрифты",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "удалить неиспользуемые глифы",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "удалить альтернативные шрифты",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -498,6 +502,10 @@
 	"optionMoveStylesInHead": {
 		"message": "переместить в основной элемент стили, найденные вне него",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
+	},
+	"optionCustomStylesheet": {
+		"message": "применить пользовательскую таблицу стилей перед сохранением страницы",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
 	},
 	"optionRemoveUnusedStyles": {
 		"message": "удалить неиспользуемые стили",
@@ -917,6 +925,10 @@
 		"message": "параметры синхронизации",
 		"description": "Options label: 'synchronize options'"
 	},
+	"optionSynchronizeError": {
+		"message": "Невозможно скопировать параметры в синхронизированное хранилище. Они по-прежнему хранятся локально.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
+	},
 	"optionsResetButton": {
 		"message": "Сброс",
 		"description": "Options button: 'Reset'"
@@ -953,6 +965,10 @@
 		"message": "Импорт",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "Невозможно импортировать настройки. Текущие настройки остались без изменений.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Отложенное содержимое",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "Ошибка SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Скопировать подробности",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Открыть изображение...",
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Профиль по правилам и текущему выбору",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Пропущено: правило назначает этой странице отключённый профиль",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "загрузить в API формы REST",

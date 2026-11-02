@@ -105,7 +105,7 @@ async function onMessage(message, sender) {
 			try {
 				await woleet.anchor(message.hash, message.woleetKey);
 			} catch (error) {
-				ui.onError(sender.tab.id, error.message, error.link);
+				ui.onError(sender.tab.id, error.message, error.link, error.stack);
 			}
 		}
 		business.onSaveEnd(message.taskId);
@@ -127,8 +127,7 @@ async function onMessage(message, sender) {
 		return {};
 	}
 	if (message.method.endsWith(".saveUrls")) {
-		business.saveUrls(message.urls);
-		return {};
+		return business.saveUrls(message.urls, {}, message.profileName);
 	}
 }
 
@@ -275,6 +274,8 @@ async function downloadContent(blob, message, tab) {
 					incognito: tab.incognito,
 					filenameConflictAction: message.filenameConflictAction,
 					filenameReplacementCharacter: message.filenameReplacementCharacter,
+					filenameReplacedCharacters: message.filenameReplacedCharacters,
+					filenameReplacementCharacters: message.filenameReplacementCharacters,
 					bookmarkId: message.bookmarkId,
 					replaceBookmarkURL: message.replaceBookmarkURL,
 					includeInfobar: message.includeInfobar,
@@ -302,7 +303,7 @@ async function downloadContent(blob, message, tab) {
 	} catch (error) {
 		if (!error.message || error.message != "upload_cancelled") {
 			console.error(error); // eslint-disable-line no-console
-			ui.onError(tabId, error.message, error.link);
+			ui.onError(tabId, error.message, error.link, error.stack);
 		}
 	} finally {
 		if (message.url) {
@@ -330,7 +331,9 @@ async function downloadCompressedContent(message, tab) {
 		if (skipped) {
 			ui.onEnd(tabId);
 		} else {
-			blobURI = await offscreen.compressPage(message.pageData, {
+			let hash;
+			({ url: blobURI, hash } = await offscreen.compressPage(message.pageData, {
+				addProof: message.addProof && !message.openEditor,
 				insertTextBody: message.insertTextBody,
 				url: message.pageData.url || tab.url,
 				createRootDirectory: message.createRootDirectory,
@@ -345,7 +348,7 @@ async function downloadCompressedContent(message, tab) {
 				insertMetaCSP: message.insertMetaCSP,
 				password: message.password,
 				embeddedImage: message.embeddedImage
-			});
+			}));
 			if (message.openEditor) {
 				ui.onEdit(tabId);
 				const content = Array.from(new Uint8Array(await (await fetch(blobURI)).arrayBuffer()));
@@ -426,6 +429,8 @@ async function downloadCompressedContent(message, tab) {
 						incognito: tab.incognito,
 						filenameConflictAction: message.filenameConflictAction,
 						filenameReplacementCharacter: message.filenameReplacementCharacter,
+						filenameReplacedCharacters: message.filenameReplacedCharacters,
+						filenameReplacementCharacters: message.filenameReplacementCharacters,
 						bookmarkId: message.bookmarkId,
 						replaceBookmarkURL: message.replaceBookmarkURL,
 						includeInfobar: message.includeInfobar,
@@ -450,11 +455,14 @@ async function downloadCompressedContent(message, tab) {
 				await openViewerTab(tab, blobURI, { compressed: true });
 				viewerOpened = true;
 			}
+			if (hash) {
+				await woleet.anchor(hash, message.woleetKey);
+			}
 		}
 	} catch (error) {
 		if (!error.message || error.message != "upload_cancelled") {
 			console.error(error); // eslint-disable-line no-console
-			ui.onError(tabId, error.message, error.link);
+			ui.onError(tabId, error.message, error.link, error.stack);
 		}
 	} finally {
 		if (!viewerOpened && blobURI) {
@@ -669,7 +677,7 @@ async function downloadPage(pageData, options) {
 	if (options.incognito) {
 		downloadInfo.incognito = true;
 	}
-	const downloadData = await download(downloadInfo, options.filenameReplacementCharacter);
+	const downloadData = await download(downloadInfo, options);
 	if (downloadData.filename) {
 		let url = downloadData.filename;
 		if (!url.startsWith("file:")) {

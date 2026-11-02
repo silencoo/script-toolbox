@@ -59,6 +59,7 @@ const removeHiddenElementsLabel = document.getElementById("removeHiddenElementsL
 const removedElementsSelectorLabel = document.getElementById("removedElementsSelectorLabel");
 const removeUnusedStylesLabel = document.getElementById("removeUnusedStylesLabel");
 const removeUnusedFontsLabel = document.getElementById("removeUnusedFontsLabel");
+const removeUnusedGlyphsLabel = document.getElementById("removeUnusedGlyphsLabel");
 const removeFramesLabel = document.getElementById("removeFramesLabel");
 const blockScriptsLabel = document.getElementById("blockScriptsLabel");
 const blockAudiosLabel = document.getElementById("blockAudiosLabel");
@@ -109,6 +110,7 @@ const insertEmbeddedCustomImageLabel = document.getElementById("insertEmbeddedCu
 const insertEmbeddedScreenshotImageLabel = document.getElementById("insertEmbeddedScreenshotImageLabel");
 const groupDuplicateStylesheetsLabel = document.getElementById("groupDuplicateStylesheetsLabel");
 const moveStylesInHeadLabel = document.getElementById("moveStylesInHeadLabel");
+const customStylesheetLabel = document.getElementById("customStylesheetLabel");
 const imageReductionFactorLabel = document.getElementById("imageReductionFactorLabel");
 const imageQualityLabel = document.getElementById("imageQualityLabel");
 const loadDeferredContentLabel = document.getElementById("loadDeferredContentLabel");
@@ -243,6 +245,7 @@ const removeHiddenElementsInput = document.getElementById("removeHiddenElementsI
 const removedElementsSelectorInput = document.getElementById("removedElementsSelectorInput");
 const removeUnusedStylesInput = document.getElementById("removeUnusedStylesInput");
 const removeUnusedFontsInput = document.getElementById("removeUnusedFontsInput");
+const removeUnusedGlyphsInput = document.getElementById("removeUnusedGlyphsInput");
 const removeFramesInput = document.getElementById("removeFramesInput");
 const blockScriptsInput = document.getElementById("blockScriptsInput");
 const blockVideosInput = document.getElementById("blockVideosInput");
@@ -290,6 +293,7 @@ const groupDuplicateStylesheetsInput = document.getElementById("groupDuplicateSt
 const imageReductionFactorInput = document.getElementById("imageReductionFactorInput");
 const imageQualityInput = document.getElementById("imageQualityInput");
 const moveStylesInHeadInput = document.getElementById("moveStylesInHeadInput");
+const customStylesheetInput = document.getElementById("customStylesheetInput");
 const loadDeferredContentInput = document.getElementById("loadDeferredContentInput");
 const loadDeferredContentMaxIdleTimeInput = document.getElementById("loadDeferredContentMaxIdleTimeInput");
 const loadDeferredContentKeepZoomLevelInput = document.getElementById("loadDeferredContentKeepZoomLevelInput");
@@ -575,7 +579,8 @@ exportButton.addEventListener("click", async () => {
 		link.dispatchEvent(new MouseEvent("click"));
 	}
 }, false);
-importButton.addEventListener("click", () => {
+importButton.addEventListener("click", event => {
+	const positionY = event.clientY + 50;
 	fileInput.onchange = async () => {
 		if (fileInput.files.length) {
 			const config = JSON.parse(await getText(fileInput.files[0]));
@@ -589,7 +594,11 @@ importButton.addEventListener("click", () => {
 				profile.saveCreatedBookmarks = false;
 				profile.passReferrerOnError = false;
 			});
-			await browser.runtime.sendMessage({ method: "config.importConfig", config });
+			try {
+				await browser.runtime.sendMessage({ method: "config.importConfig", config });
+			} catch (error) {
+				await alert(browser.i18n.getMessage("optionsImportError") + " " + error.message, positionY);
+			}
 			await refresh(DEFAULT_PROFILE_NAME);
 			await refreshExternalComponents();
 			fileInput.value = "";
@@ -652,9 +661,14 @@ externalCaptureDeniedIdsInput.addEventListener("change", updateExternalCapturePe
 externalCaptureApproveButton.addEventListener("click", () => respondExternalCaptureRequest(true), false);
 externalCaptureDenyButton.addEventListener("click", () => respondExternalCaptureRequest(false), false);
 browser.runtime.sendMessage({ method: "config.isSync" }).then(data => synchronizeInput.checked = data.sync);
-synchronizeInput.addEventListener("click", async () => {
+synchronizeInput.addEventListener("click", async event => {
 	if (synchronizeInput.checked) {
-		await browser.runtime.sendMessage({ method: "config.enableSync" });
+		try {
+			await browser.runtime.sendMessage({ method: "config.enableSync" });
+		} catch (error) {
+			synchronizeInput.checked = false;
+			await alert(browser.i18n.getMessage("optionSynchronizeError") + " " + error.message, event.clientY + 50);
+		}
 		await refresh(DEFAULT_PROFILE_NAME);
 	} else {
 		await browser.runtime.sendMessage({ method: "config.disableSync" });
@@ -755,6 +769,7 @@ removeHiddenElementsLabel.textContent = browser.i18n.getMessage("optionRemoveHid
 removedElementsSelectorLabel.textContent = browser.i18n.getMessage("optionRemovedElementsSelector");
 removeUnusedStylesLabel.textContent = browser.i18n.getMessage("optionRemoveUnusedStyles");
 removeUnusedFontsLabel.textContent = browser.i18n.getMessage("optionRemoveUnusedFonts");
+removeUnusedGlyphsLabel.textContent = browser.i18n.getMessage("optionRemoveUnusedGlyphs");
 removeFramesLabel.textContent = browser.i18n.getMessage("optionRemoveFrames");
 blockScriptsLabel.textContent = browser.i18n.getMessage("optionResourceScript");
 blockAudiosLabel.textContent = browser.i18n.getMessage("optionResourceAudio");
@@ -805,6 +820,7 @@ insertEmbeddedCustomImageLabel.textContent = browser.i18n.getMessage("optionInse
 insertEmbeddedScreenshotImageLabel.textContent = browser.i18n.getMessage("optionInsertEmbeddedScreenshotImage");
 groupDuplicateStylesheetsLabel.textContent = browser.i18n.getMessage("optionGroupDuplicateStylesheets");
 moveStylesInHeadLabel.textContent = browser.i18n.getMessage("optionMoveStylesInHead");
+customStylesheetLabel.textContent = browser.i18n.getMessage("optionCustomStylesheet");
 imageReductionFactorLabel.textContent = browser.i18n.getMessage("optionImageReductionFactor");
 imageQualityLabel.textContent = browser.i18n.getMessage("optionImageQuality");
 loadDeferredContentLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContent");
@@ -950,6 +966,7 @@ resetCancelButton.textContent = promptCancelButton.textContent = cancelButton.te
 confirmButton.textContent = promptConfirmButton.textContent = browser.i18n.getMessage("optionsOKButton");
 externalCaptureApproveButton.textContent = browser.i18n.getMessage("optionsExternalCaptureApproveButton");
 externalCaptureDenyButton.textContent = browser.i18n.getMessage("optionsExternalCaptureDenyButton");
+document.documentElement.lang = browser.i18n.getUILanguage();
 document.getElementById("resetConfirmLabel").textContent = browser.i18n.getMessage("optionsResetConfirm");
 saveToRestFormApiLabel.textContent = browser.i18n.getMessage("optionSaveToRestFormApi");
 saveToRestFormApiUrlLabel.textContent = browser.i18n.getMessage("optionRestFormApiUrl");
@@ -1089,6 +1106,7 @@ async function refresh(profileName) {
 	removedElementsSelectorInput.value = profileOptions.removedElementsSelector;
 	removeUnusedStylesInput.checked = profileOptions.removeUnusedStyles;
 	removeUnusedFontsInput.checked = profileOptions.removeUnusedFonts;
+	removeUnusedGlyphsInput.checked = profileOptions.removeUnusedGlyphs;
 	removeFramesInput.checked = profileOptions.removeFrames;
 	blockScriptsInput.checked = profileOptions.blockScripts;
 	blockVideosInput.checked = profileOptions.blockVideos;
@@ -1159,6 +1177,7 @@ async function refresh(profileName) {
 	compressHTMLInput.checked = profileOptions.compressHTML;
 	groupDuplicateStylesheetsInput.checked = profileOptions.groupDuplicateStylesheets;
 	moveStylesInHeadInput.checked = profileOptions.moveStylesInHead;
+	customStylesheetInput.value = profileOptions.customStylesheet;
 	loadDeferredContentInput.checked = profileOptions.loadDeferredContent;
 	loadDeferredContentMaxIdleTimeInput.value = profileOptions.loadDeferredContentMaxIdleTime;
 	loadDeferredContentKeepZoomLevelInput.checked = profileOptions.loadDeferredContentKeepZoomLevel;
@@ -1356,6 +1375,7 @@ async function update() {
 			removedElementsSelector: removedElementsSelectorInput.value,
 			removeUnusedStyles: removeUnusedStylesInput.checked,
 			removeUnusedFonts: removeUnusedFontsInput.checked,
+			removeUnusedGlyphs: removeUnusedGlyphsInput.checked,
 			removeFrames: removeFramesInput.checked,
 			blockScripts: blockScriptsInput.checked,
 			blockVideos: blockVideosInput.checked,
@@ -1400,6 +1420,7 @@ async function update() {
 			insertEmbeddedScreenshotImage: insertEmbeddedScreenshotImageInput.checked,
 			groupDuplicateStylesheets: groupDuplicateStylesheetsInput.checked,
 			moveStylesInHead: moveStylesInHeadInput.checked,
+			customStylesheet: customStylesheetInput.value,
 			loadDeferredContent: loadDeferredContentInput.checked,
 			loadDeferredContentMaxIdleTime: Math.max(loadDeferredContentMaxIdleTimeInput.value, 0),
 			loadDeferredContentKeepZoomLevel: loadDeferredContentKeepZoomLevelInput.checked,
@@ -1768,6 +1789,15 @@ async function confirm(message, positionY) {
 			resolve(value);
 		}
 	});
+}
+
+async function alert(message, positionY) {
+	cancelButton.hidden = true;
+	try {
+		await confirm(message, positionY);
+	} finally {
+		cancelButton.hidden = false;
+	}
 }
 
 async function reset(positionY) {
