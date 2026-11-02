@@ -72,9 +72,17 @@ for (const script of Object.keys(sources)) {
       for (const preference of [code, english]) {
         const { run } = load(script, { countryorder: preference });
         const result = realNames(run(nodes(["Unknown 01", ...samples]))).map(withoutFlags);
-        assert.deepEqual(result, [...samples, "Unknown 01"].map(withoutFlags), `${script}: ${preference}`);
+        const expected = [...samples, "Unknown 01"].map(withoutFlags);
+        if (script === "convert-v2" && code === "tw") expected[2] = "03 Taiwan";
+        assert.deepEqual(result, expected, `${script}: ${preference}`);
       }
     }
+  });
+
+  test(`${script}: CN display icons preserve Taiwan sorting`, () => {
+    const { run } = load(script, { countryorder: "tw,cn" });
+    const input = nodes(["🇨🇳 China 01", "🇨🇳 Taiwan 02", "🇨🇳 台北 03", "🇨🇳 04"]);
+    assert.deepEqual(realNames(run(input)), ["🇨🇳 Taiwan 02", "🇨🇳 台北 03", "🇨🇳 China 01", "🇨🇳 04"]);
   });
 
   test(`${script}: mixed aliases sort stably with unlisted nodes last`, () => {

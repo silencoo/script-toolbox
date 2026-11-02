@@ -98,6 +98,9 @@ function parseCountryOrder(value) {
 
 function classifySortCountry(value) {
   const name = String(value == null ? "" : value);
+  // Taiwan uses the CN icon for client compatibility; retain its text identity.
+  const taiwan = SORT_COUNTRY_MATCHERS.find((entry) => entry.name === "Taiwan");
+  if (name.includes("🇨🇳") && taiwan.regex.test(name)) return taiwan.name;
   // Prefer an explicit flag; otherwise use a fixed classification order.
   const flagged = SORT_COUNTRY_MATCHERS.find((entry) => name.includes(entry.flag));
   if (flagged) return flagged.name;

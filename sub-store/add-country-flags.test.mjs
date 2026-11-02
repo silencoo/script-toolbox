@@ -17,7 +17,7 @@ function loadOperator(contextValues = {}) {
 test("adds flags to the supported country names in one subscription", () => {
   const { operator } = loadOperator();
   const cases = [
-    ["台湾 01", "🇹🇼"],
+    ["台湾 01", "🇨🇳"],
     ["SG-02", "🇸🇬"],
     ["Japan Tokyo", "🇯🇵"],
     ["United States 04", "🇺🇸"],
@@ -67,7 +67,7 @@ test("normalizes existing flags without duplicating them", () => {
 
   assert.deepEqual(
     Array.from(output, (proxy) => proxy.name),
-    ["🇹🇼 台湾 01", "🇹🇼 台湾 02", "🇹🇼 Taiwan 03", "🇹🇼 04"],
+    ["🇨🇳 台湾 01", "🇨🇳 台湾 02", "🇨🇳 Taiwan 03", "🇨🇳 04 Taiwan"],
   );
 });
 
@@ -146,12 +146,12 @@ test("places icons after tags consistently and preserves renamed dialer targets"
   const { operator } = loadOperator();
   const cases = [
     ["[kitty]🇭🇰Hong Kong 05", "[kitty]🇭🇰Hong Kong 05"],
-    ["[kitty]🇨🇳Taiwan 03", "[kitty]🇹🇼Taiwan 03"],
-    ["🇹🇼 [kitty]Taiwan 04", "[kitty]🇹🇼Taiwan 04"],
+    ["[kitty]🇨🇳Taiwan 03", "[kitty]🇨🇳Taiwan 03"],
+    ["🇹🇼 [kitty]Taiwan 04", "[kitty]🇨🇳Taiwan 04"],
     ["[kitty]🇩🇪Germany 01", "[kitty]🇩🇪Germany 01"],
     ["[pro][kitty] Japan 01", "[pro][kitty]🇯🇵Japan 01"],
     ["[kitty]🌐 Premium 01", "[kitty]🌐Premium 01"],
-    ["🌐 [kitty]🇹🇼 🇹🇼 Taiwan 06", "[kitty]🇹🇼Taiwan 06"],
+    ["🌐 [kitty]🇹🇼 🇹🇼 Taiwan 06", "[kitty]🇨🇳Taiwan 06"],
   ];
   const input = cases.map(([name]) => ({ name, type: "ss" }));
   input[0]["dialer-proxy"] = cases[1][0];
@@ -163,5 +163,18 @@ test("places icons after tags consistently and preserves renamed dialer targets"
   assert.equal(input[0]["dialer-proxy"], cases[1][0]);
   const server = { name: "[kitty]Taiwan 07" };
   loadOperator({ $server: server });
-  assert.equal(server.name, "[kitty]🇹🇼Taiwan 07");
+  assert.equal(server.name, "[kitty]🇨🇳Taiwan 07");
+});
+
+test("keeps flag-only Taiwan nodes identifiable across repeated runs", () => {
+  const { operator } = loadOperator();
+  const input = [
+    { name: "🇹🇼 [kitty]04", type: "ss" },
+    { name: "🇨🇳 China 01", type: "ss", "dialer-proxy": "🇹🇼 [kitty]04" },
+  ];
+  const once = operator(input);
+  assert.equal(once[0].name, "[kitty]🇨🇳04 Taiwan");
+  assert.equal(once[1]["dialer-proxy"], once[0].name);
+  assert.deepEqual(operator(once), once);
+  assert.equal(input[0].name, "🇹🇼 [kitty]04");
 });

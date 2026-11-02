@@ -367,7 +367,7 @@ test("recognizes standalone country codes in common node-name formats", async ()
 
   assert.deepEqual(Array.from(groups.get("United States").proxies), ["US-01"]);
   assert.deepEqual(Array.from(groups.get("Japan").proxies), ["JP_01"]);
-  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["🇹🇼 TW01"]);
+  assert.deepEqual(Array.from(groups.get("Taiwan").proxies), ["🇨🇳 TW01"]);
   assert.deepEqual(Array.from(groups.get("Singapore").proxies), ["SG 01"]);
   assert.deepEqual(Array.from(groups.get("Hong Kong").proxies), ["HK-01"]);
 });
@@ -388,7 +388,7 @@ test("assigns a multi-region node to only its highest-priority country", async (
   assert.deepEqual(Array.from(groups.get("United States").proxies), ["US-01"]);
 });
 
-test("normalizes recognized Taiwan nodes to the Taiwan flag", async () => {
+test("normalizes recognized Taiwan nodes to the CN flag for compatibility", async () => {
   const convert = await loadConverter();
   const profile = convert({
     proxies: [
@@ -406,11 +406,11 @@ test("normalizes recognized Taiwan nodes to the Taiwan flag", async () => {
   );
 
   assert.deepEqual(names, [
-    "🇹🇼 台湾 01",
-    "🇹🇼 台灣 02",
-    "🇹🇼 TW-03",
-    "🇹🇼 Taiwan 04",
-    "🇹🇼 台北 05",
+    "🇨🇳 台湾 01",
+    "🇨🇳 台灣 02",
+    "🇨🇳 TW-03",
+    "🇨🇳 Taiwan 04",
+    "🇨🇳 台北 05",
     "🇨🇳 China 06",
   ]);
   assert.deepEqual(Array.from(taiwan.proxies), names.slice(0, 5));
@@ -1036,7 +1036,7 @@ test("uses the self-hosted z-icon collection for every convert-v2 group", async 
   );
 });
 
-test("keeps Taiwan flags after subscription tags and updates dialer references", async () => {
+test("keeps compatible Taiwan icons after subscription tags and updates dialer references", async () => {
   const convert = await loadConverter();
   const names = [
     "[kitty]🇭🇰Hong Kong 05",
@@ -1050,8 +1050,8 @@ test("keeps Taiwan flags after subscription tags and updates dialer references",
   input[0]["dialer-proxy"] = names[2];
   const profile = convert({ proxies: input });
   const expected = [
-    names[0], names[1], "[kitty]🇹🇼Taiwan 03", "[kitty]🇹🇼Taiwan 04",
-    names[4], "[pro][kitty]🇹🇼Taiwan 05",
+    names[0], names[1], "[kitty]🇨🇳Taiwan 03", "[kitty]🇨🇳Taiwan 04",
+    names[4], "[pro][kitty]🇨🇳Taiwan 05",
   ];
   assert.deepEqual(Array.from(profile.proxies, (p) => p.name), expected);
   assert.equal(profile.proxies[0]["dialer-proxy"], expected[2]);
@@ -1061,4 +1061,22 @@ test("keeps Taiwan flags after subscription tags and updates dialer references",
   assert.deepEqual(Array.from(groups.get("Taiwan").proxies), expected.slice(2, 4));
   assert.ok(groups.get("AI").proxies.includes(expected[5]));
   assert.deepEqual(Array.from(convert(profile).proxies, (p) => p.name), expected);
+});
+
+test("keeps flag-only Taiwan nodes grouped after compatible renaming and repeated conversion", async () => {
+  const convert = await loadConverter({ countryorder: "tw,cn" });
+  const input = [
+    { name: "🇨🇳 China 01", type: "ss", "dialer-proxy": "🇹🇼 [kitty]04" },
+    { name: "🇹🇼 [kitty]04", type: "ss" },
+    { name: "🇹🇼 05", type: "ss" },
+  ];
+  const once = convert({ proxies: input });
+  const expected = ["[kitty]🇨🇳04 Taiwan", "🇨🇳 05 Taiwan", "🇨🇳 China 01"];
+  for (const profile of [once, convert(once)]) {
+    assert.deepEqual(Array.from(profile.proxies, (p) => p.name), expected);
+    const taiwan = profile["proxy-groups"].find((g) => g.name === "Taiwan");
+    assert.deepEqual(Array.from(taiwan.proxies), expected.slice(0, 2));
+    assert.equal(profile.proxies[2]["dialer-proxy"], expected[0]);
+  }
+  assert.equal(input[1].name, "🇹🇼 [kitty]04");
 });

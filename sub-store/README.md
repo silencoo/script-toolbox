@@ -51,9 +51,9 @@ periodic checks.
 
 Generated node names are made unique and kept distinct from policy-group and
 Mihomo built-in outbound names. Each ordinary node is assigned to at most one
-country group. Recognized Taiwan nodes are normalized to a single `🇹🇼` flag,
-including nodes whose provider supplied another country flag. Leading bracketed
-tags stay before the flag, for example `[kitty]🇹🇼Taiwan 03`.
+country group. Recognized Taiwan nodes use a single `🇨🇳` flag for client
+compatibility, including nodes whose provider supplied another country flag. Leading bracketed
+tags stay before the flag, for example `[kitty]🇨🇳Taiwan 03`.
 
 Repository validation generates both URL-test and load-balance fixtures and
 checks them with the latest stable official Mihomo binary.
@@ -107,7 +107,9 @@ Americas, and Oceania from common Chinese names, English names, abbreviations,
 and major city names. Existing flags are normalized rather than duplicated, and
 unrecognized node names receive the neutral `🌐` icon. Existing flags for
 locations outside the built-in mapping are preserved. Leading bracketed tags
-stay before the icon, matching `convert-v2.js`; untagged names use `🇹🇼 Taiwan 03`.
+stay before the icon, matching `convert-v2.js`; untagged names use `🇨🇳 Taiwan 03`.
+Taiwan nodes use `🇨🇳` by default. If `🇹🇼` was the only region hint, a `Taiwan`
+label is appended so downstream grouping and sorting retain the region.
 Both batch operators update `dialer-proxy` references when renaming their targets.
 
 ## Sort one subscription only
@@ -160,6 +162,7 @@ Aliases such as `uk`, `usa`, `uae`, and `Czech Republic` are also accepted.
 
 - Nodes are identified from their names: recognized flags take precedence,
   followed by Chinese/English names, standalone codes, and common city names.
+  Taiwan text paired with `🇨🇳` remains classified as Taiwan for compatibility.
   No GeoIP lookup or server connection is performed.
 - Nodes from the same location retain their original order. Unlisted and
   unrecognized locations follow the requested ones, retaining their original

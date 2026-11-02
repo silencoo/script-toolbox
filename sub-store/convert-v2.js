@@ -955,6 +955,9 @@ function parseCountryOrder(value) {
 
 function classifySortCountry(value) {
   const name = String(value == null ? "" : value);
+  // Taiwan uses the CN icon for client compatibility; retain its text identity.
+  const taiwan = SORT_COUNTRY_MATCHERS.find((entry) => entry.name === "Taiwan");
+  if (name.includes("🇨🇳") && taiwan.regex.test(name)) return taiwan.name;
   // Prefer an explicit flag; otherwise use a fixed classification order.
   const flagged = SORT_COUNTRY_MATCHERS.find((entry) => name.includes(entry.flag));
   if (flagged) return flagged.name;
@@ -1031,11 +1034,15 @@ function normalizeTaiwanProxyFlag(proxy) {
   const name = String(proxy.name == null ? "" : proxy.name).trim();
   if (!name || !matchesCountry(name, "Taiwan")) return proxy;
 
-  const nameWithTaiwanFlag = formatLocationName(name, "🇹🇼");
+  // Preserve the region for grouping when the flag was its only indication.
+  const label = matchesCountry(name.replace(COUNTRY_FLAG_PATTERN, ""), "Taiwan")
+    ? name
+    : `${name} Taiwan`;
+  const compatibleName = formatLocationName(label, "🇨🇳");
 
-  return nameWithTaiwanFlag === proxy.name
+  return compatibleName === proxy.name
     ? proxy
-    : Object.assign({}, proxy, { name: nameWithTaiwanFlag });
+    : Object.assign({}, proxy, { name: compatibleName });
 }
 
 function buildHealthCheckedGroup({

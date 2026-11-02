@@ -256,7 +256,14 @@ function addCountryFlagToName(value) {
   const flag = findCountryFlag(name);
   if (!flag && HAS_COUNTRY_FLAG_PATTERN.test(name)) return name;
 
-  return formatLocationName(name, flag || DEFAULT_LOCATION_ICON);
+  // Keep a textual region hint when the original flag was the only one.
+  // Downstream grouping can no longer distinguish Taiwan from the CN icon.
+  const taiwanRule = COUNTRY_RULES.find((rule) => rule.flag === "🇹🇼");
+  const label = flag === "🇹🇼" && !taiwanRule.patterns.some((pattern) => pattern.test(name))
+    ? `${name} Taiwan`
+    : name;
+  const icon = flag === "🇹🇼" ? "🇨🇳" : flag;
+  return formatLocationName(label, icon || DEFAULT_LOCATION_ICON);
 }
 
 function addCountryFlag(proxy) {
