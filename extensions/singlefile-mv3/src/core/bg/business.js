@@ -105,28 +105,33 @@ async function batchSaveUrls() {
 	return browser.tabs.create({ active: true, url: "/src/ui/pages/batch-save-urls.html" });
 }
 
-async function saveUrls(urls, options = {}) {
+async function saveUrls(urls, options = {}, profileName) {
 	await initMaxParallelWorkers();
-	await Promise.all(urls.map(async url => {
-		const tabOptions = await config.getOptions(url);
-		if (tabOptions.profileName != config.DISABLED_PROFILE_NAME) {
+	const skippedUrls = [];
+	const pendingTasks = await Promise.all(urls.map(async url => {
+		const tabOptions = profileName ? await config.getProfileOptions(profileName) : await config.getOptions(url);
+		if (tabOptions.profileName == config.DISABLED_PROFILE_NAME) {
+			skippedUrls.push(url);
+		} else {
 			Object.keys(options).forEach(key => tabOptions[key] = options[key]);
 			tabOptions.autoClose = true;
 			tabOptions.originalUrl = url;
-			addTask({
+			return {
 				tab: { url },
 				status: TASK_PENDING_STATE,
 				options: tabOptions,
 				method: "content.save"
-			});
+			};
 		}
 	}));
+	pendingTasks.filter(Boolean).forEach(addTask);
 	runTasks();
+	return { skippedUrls };
 }
 
 async function saveTabs(tabs, options = {}) {
 	await initMaxParallelWorkers();
-	await Promise.all(tabs.map(async tab => {
+	const pendingTasks = await Promise.all(tabs.map(async tab => {
 		const tabId = tab.id;
 		const tabOptions = await config.getOptions(tab.url);
 		if (tabOptions.profileName != config.DISABLED_PROFILE_NAME) {
@@ -160,12 +165,12 @@ async function saveTabs(tabs, options = {}) {
 				}
 				if (scriptsInjected || editor.isEditor(tab)) {
 					ui.onStart(tabId, EXECUTE_SCRIPTS_STEP);
-					addTask({
+					return {
 						status: TASK_PENDING_STATE,
 						tab: tabData,
 						options: tabOptions,
 						method: "content.save"
-					});
+					};
 				} else {
 					ui.onForbiddenDomain(tab);
 				}
@@ -174,6 +179,7 @@ async function saveTabs(tabs, options = {}) {
 			ui.onForbiddenDomain(tab);
 		}
 	}));
+	pendingTasks.filter(Boolean).forEach(addTask);
 	runTasks();
 }
 
@@ -266,11 +272,9 @@ function openEditor(tab) {
 }
 
 async function initMaxParallelWorkers() {
-	if (!maxParallelWorkers) {
-		const configData = await config.get();
-		processInForeground = configData.processInForeground;
-		maxParallelWorkers = processInForeground ? 1 : configData.maxParallelWorkers;
-	}
+	const configData = await config.get();
+	processInForeground = configData.processInForeground;
+	maxParallelWorkers = processInForeground ? 1 : configData.maxParallelWorkers;
 }
 
 function runTasks() {
@@ -330,7 +334,7 @@ async function runTask(taskInfo) {
 			taskInfo.done();
 		} else if (error && (!error.message || !isIgnoredError(error))) {
 			console.log(error.message ? error.message : error); // eslint-disable-line no-console
-			ui.onError(taskInfo.tab.id, error.message, error.link);
+			ui.onError(taskInfo.tab.id, error.message, error.link, error.stack);
 			taskInfo.done();
 		}
 	}

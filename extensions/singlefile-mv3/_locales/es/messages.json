@@ -483,6 +483,10 @@
 		"message": "eliminar fuentes no usadas",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "eliminar glifos no usados",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "eliminar fuentes alternativas",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -498,6 +502,10 @@
 	"optionMoveStylesInHead": {
 		"message": "mover al elemento de head los estilos que se encuentran fuera de él",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
+	},
+	"optionCustomStylesheet": {
+		"message": "aplicar una hoja de estilos personalizada antes de guardar la página",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
 	},
 	"optionRemoveUnusedStyles": {
 		"message": "eliminar estilos no usados",
@@ -620,7 +628,7 @@
 		"description": "Popup text 'Confirm the deletion of the selected rule' in the options page"
 	},
 	"optionAutoSaveLoadOrUnload": {
-		"message": "auto-guardar tras cargar la página o al purgar la página",
+		"message": "auto-guardar tras cargar la página o al descargar la página",
 		"description": "auto-save after page load or on page unload"
 	},
 	"optionAutoSaveLoad": {
@@ -628,7 +636,7 @@
 		"description": "Options page label: 'auto-save after page load'"
 	},
 	"optionAutoSaveUnload": {
-		"message": "auto-guardar al purgar la página",
+		"message": "auto-guardar al descargar la página",
 		"description": "Options page label: 'auto-save on page unload'"
 	},
 	"optionAutoSaveDiscard": {
@@ -696,7 +704,7 @@
 		"description": "Options page label: 'default mode > remove external elements'"
 	},
 	"optionApplySystemTheme": {
-		"message": "aplicar diseño del sistema al formatear una páginae",
+		"message": "aplicar el tema del sistema al formatear una página",
 		"description": "Title of the button 'apply the system theme when formatting a page'"
 	},
 	"optionContentWidth": {
@@ -802,7 +810,7 @@
 		"description": "Options page label: 'add proof of existence'"
 	},
 	"optionsAddProofConfirm": {
-		"message": "Confirm you allow SingleFile to send to the Woleet API a SHA256 hash of each page you are going to save. You can find more information about this feature in the help page or by clicking on the question mark next to the option.",
+		"message": "Confirme que autoriza a SingleFile a enviar a la API de Woleet un hash SHA256 de cada página que vaya a guardar. Encontrará más información sobre esta función en la página de ayuda o haciendo clic en el signo de interrogación situado junto a la opción.",
 		"description": "Popup text displayed wen enabling the option 'add proof of existence'"
 	},
 	"optionWoleetKey": {
@@ -850,7 +858,7 @@
 		"description": "Options page label: 'region'"
 	},
 	"optionS3Bucket": {
-		"message": "bucket nombre",
+		"message": "nombre del bucket",
 		"description": "Options page label: 'bucket name'"
 	},
 	"optionS3AccessKey": {
@@ -917,6 +925,10 @@
 		"message": "sincronizar opciones",
 		"description": "Options label: 'synchronize options'"
 	},
+	"optionSynchronizeError": {
+		"message": "No se pudieron copiar las opciones al almacenamiento sincronizado, siguen guardadas localmente.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
+	},
 	"optionsResetButton": {
 		"message": "Restablecer",
 		"description": "Options button: 'Reset'"
@@ -953,6 +965,10 @@
 		"message": "Importar",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "No se pudieron importar las opciones, las opciones actuales no han cambiado.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Contenido diferido",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "Error de SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Copiar detalles",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Abrir imagen...",
@@ -1193,8 +1213,16 @@
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
 	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Perfil según las reglas y la selección actual",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Omitida: una regla asigna esta página al perfil desactivado",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
+	},
 	"optionSaveToRestFormApi": {
-		"message": "subir a un formulario REST Api",
+		"message": "subir a una API REST Form",
 		"description": "Options page label: 'upload to a REST Form API'"
 	},
 	"optionRestFormApiUrl": {
@@ -1202,15 +1230,15 @@
 		"description": "Options page label: 'URL'"
 	},
 	"optionRestFormApiToken": {
-		"message": "authorization token",
+		"message": "token de autorización",
 		"description": "Options page label: 'authorization token'"
 	},
 	"optionRestFormApiFileFieldName": {
-		"message": "archive data field name",
+		"message": "nombre del campo de los datos del archivo",
 		"description": "Options page label: 'archive data field name'"
 	},
 	"optionRestFormApiUrlFieldName": {
-		"message": "archive URL field name",
+		"message": "nombre del campo de la URL del archivo",
 		"description": "Options page label: 'archive URL field name'"
 	},
 	"optionsEditorTitle": {

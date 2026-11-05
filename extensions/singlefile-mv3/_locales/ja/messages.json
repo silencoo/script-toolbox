@@ -4,7 +4,7 @@
 		"description": "Description of the extension."
 	},
 	"commandSaveSelectedTabs": {
-		"message": "Save the selected tabs or their selected contents",
+		"message": "選択したタブまたはその選択範囲を保存",
 		"description": "Command (Ctrl+Shift+Y): 'Save the selected tabs or their selected contents'"
 	},
 	"commandSaveAllTabs": {
@@ -160,7 +160,7 @@
 		"description": "Badge label during initialization: '•••'"
 	},
 	"buttonSaveProgressTooltip": {
-		"message": "進行状況を保存: ",
+		"message": "保存の進行状況: ",
 		"description": "Button title during save: 'Save progress: xx%'"
 	},
 	"buttonUploadProgressTooltip": {
@@ -212,7 +212,7 @@
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
 	"optionInfobarTemplate": {
-		"message": "infobar コンテンツのテンプレート",
+		"message": "インフォバーのコンテンツのテンプレート",
 		"description": "Options page label: 'template of the infobar content'"
 	},
 	"optionBlockMixedContent": {
@@ -224,7 +224,7 @@
 		"description": "Options page label: 'save original URLs of embedded resources'"
 	},
 	"optionIncludeInfobar": {
-		"message": "保存されたページに、infobar を含める",
+		"message": "保存されたページにインフォバーを含める",
 		"description": "Options page label: 'include the infobar in the saved page'"
 	},
 	"optionOpenInfobar": {
@@ -240,7 +240,7 @@
 		"description": "Options page label: 'do not include the saved date'"
 	},
 	"optionConfirmInfobar": {
-		"message": "infobar のコンテンツを編集するためのプロンプトダイアログを開く",
+		"message": "インフォバーのコンテンツを編集するためのプロンプトダイアログを開く",
 		"description": "Options page label: 'open a prompt dialog to edit the infobar content'"
 	},
 	"optionAutoClose": {
@@ -440,7 +440,7 @@
 		"description": "Options sub-title: 'Deferred content'"
 	},
 	"optionGroupDuplicateImages": {
-		"message": "オプション重複画像のグループ化",
+		"message": "重複画像をグループ化する",
 		"description": "Options page label: 'group duplicate images together'"
 	},
 	"optionImageReductionFactor": {
@@ -483,6 +483,10 @@
 		"message": "未使用のフォントを削除する",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "未使用のグリフを削除する",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "代替フォントを削除する",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -492,19 +496,23 @@
 		"description": "Options sub-title: 'Stylesheets'"
 	},
 	"optionGroupDuplicateStylesheets": {
-		"message": "オプション重複スタイルシートのグループ化",
+		"message": "重複スタイルシートをグループ化する",
 		"description": "Options page label: 'group duplicate stylesheets together'"
 	},
 	"optionMoveStylesInHead": {
 		"message": "head要素の外にあるスタイルをhead要素内に移動する",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "ページを保存する前にカスタムスタイルシートを適用する",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "未使用のスタイルを削除する",
 		"description": "Options page label: 'remove unused styles'"
 	},
 	"optionRemoveAlternativeMedias": {
-		"message": "代替デバイス用のスタイルシートを画面に表示しない",
+		"message": "画面以外のデバイス用のスタイルシートを削除する",
 		"description": "Options page label: 'remove stylesheets for alternative devices to screens'"
 	},
 	"optionsNetworkSubTitle": {
@@ -620,7 +628,7 @@
 		"description": "Popup text 'Confirm the deletion of the selected rule' in the options page"
 	},
 	"optionAutoSaveLoadOrUnload": {
-		"message": "ページの読み込み後またはページの非読み込み時に自動保存",
+		"message": "ページの読み込み後またはページのアンロード時に自動保存",
 		"description": "auto-save after page load or on page unload"
 	},
 	"optionAutoSaveLoad": {
@@ -628,7 +636,7 @@
 		"description": "Options page label: 'auto-save after page load'"
 	},
 	"optionAutoSaveUnload": {
-		"message": "ページの非読み込み時に自動保存",
+		"message": "ページのアンロード時に自動保存",
 		"description": "Options page label: 'auto-save on page unload'"
 	},
 	"optionAutoSaveDiscard": {
@@ -648,7 +656,7 @@
 		"description": "Options page label: 'auto-save periodically'"
 	},
 	"optionAutoSaveRepeatDelay": {
-		"message": "所要時間（秒）",
+		"message": "間隔（秒）",
 		"description": "Options page label: 'period (s)'"
 	},
 	"optionAutoSaveExternalSave": {
@@ -668,7 +676,7 @@
 		"description": "Options page label: 'open saved pages in a new tab'"
 	},
 	"optionAutoOpenEditor": {
-		"message": "annotation editor で、SingleFile で保存されたページを開く",
+		"message": "SingleFile で保存されたページを注釈エディタで開く",
 		"description": "Options page label: 'open pages saved with SingleFile in the annotation editor'"
 	},
 	"optionDefaultEditorMode": {
@@ -802,7 +810,7 @@
 		"description": "Options page label: 'add proof of existence'"
 	},
 	"optionsAddProofConfirm": {
-		"message": "Confirm you allow SingleFile to send to the Woleet API a SHA256 hash of each page you are going to save. You can find more information about this feature in the help page or by clicking on the question mark next to the option.",
+		"message": "保存する各ページの SHA256 ハッシュを SingleFile が Woleet API に送信することを許可するか確認してください。この機能の詳細は、ヘルプページまたはオプションの横にある疑問符をクリックして確認できます。",
 		"description": "Popup text displayed wen enabling the option 'add proof of existence'"
 	},
 	"optionWoleetKey": {
@@ -914,8 +922,12 @@
 		"description": "Options help link"
 	},
 	"optionSynchronize": {
-		"message": "同期オプション",
+		"message": "オプションを同期する",
 		"description": "Options label: 'synchronize options'"
+	},
+	"optionSynchronizeError": {
+		"message": "オプションを同期ストレージにコピーできませんでした。オプションは引き続きローカルに保存されています。",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
 	},
 	"optionsResetButton": {
 		"message": "リセット",
@@ -953,6 +965,10 @@
 		"message": "インポート",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "オプションをインポートできませんでした。現在のオプションは変更されていません。",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "遅延コンテンツ",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "SingleFile エラー: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "詳細をコピー",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "画像を開く...",
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "ルールと現在の選択に基づくプロファイル",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "スキップ: ルールによりこのページは無効なプロファイルに割り当てられています",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "REST Form API に保存する",

@@ -216,7 +216,7 @@
 		"description": "Options page label: 'template of the infobar content'"
 	},
 	"optionBlockMixedContent": {
-		"message": "блок змішаного наповнення",
+		"message": "блокувати змішаний вміст",
 		"description": "Options page label: 'block mixed content'"
 	},
 	"optionSaveOriginalURLs": {
@@ -328,7 +328,7 @@
 		"description": "Options page label: 'save the filename template data into the page'"
 	},
 	"optionConfirmFilename": {
-		"message": "відкривати діалогове вікно \"Save as\" для підтвердження імені файлу",
+		"message": "відкривати діалогове вікно \"Зберегти як\" для підтвердження імені файлу",
 		"description": "Options page label: 'open the \"Save as\" dialog to confirm the file name'"
 	},
 	"optionFilenameConflictAction": {
@@ -404,7 +404,7 @@
 		"description": "Options page label: 'create a root directory'"
 	},
 	"optionDisableCompression": {
-		"message": "відключити сжаття",
+		"message": "вимкнути стиснення",
 		"description": "Options page label: 'disable compression'"
 	},
 	"optionPreventAppendedData": {
@@ -483,6 +483,10 @@
 		"message": "видалити невикористовувані шрифти",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "видалити невикористовувані гліфи",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "видалити альтернативні шрифти",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -499,12 +503,16 @@
 		"message": "переміщати в елемент head стилі, що знаходяться за його межами",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
 	},
+	"optionCustomStylesheet": {
+		"message": "застосувати користувацьку таблицю стилів перед збереженням сторінки",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
+	},
 	"optionRemoveUnusedStyles": {
 		"message": "видалити невикористовувані стилі",
 		"description": "Options page label: 'remove unused styles'"
 	},
 	"optionRemoveAlternativeMedias": {
-		"message": "видалити стилі для екранів альтернативних пристроїв",
+		"message": "видалити таблиці стилів для пристроїв, відмінних від екранів",
 		"description": "Options page label: 'remove stylesheets for alternative devices to screens'"
 	},
 	"optionsNetworkSubTitle": {
@@ -632,7 +640,7 @@
 		"description": "Options page label: 'auto-save on page unload'"
 	},
 	"optionAutoSaveDiscard": {
-		"message": "автозбереження на вкладці відкинути",
+		"message": "автозбереження при відкиданні вкладки",
 		"description": "Options page label: 'auto-save on tab discard'"
 	},
 	"optionAutoSaveRemove": {
@@ -834,7 +842,7 @@
 		"description": "Options page label: 'repository name'"
 	},
 	"optionGitHubBranch": {
-		"message": "назва філії",
+		"message": "назва гілки",
 		"description": "Options page label: 'branch name'"
 	},
 	"optionSaveToS3": {
@@ -914,8 +922,12 @@
 		"description": "Options help link"
 	},
 	"optionSynchronize": {
-		"message": "параметри синхронізації",
+		"message": "синхронізувати параметри",
 		"description": "Options label: 'synchronize options'"
+	},
+	"optionSynchronizeError": {
+		"message": "Не вдалося скопіювати параметри до синхронізованого сховища. Вони й надалі зберігаються локально.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
 	},
 	"optionsResetButton": {
 		"message": "Скидання",
@@ -953,6 +965,10 @@
 		"message": "Імпорт",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "Не вдалося імпортувати параметри. Поточні параметри залишилися без змін.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Відстрочений вміст",
 		"description": "Label 'Deferred content' in the log panel"
@@ -970,7 +986,7 @@
 		"description": "Label 'Step' (for 'Step x / 4') in the log panel"
 	},
 	"logPanelWidth": {
-		"message": "Сто двадцять і два,",
+		"message": "122",
 		"description": "Width of the log panel in pixels, it should be adjusted for the longest label beginning with 'log' (e.g. 'logPanelDeferredContent')"
 	},
 	"maskCancelButton": {
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "Помилка SingleFile: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Скопіювати подробиці",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Відкрити зображення..",
@@ -1062,11 +1082,11 @@
 		"description": "Title of the button 'Display/hide notes' in the editor"
 	},
 	"editorToggleHighlights": {
-		"message": "Показати/приховати текст",
+		"message": "Показати/приховати позначений текст",
 		"description": "Title of the button 'Display/hide the highlighted text' in the editor"
 	},
 	"editorRemoveHighlight": {
-		"message": "Видалити виділений текст",
+		"message": "Зняти позначення з виділеного тексту",
 		"description": "Title of the button 'Remove the selected highlighted text' in the editor"
 	},
 	"editorEditPage": {
@@ -1138,7 +1158,7 @@
 		"description": "Value of 'status' for pending saves"
 	},
 	"pendingsProcessingStatus": {
-		"message": "переробка",
+		"message": "обробка",
 		"description": "Value of 'status' for current saves"
 	},
 	"pendingsCancellingStatus": {
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Профіль за правилами та поточним вибором",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Пропущено: правило призначає цій сторінці вимкнений профіль",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "завантажити на REST Form Api",

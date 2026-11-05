@@ -25,6 +25,7 @@
 
 import { download } from "./download-util.js";
 import * as tabsData from "./tabs-data.js";
+import * as syncStorage from "./sync-storage.js";
 import { normalizeLayout } from "./../../ui/common/menu-layout.js";
 import {
 	DEFAULT_REPLACED_CHARACTERS as DEFAULT_FILENAME_REPLACED_CHARACTERS,
@@ -60,6 +61,7 @@ const DEFAULT_CONFIG = {
 	removedElementsSelector: "",
 	removeUnusedStyles: true,
 	removeUnusedFonts: true,
+	removeUnusedGlyphs: false,
 	removeFrames: false,
 	compressHTML: true,
 	loadDeferredContent: true,
@@ -179,10 +181,10 @@ const DEFAULT_CONFIG = {
 		audio: "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5"
 	},
 	moveStylesInHead: false,
+	customStylesheet: "",
 	networkTimeout: 0,
 	woleetKey: "",
 	blockImages: false,
-	blockAlternativeImages: true,
 	blockStylesheets: false,
 	blockFonts: false,
 	blockScripts: true,
@@ -261,6 +263,7 @@ export {
 	getConfig as get,
 	getRule,
 	getOptions,
+	getProfileOptions,
 	getMenuLayout,
 	getExternalCapturePermissions,
 	setExternalCapturePermissions,
@@ -279,7 +282,7 @@ export {
 async function upgrade() {
 	const { sync } = await browser.storage.local.get();
 	if (sync) {
-		configStorage = browser.storage.sync;
+		configStorage = syncStorage;
 	} else {
 		configStorage = browser.storage.local;
 	}
@@ -330,6 +333,7 @@ async function upgrade() {
 			});
 			profile._migratedDeferredContentOptions = true;
 		}
+		delete profile.blockAlternativeImages;
 		for (const key of Object.keys(DEFAULT_CONFIG)) {
 			if (profile[key] === undefined) {
 				profile[key] = DEFAULT_CONFIG[key];
@@ -543,6 +547,9 @@ async function onMessage(message) {
 	if (message.method.endsWith(".getProfileOptions")) {
 		return getProfileOptions(message.profileName);
 	}
+	if (message.method.endsWith(".getProfileName")) {
+		return getProfileName(message.url);
+	}
 	if (message.method.endsWith(".getProfiles")) {
 		return getProfiles();
 	}
@@ -550,20 +557,20 @@ async function onMessage(message) {
 		return exportConfig();
 	}
 	if (message.method.endsWith(".enableSync")) {
-		await browser.storage.local.set({ sync: true });
-		const syncConfig = await browser.storage.sync.get();
+		const syncConfig = await syncStorage.get();
 		if (!syncConfig || !syncConfig.rules) {
 			const profileKeyNames = await getProfileKeyNames();
 			const localConfig = await browser.storage.local.get(["rules", "maxParallelWorkers", "processInForeground", EXTERNAL_CAPTURE_ALLOWED_EXTENSION_IDS_KEY, EXTERNAL_CAPTURE_DENIED_EXTENSION_IDS_KEY, MENU_LAYOUT_KEY, ...profileKeyNames]);
-			await browser.storage.sync.set(localConfig);
+			await syncStorage.set(localConfig);
 		}
-		configStorage = browser.storage.sync;
+		await browser.storage.local.set({ sync: true });
+		configStorage = syncStorage;
 		await upgrade();
 		return {};
 	}
 	if (message.method.endsWith(".disableSync")) {
 		await browser.storage.local.set({ sync: false });
-		const syncConfig = await browser.storage.sync.get();
+		const syncConfig = await syncStorage.get();
 		const localConfig = await browser.storage.local.get();
 		if (syncConfig && syncConfig.rules && (!localConfig || !localConfig.rules)) {
 			await browser.storage.local.set({
@@ -613,17 +620,19 @@ async function getProfiles() {
 }
 
 async function getOptions(url, autoSave) {
+	return getProfileOptions(await getProfileName(url, autoSave));
+}
+
+async function getProfileName(url, autoSave) {
 	await pendingUpgradePromise;
 	const [rule, allTabsData] = await Promise.all([getRule(url), tabsData.get()]);
 	const tabProfileName = allTabsData.profileName || DEFAULT_PROFILE_NAME;
-	let selectedProfileName;
 	if (rule) {
 		const profileName = rule[autoSave ? "autoSaveProfile" : "profile"];
-		selectedProfileName = profileName == CURRENT_PROFILE_NAME ? tabProfileName : profileName;
+		return profileName == CURRENT_PROFILE_NAME ? tabProfileName : profileName;
 	} else {
-		selectedProfileName = tabProfileName;
+		return tabProfileName;
 	}
-	return getProfileOptions(selectedProfileName);
 }
 
 async function getProfileOptions(profileName) {
@@ -851,7 +860,6 @@ async function importConfig(config) {
 		delete allTabsData.profileName;
 		await tabsData.set(allTabsData);
 	}
-	await configStorage.remove([...profileKeyNames, "rules", "maxParallelWorkers", "processInForeground", MENU_LAYOUT_KEY]);
 	const newConfig = { rules: config.rules, maxParallelWorkers: config.maxParallelWorkers, processInForeground: config.processInForeground };
 	const menuLayout = normalizeLayout(config.menuLayout);
 	if (menuLayout) {
@@ -859,6 +867,10 @@ async function importConfig(config) {
 	}
 	Object.keys(config.profiles).forEach(profileName => newConfig[PROFILE_NAME_PREFIX + profileName] = config.profiles[profileName]);
 	await configStorage.set(newConfig);
+	const staleKeys = [...profileKeyNames, MENU_LAYOUT_KEY].filter(key => !(key in newConfig));
+	if (staleKeys.length) {
+		await configStorage.remove(staleKeys);
+	}
 	await upgrade();
 }
 

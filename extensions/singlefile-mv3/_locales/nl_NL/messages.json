@@ -483,6 +483,10 @@
 		"message": "verwijder ongebruikte lettertypen",
 		"description": "Options page label: 'remove unused fonts'"
 	},
+	"optionRemoveUnusedGlyphs": {
+		"message": "verwijder ongebruikte glyphs",
+		"description": "Options page label: 'remove unused glyphs'"
+	},
 	"optionRemoveAlternativeFonts": {
 		"message": "verwijder alternatieve lettertypen",
 		"description": "Options page label: 'remove alternative fonts'"
@@ -498,6 +502,10 @@
 	"optionMoveStylesInHead": {
 		"message": "verplaats de stijlen die zich buiten het head-element bevinden",
 		"description": "Options page label: 'move in the head element the styles found outside of it'"
+	},
+	"optionCustomStylesheet": {
+		"message": "een aangepast stylesheet toepassen voordat de pagina wordt opgeslagen",
+		"description": "Options page label: 'apply a custom stylesheet before saving the page'"
 	},
 	"optionRemoveUnusedStyles": {
 		"message": "verwijder ongebruikte stijlen",
@@ -917,6 +925,10 @@
 		"message": "synchroniseer opties",
 		"description": "Options label: 'synchronize options'"
 	},
+	"optionSynchronizeError": {
+		"message": "De opties konden niet naar de gesynchroniseerde opslag worden gekopieerd. Ze blijven lokaal opgeslagen.",
+		"description": "Options error: 'The options could not be copied to the synchronized storage, they are still stored locally.'"
+	},
 	"optionsResetButton": {
 		"message": "Reset",
 		"description": "Options button: 'Reset'"
@@ -953,6 +965,10 @@
 		"message": "Importeer",
 		"description": "Options button: 'Import'"
 	},
+	"optionsImportError": {
+		"message": "De instellingen konden niet worden geïmporteerd. De huidige instellingen blijven ongewijzigd.",
+		"description": "Options error: 'The settings could not be imported, the current settings are unchanged.'"
+	},
 	"logPanelDeferredContent": {
 		"message": "Uitgestelde inhoud",
 		"description": "Label 'Deferred content' in the log panel"
@@ -980,6 +996,10 @@
 	"topPanelError": {
 		"message": "SingleFile fout: ",
 		"description": "Label 'SingleFile error: ' in the top panel when displaying an error message"
+	},
+	"topPanelCopyDetailsButton": {
+		"message": "Details kopiëren",
+		"description": "Button label 'Copy details' in the top panel next to an error message"
 	},
 	"topPanelEmbeddedImageButton": {
 		"message": "Afbeelding openen...",
@@ -1192,6 +1212,14 @@
 	"batchSaveUrlsURLTitle": {
 		"message": "URL",
 		"description": "Title of the column in the table of the URLs"
+	},
+	"batchSaveUrlsProfileAuto": {
+		"message": "Profiel volgens de regels en de huidige selectie",
+		"description": "First entry of the profile dropdown of the 'batch save URLs' page: the profile of each URL comes from the rules and from the profile selected in the options page"
+	},
+	"batchSaveUrlsSkippedByRule": {
+		"message": "Overgeslagen: een regel koppelt deze pagina aan het uitgeschakelde profiel",
+		"description": "Status displayed next to a URL the batch save skipped because its rule maps it to the disabled profile"
 	},
 	"optionSaveToRestFormApi": {
 		"message": "uploaden naar een REST Form API",
