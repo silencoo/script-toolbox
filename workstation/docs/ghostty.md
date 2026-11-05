@@ -39,6 +39,79 @@ changing Zsh configuration:
 ./shared/ghostty-setup.sh --config-only
 ```
 
+## Two-line Starship prompt
+
+Opt in to the context-aware prompt without installing packages:
+
+```bash
+./shared/ghostty-setup.sh --config-only --prompt
+```
+
+Requires an installed `starship` and Python 3.11+ (Python is used only during
+setup, never during prompt rendering). The default invocation remains Ghostty-only.
+The helper merges `shared/starship-prompt.toml` into `$STARSHIP_CONFIG`, or
+`${XDG_CONFIG_HOME:-$HOME/.config}/starship.toml`. It backs up changed files as
+`*.bak.<timestamp>`, preserves symlinks, and leaves unrelated TOML keys/comments
+intact. Prompt-owned layout/module keys are replaced; other module settings,
+including directory truncation/colors and disabled AWS, remain unchanged.
+Nonstandard TOML layouts that cannot be safely merged fail without changing the
+Starship file. Existing custom modules remain configured but are not automatically
+added to the new explicit layout.
+
+Existing Starship initialization in `${ZDOTDIR:-$HOME}/.zshrc` is retained. If none
+is found in that file, a guarded initialization block is appended with a backup.
+If your initialization is in a sourced file instead, keep only one initialization.
+No plugins, aliases, Ghostty theme, or font preferences are replaced.
+
+```text
+user@host ~/workspace
+❯                                                       17:45:03
+
+user@host project  main [!?] py v3.11.16 (api) took 3s
+jobs:1 exit:1 ❯                                          17:45:09
+
+user@host SSH ~/app docker:production
+❯                                                       17:45:12
+```
+
+Names above are examples: username and hostname are detected, not hardcoded.
+The first line shows directory, Git branch/status, package metadata, Python
+version/environment, Node version, Docker context and container identity only
+when detected. Python also activates in Python projects without a virtualenv;
+Node uses Starship's project-file detection. Non-default Docker contexts or
+explicit Docker environment overrides are shown even outside Docker projects
+so a remote target is not hidden. Default/desktop-linux contexts stay hidden
+unless explicitly overridden. Container identity is Starship's detected local
+container name/hostname, not the name of an arbitrary remote Docker container;
+it is absent when the runtime exposes no recognized container markers.
+
+The second line shows `jobs:N` starting at one job, `exit:N` only on failure,
+and a green/red prompt character for success/failure. Durations appear only
+above 2 seconds. Local time uses Zsh's right prompt on the command line (updated
+when a prompt renders, not a continuously ticking clock). SSH identification
+applies on a remote host running this configuration; configuring your laptop
+does not install Starship or this config on remote hosts.
+
+Only built-in modules run, with a 30 ms scan timeout and 500 ms command timeout
+(instead of waiting many seconds for runtime probes). These are per-operation
+limits, not a hard total-prompt deadline; large repositories can still be slower.
+
+Reload with `exec zsh`, or open a new Ghostty window. The existing Starship session
+usually picks up TOML changes at its next prompt. Restore a printed backup by
+copying it over the corresponding configuration file, then reload.
+
+Validation (temporary homes/repos; no SSH connection or Docker daemon needed):
+
+```bash
+python3 -m unittest discover -s tests -p test_starship_prompt.py -v
+```
+
+Tests cover preservation, backups/symlinks, repeat-run idempotency, normal/Git/error/
+jobs/SSH previews, duration boundaries, right-hand time, Python virtualenv and
+Node detection, and an explicit Docker context. SSH is simulated via its environment.
+Real container detection requires running the config inside a container.
+See the [Starship module reference](https://starship.rs/config/) for detection rules.
+
 The standalone helper retains Linux desktop installation support. Use
 `--yes` for a non-interactive community Linux package-source confirmation:
 

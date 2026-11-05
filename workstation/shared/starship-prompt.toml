@@ -1,0 +1,86 @@
+# Two-line Ghostty/Zsh prompt. Built-in modules only; no custom shell probes.
+add_newline = false
+scan_timeout = 30
+command_timeout = 500
+format = '$username$hostname$directory$git_branch$git_status$package$python$nodejs$docker_context$container$cmd_duration$line_break$jobs$status$character'
+right_format = '$time'
+
+[username]
+show_always = true
+format = '[$user]($style)'
+style_user = 'bold green'
+style_root = 'bold red'
+disabled = false
+
+[hostname]
+ssh_only = false
+ssh_symbol = 'SSH '
+format = '[@$hostname](bold green) [$ssh_symbol](bold yellow)'
+disabled = false
+
+[directory]
+format = '[$path]($style)[$read_only]($read_only_style)'
+
+[git_branch]
+format = ' [$symbol$branch(:$remote_branch)]($style)'
+disabled = false
+
+[git_status]
+format = '( [\[$all_status$ahead_behind\]]($style))'
+style = 'bold yellow'
+disabled = false
+
+[package]
+format = ' is [$symbol$version]($style)'
+
+[python]
+format = ' [py $version( \($virtualenv\))]($style)'
+style = 'yellow'
+disabled = false
+
+[nodejs]
+format = ' [node $version]($style)'
+style = 'green'
+disabled = false
+
+[docker_context]
+format = ' [docker:$context]($style)'
+only_with_files = false
+disabled = false
+
+[container]
+format = ' [container:$name]($style)'
+style = 'bold cyan'
+disabled = false
+
+[cmd_duration]
+min_time = 2001
+format = ' [took $duration]($style)'
+style = 'yellow'
+disabled = false
+
+[line_break]
+disabled = false
+
+[jobs]
+number_threshold = 1
+symbol_threshold = 1
+format = '[jobs:$number]($style) '
+style = 'bold cyan'
+disabled = false
+
+[status]
+disabled = false
+format = '[exit:$status]($style) '
+style = 'bold red'
+
+[character]
+format = '$symbol '
+success_symbol = '[❯](bold green)'
+error_symbol = '[❯](bold red)'
+
+[time]
+disabled = false
+time_format = '%H:%M:%S'
+format = '[$time]($style)'
+style = 'dimmed white'

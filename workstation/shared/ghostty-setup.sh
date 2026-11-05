@@ -12,6 +12,7 @@ MANAGED_END='# <<< script-toolbox Ghostty shell integration <<<'
 
 ASSUME_YES=0
 CONFIG_ONLY=0
+CONFIGURE_PROMPT=0
 SKIP_VALIDATE=0
 FONT_IF_UNSET=''
 TEMP_FILE=''
@@ -42,6 +43,7 @@ Install Ghostty on macOS or Linux and configure:
 
 Options:
   --config-only  Write or update the configuration without installing Ghostty.
+  --prompt       Configure the two-line Starship/Zsh prompt (requires Starship and Python 3.11+).
   --yes, -y      Accept community Linux package-source prompts.
   --no-validate  Do not run 'ghostty +validate-config' after writing.
   --font-if-unset NAME  Set a default font only when no font or included config is configured.
@@ -55,6 +57,7 @@ EOF_USAGE
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --config-only) CONFIG_ONLY=1 ;;
+    --prompt) CONFIGURE_PROMPT=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     --no-validate) SKIP_VALIDATE=1 ;;
     --font-if-unset)
@@ -478,6 +481,12 @@ main() {
       Linux) install_linux ;;
       *) die "Unsupported operating system: $os" ;;
     esac
+  fi
+
+  if [ "$CONFIGURE_PROMPT" -eq 1 ]; then
+    has starship || die 'Install Starship first, then rerun with --prompt.'
+    python3 -c 'import tomllib' 2>/dev/null || die '--prompt requires Python 3.11+.'
+    python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/starship-prompt-setup.py"
   fi
 
   write_config
