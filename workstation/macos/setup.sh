@@ -316,6 +316,12 @@ show_plan() {
     die 'The selected profiles did not resolve to any packages.'
 
   show_builtin_tools
+  if key_is_selected 'brew:lizardbyte/homebrew/sunshine'; then
+    printf '\nSunshine Homebrew trust:\n'
+    printf '  - trusts only lizardbyte/homebrew/sunshine before installing packages\n'
+    printf '  - allows this third-party formula to run code as your user\n'
+    printf '  - does not trust the whole tap or change macOS security settings\n'
+  fi
   if key_is_selected 'cask:ghostty'; then
     printf '\nGhostty configuration:\n'
     printf '  - enables SSH environment forwarding and remote terminfo setup\n'
@@ -354,6 +360,10 @@ confirm_install() {
 install_packages() {
   printf '\nInstalling missing Homebrew packages\n'
   printf '%s\n' '--------------------------------------------------------------------'
+  if key_is_selected 'brew:lizardbyte/homebrew/sunshine'; then
+    printf '    $ brew tap LizardByte/homebrew\n'
+    printf '    $ brew trust --formula lizardbyte/homebrew/sunshine\n'
+  fi
   printf '    $ <filtered Brewfile> | '
   printf 'brew bundle install --no-upgrade --file=-\n'
 
@@ -383,6 +393,15 @@ install_packages() {
     die 'The install command must run on macOS.'
   command -v brew >/dev/null 2>&1 ||
     die 'Homebrew is required. Install it from https://brew.sh/ and rerun.'
+
+  if key_is_selected 'brew:lizardbyte/homebrew/sunshine'; then
+    # Bundle may inspect formulae before installing them, so grant narrow trust
+    # first rather than relying on implicit trust from a direct brew install.
+    brew tap LizardByte/homebrew ||
+      die 'Could not add the Sunshine tap; package installation was not started.'
+    brew trust --formula lizardbyte/homebrew/sunshine ||
+      die 'Could not trust Sunshine; package installation was not started. Check that Homebrew supports brew trust and review its error above.'
+  fi
 
   generate_selected_brewfile |
     brew bundle install --no-upgrade --file=-

@@ -173,7 +173,14 @@ tokens, recovery codes, and other sensitive text.
 
 Moonlight is the client and Sunshine is the self-hosted streaming server.
 Sunshine's macOS package comes from the project's official Homebrew tap because
-it is not in Homebrew's core cask catalog.
+it is not in Homebrew's core cask catalog. Before Homebrew Bundle runs, the
+initializer adds the tap and runs
+`brew trust --formula lizardbyte/homebrew/sunshine`. This grants persistent trust
+only to Sunshine's executable formula, not the entire tap, and is disclosed in
+the plan before confirmation (`--yes` accepts the plan). Homebrew must support
+`brew trust`; a tap or trust failure stops installation. Plans and dry runs do
+not change trust. This is Homebrew package trust, not macOS Gatekeeper or capture
+permission approval. See [Homebrew tap trust](https://docs.brew.sh/Tap-Trust).
 
 The complete admin profile is explicit because some packages require
 elevation, a network extension or driver, firewall approval, or account

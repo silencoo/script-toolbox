@@ -107,6 +107,53 @@ assert_contains "$admin_output" 'tap    LizardByte/homebrew' \
 assert_contains "$admin_output" 'brew   lizardbyte/homebrew/sunshine' \
   'Admin plan did not include Sunshine'
 
+assert_contains "$admin_output" 'trusts only lizardbyte/homebrew/sunshine'   'Admin plan did not disclose formula trust'
+
+# Exercise the real install path using only fake Homebrew/platform commands.
+trust_test_dir="$(mktemp -d)"
+trap 'rm -rf "$trust_test_dir"' EXIT
+mkdir "$trust_test_dir/bin"
+cat > "$trust_test_dir/bin/uname" <<'MOCK'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+MOCK
+cat > "$trust_test_dir/bin/brew" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$BREW_TEST_LOG"
+case "$1" in
+  tap) exit "${BREW_TEST_TAP_EXIT:-0}" ;;
+  trust) exit "${BREW_TEST_TRUST_EXIT:-0}" ;;
+  bundle) cat > "$BREW_TEST_BUNDLE" ;;
+  *) exit 99 ;;
+esac
+MOCK
+chmod +x "$trust_test_dir/bin/"*
+export BREW_TEST_LOG="$trust_test_dir/commands"
+export BREW_TEST_BUNDLE="$trust_test_dir/bundle"
+
+PATH="$trust_test_dir/bin:$PATH" "$setup_script" install admin --yes >/dev/null
+expected_commands=$'tap LizardByte/homebrew\ntrust --formula lizardbyte/homebrew/sunshine\nbundle install --no-upgrade --file=-'
+[[ "$(cat "$BREW_TEST_LOG")" == "$expected_commands" ]] ||
+  fail 'Sunshine trust did not run between tap and Bundle'
+assert_contains "$(cat "$BREW_TEST_BUNDLE")" 'brew "lizardbyte/homebrew/sunshine"'   'Bundle omitted Sunshine'
+
+for failed_step in tap trust; do
+  : > "$BREW_TEST_LOG"
+  if PATH="$trust_test_dir/bin:$PATH"       BREW_TEST_TAP_EXIT="$([[ "$failed_step" == tap ]] && echo 1 || echo 0)"       BREW_TEST_TRUST_EXIT="$([[ "$failed_step" == trust ]] && echo 1 || echo 0)"       "$setup_script" install admin --yes >/dev/null 2>&1; then
+    fail "Sunshine $failed_step failure was ignored"
+  fi
+  assert_not_contains "$(cat "$BREW_TEST_LOG")" bundle     "Bundle ran after Sunshine $failed_step failed"
+done
+
+: > "$BREW_TEST_LOG"
+admin_dry_run="$(PATH="$trust_test_dir/bin:$PATH" "$setup_script" install admin --dry-run)"
+assert_contains "$admin_dry_run" 'brew trust --formula lizardbyte/homebrew/sunshine'   'Admin dry run omitted trust'
+PATH="$trust_test_dir/bin:$PATH" "$setup_script" plan admin >/dev/null
+printf 'n\n' | PATH="$trust_test_dir/bin:$PATH" "$setup_script" install admin >/dev/null
+[[ ! -s "$BREW_TEST_LOG" ]] || fail 'Preview or cancelled install changed Homebrew'
+PATH="$trust_test_dir/bin:$PATH" "$setup_script" install media --yes >/dev/null
+assert_not_contains "$(cat "$BREW_TEST_LOG")" trust   'Non-Sunshine install changed trust'
+
 deduplicated_output="$("$setup_script" plan core desktop)"
 localsend_count="$(
   printf '%s\n' "$deduplicated_output" |
