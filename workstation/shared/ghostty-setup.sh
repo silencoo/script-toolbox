@@ -15,6 +15,7 @@ CONFIG_ONLY=0
 CONFIGURE_PROMPT=0
 SKIP_VALIDATE=0
 FONT_IF_UNSET=''
+CONTRAST_SHADER=1
 TEMP_FILE=''
 TEMP_DIR=''
 
@@ -46,6 +47,8 @@ Options:
   --prompt       Configure the two-line Starship/Zsh prompt (requires Starship and Python 3.11+).
   --yes, -y      Accept community Linux package-source prompts.
   --no-validate  Do not run 'ghostty +validate-config' after writing.
+  --contrast-shader     Use the bundled 1.4x contrast shader if unset (default).
+  --no-contrast-shader  Do not add the default shader; preserve existing settings.
   --font-if-unset NAME  Set a default font only when no font or included config is configured.
   --help, -h     Show this help.
 
@@ -57,6 +60,8 @@ EOF_USAGE
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --config-only) CONFIG_ONLY=1 ;;
+    --contrast-shader) CONTRAST_SHADER=1 ;;
+    --no-contrast-shader) CONTRAST_SHADER=0 ;;
     --prompt) CONFIGURE_PROMPT=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     --no-validate) SKIP_VALIDATE=1 ;;
@@ -361,6 +366,40 @@ font_is_configured() {
   return 1
 }
 
+add_default_contrast_shader() {
+  [ "$CONTRAST_SHADER" -eq 1 ] || return 0
+  case "$(uname -s)" in Darwin|Linux) ;; *) return 0 ;; esac
+
+  local file
+  local shader="$CONFIG_DIR/shaders/script-toolbox-contrast.glsl"
+  local source_shader
+  local -a config_files=("$CONFIG_FILE" "$CONFIG_DIR/config")
+  if [ "$(uname -s)" = Darwin ]; then
+    config_files+=("$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
+                   "$HOME/Library/Application Support/com.mitchellh.ghostty/config")
+  fi
+  source_shader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ghostty-shaders/contrast.glsl"
+  # Do not stack filters, override explicit resets, or guess what includes contain.
+  for file in "${config_files[@]}"; do
+    [ -f "$file" ] || continue
+    if grep -Eq '^[[:space:]]*(custom-shader|config-file)[[:space:]]*=' "$file"; then
+      return 0
+    fi
+  done
+
+  [ -f "$source_shader" ] || die "Bundled contrast shader not found: $source_shader"
+  mkdir -p "$(dirname "$shader")"
+  if [ -e "$shader" ] || [ -L "$shader" ]; then
+    if ! cmp -s "$source_shader" "$shader"; then
+      warn "Preserving existing shader at $shader; contrast default was not enabled."
+      return 0
+    fi
+  else
+    cp "$source_shader" "$shader"
+  fi
+  printf '# Default 1.4x contrast shader.\ncustom-shader = %s\n\n' "$shader" >> "$TEMP_FILE"
+}
+
 write_config() {
   info "Configuring Ghostty at $CONFIG_FILE..."
   mkdir -p "$CONFIG_DIR"
@@ -411,6 +450,7 @@ write_config() {
     printf '# Default icon font; existing font preferences are preserved.\nfont-family = %s\n\n' \
       "$FONT_IF_UNSET" >> "$TEMP_FILE"
   fi
+  add_default_contrast_shader
   printf '%s\n' \
     "$MANAGED_BEGIN" \
     "shell-integration-features = $FEATURES" \

@@ -28,6 +28,15 @@ Combine this profile with `core` to install everyday applications too:
 ./workstation/macos/setup.sh install core terminal
 ```
 
+Ghostty also defaults to the bundled **1.4× contrast shader**, copied to
+`~/.config/ghostty/shaders/script-toolbox-contrast.glsl`. Existing
+`custom-shader` settings (including an explicit reset) or `config-file`
+includes in XDG or macOS configuration files prevent adding this default.
+An existing modified shader file is never overwritten. Wallpaper, opacity, and
+titlebar settings are unchanged. Restart Ghostty to see the effect; remove the
+`custom-shader` line to disable it (use `custom-shader =` to keep it disabled
+on subsequent initializer runs). The shared Linux Ghostty setup uses the same shader default.
+
 ## Packages and features
 
 | Purpose | Packages |

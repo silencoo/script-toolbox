@@ -258,3 +258,18 @@ Official references:
 - [Configuration locations and precedence](https://ghostty.org/docs/config)
 - [Shell integration](https://ghostty.org/docs/features/shell-integration)
 - [SSH integration](https://ghostty.org/docs/features/ssh)
+
+## Default contrast shader (macOS and Linux)
+
+The shared setup adds the bundled 1.4× contrast shader by default, including with
+`--config-only`. It copies the shader to
+`~/.config/ghostty/shaders/script-toolbox-contrast.glsl` and adds a
+`custom-shader` entry. It does not change wallpaper, opacity, or titlebar settings.
+
+Existing `custom-shader` settings (including an empty reset), included configs,
+and modified destination shader files are preserved rather than stacking effects.
+macOS-specific configuration locations are checked only on macOS.
+
+Use `--no-contrast-shader` to skip adding this default; it does not remove a shader
+already configured. To disable an installed shader persistently, replace its
+configuration line with `custom-shader =`. Restart Ghostty to inspect the result.

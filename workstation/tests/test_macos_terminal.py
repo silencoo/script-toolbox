@@ -283,6 +283,77 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('macOS also loads this later config', output)
         self.assertEqual(legacy.read_text(), 'font-size = 18\n')
 
+    def test_contrast_shader_installed_and_idempotent(self):
+        self.run_setup('install', 'terminal', '--yes')
+        shader = self.config.parent / 'shaders/script-toolbox-contrast.glsl'
+        bundled = SETUP.parent.parent / 'shared/ghostty-shaders/contrast.glsl'
+        self.assertEqual(shader.read_bytes(), bundled.read_bytes())
+        self.assertIn(f'custom-shader = {shader}', self.config.read_text())
+        self.assertNotIn('macos-titlebar-style', self.config.read_text())
+        self.assertNotIn('background-opacity', self.config.read_text())
+        content = self.config.read_bytes()
+        mtime = shader.stat().st_mtime_ns
+        self.run_setup('install', 'terminal', '--yes')
+        self.assertEqual(self.config.read_bytes(), content)
+        self.assertEqual(shader.stat().st_mtime_ns, mtime)
+
+    def test_contrast_preserves_existing_shader_settings_and_includes(self):
+        paths = [
+            self.config,
+            self.home / '.config/ghostty/config',
+            self.home / 'Library/Application Support/com.mitchellh.ghostty/config',
+            self.home / 'Library/Application Support/com.mitchellh.ghostty/config.ghostty',
+        ]
+        for path in paths:
+            for choice in ['custom-shader = my.glsl\n', 'custom-shader =\n',
+                           'config-file = custom.ghostty\n']:
+                with self.subTest(path=path, choice=choice):
+                    for existing in paths:
+                        if existing.exists():
+                            existing.unlink()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(choice)
+                    self.run_setup('install', 'terminal', '--yes')
+                    self.assertNotIn('script-toolbox-contrast.glsl', self.config.read_text())
+                    self.assertIn(choice, path.read_text())
+                    self.assertFalse((self.config.parent / 'shaders').exists())
+
+    def test_modified_shader_file_is_not_overwritten_or_enabled(self):
+        shader = self.config.parent / 'shaders/script-toolbox-contrast.glsl'
+        shader.parent.mkdir(parents=True)
+        shader.write_text('// user shader')
+        self.run_setup('install', 'terminal', '--yes')
+        self.assertEqual(shader.read_text(), '// user shader')
+        self.assertNotIn('custom-shader', self.config.read_text())
+
+    def test_linux_contrast_default_and_idempotence(self):
+        (self.bin / 'uname').write_text('#!/bin/sh\nprintf "Linux\\n"\n')
+        helper = SETUP.parent.parent / 'shared/ghostty-setup.sh'
+        self.run_setup('--config-only', '--no-validate', setup=helper)
+        shader = self.config.parent / 'shaders/script-toolbox-contrast.glsl'
+        self.assertEqual(shader.read_bytes(),
+                         (helper.parent / 'ghostty-shaders/contrast.glsl').read_bytes())
+        self.assertIn(f'custom-shader = {shader}', self.config.read_text())
+        content = self.config.read_bytes()
+        self.run_setup('--config-only', '--no-validate', setup=helper)
+        self.assertEqual(content, self.config.read_bytes())
+
+    def test_linux_contrast_opt_out(self):
+        (self.bin / 'uname').write_text('#!/bin/sh\nprintf "Linux\\n"\n')
+        self.run_setup('--config-only', '--no-validate', '--no-contrast-shader',
+                       setup=SETUP.parent.parent / 'shared/ghostty-setup.sh')
+        self.assertNotIn('custom-shader', self.config.read_text())
+        self.assertFalse((self.config.parent / 'shaders').exists())
+
+    def test_linux_existing_shader_is_preserved(self):
+        (self.bin / 'uname').write_text('#!/bin/sh\nprintf "Linux\\n"\n')
+        self.seed_config()
+        self.config.write_text('custom-shader = existing.glsl\n')
+        self.run_setup('--config-only', '--no-validate',
+                       setup=SETUP.parent.parent / 'shared/ghostty-setup.sh')
+        self.assertIn('custom-shader = existing.glsl', self.config.read_text())
+        self.assertFalse((self.config.parent / 'shaders').exists())
+
     def test_existing_font_choice_is_preserved(self):
         self.seed_config()
         self.config.write_text('font-family = Menlo\nfont-size = 16\n')

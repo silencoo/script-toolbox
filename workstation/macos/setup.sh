@@ -324,6 +324,7 @@ show_plan() {
   fi
   if key_is_selected 'cask:ghostty'; then
     printf '\nGhostty configuration:\n'
+    printf '  - defaults to a 1.4x contrast shader, preserving existing shaders/includes\n'
     printf '  - enables SSH environment forwarding and remote terminfo setup\n'
     printf '  - preserves other settings and backs up changed configuration\n'
     printf '  - configures ~/.config/ghostty/config.ghostty for the current user\n'
@@ -369,7 +370,7 @@ install_packages() {
 
   local ghostty_setup="$script_dir/../shared/ghostty-setup.sh"
   local zsh_setup="$script_dir/terminal-setup.sh"
-  local -a ghostty_options=(--config-only)
+  local -a ghostty_options=(--config-only --contrast-shader)
   if key_is_selected 'cask:font-jetbrains-mono-nerd-font'; then
     ghostty_options+=(--font-if-unset 'JetBrainsMono Nerd Font')
   fi
