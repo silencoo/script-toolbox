@@ -64,8 +64,8 @@ done < <(grep '^# workstation-package|' "$brewfile")
 core_media_output="$("$setup_script" plan core media)"
 assert_contains "$core_media_output" 'Plan: core media profile(s)' \
   'Combined plan did not preserve profile order'
-assert_contains "$core_media_output" 'cask   keka' \
-  'Core plan did not include Keka'
+assert_contains "$core_media_output" 'cask   macpacker' \
+  'Core plan did not include MacPacker'
 assert_contains "$core_media_output" 'cask   keepassxc' \
   'Core plan did not include KeePassXC'
 assert_contains "$core_media_output" 'brew   sevenzip' \
@@ -82,8 +82,8 @@ assert_not_contains "$core_media_output" 'brew   mpv' \
 optional_output="$("$setup_script" plan media maintenance --include-optional)"
 assert_contains "$optional_output" 'brew   mpv' \
   'Optional media plan did not include mpv'
-assert_contains "$optional_output" 'cask   appcleaner' \
-  'Optional maintenance plan did not include AppCleaner'
+assert_not_contains "$optional_output" 'cask   appcleaner' \
+  'Removed AppCleaner appeared in the optional maintenance plan'
 assert_contains "$optional_output" 'cask   stats' \
   'Maintenance plan did not include Stats'
 
@@ -91,7 +91,13 @@ maintenance_output="$("$setup_script" plan maintenance)"
 assert_contains "$maintenance_output" 'brew   mole' \
   'Maintenance plan did not include Mole'
 assert_not_contains "$maintenance_output" 'cask   appcleaner' \
-  'Optional AppCleaner appeared in the default maintenance plan'
+  'Removed AppCleaner appeared in the default maintenance plan'
+
+all_output="$("$setup_script" plan core media maintenance desktop admin terminal --include-optional)"
+for removed_package in keka raycast appcleaner; do
+  assert_not_contains "$all_output" "cask   $removed_package" \
+    "Removed $removed_package appeared in the full optional plan"
+done
 
 admin_output="$("$setup_script" plan admin)"
 assert_contains "$admin_output" 'cask   moonlight' \

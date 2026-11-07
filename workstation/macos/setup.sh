@@ -247,7 +247,7 @@ show_profiles() {
     'Explicit networking, remote access, and encryption tools'
   printf '  %-13s %s\n' terminal \
     'Ghostty, Starship, Zsh plugins, Yazi, navigation, and CLI tools'
-  printf '\nUse --include-optional for AppCleaner, mpv, Maccy, Raycast, VeraCrypt, btop, ncdu, and duf.\n'
+  printf '\nUse --include-optional for mpv, Maccy, VeraCrypt, btop, ncdu, and duf.\n'
   printf 'The admin profile may require elevation, extensions, or account setup.\n'
 }
 

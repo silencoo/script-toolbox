@@ -13,8 +13,8 @@ cask "vscodium" if false
 brew "sevenzip" if false
 # workstation-package|core,terminal|brew|zstd|Zstandard CLI|required
 brew "zstd" if false
-# workstation-package|core|cask|keka|Keka|required
-cask "keka" if false
+# workstation-package|core|cask|macpacker|MacPacker|required
+cask "macpacker" if false
 # workstation-package|core,desktop|cask|localsend|LocalSend|required
 cask "localsend" if false
 # workstation-package|core|cask|grandperspective|GrandPerspective|required
@@ -55,15 +55,11 @@ brew "restic" if false
 brew "rclone" if false
 # workstation-package|maintenance|brew|mole|Mole|required
 brew "mole" if false
-# workstation-package|maintenance|cask|appcleaner|AppCleaner|optional
-cask "appcleaner" if false
 
 # workstation-package|desktop|cask|keepingyouawake|KeepingYouAwake|required
 cask "keepingyouawake" if false
 # workstation-package|desktop|cask|maccy|Maccy|optional
 cask "maccy" if false
-# workstation-package|desktop|cask|raycast|Raycast|optional
-cask "raycast" if false
 
 # workstation-package|admin|brew|nmap|Nmap|required
 brew "nmap" if false

@@ -40,7 +40,7 @@ and [Flatpak](https://docs.flatpak.org/en/latest/flatpak-command-reference.html)
 | --- | --- | --- |
 | Password management | KeePassXC (`KeePassXCTeam.KeePassXC`) | KeePassXC (`keepassxc`) |
 | Text/code editor | VSCodium (`VSCodium.VSCodium`, `apps` or developer mode) | VSCodium (`vscodium`) |
-| GUI archives | NanaZip (`M2Team.NanaZip`) | Keka (`keka`) |
+| GUI archives | NanaZip (`M2Team.NanaZip`) | MacPacker (`macpacker`) |
 | Archive CLI | Zstandard (`Meta.Zstandard`) | 7-Zip (`sevenzip`) and Zstandard (`zstd`) |
 | Disk usage | WinDirStat (`WinDirStat.WinDirStat`) | GrandPerspective (`grandperspective`) |
 | Fast file search | Everything (`voidtools.Everything`) | Spotlight and `mdfind` (built in) |
@@ -117,7 +117,7 @@ owner, applicable law, and the service's terms.
 
 | Purpose | Windows WinGet ID | macOS Homebrew token |
 | --- | --- | --- |
-| Manual application removal | `Klocman.BulkCrapUninstaller` | `appcleaner` (**optional**) |
+| Manual application removal | `Klocman.BulkCrapUninstaller` | — |
 | Disk usage | `WinDirStat.WinDirStat` | GrandPerspective from `core` |
 | Duplicate inspection | `qarmin.krokiet` | `czkawka` |
 | PDF inspection | `QPDF.QPDF` | `qpdf` |
@@ -130,8 +130,7 @@ owner, applicable law, and the service's terms.
 
 The duplicate finders are installed as inspection tools. Neither initializer
 runs them or deletes duplicate files. Homebrew-managed macOS applications
-should normally be removed with `brew uninstall --cask <application>`;
-AppCleaner is reserved for manually installed applications.
+should normally be removed with `brew uninstall --cask <application>`.
 
 Mole is installed as a command-line tool but is never run by the initializer.
 Its cleanup, uninstall, purge, and optimization commands can remove files or
@@ -154,7 +153,7 @@ settings.
 | Window layout | PowerToys | Rectangle |
 | Keep awake | — | KeepingYouAwake (`keepingyouawake`) |
 | Clipboard manager | — | Maccy (`maccy`, **optional**) |
-| Launcher | Flow Launcher (`Flow-Launcher.Flow-Launcher`, **optional**) | Raycast (`raycast`, **optional**) |
+| Launcher | Flow Launcher (`Flow-Launcher.Flow-Launcher`, **optional**) | — |
 
 Clipboard history is never enabled implicitly. It can retain passwords,
 tokens, recovery codes, and other sensitive text.

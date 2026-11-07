@@ -72,7 +72,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         output = self.run_setup('menu', input='2\n1, 5 1\nn\n')
         self.assertIn('Plan: core desktop profile(s)', output)
         self.assertIn('maccy', output)
-        self.assertIn('raycast', output)
+        self.assertNotIn('raycast', output)
         self.assertNotIn('[optional]', output)
         self.assertEqual(output.count('cask   localsend'), 1)
         self.assertIn('Selected packages (Homebrew skips those already installed)', output)
