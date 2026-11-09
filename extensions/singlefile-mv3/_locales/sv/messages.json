@@ -211,6 +211,14 @@
 		"message": "visa ett informationsfält när du visar en sparad sida",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "SingleFile kan inte visa informationsfältet eller spara sidor som har öppnats från filsystemet, eftersom tillägget inte får åtkomst till lokala filer. Åtgärda detta genom att aktivera ”Åtkomst till lokala filer på din dator” under ”Behörigheter och data” på SingleFile-sidan i about:addons.",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "SingleFile kan inte visa informationsfältet eller spara sidor som har öppnats från filsystemet, eftersom tillägget inte får åtkomst till fil-URL:er. Åtgärda detta genom att aktivera ”Tillåt åtkomst till fil-URL:er” på SingleFile-sidan på webbläsarens sida för tillägg.",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
+	},
 	"optionInfobarTemplate": {
 		"message": "mall för informationsfältets innehåll",
 		"description": "Options page label: 'template of the infobar content'"
@@ -462,6 +470,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "zooma ut sidan under sparandet",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "behåll den emulerade skärmstorleken under sparandet",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "simulera rullning",
@@ -1098,12 +1110,12 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "Aktivera eller inaktivera borttagning av markerade element",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "Ta bort elementet under muspekaren (röd ram)",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "Aktivera eller inaktivera borttagning av element utanför markeringen",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "Behåll elementet under muspekaren och ta bort allt annat (grön ram)",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "Återställ det senast borttagna elementet",
