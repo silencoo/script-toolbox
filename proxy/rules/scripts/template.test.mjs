@@ -24,6 +24,24 @@ test("routes APNs before broad direct resources while keeping Apple direct-first
   }
 });
 
+test("APNs has a distinct notification icon from general Apple services", () => {
+  const icon = (name) => template.split("\n")
+    .find((line) => line.startsWith(`static=${name},`)).split("img-url=")[1];
+  assert.equal(icon("APNs"),
+    "https://raw.githubusercontent.com/silencoo/z-icon/main/icon/homarr/108/ntfy.png");
+  assert.equal(icon("Apple"),
+    "https://raw.githubusercontent.com/silencoo/z-icon/main/icon/apps-cn/apple-v2.png");
+  assert.notEqual(icon("APNs"), icon("Apple"));
+});
+
+test("GitHub and Residential use service-appropriate icons", () => {
+  for (const [policy, asset] of [["GitHub", "github"], ["Residential", "router"]]) {
+    const line = template.split("\n").find((entry) => entry.startsWith(`static=${policy},`));
+    assert.equal(line.split("img-url=")[1],
+      `https://raw.githubusercontent.com/silencoo/z-icon/main/icon/homarr/108/${asset}.png`);
+  }
+});
+
 test("APNs rules cover push hosts and both IP families without broad Apple routing", async () => {
   const rules = (await readFile(new URL("../rules/quantumultx/APNs.list", import.meta.url), "utf8"))
     .split("\n").filter((line) => line && !line.startsWith("#"));
