@@ -22,6 +22,7 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Standalone Codex analytics; its data features are integrated into ChatGPT Checker Next |
 | [`userscripts/e-hentai/`](./userscripts/e-hentai/) | E-Hentai Favorites & H@H browser userscript |
 | [`userscripts/gemini-toolkit/`](./userscripts/gemini-toolkit/) | Keep Gemini defaults, concurrently download/export full-size images, and safely manage conversations |
+| [`userscripts/javbus-quiz-autoselect/`](./userscripts/javbus-quiz-autoselect/) | Select known answers on the JavBus driving quiz page |
 | [`userscripts/linux-do/`](./userscripts/linux-do/) | Archive Linux.do topics locally or publish them to WordPress |
 | [`userscripts/netease-music/`](./userscripts/netease-music/) | Third-party NetEase Music download, cloud-transfer, metadata, and playback toolkit |
 | [`userscripts/pt-daily-opener/`](./userscripts/pt-daily-opener/) | Scheduled daily opener for Private Tracker sites |
