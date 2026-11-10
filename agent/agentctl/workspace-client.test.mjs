@@ -41,8 +41,8 @@ import {
 } from "./provider-schema.mjs";
 import { newFailoverStore, validateFailoverStore } from "./failover-schema.mjs";
 import { newPricingCatalog, validatePricingCatalog } from "../pricing/pricing.mjs";
-import worker from "../../workers/toolbox-store/worker.js";
-import { MemoryR2Bucket } from "../../workers/toolbox-store/test-memory-r2.mjs";
+import worker from "../toolbox-store/worker.js";
+import { MemoryR2Bucket } from "../toolbox-store/test-memory-r2.mjs";
 
 function providerProfile(name, secret) {
   return {

@@ -3,7 +3,7 @@ name: Validate misc
   push:
     paths:
       - debian-ai-workstation/**
-      - dujiaoka-epusdt/**
+      - specialized/dujiaoka-epusdt/**
       - .github/workflows/**
       - .github/actions/**
       - scripts/**
@@ -11,7 +11,7 @@ name: Validate misc
   pull_request:
     paths:
       - debian-ai-workstation/**
-      - dujiaoka-epusdt/**
+      - specialized/dujiaoka-epusdt/**
       - .github/workflows/**
       - .github/actions/**
       - scripts/**

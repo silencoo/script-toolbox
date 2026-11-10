@@ -3,14 +3,14 @@ name: Validate Quantumult X
 on:
   push:
     paths:
-      - 'quantumult-x/**'
-      - 'proxy-rules/**'
+      - 'proxy/quantumult-x/**'
+      - 'proxy/rules/**'
       - '.github/workflows/quantumult-x.yml'
       - 'scripts/**'
   pull_request:
     paths:
-      - 'quantumult-x/**'
-      - 'proxy-rules/**'
+      - 'proxy/quantumult-x/**'
+      - 'proxy/rules/**'
       - '.github/workflows/quantumult-x.yml'
       - 'scripts/**'
   workflow_dispatch:

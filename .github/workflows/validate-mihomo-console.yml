@@ -2,13 +2,13 @@ name: Validate mihomo-console
 'on':
   push:
     paths:
-      - mihomo-console/**
+      - proxy/mihomo-console/**
       - .github/actions/mihomo/**
       - scripts/**
       - .github/workflows/validate-mihomo-console.yml
   pull_request:
     paths:
-      - mihomo-console/**
+      - proxy/mihomo-console/**
       - .github/actions/mihomo/**
       - scripts/**
       - .github/workflows/validate-mihomo-console.yml

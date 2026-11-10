@@ -9,16 +9,16 @@ node_modules/
 __pycache__/
 *.py[cod]
 # Mihomo runtime data includes subscription URLs, controller secrets and backups.
-/mihomo-console/data/
+/proxy/mihomo-console/data/
 # Local JPopSuki data contains account-bound URL credentials and user choices.
-jpopsuki-rss-autobrr/data/subscriptions.json
+userscripts/jpopsuki-rss-autobrr/data/subscriptions.json
 
 # Local Gist migration staging. These files remain outside the public repo.
 /todo/
 /gists/.gist-history/
 
 # Editable Quantumult X profiles can contain account-bound subscription URLs.
-/proxy-rules/templates/quantumult-x.local.conf
+/proxy/rules/templates/quantumult-x.local.conf
 
 # Sunshine monitor runtime contains host identities, native snapshots and logs.
 /sunshine-vdd/monitor/settings.json

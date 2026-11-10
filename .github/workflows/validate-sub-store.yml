@@ -2,15 +2,15 @@ name: Validate sub-store
 'on':
   push:
     paths:
-      - sub-store/**
-      - proxy-rules/sources/**
+      - proxy/sub-store/**
+      - proxy/rules/sources/**
       - .github/actions/mihomo/**
       - scripts/**
       - .github/workflows/validate-sub-store.yml
   pull_request:
     paths:
-      - sub-store/**
-      - proxy-rules/sources/**
+      - proxy/sub-store/**
+      - proxy/rules/sources/**
       - .github/actions/mihomo/**
       - scripts/**
       - .github/workflows/validate-sub-store.yml
@@ -43,9 +43,9 @@ jobs:
         timeout-minutes: 5
         run: |
           mkdir -p "${RUNNER_TEMP}/mihomo-home"
-          node sub-store/generate-mihomo-fixture.mjs \
+          node proxy/sub-store/generate-mihomo-fixture.mjs \
             > "${RUNNER_TEMP}/convert-v2-default.json"
-          node sub-store/generate-mihomo-fixture.mjs loadbalance=true \
+          node proxy/sub-store/generate-mihomo-fixture.mjs loadbalance=true \
             > "${RUNNER_TEMP}/convert-v2-load-balance.json"
           "${RUNNER_TEMP}/mihomo" -t \
             -d "${RUNNER_TEMP}/mihomo-home" \

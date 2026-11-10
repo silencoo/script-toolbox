@@ -8,24 +8,24 @@ third-party-derived files.
   export from Ghostty 1.3.1, derived from
   `ghostty-org/ghostty/src/terminfo/ghostty.zig` at tag `v1.3.1`.
   Its MIT license and copyright notice are retained beside the bundled entry.
-- `quantumult-x/resource-parser.js` retains its upstream attribution to
+- `proxy/quantumult-x/resource-parser.js` retains its upstream attribution to
   KOP-XIAO/Shawn. Use and redistribution of that file remain subject to any
   applicable upstream terms.
-- `quantumult-x/StreamingCheck-QX.js` and
-  `quantumult-x/GoogleLocation-QX.js` are rewritten and adapted from
+- `proxy/quantumult-x/StreamingCheck-QX.js` and
+  `proxy/quantumult-x/GoogleLocation-QX.js` are rewritten and adapted from
   KOP-XIAO/QuantumultX scripts at the source commits recorded in their headers.
   The upstream repository does not declare a license, so the repository-level
   MIT license does not assert rights over the upstream-derived portions.
-- `quantumult-x/ExitIPCheck-QX.js` is rewritten and adapted from ddgksf2013's
+- `proxy/quantumult-x/ExitIPCheck-QX.js` is rewritten and adapted from ddgksf2013's
   `server-info-pure.js` snapshot dated 2025-12-14. The upstream file does not
   declare a license, so the repository-level MIT license does not assert rights
   over the upstream-derived portions. Runtime IP reputation data is supplied
   by the external IPPure service and remains subject to its service terms.
-- `proxy-rules/` contains curated rule content derived in part from
+- `proxy/rules/` contains curated rule content derived in part from
   `blackmatrix7/ios_rule_script`; that material is distributed under GPL-2.0 as
-  documented in `proxy-rules/LICENSE.GPL-2.0`. The ByteDance source and
+  documented in `proxy/rules/LICENSE.GPL-2.0`. The ByteDance source and
   generated list derive from `fmz200/wool_scripts` and remain GPL-3.0-only as
-  documented in `proxy-rules/LICENSE.GPL-3.0`. Its generated ad-domain output
+  documented in `proxy/rules/LICENSE.GPL-3.0`. Its generated ad-domain output
   combines
   `8680/GOODBYEADS` with `Cats-Team/AdRules`. GOODBYEADS is MIT licensed and
   aggregates constituent upstream lists that may retain separate terms.
@@ -59,7 +59,7 @@ third-party-derived files.
   `gemini-watermark-remover`, as vendored and adapted by `silencoo/web2gem-plus`.
   The upstream MIT attribution is retained beside it in
   `vendor/LICENSE.gargantua`.
-- `resources/network/adobe-blocking/` was migrated from a local Gist. The Adobe
+- `proxy/resources/adobe-blocking/` was migrated from a local Gist. The Adobe
   hosts list did not include complete upstream provenance or license metadata,
   so the repository-level MIT license does not assert rights over that list.
 - Files under `agent/promptctl/advanced/claude/` were copied from
@@ -79,6 +79,6 @@ third-party-derived files.
   the bundled `extensions/singlefile-mv3/LICENSE`. The exact mirrored revision
   is recorded in `extensions/singlefile-mv3/.upstream-commit`.
 
-External services queried by `workers/cloudflare-vless/worker.js` are operated
+External services queried by `proxy/cloudflare-vless/worker.js` are operated
 by their respective providers. The MIT license does not grant rights to those
 services or their data.

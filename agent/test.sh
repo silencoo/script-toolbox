@@ -21,7 +21,7 @@ while IFS= read -r -d '' f; do
     printf '%s %s\n' "FAIL:" "${f#"${SCRIPT_DIR}/"}" >&2
     fail=1
   fi
-done < <(find "$SCRIPT_DIR" -type f -name '*.sh' -print0)
+done < <(find "$SCRIPT_DIR" \( -name node_modules -o -path "$SCRIPT_DIR/toolbox-store" \) -prune -o -type f -name '*.sh' -print0)
 
 run_dependency_tests() {
   bash -c '

@@ -29,8 +29,8 @@ import {
   restoreStore,
   SNAPSHOT_INFO
 } from "./remote-client.mjs";
-import worker from "../../workers/toolbox-store/worker.js";
-import { MemoryR2Bucket } from "../../workers/toolbox-store/test-memory-r2.mjs";
+import worker from "../toolbox-store/worker.js";
+import { MemoryR2Bucket } from "../toolbox-store/test-memory-r2.mjs";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TEST_DIR, "../..");

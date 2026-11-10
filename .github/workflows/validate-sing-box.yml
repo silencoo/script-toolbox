@@ -2,12 +2,12 @@ name: Validate sing-box
 'on':
   push:
     paths:
-      - sing-box/**
+      - proxy/sing-box/**
       - scripts/**
       - .github/workflows/validate-sing-box.yml
   pull_request:
     paths:
-      - sing-box/**
+      - proxy/sing-box/**
       - scripts/**
       - .github/workflows/validate-sing-box.yml
   workflow_dispatch: null

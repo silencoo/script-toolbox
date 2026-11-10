@@ -4,16 +4,12 @@ name: Validate userscripts
     paths:
       - userscripts/**
       - '!userscripts/linux-do/**'
-      - jpopsuki-rss-autobrr/**
-      - turnstile-autoclick/**
       - scripts/**
       - .github/workflows/validate-userscripts.yml
   pull_request:
     paths:
       - userscripts/**
       - '!userscripts/linux-do/**'
-      - jpopsuki-rss-autobrr/**
-      - turnstile-autoclick/**
       - scripts/**
       - .github/workflows/validate-userscripts.yml
   workflow_dispatch: null

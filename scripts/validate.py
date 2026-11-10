@@ -28,8 +28,9 @@ def files(directory, patterns):
                    if not EXCLUDED.intersection(p.relative_to(base).parts)})
 
 
-def node_tests(directory):
+def node_tests(directory, exclude=()):
     tests = files(directory, ('*.test.mjs', '*.test.cjs', '*.test.js', 'test.mjs'))
+    tests = [p for p in tests if not set(exclude).intersection(p.relative_to(ROOT / directory).parts)]
     if tests:
         run('node', '--test', *tests)
 
@@ -67,11 +68,19 @@ def syntax(directories):
 
 def validate(component, install=False, containers=False):
     windows = sys.platform == 'win32'
+    directory = {
+        'proxy-rules': 'proxy/rules',
+        'sub-store': 'proxy/sub-store',
+        'mihomo-console': 'proxy/mihomo-console',
+        'sing-box': 'proxy/sing-box',
+        'cloudflare-vless': 'proxy/cloudflare-vless',
+        'toolbox-store': 'agent/toolbox-store',
+    }.get(component, component)
     if component == 'server-toolkit':
         if install:
             run(sys.executable, '-m', 'pip', 'install', 'Flask>=3,<4')
         run('bash', '-c', '(( BASH_VERSINFO[0] >= 4 )) || { echo "Bash 4+ required" >&2; exit 1; }')
-        syntax([component])
+        syntax([directory])
         unittest('server-toolkit/tests')
         shell_tests('server-toolkit/tests')
     elif component == 'agent':
@@ -82,7 +91,7 @@ def validate(component, install=False, containers=False):
             run('git', 'diff', '--exit-code', '--', 'agent/tui/dist')
             run('bash', 'agent/test.sh')
         else:
-            node_tests('agent')
+            node_tests('agent', exclude=('toolbox-store',))
             run('bash', 'agent/tests/windows-git-bash-smoke.sh')
             run('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'agent/tests/install-commands-powershell-test.ps1')
         run('node', 'agent/tui/dist/toolbox-tui.mjs', '--help')
@@ -94,7 +103,7 @@ def validate(component, install=False, containers=False):
         if windows:
             powershell_tests(component)
         else:
-            syntax([component])
+            syntax([directory])
             shell_tests(component)
             for path in ['kits/zsh-shell/files/home/.zshrc', 'kits/zsh-shell/files/home/.config/sbx-manager/completions/_claude']:
                 run('zsh', '-n', str(ROOT / component / path))
@@ -102,24 +111,21 @@ def validate(component, install=False, containers=False):
         if windows:
             powershell_tests(component)
         else:
-            syntax([component])
+            syntax([directory])
             shell_tests(component)
             unittest('workstation/tests')
             run('zsh', '-n', 'workstation/macos/zshrc.zsh')
     elif component == 'extensions':
-        syntax([component])
+        syntax([directory])
         for package in sorted((ROOT / component).glob('*/package.json')):
             directory = package.parent.relative_to(ROOT)
             npm(directory, 'test:unit' if package.parent.name == 'singlefile-mv3' else 'validate', install)
+        node_tests('extensions/turnstile-autoclick')
     elif component == 'userscripts':
-        for directory in ['userscripts', 'jpopsuki-rss-autobrr', 'turnstile-autoclick']:
-            syntax([directory])
-            if directory == 'userscripts':
-                for child in sorted((ROOT / directory).iterdir()):
-                    if child.is_dir() and child.name not in ('sht-helper', 'linux-do'):
-                        node_tests(str(child.relative_to(ROOT)))
-            else:
-                node_tests(directory)
+        syntax(['userscripts'])
+        for child in sorted((ROOT / 'userscripts').iterdir()):
+            if child.is_dir() and child.name not in ('sht-helper', 'linux-do'):
+                node_tests(str(child.relative_to(ROOT)))
         npm('userscripts/sht-helper', 'check', install)
     elif component == 'linux-do':
         syntax(['userscripts/linux-do'])
@@ -132,32 +138,32 @@ def validate(component, install=False, containers=False):
             run(*command, 'chromium', cwd=directory)
         node_tests('userscripts/linux-do')
     elif component == 'proxy-rules':
-        syntax(['quantumult-x', 'proxy-rules'])
-        node_tests('quantumult-x')
-        npm('proxy-rules', 'check', install)
+        syntax(['proxy/quantumult-x', directory])
+        node_tests('proxy/quantumult-x')
+        npm(directory, 'check', install)
     elif component == 'sub-store':
-        syntax([component])
-        node_tests(component)
+        syntax([directory])
+        node_tests(directory)
     elif component == 'mihomo-console':
         if install:
-            run(sys.executable, '-m', 'pip', 'install', '-r', 'mihomo-console/requirements.txt')
-        syntax([component])
-        unittest(component)
+            run(sys.executable, '-m', 'pip', 'install', '-r', 'proxy/mihomo-console/requirements.txt')
+        syntax([directory])
+        unittest(directory)
         if containers:
             os.environ.setdefault('NAS_IP', '192.0.2.10')
             for compose in ['compose.yaml', 'deploy/qnap.compose.yaml', 'deploy/truenas.compose.yaml']:
-                run('docker', 'compose', '-f', f'mihomo-console/{compose}', 'config', '--quiet')
+                run('docker', 'compose', '-f', f'proxy/mihomo-console/{compose}', 'config', '--quiet')
     elif component == 'sing-box':
-        syntax([component])
-        unittest('sing-box/tests')
+        syntax([directory])
+        unittest('proxy/sing-box/tests')
     elif component in ('cloudflare-vless', 'toolbox-store'):
         if component == 'cloudflare-vless':
-            node_tests('workers/cloudflare-vless')
-        npm(f'workers/{component}', 'validate', install)
+            node_tests(directory)
+        npm(directory, 'validate', install)
     elif component == 'sunshine-vdd':
         powershell_tests(component)
     elif component == 'misc':
-        syntax(['debian-ai-workstation', 'dujiaoka-epusdt'])
+        syntax(['debian-ai-workstation', 'specialized/dujiaoka-epusdt'])
         unittest('scripts/tests')
 
 

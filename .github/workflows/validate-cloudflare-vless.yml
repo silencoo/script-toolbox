@@ -2,12 +2,12 @@ name: Validate cloudflare-vless
 'on':
   push:
     paths:
-      - workers/cloudflare-vless/**
+      - proxy/cloudflare-vless/**
       - scripts/**
       - .github/workflows/validate-cloudflare-vless.yml
   pull_request:
     paths:
-      - workers/cloudflare-vless/**
+      - proxy/cloudflare-vless/**
       - scripts/**
       - .github/workflows/validate-cloudflare-vless.yml
   workflow_dispatch: null

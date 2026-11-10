@@ -183,7 +183,7 @@ protect them accordingly.
 ## Encrypted recovery
 
 Deploy the shared Worker in
-[`workers/toolbox-store/`](../../workers/toolbox-store/), then initialize and back up:
+[`agent/toolbox-store/`](../toolbox-store), then initialize and back up:
 
 ```bash
 skillsctl remote init --endpoint https://toolbox-store.example.workers.dev

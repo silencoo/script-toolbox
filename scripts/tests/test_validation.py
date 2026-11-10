@@ -35,6 +35,29 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue({'test_fail2ban.py', 'test_capture_privacy.py', 'test_login_notify.py',
                          'test_bug_regressions.py', 'cloudflare-ddns-test.sh', 'vnstat-traffic-firewall-test.sh'} <= scripts)
 
+    def test_relocated_components_use_existing_directories(self):
+        for component in ('proxy-rules', 'sub-store', 'mihomo-console',
+                          'sing-box', 'cloudflare-vless', 'toolbox-store', 'misc'):
+            with self.subTest(component=component), patch.object(validation, 'run') as run:
+                validation.validate(component)
+                for call in run.call_args_list:
+                    cwd = call.kwargs.get('cwd', validation.ROOT)
+                    self.assertTrue(Path(cwd).is_dir(), cwd)
+                    args = call.args
+                    if '-s' in args:
+                        self.assertTrue((validation.ROOT / args[args.index('-s') + 1]).is_dir())
+
+    def test_browser_projects_are_validated_in_their_new_categories(self):
+        with patch.object(validation, 'syntax'), patch.object(validation, 'npm'), \
+                patch.object(validation, 'node_tests') as tests:
+            validation.validate('userscripts')
+            paths = [call.args[0] for call in tests.call_args_list]
+            self.assertIn('userscripts/jpopsuki-rss-autobrr', paths)
+            self.assertNotIn('extensions/turnstile-autoclick', paths)
+            tests.reset_mock()
+            validation.validate('extensions')
+            tests.assert_any_call('extensions/turnstile-autoclick')
+
     def test_workflows_are_pinned_and_scoped(self):
         import re
         root = MODULE.parents[1]

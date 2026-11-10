@@ -346,3 +346,9 @@ setup entrypoints fetch `setup-lib.sh` from immutable revision
 When changing the helper, publish/review its commit first and update those five
 fallback URLs together. These pins cover the helper and named npm dependencies;
 they do not pin every optional tool downloaded by setup.
+
+## Toolbox Store backend
+
+[`toolbox-store/`](toolbox-store/) contains the Cloudflare Worker and Web UI for
+the encrypted agent Workspace. It has its own deployment and validation lifecycle
+and is not installed with the controller runtime.

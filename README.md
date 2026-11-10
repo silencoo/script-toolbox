@@ -4,19 +4,44 @@ A collection of standalone proxy utilities, Cloudflare Workers, browser
 extensions and userscripts, and AI agent setup scripts. Each tool lives with its own
 documentation so scripts can evolve without crowding the repository root.
 
+## Organization
+
+```text
+script-toolbox/
+├── agent/                   # Agent controllers, skills, and Toolbox Store
+├── proxy/                   # Proxy tools, subscriptions, rules, and references
+├── userscripts/             # Browser userscripts, including JPopSuki
+├── extensions/              # Browser extensions, including Turnstile
+├── specialized/             # Dujiaoka/EPUSDT and Supabase diagnostics
+├── workstation/             # macOS, Windows, and Linux desktop setup
+├── debian-ai-workstation/    # Debian AI/GPU workstation setup
+├── server-toolkit/          # Linux server administration
+├── docker-sandboxes/         # Docker Sandbox setup
+├── sunshine-vdd/            # Sunshine/Moonlight display setup
+├── scripts/                 # Repository-wide validation helpers
+└── .github/                 # Workflows and shared actions
+```
+
+See the [proxy index](proxy/README.md), [agent guide](agent/README.md), and
+[specialized tools index](specialized/README.md) for their individual projects.
+
+The category migration changes raw download URLs. Update existing subscriptions
+and installation commands; old paths do not contain compatibility copies.
+
 ## Contents
 
 | Directory | Tools |
 | --- | --- |
-| [`sub-store/`](./sub-store/) | Sub-Store conversion and iOS compatibility scripts |
-| [`quantumult-x/`](./quantumult-x/) | Quantumult X resource parser and node diagnostic UIActions |
-| [`proxy-rules/`](./proxy-rules/) | Reusable Quantumult X profile plus generated AI and ad rules |
-| [`resources/`](./resources/) | Navigable network rule sets and database diagnostic references |
-| [`extensions/cookie-exporter/`](./extensions/cookie-exporter/) | Per-site Chromium Cookie export in JSON, Netscape, request-header, and CSV formats |
-| [`extensions/user-agent-manager/`](./extensions/user-agent-manager/) | Chromium User-Agent and Client Hints switcher with custom profiles and per-site rules |
-| [`extensions/singlefile-mv3/`](./extensions/singlefile-mv3/) | Reviewed mirror of the upstream AGPL-licensed SingleFile Manifest V3 extension |
-| [`workers/cloudflare-vless/`](./workers/cloudflare-vless/) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
-| [`jpopsuki-rss-autobrr/`](./jpopsuki-rss-autobrr/) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
+| [`proxy/sub-store/`](./proxy/sub-store) | Sub-Store conversion and iOS compatibility scripts |
+| [`proxy/quantumult-x/`](./proxy/quantumult-x) | Quantumult X resource parser and node diagnostic UIActions |
+| [`proxy/rules/`](./proxy/rules) | Reusable Quantumult X profile plus generated AI and ad rules |
+| [`proxy/resources/`](./proxy/resources/) | Network blocking reference snippets |
+| [`proxy/cloudflare-vless/`](./proxy/cloudflare-vless) | VLESS subscription Worker using speed-ranked Cloudflare addresses |
+| [`proxy/sing-box/`](./proxy/sing-box) | AnyTLS node installer and client configuration generator |
+| [`proxy/mihomo-console/`](./proxy/mihomo-console) | TUI, diagnostics, backups, safe automatic updates, and Docker/NAS deployment for complete Mihomo profiles |
+| [`agent/`](./agent/) | Provider setup, MCP profiles, portable skill packs, and persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
+| [`agent/toolbox-store/`](./agent/toolbox-store) | End-to-end encrypted Toolbox Workspace/Web UI for Provider profiles, MCP profiles, skill packs, persistent prompts, snippets, and development presets |
+| [`userscripts/jpopsuki-rss-autobrr/`](./userscripts/jpopsuki-rss-autobrr) | Browser-only JPopSuki RSS creation and Autobrr management userscript |
 | [`userscripts/123pan-fastlink/`](./userscripts/123pan-fastlink/) | Generate and save instant-transfer links for 123pan |
 | [`userscripts/chatgpt-checker/`](./userscripts/chatgpt-checker/) | All-in-one ChatGPT/Codex information panel with themes, display settings, quota estimates, credit values, and cycle/history analytics |
 | [`userscripts/codex-quota-compass/`](./userscripts/codex-quota-compass/) | Standalone Codex analytics; its data features are integrated into ChatGPT Checker Next |
@@ -29,17 +54,17 @@ documentation so scripts can evolve without crowding the repository root.
 | [`userscripts/rar-attachment-extractor/`](./userscripts/rar-attachment-extractor/) | In-browser RAR attachment extraction and preview userscript |
 | [`userscripts/sht-helper/`](./userscripts/sht-helper/) | Comprehensive Sehuatang attachment, link, cloud-download, and search helper |
 | [`userscripts/xsijishe-enhancer/`](./userscripts/xsijishe-enhancer/) | Responsive layout, navigation, visibility, and image controls for XSijishe |
-| [`agent/`](./agent/) | Provider setup, MCP profiles, portable skill packs, and persistent-instruction management for Claude Code, Codex CLI, OpenCode, and Pi |
-| [`workers/toolbox-store/`](./workers/toolbox-store/) | End-to-end encrypted Toolbox Workspace/Web UI for Provider profiles, MCP profiles, skill packs, persistent prompts, snippets, and development presets |
+| [`extensions/cookie-exporter/`](./extensions/cookie-exporter/) | Per-site Chromium Cookie export in JSON, Netscape, request-header, and CSV formats |
+| [`extensions/user-agent-manager/`](./extensions/user-agent-manager/) | Chromium User-Agent and Client Hints switcher with custom profiles and per-site rules |
+| [`extensions/singlefile-mv3/`](./extensions/singlefile-mv3/) | Reviewed mirror of the upstream AGPL-licensed SingleFile Manifest V3 extension |
+| [`extensions/turnstile-autoclick/`](./extensions/turnstile-autoclick) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
+| [`specialized/supabase/`](./specialized/supabase/) | Supabase diagnostic SQL (unsafe for production) |
+| [`specialized/dujiaoka-epusdt/`](./specialized/dujiaoka-epusdt) | Dujiaoka and EPUSDT deployment stack |
+| [`workstation/`](./workstation/) | Set up desktop applications and utilities on Debian 13, Windows, and macOS; Windows developer/WSL menu, macOS profile menu and Zsh/Ghostty setup, and utility uninstall menus |
 | [`debian-ai-workstation/`](./debian-ai-workstation/) | Debian 13 GPU development and AI workstation setup |
-| [`dujiaoka-epusdt/`](./dujiaoka-epusdt/) | Dujiaoka and EPUSDT deployment stack |
-| [`sing-box/`](./sing-box/) | AnyTLS node installer and client configuration generator |
-| [`mihomo-console/`](./mihomo-console/) | TUI, diagnostics, backups, safe automatic updates, and Docker/NAS deployment for complete Mihomo profiles |
 | [`server-toolkit/`](./server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`sunshine-vdd/`](./sunshine-vdd/SKILL.md) | Plan, configure, troubleshoot, and verify Sunshine + Moonlight setups using MTT VDD |
-| [`workstation/`](./workstation/) | Set up desktop applications and utilities on Debian 13, Windows, and macOS; Windows developer/WSL menu, macOS profile menu and Zsh/Ghostty setup, and utility uninstall menus |
-| [`turnstile-autoclick/`](./turnstile-autoclick/) | CDP-based Chrome extension that auto-clicks Cloudflare Turnstile checkboxes |
 
 ## Raw URL changes
 
@@ -47,17 +72,29 @@ Moving the scripts into categories changes their GitHub raw URLs:
 
 | Previous path | New path |
 | --- | --- |
-| `convert_v2.js` | `sub-store/convert-v2.js` |
-| `substore-ios-adapter.js` | `sub-store/ios-adapter.js` |
-| `quanx.js` | `quantumult-x/resource-parser.js` |
-| `workers.js` | `workers/cloudflare-vless/worker.js` |
+| `workers/toolbox-store` | `agent/toolbox-store` |
+| `workers/cloudflare-vless` | `proxy/cloudflare-vless` |
+| `mihomo-console` | `proxy/mihomo-console` |
+| `sing-box` | `proxy/sing-box` |
+| `sub-store` | `proxy/sub-store` |
+| `quantumult-x` | `proxy/quantumult-x` |
+| `proxy-rules` | `proxy/rules` |
+| `jpopsuki-rss-autobrr` | `userscripts/jpopsuki-rss-autobrr` |
+| `turnstile-autoclick` | `extensions/turnstile-autoclick` |
+| `dujiaoka-epusdt` | `specialized/dujiaoka-epusdt` |
+| `resources/network/adobe-blocking` | `proxy/resources/adobe-blocking` |
+| `resources/database/supabase-rls-allow-all.sql` | `specialized/supabase/diagnostics/rls-allow-all.sql` |
+| `convert_v2.js` | `proxy/sub-store/convert-v2.js` |
+| `substore-ios-adapter.js` | `proxy/sub-store/ios-adapter.js` |
+| `quanx.js` | `proxy/quantumult-x/resource-parser.js` |
+| `workers.js` | `proxy/cloudflare-vless/worker.js` |
 | `windows-wsl2/setup.ps1` | `workstation/windows/wsl.ps1` |
 | `windows-dev-setup/setup.ps1` | `workstation/windows/developer.ps1` (or the unified `windows/setup.ps1` menu) |
 | `windows-dev-setup/wsl.ps1` | `workstation/windows/wsl.ps1` |
 | `debian-13/setup.sh` | `debian-ai-workstation/setup.sh` |
 | `ghostty/setup.sh` | `workstation/shared/ghostty-setup.sh` |
 | `ghostty/ssh-terminfo.sh` | `workstation/shared/ghostty-ssh-terminfo.sh` |
-| `cf-turnstile-autoclick/` | `turnstile-autoclick/` |
+| `cf-turnstile-autoclick/` | `extensions/turnstile-autoclick/` |
 | `workstation-utils/` | `workstation/` |
 | `linux-server-toolkit/` | `server-toolkit/` |
 | `sunshine-vdd-setup/` | `sunshine-vdd/` |
@@ -68,7 +105,7 @@ Update any subscriptions or deployments that use the old raw URLs after this
 change is merged.
 
 The legacy `convert.js` script has been removed. Migrate existing Sub-Store
-operators to `sub-store/convert-v2.js`.
+operators to `proxy/sub-store/convert-v2.js`.
 
 ## agent
 

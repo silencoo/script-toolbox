@@ -3,13 +3,11 @@ name: Validate agent
   push:
     paths:
       - agent/**
-      - workers/toolbox-store/**
       - scripts/**
       - .github/workflows/validate-agent.yml
   pull_request:
     paths:
       - agent/**
-      - workers/toolbox-store/**
       - scripts/**
       - .github/workflows/validate-agent.yml
   workflow_dispatch: null
