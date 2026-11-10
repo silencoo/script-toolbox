@@ -16,8 +16,7 @@ expensive residential node.
   plus exact flags and proxy-client icons from the general catalog.
 - Mihomo/Clash profile generation remains in `../sub-store/convert-v2.js` instead
   of duplicating a second client implementation here.
-- The Quantumult X template encrypts local/direct DNS with AliDNS over HTTPS
-  and keeps the provider's `*.placudoshai.fun` / `jeeyio.com` DoH exception.
+- The Quantumult X template encrypts local/direct DNS with AliDNS over HTTPS.
   Chinese domains use `ChinaMaxNoIP` after the specific service resources;
   the generated `HostnameFallback.list` is the last enabled remote resource
   so unmatched hostnames can use `Final` before local IP-based DNS evaluation.
@@ -198,14 +197,13 @@ The template balances mainland-site access with remote resolution for proxy
 traffic. It uses [AliDNS DoH](https://alidns.com/) for local/direct lookups,
 [ChinaMaxNoIP](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/QuantumultX/ChinaMaxNoIP/README.md)
 for Chinese service domains (including `.com`), and a final hostname rule for
-unmatched domains. The provider's node-domain DoH exception stays scoped.
+unmatched domains.
 
 ```ini
 [dns]
 no-ipv6
 no-system
 doh-server=https://223.5.5.5/dns-query
-doh-server=/*.placudoshai.fun/https://jeeyio.com/api/dns-query
 address=/raw.githubusercontent.com/185.199.110.133
 ```
 

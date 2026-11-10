@@ -7,15 +7,8 @@ const template = await readFile(
   "utf8",
 );
 
-test("scopes the provider DoH endpoint to its Quantumult X node domain", () => {
-  assert.match(
-    template,
-    /^doh-server=\/\*\.placudoshai\.fun\/https:\/\/jeeyio\.com\/api\/dns-query$/m,
-  );
-  assert.doesNotMatch(
-    template,
-    /^doh-server=https:\/\/jeeyio\.com\/api\/dns-query$/m,
-  );
+test("does not include the removed provider-specific DNS override", () => {
+  assert.doesNotMatch(template, /jeeyio\.com|placudoshai\.fun/i);
 });
 
 test("routes APNs before broad direct resources while keeping Apple direct-first", () => {
