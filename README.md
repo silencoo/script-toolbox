@@ -25,9 +25,6 @@ script-toolbox/
 See the [proxy index](proxy/README.md), [agent guide](agent/README.md), and
 [specialized tools index](specialized/README.md) for their individual projects.
 
-The category migration changes raw download URLs. Update existing subscriptions
-and installation commands; old paths do not contain compatibility copies.
-
 ## Contents
 
 | Directory | Tools |
@@ -65,47 +62,6 @@ and installation commands; old paths do not contain compatibility copies.
 | [`server-toolkit/`](./server-toolkit/) | All-in-one Debian/Ubuntu server setup and operations toolkit |
 | [`docker-sandboxes/`](./docker-sandboxes/) | Install, configure, diagnose, and launch Docker Sandboxes on macOS, Windows, and Linux |
 | [`sunshine-vdd/`](./sunshine-vdd/SKILL.md) | Plan, configure, troubleshoot, and verify Sunshine + Moonlight setups using MTT VDD |
-
-## Raw URL changes
-
-Moving the scripts into categories changes their GitHub raw URLs:
-
-| Previous path | New path |
-| --- | --- |
-| `workers/toolbox-store` | `agent/toolbox-store` |
-| `workers/cloudflare-vless` | `proxy/cloudflare-vless` |
-| `mihomo-console` | `proxy/mihomo-console` |
-| `sing-box` | `proxy/sing-box` |
-| `sub-store` | `proxy/sub-store` |
-| `quantumult-x` | `proxy/quantumult-x` |
-| `proxy-rules` | `proxy/rules` |
-| `jpopsuki-rss-autobrr` | `userscripts/jpopsuki-rss-autobrr` |
-| `turnstile-autoclick` | `extensions/turnstile-autoclick` |
-| `dujiaoka-epusdt` | `specialized/dujiaoka-epusdt` |
-| `resources/network/adobe-blocking` | `proxy/resources/adobe-blocking` |
-| `resources/database/supabase-rls-allow-all.sql` | `specialized/supabase/diagnostics/rls-allow-all.sql` |
-| `convert_v2.js` | `proxy/sub-store/convert-v2.js` |
-| `substore-ios-adapter.js` | `proxy/sub-store/ios-adapter.js` |
-| `quanx.js` | `proxy/quantumult-x/resource-parser.js` |
-| `workers.js` | `proxy/cloudflare-vless/worker.js` |
-| `windows-wsl2/setup.ps1` | `workstation/windows/wsl.ps1` |
-| `windows-dev-setup/setup.ps1` | `workstation/windows/developer.ps1` (or the unified `windows/setup.ps1` menu) |
-| `windows-dev-setup/wsl.ps1` | `workstation/windows/wsl.ps1` |
-| `debian-13/setup.sh` | `debian-ai-workstation/setup.sh` |
-| `ghostty/setup.sh` | `workstation/shared/ghostty-setup.sh` |
-| `ghostty/ssh-terminfo.sh` | `workstation/shared/ghostty-ssh-terminfo.sh` |
-| `cf-turnstile-autoclick/` | `extensions/turnstile-autoclick/` |
-| `workstation-utils/` | `workstation/` |
-| `linux-server-toolkit/` | `server-toolkit/` |
-| `sunshine-vdd-setup/` | `sunshine-vdd/` |
-| `userscripts/chatgpt-checker-next/` | `userscripts/chatgpt-checker/` |
-| `userscripts/netease-music-toolkit/` | `userscripts/netease-music/` |
-
-Update any subscriptions or deployments that use the old raw URLs after this
-change is merged.
-
-The legacy `convert.js` script has been removed. Migrate existing Sub-Store
-operators to `proxy/sub-store/convert-v2.js`.
 
 ## agent
 
