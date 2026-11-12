@@ -2581,8 +2581,16 @@ function AeadVmess(cnt,aeadp) {
 
 //新版本tls 的检验（存在sha256 参数时）
 function TLS_Check(cnt) {
-  cnt =cnt.indexOf("tls-cert-sha256")!=-1 || cnt.indexOf("tls-pubkey-sha256")!=-1 ? cnt.replace(/tls-verification\s*\=\s*false.*?\,/,"tls-verification=true,"): cnt // 去掉 tls-verification=false 如果存在 sha256
-  return cnt
+  // Sub-Store may export an empty optional pin. QX rejects the empty field;
+  // it must not be treated as an actual certificate pin.
+  var tagIndex = cnt.search(/,\s*tag\s*=/i)
+  var tag = tagIndex == -1 ? "" : cnt.slice(tagIndex)
+  var config = tagIndex == -1 ? cnt : cnt.slice(0, tagIndex)
+  config = config.replace(/,\s*tls-(?:cert|pubkey)-sha256\s*=\s*(?=,|$)/gi, "")
+  if (/(?:^|,)\s*tls-(?:cert|pubkey)-sha256\s*=\s*[^,\s]/i.test(config)) {
+    config = config.replace(/(\btls-verification\s*=\s*)false(?=\s*(?:,|$))/i, "$1true")
+  }
+  return config + tag
 }
 
 // qx 类型 tls/udp 验证问题t
@@ -3279,7 +3287,11 @@ QuanX 不支持 path/uri 中包含逗号，因此在 QXFix 内部拆字段前，
 */
 // 纠正部分不规范的写法(没有把 tag 写在最后)
 function QXFix(cntf) {
-var cnti = cntf.replace(/\s*tag\s*\=/g,"tag=").replace("chacha20-poly","chacha20-ietf-poly")
+var cnti = cntf.replace(/\s*tag\s*\=/g,"tag=")
+// The IETF spelling belongs to Shadowsocks. VMess uses chacha20-poly1305.
+if (/^\s*shadowsocks\s*=/i.test(cnti)) {
+  cnti = cnti.replace(/(,\s*method\s*=\s*)chacha20-poly1305(?=\s*(?:,|$))/i, "$1chacha20-ietf-poly1305")
+}
 try {
   function normalizeQXObfsUriValue(str) {
     var fieldK = "(password|method|udp-relay|udp-over-tcp|fast-open|obfs|obfs-host|obfs-uri|over-tls|tls-host|tls-verification|tls13|aead|tag|username|tls-alpn|server_check_url|tls-cert-sha256|tls-pubkey-sha256|reality-base64-pubkey|reality-hex-shortid|vless-flow)";
