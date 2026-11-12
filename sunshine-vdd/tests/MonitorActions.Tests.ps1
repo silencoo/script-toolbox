@@ -5,7 +5,19 @@ $temp=Join-Path ([IO.Path]::GetTempPath()) ('sunshine-guard-tests-'+[guid]::NewG
 [void](New-Item -ItemType Directory -Path (Join-Path $temp 'data') -Force)
 function Assert($value,[string]$message){if(!$value){throw $message};Write-Output "PASS $message"}
 try {
+    $corrupt=Join-Path $temp 'data/guard-state.json'
+    [IO.File]::WriteAllBytes($corrupt,(New-Object byte[] 334))
+    $rejected=$false
+    try{Read-GuardRuntime -Path $corrupt -Mode Protect|Out-Null}catch{$rejected=$true}
+    Assert $rejected 'Unreadable persisted state cannot start automatic protection'
+    $recovered=Read-GuardRuntime -Path $corrupt -Mode Observe
+    Assert ($recovered.Latched -and $recovered.FailureHandled -and $recovered.Notice -match 'unreadable') 'Observe diagnostics preserve an explicit fault when saved state is corrupt'
+    Assert (([IO.File]::ReadAllBytes($corrupt)|Where-Object {$_ -ne 0}).Count -eq 0) 'Unreadable source evidence is preserved'
+    Assert (@(Get-ChildItem -LiteralPath (Join-Path $temp 'data') -Filter '*.unreadable-*.json').Count -eq 1) 'Unreadable state is copied before any future status write'
     $expected=[pscustomobject]@{Trusted=$true;Phase='Streaming';SessionKey='test';ModeKey='1920x1080@60';MonitorId='virtual-test';ConfigMatches=$true}
+    $idle=$expected.PSObject.Copy();$idle.Phase='Idle';$rejected=$false
+    try{& $module {param($observation) Invoke-GuardRestore $null $observation {throw 'Refresh should not execute'}} $idle}catch{$rejected=$_.Exception.Message -match 'polling is not an interlock'}
+    Assert $rejected 'Idle monitor cannot activate physical paths in the reconnect race'
     & $module {param($a) Assert-GuardFreshObservation $a $a} $expected
     foreach($change in @(@('Phase','Idle'),@('SessionKey','new-session'),@('ModeKey','2560x1440@120'),@('MonitorId','different-monitor'),@('Trusted',$false),@('ConfigMatches',$false))){
         $fresh=$expected.PSObject.Copy();$fresh.($change[0])=$change[1];$rejected=$false

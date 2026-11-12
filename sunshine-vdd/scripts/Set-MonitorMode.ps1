@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateSet('Observe','Protect')][string]$Mode='Observe',[string]$InstallDirectory="$env:LOCALAPPDATA\SunshineMonitor",[string]$TaskName='SunshineDisplayDiagnosticMonitor',[switch]$ClearFailureLatch,[switch]$Apply)
+param([ValidateSet('Observe','Protect')][string]$Mode='Observe',[string]$InstallDirectory="$env:ProgramData\SunshineDisplayHealth\monitor",[string]$TaskName='SunshineDisplayDiagnosticMonitor',[switch]$ClearFailureLatch,[switch]$Apply)
 $ErrorActionPreference='Stop'
 $path=Join-Path $InstallDirectory 'guard.json'
 $policy=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json

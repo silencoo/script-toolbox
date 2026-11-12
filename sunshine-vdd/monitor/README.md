@@ -23,8 +23,9 @@ idle monitor and a single exclusive MTT stream monitor.
 - When correction is unavailable/exhausted, persist a failure latch, confirm lock,
   then stop `SunshineService`. If lock cannot be confirmed, do not stop the service
   or expose a physical recovery desktop: retain the latch and notify for manual action.
-- After shutdown/disconnect has settled, restore only a verified physical baseline.
-  Missing/stale idle baselines cause a notification, never a guessed topology.
+- After shutdown/disconnect, report physical recovery failures. Even a verified
+  idle baseline does not close the reconnect race. The monitor never activates
+  physical paths; coordinated boot recovery or supervised manual recovery owns that.
 - Protection never unlocks Windows, reloads a driver, edits Sunshine settings,
   clears Sunshine persistence, or automatically restarts the stopped service.
 
@@ -50,6 +51,15 @@ inventory. New installations also require `-StreamMonitorInstanceId` and
 same task and starts it in Observe mode. It does not restart Sunshine or change
 display topology.
 
+The default installation is `%ProgramData%\SunshineDisplayHealth\monitor` with
+SYSTEM/Administrators write access and Users read/execute access. The installer
+copies existing settings and logs from `%LocalAppData%\SunshineMonitor`, preserving
+that original directory for rollback, and reuses the same task. Customized guard
+options are retained except Mode, which becomes Observe. An unreadable saved
+guard state is copied as evidence and produces a visible latched fault in Observe;
+it cannot silently reset protection history or start Protect. Installation verifies
+a fresh Observe heartbeat before reporting success. Fast Startup is unchanged.
+
 While Observe runs, establish healthy physical-only idle and VDD-only streaming
 states for at least 15 seconds each. Use the existing guarded recovery/physical
 topology tools if necessary, with every client disconnected before idle repair.
@@ -74,3 +84,16 @@ session is in progress; run the fixture tests to verify the failure path safely.
 The source does not contain personal monitor IDs, credentials or log snapshots.
 Regression tests in `tests/Monitor*.Tests.ps1` use synthetic events and mocked
 actions and do not switch displays, lock Windows or stop Sunshine.
+
+## Tray and boot recovery
+
+The [native tray](../tray/README.md) reads this monitor's schema-2 status. The
+existing task remains the only ongoing diagnostic/control loop. Status includes
+PnP presence, attached/primary identities, fresh active CCD paths, configured
+capture target, capture evidence, boot timestamp, and heartbeat. It uses flushed
+atomic replacement; missing, NUL-filled, stale and old-boot records are Unknown.
+Windows enumeration never proves that the panel shows a picture.
+
+The separate [boot recovery service](../boot-recovery/README.md) runs a bounded
+console helper before an explicitly coordinated Sunshine startup. It does not
+reuse these native snapshots across boots and never relies on the login tray.

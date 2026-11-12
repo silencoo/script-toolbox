@@ -5,6 +5,7 @@ $topologyModule=Join-Path $PSScriptRoot 'DisplayTopology.psm1'
 if(-not (Test-Path -LiteralPath $topologyModule)){$topologyModule=Join-Path $PSScriptRoot '../scripts/DisplayTopology.psm1'}
 Import-Module $topologyModule -Force
 Import-Module (Join-Path $PSScriptRoot 'Guard.Actions.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Status.Core.psm1')
 $settings=Get-Content -LiteralPath (Join-Path $Root 'settings.json') -Raw | ConvertFrom-Json
 $data=Join-Path $Root 'data'
 [void](New-Item -ItemType Directory -Path $data -Force)
@@ -51,6 +52,8 @@ $eventCursor=@{}; $nextEvents=Get-Date; $nextCleanup=Get-Date; $lastHealth=''; $
 $candidate=''; $candidateAt=Get-Date; $lastAlert=@{}; $iteration=0; $errorCount=0
 $monitorStarted=Get-Date; $lastWarning=$null
 $guard=Initialize-Guard -Root $Root -Settings $settings
+$bootKey=$guard.BootKey
+$deviceEvidence=$null; $deviceEvidenceAt=[datetime]::MinValue
 function Get-MonitorProcesses {
     $items=@(Get-Process -Name sunshine -ErrorAction SilentlyContinue | Select-Object Id,StartTime)
     if(@($items | Where-Object {-not $_.StartTime}).Count -gt 0){
@@ -158,7 +161,15 @@ function Trim-Records {
 }
 function Get-MonitorSnapshot {
     param($processes,[datetime]$now=(Get-Date))
-            $displays=@(Get-VddDisplayInventory | Where-Object Attached | Select-Object DeviceName,DeviceString,Attached,Width,Height,RefreshRate,PositionX,PositionY,Primary,IsMttVdd,IsOtherVirtual)
+            $paths=@([SunshineVddSkill.NativeDisplay]::EnumeratePaths($true))
+            if(($now-$script:deviceEvidenceAt).TotalSeconds -ge 15){
+                try {
+                    $script:deviceEvidence=@(Get-CimInstance Win32_PnPEntity -Filter "PNPClass='Monitor'" -ErrorAction Stop | Select-Object @{N='InstanceId';E={$_.PNPDeviceID}},Name,Present,Status,ConfigManagerErrorCode)
+                } catch {$script:deviceEvidence=@([pscustomobject]@{Error=$_.Exception.Message;Present=$null})}
+                $script:deviceEvidenceAt=$now
+            }
+            $allDisplays=@(Get-VddDisplayInventory)
+            $displays=@($allDisplays | Where-Object Attached | Select-Object DeviceName,DeviceString,Attached,Width,Height,RefreshRate,PositionX,PositionY,Primary,IsMttVdd,IsOtherVirtual)
             $identities=@(foreach($d in $displays){[MonitorIdentity]::Get($d.DeviceName)})
             $targetNames=@($identities | Where-Object InstanceId -eq $settings.ExpectedMonitorInstanceId | ForEach-Object {$_.DisplayName})
             $target=@($displays | Where-Object {$_.DeviceName -in $targetNames})
@@ -175,7 +186,16 @@ function Get-MonitorSnapshot {
             if($config.output_name -ne $settings.ExpectedOutputGuid){$health.Status='Degraded';$health.Reason='ConfiguredOutputChangedFromBaseline'}
             if($privacyMode -and $config.dd_configuration_option -ne 'ensure_only_display'){$health.Status='Degraded';$health.Reason='ConfiguredTopologyChangedFromBaseline'}
             if($privacyMode -and $config.dd_config_revert_on_disconnect -ne 'enabled'){$health.Status='Degraded';$health.Reason='DisplayRevertDisabled'}
-            $snapshot=[pscustomobject][ordered]@{At=$now.ToString('o');MonitorPid=$PID;SunshineProcesses=$processes;Health=$health;Clients=$state.Clients;LogEpoch=$state.Epoch;Capture=$state.Capture;ExpectedMonitor=$settings.ExpectedMonitorInstanceId;Displays=$displays;MonitorIdentities=$identities;Config=$config;LastWarnings=$state.Warnings;Iteration=$iteration;EventCursors=$eventCursor}
+            if($privacyMode -and $health.Status -eq 'Healthy' -and (@($paths).Count -ne 1 -or $paths[0].InstanceId -ine $settings.ExpectedMonitorInstanceId -or $paths[0].PhysicalConnector)){$health.Status='Degraded';$health.Reason='ActiveCcdPathsDoNotMatchPrivateStream'}
+            if($privacyMode -and $health.Reason -eq 'PhysicalOnlyIdleTopologyVerified' -and (@($paths).Count -ne 1 -or $paths[0].InstanceId -ine $settings.IdleMonitorInstanceId -or !$paths[0].PhysicalConnector)){$health.Status='Degraded';$health.Reason='ActiveCcdPathsDoNotMatchPhysicalIdle'}
+            $snapshot=[pscustomobject][ordered]@{At=$now.ToString('o');MonitorPid=$PID;SunshineProcesses=$processes;Health=$health;Clients=$(if(@($processes).Count -eq 0){0}else{$state.Clients});LogEpoch=$state.Epoch;Capture=$(if(@($processes).Count -eq 0){$null}else{$state.Capture});ExpectedMonitor=$settings.ExpectedMonitorInstanceId;Displays=$displays;MonitorIdentities=$identities;Config=$config;LastWarnings=$state.Warnings;Iteration=$iteration;EventCursors=$eventCursor}
+            $snapshot | Add-Member SchemaVersion 2
+            $snapshot | Add-Member BootKey $bootKey
+            $snapshot | Add-Member ExpectedPhysicalMonitor $settings.IdleMonitorInstanceId
+            $snapshot | Add-Member Devices ([pscustomobject]@{At=$script:deviceEvidenceAt.ToString('o');Items=$script:deviceEvidence;Meaning='PnP presence is not desktop attachment or a visible image'})
+            $snapshot | Add-Member DisplayPaths $paths
+            $snapshot | Add-Member DisplayTargets @(foreach($adapter in $allDisplays){foreach($identity in [MonitorIdentity]::Get($adapter.DeviceName)){[pscustomobject]@{InstanceId=$identity.InstanceId;Name=$identity.Description;DisplayName=$adapter.DeviceName;Attached=$adapter.Attached;Primary=$adapter.Primary;IsMttVdd=$adapter.IsMttVdd;IsOtherVirtual=$adapter.IsOtherVirtual}}})
+            $snapshot | Add-Member VisiblePicture 'Unverified; Windows enumeration cannot prove a panel shows an image'
     return $snapshot
 }
 function Read-GuardFresh {
@@ -193,7 +213,7 @@ try {
             Read-NewLog $processes
             $snapshot=Get-MonitorSnapshot $processes $now
             $observation=Invoke-GuardTick $guard $snapshot $state $settings {Read-GuardFresh}
-            $snapshot | Add-Member Protection ([pscustomobject]@{Mode=$guard.Policy.Mode;Latched=$guard.Runtime.Latched;Attempts=$guard.Runtime.Attempts;Decision=$guard.LastDecision;BaselineAvailable=$observation.BaselineAvailable})
+            $snapshot | Add-Member Protection ([pscustomobject]@{Mode=$guard.Policy.Mode;Latched=$guard.Runtime.Latched;Notice=$guard.Runtime.Notice;Attempts=$guard.Runtime.Attempts;Decision=$guard.LastDecision;BaselineAvailable=$observation.BaselineAvailable})
             $health=$snapshot.Health; $displays=$snapshot.Displays; $config=$snapshot.Config
             $ring.Enqueue($snapshot);if($ring.Count -gt 120){[void]$ring.Dequeue()}
             $healthKey=$health.Status+':'+$health.Reason
@@ -205,13 +225,13 @@ try {
             if($health.Status -eq 'Degraded' -and ($now-$candidateAt).TotalSeconds -ge 5){Save-Incident $health.Reason $snapshot}
             if($now -ge $nextEvents){Read-DeviceEvents $snapshot;$nextEvents=$now.AddSeconds(10)}
             if($now -ge $nextCleanup){Trim-Records;$nextCleanup=$now.AddMinutes(5)}
-            $statusTemp=Join-Path $data 'status.tmp';$statusPath=Join-Path $data 'status.json'
-            [IO.File]::WriteAllText($statusTemp,($snapshot|ConvertTo-Json -Depth 12),$utf8)
-            Move-Item -LiteralPath $statusTemp -Destination $statusPath -Force
+            Write-DiagnosticJson -Path (Join-Path $data 'status.json') -Value $snapshot
             $errorCount=0
             if($Once){$snapshot|ConvertTo-Json -Depth 12;break}
             if($DurationSeconds -gt 0 -and ((Get-Date)-$monitorStarted).TotalSeconds -ge $DurationSeconds){break}
         } catch {
+            $checkError=$_.Exception.Message
+            Write-DiagnosticJson -Path (Join-Path $data 'status.json') -Value ([pscustomobject]@{SchemaVersion=2;BootKey=$bootKey;At=(Get-Date).ToString('o');MonitorPid=$PID;Health=@{Status='Unknown';Reason=$checkError};VisiblePicture='Unverified'})
             $errorCount++; Append-Record 'monitor' @{Event='CheckFailed';Error=$_.Exception.Message;ConsecutiveErrors=$errorCount;Iteration=$iteration}
             if($Once -or $errorCount -ge 15){throw}
         }

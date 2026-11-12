@@ -5,6 +5,19 @@ description: Plan, configure, migrate, troubleshoot, and verify Windows Sunshine
 
 # Sunshine VDD Setup
 
+## Mandatory privacy deployments
+
+When the approved requirement is private streaming, physical displays must be
+detached and only the VDD may be active. This overrides the older fail-open default
+below: never suggest leaving a physical monitor attached as a recovery workaround.
+Read [boot-recovery/README.md](boot-recovery/README.md) and [tray/README.md](tray/README.md)
+for the native tray and bounded console-session boot service. Start with
+`Get-BootRecoveryReadiness.ps1`. Installation, startup coordination, disabling Fast
+Startup, live topology changes and reboot tests each require the user's approval.
+An idle poll is not a reconnect interlock; the monitor does not activate physical
+paths automatically. Keep unknown safety evidence unsafe, and never treat a
+compiled helper or Windows enumeration as proof of a visible login screen.
+
 Build a reversible, fail-open Windows display setup: the chosen physical display(s) while idle, with the MTT VDD activated and made primary while Moonlight is streaming without detaching the physical recovery display by default.
 
 ## Non-negotiable rules

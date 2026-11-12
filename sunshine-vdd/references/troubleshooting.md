@@ -61,8 +61,11 @@ Recovery order:
 
 Prevention:
 
-- Migrate Sunshine to `dd_configuration_option = ensure_primary` so the VDD becomes primary without detaching the physical recovery display.
-- If exclusive VDD-only streaming is mandatory, prevent automatic sleep during unattended sessions, retain an independent recovery path, and treat the mode as high risk even with `dd_config_revert_on_disconnect = enabled`.
+- When privacy is mandatory, retain `ensure_only_display` and require every physical
+  display detached during streaming. Keeping a panel attached is not a recovery workaround.
+- Retain tested independent recovery access. Clean-disconnect reversion is not
+  boot recovery. See the [console boot service](../boot-recovery/README.md) for
+  bounded full-boot recovery and its explicit startup/Fast Startup approvals.
 - Do not use Duplicate/Clone as the recovery topology; mismatched physical/VDD modes can produce an 800x600 fallback. Use Extend, then repair the idle topology explicitly.
 
 ## Stream state is unknown
@@ -92,6 +95,18 @@ a physical baseline with a temporary VDD-only state, copy a native snapshot from
 another boot, or change the configured monitor identity just to silence an alert.
 
 ## Logs and evidence
+
+The [read-only tray](../tray/README.md) separates current monitor health from boot
+recovery results. A valid device record is not an active display path; an active
+path is not proof of capture or a visible panel image. If `status.json` is stale or
+NUL-filled, inspect the existing task's LastTaskResult and local logs. Do not show
+its previous Healthy state. New writes are flushed and atomically replaced, but
+storage/driver failure still requires independent verification.
+
+`Get-BootRecoveryReadiness.ps1` is read-only. A running Sunshine process cancels boot
+recovery, even if logs say idle. Polling does not eliminate the reconnect race.
+The monitor now refuses automatic physical restore for that reason. Never clear
+completion state or failure latches as a shortcut while a private stream exists.
 
 - Use normal Sunshine logging for verification.
 - Enable VDD debug logging only for a short reproduction window.

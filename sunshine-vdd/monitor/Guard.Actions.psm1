@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Guard.Core.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Status.Core.psm1') -Force
 
 function Initialize-GuardWindows {
     if ('SunshineGuard.Session' -as [type]) { return }
@@ -39,9 +40,7 @@ namespace SunshineGuard {
 
 function Write-GuardJson {
     param([string]$Path,$Value)
-    $temp=$Path+'.tmp'
-    [IO.File]::WriteAllText($temp,($Value|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $Path -Force
+    Write-DiagnosticJson -Path $Path -Value $Value
 }
 
 function Send-GuardNotice {
@@ -61,6 +60,26 @@ function Send-GuardNotice {
 }
 $script:noticeIcon=$null
 
+function Read-GuardRuntime {
+    param([string]$Path,[ValidateSet('Observe','Protect')][string]$Mode)
+    if(!(Test-Path -LiteralPath $Path)){return New-GuardState}
+    try {
+        $runtime=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
+        if(!$runtime -or $runtime.SchemaVersion -ne 1){throw 'Unsupported guard runtime state.'}
+        foreach($name in (New-GuardState).PSObject.Properties.Name){if($runtime.PSObject.Properties.Name -notcontains $name){throw "Missing guard state property: $name"}}
+        if($runtime.Latched -isnot [bool] -or $runtime.FailureHandled -isnot [bool]){throw 'Invalid failure latch.'}
+        return $runtime
+    } catch {
+        if($Mode -ne 'Observe'){throw 'Stored guard state is unreadable; automatic protection must remain disabled until reviewed.'}
+        $evidence=$Path+'.unreadable-'+[datetime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'.json'
+        Copy-Item -LiteralPath $Path -Destination $evidence -ErrorAction Stop
+        $runtime=New-GuardState
+        $runtime.Latched=$true;$runtime.FailureHandled=$true
+        $runtime.Notice='Stored guard state was unreadable. Observe only; inspect '+$evidence+' before deliberately clearing the latch.'
+        return $runtime
+    }
+}
+
 function Initialize-Guard {
     param([string]$Root,$Settings)
     Initialize-GuardWindows
@@ -70,8 +89,7 @@ function Initialize-Guard {
     }
     if($policy.Mode -notin @('Observe','Protect') -or $policy.MaxAttempts -lt 1 -or $policy.MaxAttempts -gt 3 -or $policy.RetrySeconds -lt 5 -or $policy.FaultSeconds -lt 2 -or $policy.StableSeconds -lt 2 -or $policy.MaxUnstableSeconds -lt $policy.StableSeconds -or $policy.BaselineStableSeconds -lt 5 -or $policy.ServiceName -ne 'SunshineService'){throw 'Invalid guard policy; refusing to start automatic actions.'}
     $runtimePath=Join-Path $Root 'data/guard-state.json'
-    $runtime=if(Test-Path -LiteralPath $runtimePath){Get-Content -LiteralPath $runtimePath -Raw|ConvertFrom-Json}else{New-GuardState}
-    if($runtime.SchemaVersion -ne 1){throw 'Unsupported guard runtime state.'}
+    $runtime=Read-GuardRuntime -Path $runtimePath -Mode $policy.Mode
     $boot=(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().ToString('o')
     [pscustomobject]@{Root=$Root;Policy=$policy;Runtime=$runtime;RuntimePath=$runtimePath;BootKey=$boot;Fingerprint='';StableSince=Get-Date;Baselines=@{};LastDecision=$null}
 }
@@ -134,6 +152,9 @@ function Assert-GuardFreshObservation {
 
 function Invoke-GuardRestore {
     param($Context,$Observation,[scriptblock]$Refresh)
+    # This monitor has no connection-admission interlock. Rechecking idle cannot
+    # close the reconnect TOCTOU window, so never activate physical paths here.
+    if($Observation.Phase -eq 'Idle'){throw 'Physical recovery requires coordinated boot recovery or an explicitly supervised manual operation. Idle polling is not an interlock.'}
     # Re-read stream state after policy evaluation and again immediately before the native apply.
     $fresh=& $Refresh
     Assert-GuardFreshObservation $Observation $fresh.Observation
@@ -195,4 +216,4 @@ function Invoke-GuardTick {
     return $observation
 }
 
-Export-ModuleMember -Function Initialize-Guard,Invoke-GuardTick,Get-GuardObservation,Write-GuardJson,Initialize-GuardWindows
+Export-ModuleMember -Function Initialize-Guard,Invoke-GuardTick,Get-GuardObservation,Write-GuardJson,Initialize-GuardWindows,Read-GuardRuntime

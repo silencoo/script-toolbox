@@ -56,7 +56,7 @@ namespace SunshineVddSkill
         public bool Applied { get; set; }
     }
 
-    public static class NativeDisplay
+    public static partial class NativeDisplay
     {
         private const int ENUM_CURRENT_SETTINGS = -1;
         private const int ERROR_INSUFFICIENT_BUFFER = 122;
@@ -66,8 +66,8 @@ namespace SunshineVddSkill
         private const uint DISPLAY_DEVICE_REMOTE = 0x04000000;
         private const uint DISPLAY_DEVICE_DISCONNECT = 0x02000000;
         private const uint QDC_ONLY_ACTIVE_PATHS = 0x2;
-        private const uint QDC_VIRTUAL_MODE_AWARE = 0x8000;
-        private const uint QDC_VIRTUAL_REFRESH_RATE_AWARE = 0x20000;
+        private const uint QDC_VIRTUAL_MODE_AWARE = 0x10;
+        private const uint QDC_VIRTUAL_REFRESH_RATE_AWARE = 0x40;
         private const uint DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1;
         private const uint DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE = 0x8;
         private const uint DISPLAYCONFIG_PATH_MODE_IDX_INVALID = 0xFFFFFFFF;
@@ -569,6 +569,8 @@ namespace SunshineVddSkill
     }
 }
 '@
+    $extension = Join-Path $PSScriptRoot 'DisplayRecovery.cs'
+    if (Test-Path -LiteralPath $extension) { $source += [IO.File]::ReadAllText($extension) }
     Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
 }
 
