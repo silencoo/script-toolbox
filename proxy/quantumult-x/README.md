@@ -65,6 +65,34 @@ https://raw.githubusercontent.com/silencoo/script-toolbox/main/proxy/quantumult-
 The source file retains its upstream attribution. See the repository
 [`NOTICE.md`](../../NOTICE.md) before redistributing it.
 
+### Subscription notifications
+
+Every server parsing attempt ends with a summary before returning its result to
+Quantumult X, including empty responses, invalid parameters, partial failures,
+and zero usable nodes. The summary remains enabled with `ntf=0`; that parameter
+only silences optional detail notifications. A User-Agent retry reports its
+summary after the retried response is parsed.
+
+The notification distinguishes generated nodes, local traffic/expiry information
+placeholders, conversion failures, unsupported entries, and nodes removed by
+filters or deduplication. Repairs are counted separately. Processing exceptions
+show the stage that stopped; failed custom filtering or renaming scripts show a
+warning when falling back to their original input. Up to five affected node names
+and safe error categories are included, without dumping node credentials. The
+parser version appears at the bottom of the summary.
+
+**Generated nodes are not an import receipt.** The parser cannot inspect Quantumult
+X's subsequent native validation; the accepted count is the number in the app's
+subscription list. For example, 447 output entries can contain 445 generated
+nodes and two information placeholders. App termination, script timeouts, and
+disabled OS notifications cannot be recovered by the script's final report.
+
+The offline parser tests exercise both conversion and notification failures:
+
+```sh
+node --test proxy/quantumult-x/tests/resource-parser*.test.mjs
+```
+
 ## Reusable profile
 
 [`../rules/templates/quantumult-x.conf`](../rules/templates/quantumult-x.conf)

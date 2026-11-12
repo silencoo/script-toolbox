@@ -17,8 +17,8 @@ function parse(content) {
     console: { log() {} },
   });
   vm.runInContext(source, context, { timeout:5000 });
-  assert.equal(context.PFailedNodeCount, 0);
-  assert.equal(context.PNS, 0);
+  assert.equal(context.ParserRun.snapshot().failed, 0);
+  assert.equal(context.ParserRun.snapshot().unsupported, 0);
   assert.ok(results.length);
   assert.ok(!notifications.some(n => /错误|失败/.test(n[0])));
   return Buffer.from(results.at(-1).content, 'base64').toString('utf8');

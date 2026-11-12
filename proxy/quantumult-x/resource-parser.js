@@ -514,6 +514,98 @@ $parser.uiToHash = function (values) {
 
 
 //
+
+// One completion and one final server summary, including initialization errors.
+var ParserRun = {
+  version: "2026-11-12.2", stage: "初始化参数", result: null,
+  nodes: [], repaired: 0, warnings: [], fatal: "", reason: "", converted: false, profile: false
+}
+
+function ParserErrorName(error) {
+  var name = error && error.name
+  return /^(Error|TypeError|SyntaxError|URIError|RangeError|ReferenceError|EvalError)$/.test(name) ? name : "Error"
+}
+
+function ParserSafeText(value) {
+  return String(value == null ? "" : value)
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[链接]")
+    .replace(/\b(password|token|uuid|authorization)\s*=\s*[^\s,;]+/gi, "$1=[隐藏]")
+    .replace(/[\r\n\t]/g, " ").slice(0, 100)
+}
+
+function ParserNodeLabel(node, index) {
+  var name = node && typeof node == "object" ? node.name : ""
+  if (typeof node == "string") {
+    var tag = node.match(/(?:^|,)\s*tag\s*=\s*([^,\r\n]*)/i)
+    if (tag) name = tag[1]
+    else if (node.indexOf("://") != -1 && node.indexOf("#") != -1) {
+      try { name = decodeURIComponent(node.slice(node.indexOf("#") + 1)) } catch (_) {}
+    }
+  }
+  return ParserSafeText(name) || "第 " + (index + 1) + " 条"
+}
+
+function ParserDisplayNode(line) {
+  // Only the iOS adapter's local traffic/expiry placeholders, not real HTTP nodes.
+  return /^http\s*=\s*(?:127\.0\.0\.1|localhost|\[::1\]):[12]\s*,/i.test(line) &&
+    /,\s*tag\s*=\s*(?:剩余流量|到期时间)[：:]/.test(line)
+}
+
+function ParserComplete(result) {
+  result = result || { content: "" }
+  if (!result.retry && typeof result.content != "string") result.content = ""
+  ParserRun.result = result
+}
+
+function ParserFinalReport() {
+  var stats = ParserRun.snapshot ? ParserRun.snapshot() : {}
+  var resource = typeof $resource == "object" && $resource ? $resource : {}
+  if (ParserRun.profile || (ParserRun.result && ParserRun.result.retry) ||
+      (resource.type != "server" && stats.kind != "server")) return
+  var entries = ParserRun.nodes.length
+  var display = ParserRun.nodes.filter(ParserDisplayNode).length
+  var real = entries - display
+  var unsupported = stats.unsupported || 0
+  var failed = stats.failed || 0
+  // Count conversion losses before user filters; filtering is not a parse failure.
+  if (ParserRun.converted) {
+    failed = Math.max(failed, (stats.original || 0) - unsupported - (stats.metadata || 0) - (stats.converted || 0))
+  }
+  var filtered = ParserRun.converted && !ParserRun.fatal ? Math.max(0, (stats.converted || 0) - entries) : 0
+  var status = ParserRun.fatal || !real ? "❌ 订阅解析失败" :
+    failed || unsupported || ParserRun.warnings.length ? "⚠️ 订阅解析有异常" :
+    ParserRun.repaired ? "🛠 订阅解析已修复" : "✅ 订阅解析完成"
+  var lines = [
+    "原始条目：" + (stats.known ? stats.original : "无法统计") + " · 输出条目：" + entries,
+    "生成节点：" + real + " · 信息占位：" + display,
+    "转换失败：" + failed + " · 不支持：" + unsupported + " · 筛除/去重：" + filtered
+  ]
+  if (stats.metadata) lines.push("订阅信息行：" + stats.metadata)
+  if (ParserRun.repaired) lines.push("已修复空证书指纹：" + ParserRun.repaired + " 个节点")
+  if (ParserRun.warnings.length) lines.push("处理警告：\n" + ParserRun.warnings.join("\n"))
+  if (ParserRun.fatal) {
+    lines.push("中断阶段：" + ParserRun.stage + "（" + ParserRun.fatal + "）")
+    lines.push("本次未完成，生成结果不可用；请检查参数或订阅格式。")
+  } else if (ParserRun.reason) lines.push(ParserRun.reason)
+  else if (!real) lines.push(filtered ? "筛选/去重后没有可用节点，请检查参数。" : "没有生成可用节点，请检查格式、协议及 app 版本。")
+  if (stats.details && stats.details.length) lines.push("异常条目（最多 5 条）：\n" + stats.details.join("\n"))
+  lines.push("生成数量不代表 QuanX 已接收；实际以订阅列表为准。")
+  lines.push("解析器版本：" + ParserRun.version)
+  var subtitle = ParserRun.fatal ? "处理中断 · " + ParserRun.stage :
+    "生成 " + real + " · 失败 " + failed + " · 不支持 " + unsupported
+  if (ParserRun.warnings.length) subtitle += " · 警告 " + ParserRun.warnings.length
+  $notify(status + "：" + (ParserSafeText(resource.tag) || "未命名订阅"),
+    subtitle, lines.join("\n"))
+}
+
+function RunResourceParser() {
+  ParserRun.snapshot = function () {
+    return { original: POriginalNodeCount || 0, known: !!PCountKnown,
+      failed: PFailedNodeCount || 0, unsupported: PNS || 0,
+      converted: PConvertedNodeCount || 0, metadata: PInputMetadataCount || 0,
+      details: PFailureDetails || [], kind: typeQ }
+  }
+
 let version = typeof $environment != "undefined" ? Number($environment.version.split("build")[1]): 0 // 版本号
 
 const UA_Retry= "Shadowrocket/3218 CFNetwork/3860.600.12 Darwin/25.5.0 iPhone18,1"
@@ -653,6 +745,14 @@ var PNS=0 // 不支持的节点统计
 var NSList=["当前订阅内，不支持以下节点 ↘️ \n"] // 不支持节点列表
 var POriginalNodeCount=0
 var PFailedNodeCount=0
+var PCountKnown=false
+var PConvertedNodeCount=0
+var PInputMetadataCount=0
+var PFailureDetails=[]
+
+function NodeIssue(node, index, reason) {
+  if (PFailureDetails.length < 5) PFailureDetails.push(ParserNodeLabel(node, index) + " — " + reason)
+}
 
 var RegoutList= [] ;//用于 regout参数删选提醒
 // URL-Scheme 增加配置
@@ -772,12 +872,13 @@ var flag = 1
 // retry with new UA, default use shadowrocket
 if (UARetry && !inRetry && version>920) {
   $notify("⚠️ 将尝试使用其他 UA, 重新获取订阅内容","⚠️ 如仍旧无有效内容，请自行与节点提供商联系","⚠️ 本次尝试使用 User-Agent 为 ⬇️\n\n"+UA_Retry)
-  $done({retry: {user_agent: "Shadowrocket/3218 CFNetwork/3860.600.12 Darwin/25.5.0 iPhone18,1"}})
+  ParserComplete({retry: {user_agent: "Shadowrocket/3218 CFNetwork/3860.600.12 Darwin/25.5.0 iPhone18,1"}})
 } else {
   if (typeof($resource)!=="undefined" && PProfile == 0) {
   Parser()
-  $done(typeQ=="server"?{content:total,info:Finfo}:{content:total})
+  ParserComplete(typeQ=="server"?{content:total,info:Finfo}:{content:total})
 } else if (PProfile != 0) {
+  ParserRun.profile = true
   try {
     Profile_Handle()
   } catch (err) {
@@ -788,11 +889,12 @@ if (UARetry && !inRetry && version>920) {
   openlink = {"open-url": ADDres}
   $notify("⚠️请忽略报错提示, 点击此通知跳转", "添加配置中的有效远程资源👇 ["+ PProfile+"]", ADDres,openlink)
   total = ProfileInfo[typeQ]
-  $done({content:total})
+  ParserComplete({content:total})
 }
 }
 
 function Parser() {
+  ParserRun.stage = "格式识别"
   type0 = Type_Check(content0); //  类型判断
   //$notify(type0)
   if (type0 != "web" && type0 != "wrong-field" && type0 != "JS-0" && type0 != "wrong-link"){
@@ -801,12 +903,17 @@ function Parser() {
       if (Pdbg){
         $notify(link0,type0,content0)
       }
+      ParserRun.stage = "节点转换"
       total = ResourceParse();
       
     } catch (err) {
-      if(Perror == 0) {
-      $notify("❌ 解析出现错误", "⚠️ 请点击通知，发送订阅链接进行反馈", err, bug_link);
-    }
+      if (typeQ == "server") {
+        ParserRun.fatal = ParserErrorName(err)
+        ParserRun.nodes = []
+        total = ""
+      } else if(Perror == 0) {
+        $notify("❌ 解析出现错误", "请检查资源格式或参数", ParserErrorName(err));
+      }
     }
   } else if (type0 == "wrong-field"){
     if (version >= 670 && typec!="") { //尝试跳转到正确类型
@@ -817,18 +924,20 @@ function Parser() {
     } else {//旧版本
     $notify("❌ 检测类型「"+typec+" 」"+"与目标类型"+" 「"+typeQ+" 」冲突", "⚠️ 请自行检查链接内容，或点击通知发送链接进行反馈", $resource.link, bug_link)
     }
+    ParserRun.reason = "资源类型不匹配，请将链接添加到正确的资源类型。"
     total=""
   } else {
+    ParserRun.reason = "链接未返回可解析的节点订阅（" + type0 + "）。"
     total=""
   }
-    $done(typeQ=="server"?{content:total,info:Finfo}:{content:total});
+    ParserComplete(typeQ=="server"?{content:total,info:Finfo}:{content:total});
 }
 
 
 // 2026-05-15 remove
 // if (typeof($resource)!=="undefined" && PProfile == 0) {
 //   Parser()
-//   $done({ content: total, info: Finfo })
+//   ParserComplete({ content: total, info: Finfo })
 // } else if (PProfile != 0) {
 //   try {
 //     Profile_Handle()
@@ -840,7 +949,7 @@ function Parser() {
 //   openlink = {"open-url": ADDres}
 //   $notify("⚠️请忽略报错提示, 点击此通知跳转", "添加配置中的有效远程资源👇 ["+ PProfile+"]", ADDres,openlink)
 //   total = ProfileInfo[typeQ]
-//   $done({content:total})
+//   ParserComplete({content:total})
 // }
 
 
@@ -850,6 +959,10 @@ function Parser() {
 */
 
 function ParseUnknown(cnt){
+  if (typeQ == "server") {
+    ParserRun.reason = "无法识别订阅格式，请检查链接返回内容。"
+    return
+  }
   try {
     cnt = JSON.parse(cnt)
     if(cnt) {
@@ -910,6 +1023,8 @@ function ResourceParse() {
     total = total.length<100? total.filter( (ele,pos)=>total.indexOf(ele) == pos) : total
     total = total.join("\n")
   } else if (content0.trim() == "") {
+    PCountKnown = true
+    ParserRun.reason = "订阅返回内容为空，请检查链接或 User-Agent。"
     $notify("‼️ 当前引用" + "⟦" + subtag + "⟧" + " 返回內容为空", "1️⃣ 请确认 APP 已经更新至最新版本 1.5.6", "2️⃣ 如确认链接有效，请打开资源解析器的「User-Agent 替换」选项重新获取链接内容 ", nan_link);
     flag = 0;
   } else if (type0 == "sub-http") {
@@ -924,6 +1039,7 @@ function ResourceParse() {
     ParseUnknown(content0)
     flag = -1;
   } else if (type0 == "profile") {
+    ParserRun.profile = true
     PProfile = "111" //默认添加所有部分
     Profile_Handle()
     openlink = {"open-url": ADDres}
@@ -936,7 +1052,10 @@ function ResourceParse() {
 
   //开始处理
   if (flag == 1) { //server 类型统一处理
-    total = isQuanX(total.filter(Boolean).join("\n"))
+    total = isQuanX(total.filter(Boolean).join("\n")).filter(Boolean)
+    PConvertedNodeCount = total.length
+    ParserRun.converted = true
+    ParserRun.stage = "节点筛选与重命名"
     if (Pinfo == 1 && ntf_flow == 0) { //假节点类型的流量通知
       flowcheck(total)
     }
@@ -977,41 +1096,23 @@ function ResourceParse() {
       total = para1.indexOf("node_index_prefix")!=-1 ?index_handle(total):total // 节点序号操作
       //$notify("before","haha",total)
       total = TagCheck_QX(total) //节点名检查
-      ParseReport(total.length)
+      var reportNodes = total.slice()
       total = total.join("\n")
       if (PUOT==1) { total = total.split("\n").map(UOT).join("\n")}
       if (Pcnt == 1 && total!=undefined) {$notify("⟦" + subtag + "⟧"+"解析后最终返回内容" , "节点数量: " +total.split("\n").length, total)}
       total = PRelay==""? Base64.encode(total) : ServerRelay(total.split("\n"),PRelay) //强制节点类型 base64 加密后再导入 Quantumult X, 如果是relay，则转换成分流类型
-      if (PNS !=0) {
-        if (version >913) {
-          $notify("⚠️ 存在 QuantumultX 不支持类型 ➟ ⟦"+subtag+"⟧", "⚠️ 已忽略相关节点，共计 ➟ "+PNS+" 条", "⚠️ 此版本暂不支持 Hysteria2/Tuic/Wireguard 等类型, 以及 http-upgrade/xhttp/grpc/mkcp/h2” 等类型 vless\n\n"+NSList.join("\n"))
-        } else {
-          $notify("⚠️ 存在 QuantumultX 不支持类型 ➟ ⟦"+subtag+"⟧", "⚠️ 已忽略相关节点，共计 ➟ "+PNS+" 条", "⚠️ 此版本暂不支持 Hysteria2/Tuic/Anytls 等类型, 以及 http-upgrade/xhttp/grpc/mkcp/h2” 等类型 vless\n\n"+NSList.join("\n"))
-        }
-      }
-      $done({content:total,info:Finfo});
-    } else { // total length = 0
-      if(Perror == 0) {
-      if (PNS !=0) { // 全部为不支持类型节点
-        if (version >913) {
-          $notify("⚠️ QuantumultX 不支持该订阅内的任何节点➟ ⟦"+subtag+"⟧", "⚠️ 已忽略共计 ➟ "+PNS+" 条不支持节点，剩余 0️⃣ 条", "⚠️ 此版本暂不支持 Hysteria2/Tuic/Wireguard 等类型, 以及 http-upgrade/xhttp/grpc/mkcp/h2” 等类型 vless\n\n"+NSList.join("\n"))
-        } else {
-          $notify("⚠️ QuantumultX 不支持该订阅内的任何节点➟ ⟦"+subtag+"⟧", "⚠️ 已忽略共计 ➟ "+PNS+" 条不支持节点，剩余 0️⃣ 条", "⚠️ 此版本暂不支持 Hysteria2/Tuic/Anytls 等类型, 以及 http-upgrade/xhttp/grpc/mkcp/h2” 等类型 vless\n\n"+NSList.join("\n"))
-        }
-        
-      } else { // 其它原因
-        $notify("❓❓ 该订阅 ➟ "+ "⟦" + subtag + "⟧ 解析后无有效节点", "⚠️⚠️ 解析后 Quantumult-X 支持节点数为 0️⃣ 条", "🚥🚥 请自行检查相关参数、确认节点类型, 或者点击通知跳转并发送链接反馈", bug_link)
-      } 
-    }
+      ParserRun.nodes = reportNodes
+      ParserComplete({content:total,info:Finfo});
+    } else { // total length = 0; the final summary explains why.
       total = errornode
-      $done({ content: errornode })
+      ParserComplete({ content: errornode })
     }
   } else if (flag == 0){ //空/错误类型
     total = errornode
-    $done({ content: errornode })
+    ParserComplete({ content: errornode })
   } else if (flag == -1){ //未知类型
     total = content0
-    $done({ content: content0 })
+    ParserComplete({ content: content0 })
   } 
   if (Pcnt == 1 && flag !=1 && total!=undefined) {$notify("解析后最终返回内容" , "总数量： " +total.split("\n").length, total)}
   return total
@@ -1060,20 +1161,6 @@ function flowcheck(cnt) {
     if (flow != "") { $notify("流量信息: ⟦" + subtag + "⟧", flow, exptime, subinfo_link1) }
 }
 
-function ParseReport(successCount) {
-  var originalCount=Math.max(POriginalNodeCount,successCount+PFailedNodeCount+PNS)
-  var failedCount=Math.max(PFailedNodeCount,originalCount-successCount-PNS)
-  var reportTag=subtag || $resource.tag || "未命名订阅"
-  $notify(
-    "订阅解析完成："+reportTag,
-    "节点数量："+successCount,
-    "原始节点："+originalCount+"\n"+
-    "成功转换："+successCount+"\n"+
-    "转换失败："+failedCount+"\n"+
-    "不支持节点："+PNS
-  )
-}
-
 // regex 后的检查
 function RegCheck(total, typen, paraname,regpara) {
   if(total.length == 0){ 
@@ -1094,7 +1181,7 @@ function Type_Check(subs) {
     var SubK = ["dm1lc3M", "c3NyOi8v", "CnNzOi8", "dHJvamFu", "c3M6Ly", "c3NkOi8v", "c2hhZG93", "aHR0cDovLw", "aHR0cHM6L", "CnRyb2phbjo", "aHR0cD0", "aHR0cCA","U1RBVFVT","dmxlc3M6"];
     var RewriteK = [" url 302", " url 307", " url reject", " url script", " url req", " url res", " url echo", " url-and-header 302", " url-and-header 307", " url-and-header reject", " url-and-header script", " url-and-header req", " url-and-header res", " url-and-header echo", " url jsonjq"] // quantumult X 类型 rewrite
     var JsonJQK = [" response-body-json-jq ", " request-body-json-jq ", " response-body-json-del ", " response-body-json-replace "] // 需要转换成 QuanX jsonjq 的 rewrite
-    var SubK2 = ["ss://", "vmess://", "ssr://", "trojan://", "ssd://", "\nhttps://", "\nhttp://","socks://","ssocks://","vless://","anytls://","wireguard://","wg://","tuic://"];
+    var SubK2 = ["hysteria2://", "hy2://", "ss://", "vmess://", "ssr://", "trojan://", "ssd://", "\nhttps://", "\nhttp://","socks://","ssocks://","vless://","anytls://","wireguard://","wg://","tuic://"];
     var ModuleK = ["[Script]", "[Rule]", "[URL Rewrite]", "[Map Local]", "\nhttp-r", "script-path"]
     var QXProfile = ["[filter_local]","[filter_remote]","[server_local]","[server_remote]"]
     var html = "DOCTYPE html"
@@ -2436,6 +2523,7 @@ function Reality_Handle(cnt) {
 function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
   if (Pdbg) {$notify("subs", "node", subs)}
     var list0 = subs.split("\n");
+    PCountKnown = true
     if (POriginalNodeCount == 0) {
       POriginalNodeCount = list0.filter(function(item) {
         var line = item.trim()
@@ -2446,11 +2534,13 @@ function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
     var SurgeK = ["=ss,", "=vmess,", "=trojan,", "=http,", "=https,", "=custom,", "=socks5", "=socks5-tls","=anytls"];
     var LoonK = ["=Shadowsocks", "=ShadowsocksR", "=VLESS","=AnyTLS"]
     var QXlist = [];
-    var failedList = [];
     for (var i = 0; i < list0.length; i++) {
         var node = ""
         //if (Pdbg) {$notify(i, "node", list0[i])}
-        if (list0[i].trim().length > 3 && !/\;|\/|\#/.test(list0[i][0]) && list0[i].indexOf(" url ")==-1) {
+        if (list0[i].trim().length > 3 && !/^[;\/#]/.test(list0[i].trim()) && list0[i].indexOf(" url ")==-1) {
+            var unsupportedBefore = PNS
+            var failedBefore = PFailedNodeCount
+            var metadataLine = /^STATUS\s*=/i.test(list0[i].trim())
             var type = list0[i].split("://")[0].trim()
             var listi = list0[i].replace(/ /g, "")
             var tag0 = list0[i].indexOf("tag=")!=-1 ? list0[i].split(/\&*(emoji|udp|tfo|cert|rename|replace)\=/)[0].split("tag=")[1] : ""
@@ -2503,32 +2593,38 @@ function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
                     }
                 } else if (type == "vless" && version<821) {
                   Perror = 1 ; // 无需反馈
-                  $notify("⚠️ 你的 Quantumult X 版本暂未支持 Vless 节点","请更新app到最新版本",list0[i])
+                  PNS++
                 } else if (type == "vless" ) { // version 150 support vless 
                   node=VL2QX(list0[i], Pudp, Ptfo, Pcert0, PTls13)
                 } else if (type == "anytls") { // 2026-04-15 tls 类型支持
                   if (version <914) {
                     Perror = 1 ; // 无需反馈
-                    $notify("⚠️ 你的 Quantumult X 版本暂未支持 anytls 节点","请更新app到最新版本",list0[i])
+                    PNS++
                   } else {
                     node=Anytls2QX(list0[i],Pcert0)
                   }
                 } else if (QuanXK.some(NodeCheck1)) { // QuanX type 
-                    node = QX_TLS(isQuanX(list0[i])[0], Pcert0, PTls13)
+                    node = QX_TLS(isQuanX(list0[i], i)[0], Pcert0, PTls13)
                 } else if (LoonK.some(NodeCheck2)) { // Loon type
                     node = Loon2QX(list0[i])
                 } else if (SurgeK.some(NodeCheck) ) { // Surge type, 第2为端口号
                     node = QX_TLS(Surge2QX(list0[i])[0], Pcert0, PTls13)
-                } else if (type=="hysteria2" || (type=="anytls" && version<914) || type=="tuic" || type=="wireguard"|| type=="wg") { //
+                } else if (type=="hysteria2" || type=="hy2" || (type=="anytls" && version<914) || type=="tuic" || type=="wireguard"|| type=="wg") { //
                   PNS=PNS+1 
                   NSList.push(numToEmoji10(PNS)+list0[i])
                 } else if (/^STATUS\=/.test(listi)) { // flow info fake server
                   //$notify("Status","flow",listi)
+                  PInputMetadataCount++
                   Rocket_flow(listi)
                 }
               if (Pdbg) {$notify(i, type, node)}
-            } catch (e) {
-                failedList.push(`<<<\nContent: ${list0[i]}\nError: ${e}`)
+            if (PNS > unsupportedBefore) NodeIssue(list0[i], i, "不支持的协议/传输或 app 版本")
+            if (!node) {
+              if (PNS == unsupportedBefore && PFailedNodeCount == failedBefore && !metadataLine) {
+                PFailedNodeCount++
+                NodeIssue(list0[i], i, "未生成有效节点")
+              }
+              continue
             }
             if (Paead != "") {node = AeadVmess(node,Paead)} // vmess 类型 aead 处理
             if (Phost != "") {node = HOST_Handle(node,Phost)} // host 参数修改
@@ -2550,12 +2646,12 @@ function Subs2QX(subs, Pudp, Ptfo, Pcert0, PTls13) {
               node = Ptfo != 0 ? XTFO(node,Ptfo) : node
                 QXlist.push(node)
             }
-        }
-    }
-    if (failedList.length > 0) {
-        PFailedNodeCount=PFailedNodeCount+failedList.length
-        if (Pntf0 != 0) {
-          $notify(`⚠️ 有 ${failedList.length} 条数据解析失败, 已忽略`, "出错内容👇", failedList.join("\n"));
+            } catch (e) {
+                if (PFailedNodeCount == failedBefore) {
+                  PFailedNodeCount++
+                  NodeIssue(list0[i], i, "转换异常（" + ParserErrorName(e) + "）")
+                }
+            }
         }
     }
     //$notify("QXList","check below content",QXlist)
@@ -2586,7 +2682,9 @@ function TLS_Check(cnt) {
   var tagIndex = cnt.search(/,\s*tag\s*=/i)
   var tag = tagIndex == -1 ? "" : cnt.slice(tagIndex)
   var config = tagIndex == -1 ? cnt : cnt.slice(0, tagIndex)
+  var beforePinCleanup = config
   config = config.replace(/,\s*tls-(?:cert|pubkey)-sha256\s*=\s*(?=,|$)/gi, "")
+  if (config != beforePinCleanup) ParserRun.repaired++
   if (/(?:^|,)\s*tls-(?:cert|pubkey)-sha256\s*=\s*[^,\s]/i.test(config)) {
     config = config.replace(/(\btls-verification\s*=\s*)false(?=\s*(?:,|$))/i, "$1true")
   }
@@ -2957,7 +3055,7 @@ function Filter(servers, Pin, Pout) {
 }
 
 function FilterScript(servers, script) {
-    $notify("🤖 启用脚本进行筛选", "", script);
+    if (Pdbg) $notify("🤖 启用脚本进行筛选", "", script);
     try {
         const $ = Tools();
         eval(script);
@@ -2970,7 +3068,7 @@ function FilterScript(servers, script) {
         }
         return res;
     } catch (err) {
-        $notify("❌ 脚本筛选出现错误", "", err);
+        ParserRun.warnings.push("脚本筛选失败（" + ParserErrorName(err) + "），已保留筛选前的节点。")
         return servers;
     }
 }
@@ -3286,7 +3384,7 @@ QuanX 不支持 path/uri 中包含逗号，因此在 QXFix 内部拆字段前，
 ----------------------------------------------------------
 */
 // 纠正部分不规范的写法(没有把 tag 写在最后)
-function QXFix(cntf) {
+function QXFix(cntf, index) {
 var cnti = cntf.replace(/\s*tag\s*\=/g,"tag=")
 // The IETF spelling belongs to Shadowsocks. VMess uses chacha20-poly1305.
 if (/^\s*shadowsocks\s*=/i.test(cnti)) {
@@ -3327,15 +3425,14 @@ try {
   //$notify("tag-fix","Look","cntf:\n"+cntf+"\nhd:\n"+hd+"\ntag:\n"+tag+"\ntail:\n"+tail+"\ncnti: \n"+cnti +"\n\ncntii: \n"+cntii)
   return cntii
 } catch (err) {
-  if(Perror == 0) {
-  $notify("❌ 解析出现错误,已忽略该条目", "⚠️ 请点击通知，发送订阅链接进行反馈", cntf+"\n"+ err, bug_link);
-}
+  PFailedNodeCount++
+  NodeIssue(cntf, index || 0, "节点格式异常（" + ParserErrorName(err) + "）")
 }
   return ""
 }
 
 // 用于过滤非节点部分（比如整份配置中其它内容）,同时纠正部分不规范的写法(没有把 tag 写在最后)
-function isQuanX(content) {
+function isQuanX(content, indexOffset) {
     var cnts = content.split("\n");
     var nlist = []
     for (var i = 0; i < cnts.length; i++) {
@@ -3343,7 +3440,7 @@ function isQuanX(content) {
         if (cnti.indexOf("=") != -1 && cnti.indexOf("tag") != -1) {
             var cnt = cnti.split("=")[0].trim()
             if (cnt == "http" || cnt == "shadowsocks" || cnt == "trojan" || cnt == "vmess" || cnt == "socks5" || cnt == "vless" ||  cnt == "anytls") {
-                nlist.push(QXFix(cnti))
+                nlist.push(QXFix(cnti, (indexOffset || 0) + i))
             }
         }
     }
@@ -3566,7 +3663,7 @@ function Rename(str) {
 }
 
 function RenameScript(servers, script) {
-    $notify("🤖 启用脚本进行重命名", "", script);
+    if (Pdbg) $notify("🤖 启用脚本进行重命名", "", script);
     try {
         const $ = Tools().rename;
         // extract server tags
@@ -3576,7 +3673,7 @@ function RenameScript(servers, script) {
         // rename nodes
         return servers.map((s, i) => s.split("tag=")[0] + "tag=" + newNames[i]);
     } catch (err) {
-        $notify("❌ 脚本重命名出现错误", "", err);
+        ParserRun.warnings.push("脚本重命名失败（" + ParserErrorName(err) + "），已保留原节点名称。")
         return servers;
     }
 
@@ -4425,6 +4522,8 @@ function Clash2QX(cnt) {
     aa = aa.replace(new RegExp(patn[4][i], "gmi"),patn[0][i])
   }
   var bb = JSON.parse(aa).proxies
+  if (!Array.isArray(bb)) throw new TypeError("proxies must be an array")
+  PCountKnown = true
   POriginalNodeCount=Math.max(POriginalNodeCount,bb.length)
   if (Pdbg==1) { $notify("After YAML Parse", "content", JSON.stringify(bb))}
   //console.log(bb)
@@ -4434,6 +4533,7 @@ function Clash2QX(cnt) {
   for (i=0; i<nl; i++){
     try{
       node=bb[i]
+      var unsupportedBefore = PNS
       typecc = node.type
       if (typecc == "ss") {
         node = CSS2QX(node)
@@ -4459,6 +4559,15 @@ function Clash2QX(cnt) {
         }
         typecc="NS"
       }
+      if (PNS > unsupportedBefore) {
+        NodeIssue(bb[i], i, "不支持的协议/传输或 app 版本")
+        continue
+      }
+      if (!node) {
+        PFailedNodeCount++
+        NodeIssue(bb[i], i, "未生成有效节点")
+        continue
+      }
       node = Pudp0 != 0 ? XUDP(node,Pudp0) : node
       node = Ptfo0 != 0 ? XTFO(node,Ptfo0) : node
       if (typecc!="NS") {
@@ -4469,8 +4578,7 @@ function Clash2QX(cnt) {
     } 
     }catch (e) {
       PFailedNodeCount=PFailedNodeCount+1
-      $notify(`⚠️该节点解析错误, 暂时已忽略处理`,`可点击通知并发送链接反馈至 bot`,JSON.stringify(node),bug_link )
-      $notify(`⚠️错误内容如下`,`可复制错误内容到反馈 bot`,JSON.stringify(node)+"\n\n"+e)
+      NodeIssue(bb[i], i, "转换异常（" + ParserErrorName(e) + "）")
     }
   }
   return nodelist.join("\n")
@@ -5482,4 +5590,17 @@ function OR(...args) {
 
 function NOT(array) {
     return array.map(c => !c);
+}
+
+} // RunResourceParser
+
+try {
+  RunResourceParser()
+} catch (error) {
+  ParserRun.fatal = ParserErrorName(error)
+  ParserRun.nodes = []
+  ParserRun.result = { content: "" }
+} finally {
+  // Report before the host completion; $done may terminate execution immediately.
+  try { ParserFinalReport() } finally { $done(ParserRun.result || { content: "" }) }
 }
