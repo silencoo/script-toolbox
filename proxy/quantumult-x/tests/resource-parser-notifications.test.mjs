@@ -15,12 +15,14 @@ function run(content, {hash='', type='server', build=946, userAgent='', terminat
     $resource:{link:'https://example.invalid/sub?token=private-token'+hash, content, type, tag:'Test subscription', user_agent:userAgent},
     $environment:{version:`Quantumult X 1.8.0 build${build}`},
     $notify:(...args)=>{notifications.push(args);events.push('notify');},
-    $done:value=>{completions.push(value);events.push('done');if(terminate)throw stopped;},
+    $done:value=>{completions.push(value);events.push('done');if(terminate)throw stopped;return value;},
     console:{log(){}},
   });
-  try { vm.runInContext(source,context,{timeout:5000}); } catch(error) {if(error!==stopped)throw error;}
+  let completion;
+  try { completion=vm.runInContext(source,context,{timeout:5000}); } catch(error) {if(error!==stopped)throw error;}
   const reports=notifications.filter(n=>/订阅解析(?:完成|失败|有异常|已修复)/.test(n[0]));
   assert.equal(completions.length,1,'exactly one host completion');
+  if(!terminate) assert.equal(completion,completions[0],'script preserves the host completion value');
   assert.equal(events.at(-1),'done','summary precedes the terminating host call');
   const text=reports[0]?.join('\n') || '';
   assert.ok(!text.includes('test-secret')&&!text.includes('private-token'),'summary must not include credentials');
@@ -34,7 +36,7 @@ test('success summary reports generated nodes, version, and native acceptance ca
   assert.match(r.text,/原始条目：1 · 输出条目：1/);
   assert.match(r.text,/生成节点：1 · 信息占位：0/);
   assert.match(r.text,/实际以订阅列表为准/);
-  assert.match(r.text,/2026-11-12\.2/);
+  assert.match(r.text,/2026-11-12\.3/);
   assert.doesNotMatch(r.text,/成功转换/);
 });
 

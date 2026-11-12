@@ -517,7 +517,7 @@ $parser.uiToHash = function (values) {
 
 // One completion and one final server summary, including initialization errors.
 var ParserRun = {
-  version: "2026-11-12.2", stage: "初始化参数", result: null,
+  version: "2026-11-12.3", stage: "初始化参数", result: null,
   nodes: [], repaired: 0, warnings: [], fatal: "", reason: "", converted: false, profile: false
 }
 
@@ -5600,7 +5600,8 @@ try {
   ParserRun.fatal = ParserErrorName(error)
   ParserRun.nodes = []
   ParserRun.result = { content: "" }
-} finally {
-  // Report before the host completion; $done may terminate execution immediately.
-  try { ParserFinalReport() } finally { $done(ParserRun.result || { content: "" }) }
 }
+// Report before completion, even if the host terminates execution inside $done.
+try { ParserFinalReport() } catch (_) {}
+// Keep $done as the final expression: native hosts can use its completion value.
+$done(ParserRun.result || { content: "" })
