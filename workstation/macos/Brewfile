@@ -105,6 +105,9 @@ brew "fd" if false
 # workstation-package|terminal|brew|yazi|Yazi terminal file manager|required
 brew "yazi" if false
 
+# workstation-package|terminal|brew|croc|Secure file transfer|required
+brew "croc" if false
+
 # workstation-package|terminal|brew|tmux|Terminal multiplexer|required
 brew "tmux" if false
 

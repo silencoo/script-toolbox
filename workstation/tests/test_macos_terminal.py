@@ -166,6 +166,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('Zsh terminal configuration:', plan)
         self.assertIn('zsh-autosuggestions', plan)
         self.assertIn('brew   yazi', plan)
+        self.assertIn('brew   croc', plan)
         self.assertIn('adds y to open Yazi', plan)
         self.assertIn('font-jetbrains-mono-nerd-font', plan)
         preview = self.run_setup('install', 'terminal', '--dry-run')
@@ -181,7 +182,7 @@ exit "${TEST_GHOSTTY_STATUS:-0}"''',
         self.assertIn('cask "ghostty"', self.bundle.read_text())
         self.assertNotIn('keepassxc', self.bundle.read_text())
         for token in ['starship', 'fzf', 'zoxide', 'eza', 'bat', 'ripgrep', 'fd', 'yazi',
-                      'tmux', 'neovim', 'uv', 'zsh-autosuggestions',
+                      'tmux', 'neovim', 'uv', 'croc', 'zsh-autosuggestions',
                       'zsh-syntax-highlighting', 'zsh-completions']:
             self.assertIn('brew "' + token + '"', self.bundle.read_text())
         self.assertNotIn('brew "btop"', self.bundle.read_text())

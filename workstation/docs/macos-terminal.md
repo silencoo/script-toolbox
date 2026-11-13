@@ -46,11 +46,15 @@ on subsequent initializer runs). The shared Linux Ghostty setup uses the same sh
 | Navigation and fuzzy history/completion | zoxide, fzf |
 | Zsh plugins and completion | zsh-autosuggestions, zsh-syntax-highlighting, zsh-completions |
 | File listing, viewing, search, and navigation | eza, bat, ripgrep, fd, Yazi |
+| Secure file transfer | croc |
 | Terminal editing and sessions | Neovim, tmux |
 | Data and command help | jq, yq, git-delta, tealdeer (`tldr`) |
 | Archives | 7-Zip CLI, Zstandard |
 | Python project tooling and completion | uv |
 | Optional monitors (`--include-optional`) | btop, ncdu, duf |
+
+The profile installs `croc` for file transfers but never starts transfers or a
+relay service automatically.
 
 Starship uses its default prompt or your existing Starship configuration.
 The Zsh block enables fuzzy history search through fzf, `z` navigation through

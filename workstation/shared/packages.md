@@ -76,12 +76,14 @@ versions and configuration details.
 | Prompt and navigation | `starship`, `zoxide`, `fzf` |
 | Zsh suggestions, highlighting, and completions | `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions` |
 | Files, search, and file manager | `eza`, `bat`, `ripgrep`, `fd`, `yazi` |
+| Secure file transfer | `croc` |
 | Editor and sessions | `neovim`, `tmux` |
 | Data, Git diff viewing, and help | `jq`, `yq`, `git-delta`, `tealdeer` |
 | Archives and Python projects | `sevenzip`, `zstd`, `uv` |
 | Optional terminal monitors | `btop`, `ncdu`, `duf` |
 
 Package identifiers and Homebrew plugin paths were verified on 2026-10-04.
+The [croc formula](https://formulae.brew.sh/formula/croc) was verified on 2026-11-13.
 Yazi includes `yazi` and `ya`; a guarded `y` shell wrapper returns to its selected directory.
 The profile installs missing packages without upgrades, manages a validated
 `.zshrc` block, and configures Ghostty's SSH integration. Font preferences are
