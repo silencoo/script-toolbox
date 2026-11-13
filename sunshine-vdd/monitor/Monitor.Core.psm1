@@ -83,9 +83,9 @@ Export-ModuleMember -Function New-CaptureState, Update-CaptureState, Get-Capture
 function Get-PrivacyCaptureHealth {
     param($State, $Processes, $Displays, $StreamTarget, $IdleTarget, $Settings, [datetime]$Now=(Get-Date))
     $health=Get-CaptureHealth -State $State -Processes $Processes -Displays $Displays -Target $StreamTarget -Now $Now -GraceSeconds 12
-    $phase=if($State.Clients -gt 0){'Streaming'}else{'Idle'}
+    $phase=if(@($Processes).Count -gt 0 -and $State.Clients -gt 0){'Streaming'}else{'Idle'}
     $health | Add-Member -NotePropertyName Phase -NotePropertyValue $phase
-    if($State.Clients -gt 0) {
+    if($phase -eq 'Streaming') {
         if($health.Status -ne 'Healthy'){return $health}
         $physical=@($Displays | Where-Object {-not $_.IsMttVdd -and -not $_.IsOtherVirtual})
         if($physical.Count -gt 0){$health.Status='Degraded';$health.Reason='PrivacyPhysicalDisplayStillAttached'}
@@ -101,7 +101,7 @@ function Get-PrivacyCaptureHealth {
         return $health
     }
     # Never use startup encoder probes or an untrusted log epoch as proof of idle topology.
-    if($health.Status -ne 'Idle' -or $health.Reason -ne 'NoConnectedClients'){return $health}
+    if($health.Status -ne 'Idle' -or $health.Reason -notin @('NoConnectedClients','SunshineNotRunning')){return $health}
     if($State.LastDisconnect -and ($Now-$State.LastDisconnect).TotalSeconds -lt 15){$health.Status='Starting';$health.Reason='DisplayRevertGracePeriod';return $health}
     if(@($IdleTarget).Count -ne 1){$health.Status='Degraded';$health.Reason='IdlePhysicalDisplayNotRestored';return $health}
     if(@($Displays).Count -ne 1 -or $Displays[0].DeviceName -ne $IdleTarget[0].DeviceName -or -not $IdleTarget[0].Primary){$health.Status='Degraded';$health.Reason='UnexpectedIdleDisplayTopology';return $health}

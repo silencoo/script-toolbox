@@ -13,6 +13,8 @@ $state=New-CaptureState
 Update-CaptureState $state @('[2025-01-02 04:00:00.000]: Info: Sunshine version: test')
 $now=[datetime]'2025-01-02 04:01:00'
 CheckPrivacy 'PhysicalOnlyIdleTopologyVerified' (Get-PrivacyCaptureHealth $state $processes @($physical) @() @($physical) $settings $now)
+CheckPrivacy 'PhysicalOnlyIdleTopologyVerified' (Get-PrivacyCaptureHealth $state @() @($physical) @() @($physical) $settings $now)
+CheckPrivacy 'IdlePhysicalDisplayNotRestored' (Get-PrivacyCaptureHealth $state @() @($virtual) @($virtual) @() $settings $now)
 CheckPrivacy 'UnexpectedIdleDisplayTopology' (Get-PrivacyCaptureHealth $state $processes @($physical,$sideVirtual) @($sideVirtual) @($physical) $settings $now)
 CheckPrivacy 'IdlePhysicalDisplayNotRestored' (Get-PrivacyCaptureHealth $state $processes @($virtual) @($virtual) @() $settings $now)
 Update-CaptureState $state @('[2025-01-02 04:00:20.000]: Info: New streaming session started [active sessions: 1]','[2025-01-02 04:00:21.000]: Info: CLIENT CONNECTED','[2025-01-02 04:00:22.000]: Info: GPU','Capture size : 2560x1440','Offset : 0x0')

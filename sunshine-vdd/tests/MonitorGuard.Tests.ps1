@@ -32,7 +32,7 @@ Assert ((Get-GuardDecision $s $o $policy $start).Action -eq 'None') 'Latched fai
 $o.Phase='Idle';$o.Grace=$true
 Assert ((Get-GuardDecision $s $o $policy $start).Action -eq 'None') 'Latched recovery still respects disconnect grace'
 $o.Grace=$false
-Assert ((Get-GuardDecision $s $o $policy $start).Action -eq 'RestoreIdle') 'Known idle baseline may be restored after failure shutdown'
+Assert ((Get-GuardDecision $s $o $policy $start).Action -eq 'NotifyIdleFailure') 'Known idle baseline still requires a reconnect interlock before physical activation'
 $s=New-GuardState;$o=Observation;$o.Phase='Idle';$o.BaselineAvailable=$false
 [void](Get-GuardDecision $s $o $policy $start)
 Assert ((Get-GuardDecision $s $o $policy $start.AddSeconds(5)).Action -eq 'NotifyIdleFailure') 'Missing idle baseline only notifies; no guessed recovery'

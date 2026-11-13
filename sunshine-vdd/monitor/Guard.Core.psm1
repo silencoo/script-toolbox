@@ -12,7 +12,7 @@ function Get-GuardDecision {
     if ($State.Latched) {
         if (-not $State.FailureHandled) { $decision.Action='FailClosed' }
         elseif ($Observation.Trusted -and $Observation.Phase -eq 'Idle' -and -not $Observation.Grace -and $Observation.Stable -and $Observation.BaselineAvailable -and -not $Observation.Healthy -and $State.Attempts -lt $Policy.MaxAttempts -and (!$State.LastAttempt -or ($Now-[datetime]$State.LastAttempt).TotalSeconds -ge [math]::Max(20,$Policy.RetrySeconds))) {
-            $decision.Action='RestoreIdle'
+            $decision.Action='NotifyIdleFailure'
         }
         return $decision
     }
@@ -34,7 +34,7 @@ function Get-GuardDecision {
         else { $decision.Action='NotifyIdleFailure' }
         return $decision
     }
-    $decision.Action=if($Observation.Phase -eq 'Streaming'){'RestoreStream'}else{'RestoreIdle'}
+    $decision.Action=if($Observation.Phase -eq 'Streaming'){'RestoreStream'}else{'NotifyIdleFailure'}
     return $decision
 }
 

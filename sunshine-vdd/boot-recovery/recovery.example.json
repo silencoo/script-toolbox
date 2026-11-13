@@ -1,0 +1,18 @@
+{
+  "SchemaVersion": 1,
+  "ScmStartupCoordinationApproved": false,
+  "SunshineServiceIsSoleLauncher": false,
+  "TimeoutSeconds": 90,
+  "MaxAttempts": 3,
+  "PhysicalDisplays": [
+    {
+      "InstanceId": "DISPLAY\\REPLACE_WITH_LIVE_APPROVED_PHYSICAL_ID\\REPLACE",
+      "Width": 3840,
+      "Height": 2160,
+      "RefreshRate": 120,
+      "X": 0,
+      "Y": 0,
+      "Primary": true
+    }
+  ]
+}
