@@ -211,6 +211,14 @@
 		"message": "visualizza una barra informativa quando vedi una pagina salvata",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "SingleFile non può visualizzare la barra informativa né salvare le pagine aperte dal filesystem perché non è autorizzato ad accedere ai file locali. Per risolvere il problema, attiva \"Accedi ai file locali sul tuo computer\" in \"Permessi e dati\" nella pagina di SingleFile in about:addons.",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "SingleFile non può visualizzare la barra informativa né salvare le pagine aperte dal filesystem perché non è autorizzato ad accedere agli URL dei file. Per risolvere il problema, attiva \"Consenti l'accesso agli URL dei file\" nella pagina di SingleFile nella pagina delle estensioni del browser.",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
+	},
 	"optionInfobarTemplate": {
 		"message": "modello del contenuto della barra informativa",
 		"description": "Options page label: 'template of the infobar content'"
@@ -462,6 +470,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "riduci lo zoom della pagina durante il salvataggio",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "mantieni la dimensione dello schermo emulata durante il salvataggio",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "simula lo scorrimento",
@@ -1098,12 +1110,12 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "Abilita/disabilita la rimozione di elementi interni",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "Rimuovi l'elemento sotto il mouse (contorno rosso)",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "Abilita/disabilita la rimozioni di elementi esterni",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "Mantieni l'elemento sotto il mouse e rimuovi tutto il resto (contorno verde)",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "Ripristina ultimo elemento rimosso",
