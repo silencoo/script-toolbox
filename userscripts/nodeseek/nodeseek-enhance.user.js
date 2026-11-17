@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek Enhance
 // @namespace    http://www.nodeseek.com/
-// @version      1.4.10
+// @version      1.4.11
 // @description  【NodeSeek增强脚本】全面增强 NodeSeek/DeepFlood 论坛体验。核心功能：自动签到（支持随机/固定鸡腿）、无缝翻页（帖子列表和评论自动加载）、快捷回复（浮动编辑器）、代码高亮（支持亮色/暗色主题）、图片滑动查看。内容管理：屏蔽用户/帖子/分类（支持关键词和正则）、帖子排序（按回复数/查看数/已访问置底）、隐藏元素（页脚/分类标签/帖子信息/推荐轮播/用户统计面板）。界面优化：紧凑模式（1-4列多栏布局，自定义间距/字体/头像大小）、自定义背景图（支持URL/本地上传）、Header/Frame透明度（支持模糊和饱和度）、字体排版自定义（标题/Tag/元数据/内容）、已访问链接标记（可隐藏/置底）、默认头像替换（自动识别系统头像）。增强功能：用户卡片扩展（显示@我/私信/回复通知）、等级标签显示（楼主等级和统计信息）、浏览历史记录（下拉菜单快速访问）、键盘快捷键（左右箭头翻页、Ctrl+Enter提交）、强制新标签页打开帖子、自动跳转外部链接、平滑滚动、即时页面预加载。设置管理：可视化设置面板（集成到导航栏）、设置导入导出、一键恢复默认样式。支持深色模式自动适配。
 // @author       silencoo
 // @match        *://www.nodeseek.com/*
@@ -674,24 +674,6 @@ const applyTypographyStyle = (type, config) => {
                 gap: ${marginBottom}px ${gridGapX}px !important;
                 padding: 4px 0 !important;
             }
-            html.nsx-compact-mode #nsk-head {
-                position: relative !important;
-                box-sizing: border-box !important;
-                padding-right: 130px !important;
-                overflow: hidden !important;
-            }
-            html.nsx-compact-mode #nsk-head .search-box {
-                position: relative !important;
-                left: auto !important;
-                transform: none !important;
-                margin-left: 8px !important;
-                flex: 0 1 175px !important;
-                min-width: 140px !important;
-                max-width: 290px !important;
-                z-index: 2 !important;
-                pointer-events: auto !important;
-                transition: none !important;
-            }
             html.nsx-compact-mode #nsk-body-left .post-list .post-list-item {
                 padding: ${padding} !important;
                 margin-bottom: ${marginBottom}px !important;
@@ -767,15 +749,6 @@ const applyTypographyStyle = (type, config) => {
             @media screen and (max-width: 800px) {
                 html.nsx-compact-mode #nsk-body-left .post-list {
                     grid-template-columns: 1fr !important;
-                }
-                html.nsx-compact-mode #nsk-head .search-box {
-                    position: relative !important;
-                    transform: none !important;
-                    left: auto !important;
-                    margin-left: 6px !important;
-                    flex: 1 1 0 !important;
-                    min-width: 0 !important;
-                    transition: none !important;
                 }
             }
             html.nsx-compact-mode #nsk-body-left .post-list .blocked-post,
@@ -2835,7 +2808,27 @@ const applyTypographyStyle = (type, config) => {
                 scroll('#back-to-top', 0);
                 scroll('#back-to-bottom', Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
             },
-            history: ()=>{
+            addHeaderButton(className, label, icon) {
+                const theme = document.querySelector('#nsk-head .color-theme-switcher');
+                if (!theme) return null;
+                const button = util.createElement('button', {
+                    staticClass: 'nsx-header-button ' + className,
+                    attrs: { type: 'button', title: label, 'aria-label': label }
+                });
+                const svgNS = 'http://www.w3.org/2000/svg';
+                button.append(util.createElement('svg', {
+                    staticClass: 'iconpark-icon', attrs: { 'aria-hidden': 'true' }
+                }, [util.createElement('use', { attrs: { href: '#' + icon } }, [], document, svgNS)], document, svgNS));
+                if (theme.matches('li')) {
+                    const item = document.createElement('li');
+                    item.append(button);
+                    theme.before(item);
+                } else {
+                    theme.before(button);
+                }
+                return button;
+            },
+            history() {
                 const STORAGE_KEY = 'nsx_browsing_history';
                 let sortedCache = null; // 缓存排序后的数据
                 const getCurrentTime = () => layui.util.toDateString(new Date(),"yyyy-MM-ddTHH:mm:ss.SSS");
@@ -2884,21 +2877,9 @@ const applyTypographyStyle = (type, config) => {
                 };
 
                 const injectDom=()=>{
-                    const svg = util.createElement("svg", { staticClass: "iconpark-icon", attrs: { "style": "width: 17px;height: 17px;" }},[ util.createElement("use",{ attrs: { "href": "#history"} }, [], document, "http://www.w3.org/2000/svg") ], document, "http://www.w3.org/2000/svg");
-                    const originalSwitcher = document.querySelector('#nsk-head .color-theme-switcher');
-                    if (originalSwitcher) {
-                        const svgWrap = originalSwitcher.cloneNode();
-                        svgWrap.classList.replace('color-theme-switcher', 'history-dropdown-on');
-                        svgWrap.setAttribute('lay-options', '{trigger:"hover"}');
-
-                        // 判断是否为移动端（li 元素）并移除 SVG 的 style 属性
-                        if (originalSwitcher.tagName.toLowerCase() === 'li') {
-                            svg.removeAttribute('style');
-                        }
-
-                        svgWrap.appendChild(svg);
-                        originalSwitcher.insertAdjacentElement('beforebegin', svgWrap);
-                    }
+                    if (document.querySelector('#nsk-head .history-dropdown-on')) return;
+                    const button = this.addHeaderButton('history-dropdown-on', '浏览历史', 'history');
+                    if (!button) return;
 
                     const history=getHistory(0);
                     const maxLength=20;
@@ -2931,10 +2912,10 @@ const applyTypographyStyle = (type, config) => {
                     // console.log(result);
 
                     dropdown.render({
-                        elem: '.history-dropdown-on',
-                        // trigger: 'click' // trigger 已配置在元素 `lay-options` 属性上
+                        elem: button,
+                        trigger: 'click',
                         data: result,
-                        style: 'width: 370px; height: 200px;'
+                        style: 'width: 370px; max-width: calc(100vw - 16px); max-height: 200px; overflow-y: auto;'
                     });
                 };
 
@@ -2981,27 +2962,11 @@ const applyTypographyStyle = (type, config) => {
             },
             // 在导航栏添加设置按钮
             addSettingsButton() {
-                const header = document.querySelector('#nsk-head');
-                if (!header) return;
-
-                const colorSwitcher = header.querySelector('.color-theme-switcher');
-                if (!colorSwitcher) return;
-
-                // 检查是否已存在设置按钮
-                if (header.querySelector('.nsx-settings-btn')) return;
-
-                const settingsBtn = colorSwitcher.cloneNode(true);
-                settingsBtn.classList.remove('color-theme-switcher');
-                settingsBtn.classList.add('nsx-settings-btn');
-                settingsBtn.setAttribute('title', 'NodeSeek X 设置');
-                settingsBtn.dataset.nsxVersion = version;
-                settingsBtn.querySelector('use').setAttribute('href', '#setting');
-                settingsBtn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    this.advancedSettings();
-                });
-
-                colorSwitcher.insertAdjacentElement('beforebegin', settingsBtn);
+                if (document.querySelector('#nsk-head .nsx-settings-btn')) return;
+                const button = this.addHeaderButton('nsx-settings-btn', 'NodeSeek X 设置', 'setting');
+                if (!button) return;
+                button.dataset.nsxVersion = version;
+                button.addEventListener('click', () => this.advancedSettings());
             },
             createLoadingOverlay() {
                 if (document.getElementById('nsx-loading-overlay')) return;
@@ -3444,7 +3409,7 @@ const applyTypographyStyle = (type, config) => {
         <label class="layui-form-label">合并分类到导航栏</label>
         <div class="layui-input-block">
           <input type="checkbox" name="merge_category_to_nav" lay-skin="switch" lay-filter="merge_category_to_nav" lay-text="开启|关闭" ${Config.getConfig('merge_category_to_nav.enabled') === true ? 'checked' : ''}>
-          <div class="layui-form-mid layui-word-aux">将分类面板合并到导航栏，节省空间。多列模式下自动启用</div>
+          <div class="layui-form-mid layui-word-aux">在导航栏的“更多分类”中显示额外分类。切换到多列时自动启用，可手动关闭。</div>
         </div>
       </div>
       <div class="layui-form-item">
@@ -4262,7 +4227,6 @@ const applyTypographyStyle = (type, config) => {
                         registerFormHandler('radio(compact_columns)', function(data) {
                             const columns = parseInt(data.value);
                             Config.updateConfig('compact_mode.columns', columns);
-                            _this.updateCompactModeStyle();
                             // 如果列数 >= 2，自动启用合并分类到导航栏
                             if (columns >= 2) {
                                 Config.updateConfig('merge_category_to_nav.enabled', true);
@@ -4272,8 +4236,8 @@ const applyTypographyStyle = (type, config) => {
                                     switchElem.checked = true;
                                     layui.form.render('checkbox');
                                 }
-                                _this.mergeCategoryToNav();
                             }
+                            _this.updateCompactModeStyle();
                         });
 
                         // 帖子排序模式切换
@@ -4635,9 +4599,6 @@ const applyTypographyStyle = (type, config) => {
             });
             // 先添加类名，再调用 mergeCategoryToNav，确保能正确判断状态
             toggleRootClass('nsx-compact-mode', true);
-            if (config.columns >= 2 && !Config.getConfig('merge_category_to_nav.enabled')) {
-                Config.updateConfig('merge_category_to_nav.enabled', true);
-            }
             // 更新分类合并（需要知道当前的紧凑模式状态）
             this.mergeCategoryToNav();
             applyCompactModeStyleFromConfig(config);
@@ -5152,235 +5113,63 @@ const applyTypographyStyle = (type, config) => {
                 });
             },
             mergeCategoryToNav() {
-                const enabled = Config.getConfig('merge_category_to_nav.enabled');
-                const useNativeMobileLayout = window.matchMedia('(max-width: 800px)').matches;
-                const navMenu = document.querySelector('#nsk-head .nav-menu');
-                const categoryPanel = document.querySelector('#nsk-right-panel-container .category-list');
-                const leftCategoryPanel = document.querySelector('#nsk-left-panel-container .category-list');
+                document.querySelector('#nsk-head .nsx-merged-categories')?.remove();
+                document.querySelectorAll('.nsx-categories-in-header').forEach(panel =>
+                    panel.classList.remove('nsx-categories-in-header'));
+                const nav = document.querySelector('#nsk-head .nav-menu');
+                if (!nav || !Config.getConfig('merge_category_to_nav.enabled') ||
+                    window.matchMedia('(max-width: 800px)').matches) return;
 
-                if (!navMenu) return;
-
-                // 移除旧的合并样式
-                const oldStyle = document.getElementById('nsx-merge-category-style');
-                if (oldStyle) oldStyle.remove();
-
-                // 移除已存在的合并分类列表（可能在 nav-menu 中，也可能在 header 中）
-                const existingMerged = document.querySelector('#nsk-head .nsx-merged-categories, header ~ .nsx-merged-categories-wrapper');
-                if (existingMerged) {
-                    existingMerged.remove();
-                }
-
-                if (!enabled || useNativeMobileLayout) {
-                    // 恢复右侧面板显示
-                    if (categoryPanel) {
-                        categoryPanel.style.display = '';
+                const panels = document.querySelectorAll(
+                    '#nsk-left-panel-container .category-list, #nsk-right-panel-container .category-list'
+                );
+                const urlKey = link => link.href.split(/[?#]/, 1)[0].replace(/\/$/, '');
+                const seen = new Set(Array.from(nav.querySelectorAll('a[href]'), urlKey));
+                const links = document.createElement('nav');
+                links.setAttribute('aria-label', '更多分类');
+                for (const panel of panels) {
+                    const categories = panel.querySelectorAll('li a[href]');
+                    for (const category of categories) {
+                        const key = urlKey(category);
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        const link = category.cloneNode(true);
+                        if (category.closest('.current-category')) link.setAttribute('aria-current', 'page');
+                        links.append(link);
                     }
-                    if (leftCategoryPanel) {
-                        leftCategoryPanel.style.display = '';
-                    }
-                    return;
+                    if (categories.length) panel.classList.add('nsx-categories-in-header');
                 }
+                if (!links.childElementCount) return;
 
-                // 隐藏右侧和左侧的分类面板
-                if (categoryPanel) {
-                    categoryPanel.style.display = 'none';
-                }
-                if (leftCategoryPanel) {
-                    leftCategoryPanel.style.display = 'none';
-                }
-
-                // 获取分类列表（优先使用右侧面板）
-                const categoryList = categoryPanel || leftCategoryPanel;
-                if (!categoryList) return;
-
-                const categoryItems = categoryList.querySelectorAll('ul li');
-                if (categoryItems.length === 0) return;
-
-                // 获取导航栏中已有的链接URL集合（用于去重）
-                const existingNavLinks = new Set();
-                navMenu.querySelectorAll('li a').forEach(link => {
-                    const href = link.getAttribute('href');
-                    if (href) {
-                        // 标准化URL，移除查询参数和锚点
-                        const normalizedHref = href.split('?')[0].split('#')[0];
-                        existingNavLinks.add(normalizedHref);
-                    }
+                const menu = document.createElement('details');
+                menu.className = 'nsx-merged-categories';
+                const toggle = document.createElement('summary');
+                toggle.title = '更多分类';
+                toggle.setAttribute('aria-label', toggle.title);
+                toggle.textContent = '⋯';
+                menu.append(toggle, links);
+                nav.after(menu);
+                menu.addEventListener('focusout', event => {
+                    if (event.relatedTarget && !menu.contains(event.relatedTarget)) menu.open = false;
                 });
-                // 也检查已存在的合并分类链接
-                const header = document.querySelector('#nsk-head');
-                if (header) {
-                    const existingMerged = header.querySelector('.nsx-merged-categories');
-                    if (existingMerged) {
-                        existingMerged.querySelectorAll('a').forEach(link => {
-                            const href = link.getAttribute('href');
-                            if (href) {
-                                const normalizedHref = href.split('?')[0].split('#')[0];
-                                existingNavLinks.add(normalizedHref);
-                            }
-                        });
-                    }
-                }
-
-                // 创建合并后的分类菜单
-                const mergedCategories = document.createElement('div');
-                mergedCategories.className = 'nsx-merged-categories';
-                // 检查是否是紧凑模式，如果不是，设置 flex-wrap: nowrap 防止换行
-                const isCompactMode = document.documentElement.classList.contains('nsx-compact-mode');
-                const compactColumns = Config.getConfig('compact_mode.columns') || 1;
-                // 只有在紧凑模式且列数>=2时才允许换行，否则单行显示
-                if (isCompactMode && compactColumns >= 2) {
-                    // 紧凑模式多列：允许换行
-                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 2px; flex-wrap: wrap;';
-                } else {
-                    // 单列模式或紧凑模式单列：不换行，隐藏超出部分
-                    mergedCategories.style.cssText = 'display: flex; align-items: center; margin-left: 10px; gap: 2px; flex-wrap: nowrap; overflow: hidden;';
-                }
-
-                categoryItems.forEach((item) => {
-                    const link = item.querySelector('a');
-                    if (!link) return;
-
-                    // 检查是否已存在于导航栏中
-                    const href = link.getAttribute('href');
-                    if (href) {
-                        const normalizedHref = href.split('?')[0].split('#')[0];
-                        if (existingNavLinks.has(normalizedHref)) {
-                            // 如果导航栏中已有此链接，跳过（保留导航栏中的带图标版本）
-                            return;
-                        }
-                    }
-
-                    const clonedLink = link.cloneNode(true);
-                    clonedLink.style.cssText = 'display: flex; align-items: center; padding: 4px 5px; border-radius: 4px; transition: background-color 0.2s, color 0.2s; white-space: nowrap;';
-
-                    // 保持当前分类的样式
-                    if (item.classList.contains('current-category')) {
-                        clonedLink.style.backgroundColor = '#f1f3f5';
-                        clonedLink.style.color = '#0dbc79';
-                    }
-
-                    // 添加悬停效果
-                    clonedLink.addEventListener('mouseenter', function() {
-                        if (!item.classList.contains('current-category')) {
-                            this.style.backgroundColor = '#f1f3f5';
-                            this.style.color = '#0dbc79';
-                        }
-                    });
-                    clonedLink.addEventListener('mouseleave', function() {
-                        if (!item.classList.contains('current-category')) {
-                            this.style.backgroundColor = '';
-                            this.style.color = '';
-                        }
-                    });
-
-                    mergedCategories.appendChild(clonedLink);
-                });
-
-                // 只有当有新的分类链接时才添加到导航栏
-                if (mergedCategories.children.length > 0) {
-                    // 将合并的分类链接添加到 header 中，搜索框之后
-                    const header = document.querySelector('#nsk-head');
-                    const searchBox = header ? header.querySelector('.search-box') : null;
-                    if (searchBox && searchBox.nextSibling) {
-                        header.insertBefore(mergedCategories, searchBox.nextSibling);
-                    } else if (searchBox) {
-                        searchBox.insertAdjacentElement('afterend', mergedCategories);
-                    } else {
-                        // 如果没有搜索框，添加到 nav-menu 后面
-                        navMenu.insertAdjacentElement('afterend', mergedCategories);
-                    }
-                }
-
-                // 添加样式
-                const style = document.createElement('style');
-                style.id = 'nsx-merge-category-style';
-                style.textContent = `
-                    /* 增加导航栏宽度，确保能容纳所有内容 */
-                    #nsk-head {
-                        max-width: 100% !important;
-                        width: 100% !important;
-                        overflow: visible !important;
-                    }
-                    /* 导航栏内的分类链接 */
-                    #nsk-head .nsx-merged-categories {
-                        display: flex;
-                        align-items: center;
-                        flex-wrap: nowrap !important;
-                        gap: 2px;
-                        margin-left: 10px;
-                        flex: 1 1 0;
-                        min-width: 0;
-                        overflow: hidden;
-                    }
-                    @media screen and (min-width: 801px) {
-                        #nsk-head {
-                            box-sizing: border-box !important;
-                            padding-right: 130px !important;
-                            overflow: hidden !important;
-                        }
-                        #nsk-head .nav-menu {
-                            min-width: 0 !important;
-                            flex-wrap: nowrap !important;
-                            overflow-x: auto !important;
-                            overflow-y: hidden !important;
-                            scrollbar-width: none;
-                        }
-                        #nsk-head .nav-menu::-webkit-scrollbar {
-                            display: none;
-                        }
-                        #nsk-head .nsx-merged-categories {
-                            position: static !important;
-                            left: auto !important;
-                            right: auto !important;
-                            top: auto !important;
-                            transform: none !important;
-                            max-width: none !important;
-                            flex: 1 1 0 !important;
-                            min-width: 0 !important;
-                            z-index: auto !important;
-                        }
-                    }
-                    @media screen and (max-width: 800px) {
-                        #nsk-head .nsx-merged-categories {
-                            position: static !important;
-                            transform: none !important;
-                            left: auto !important;
-                            right: auto !important;
-                            max-width: 100% !important;
-                            margin-left: 0 !important;
-                            margin-top: 5px !important;
-                        }
-                    }
-                    .nsx-merged-categories a {
-                        font-size: 13px;
-                        text-decoration: none;
-                        color: var(--link-color);
-                        display: flex;
-                        align-items: center;
-                        padding: 4px 5px;
-                        border-radius: 4px;
-                        transition: background-color 0.2s, color 0.2s;
-                        white-space: nowrap;
-                        flex-shrink: 0;
-                    }
-                    .nsx-merged-categories a:hover {
-                        color: var(--link-hover-color);
-                    }
-                    .nsx-merged-categories .iconpark-icon {
-                        width: 14px;
-                        height: 14px;
-                        margin-right: 4px;
-                    }
-                `;
-                document.head.appendChild(style);
             },
             initCategoryNavResponsive() {
                 if (this.categoryNavMediaQuery) return;
-                const mediaQuery = window.matchMedia('(max-width: 800px)');
-                const handleLayoutChange = () => this.mergeCategoryToNav();
-                mediaQuery.addEventListener?.('change', handleLayoutChange);
-                this.categoryNavMediaQuery = mediaQuery;
-                this.categoryNavMediaQueryHandler = handleLayoutChange;
+                this.categoryNavMediaQuery = window.matchMedia('(max-width: 800px)');
+                this.categoryNavMediaQuery.addEventListener('change', () => this.mergeCategoryToNav());
+                const openMenu = () => document.querySelector('#nsk-head .nsx-merged-categories[open]');
+                document.addEventListener('click', event => {
+                    const menu = openMenu();
+                    if (menu && (!menu.contains(event.target) || event.target.closest('a'))) menu.open = false;
+                });
+                document.addEventListener('keydown', event => {
+                    if (event.key !== 'Escape') return;
+                    const menu = openMenu();
+                    if (menu) {
+                        menu.open = false;
+                        menu.querySelector('summary').focus();
+                    }
+                });
             },
             addPluginStyle() {
                 let style = `
@@ -5391,18 +5180,98 @@ const applyTypographyStyle = (type, config) => {
             #back-to-comment{display:flex;}
             #fast-nav-button-group .nav-item-btn:nth-last-child(4){bottom:120px;}
 
-            header div.history-dropdown-on { color: var(--link-hover-color); cursor: pointer; padding: 0 5px; position: absolute; right: 50px}
-            header div.nsx-settings-btn {
-                color: var(--link-hover-color);
-                cursor: pointer;
-                padding: 0 5px;
-                position: absolute;
-                right: 95px;
-                transition: color 0.3s;
-                z-index: 10 !important;
-                pointer-events: auto !important;
+            #nsk-head {
+                display: flex;
+                align-items: center;
+                box-sizing: border-box;
+                min-width: 0;
+                overflow: visible;
             }
-            header div.nsx-settings-btn:hover { color: var(--link-color);}
+            #nsk-head > .nav-menu {
+                position: static !important;
+                min-width: 0;
+                flex: 1 1 auto;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                scrollbar-width: none;
+            }
+            #nsk-head > .nav-menu::-webkit-scrollbar { display: none; }
+            #nsk-head .nav-menu > li { flex: none; }
+            #nsk-head .search-box {
+                position: relative !important;
+                inset: auto !important;
+                transform: none !important;
+                flex: 0 1 12rem;
+                min-width: 0;
+                margin: 0 0.4rem;
+            }
+            #nsk-head .search-box input:is(:not([type]), [type="search"], [type="text"]) {
+                box-sizing: border-box;
+                width: 100% !important;
+                min-width: 0;
+            }
+            #nsk-head > .color-theme-switcher,
+            #nsk-head .nav-menu > li.color-theme-switcher {
+                position: static !important;
+                transform: none !important;
+                flex: none;
+            }
+            #nsk-head .nsx-header-button,
+            #nsk-head .nsx-merged-categories > summary {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                box-sizing: border-box;
+                flex: none;
+                width: 36px;
+                height: 36px;
+                padding: 0;
+                border: 0;
+                border-radius: 5px;
+                background: transparent;
+                color: inherit;
+                cursor: pointer;
+            }
+            #nsk-head .nsx-header-button svg { width: 17px; height: 17px; }
+            #nsk-head .nsx-merged-categories { position: relative; flex: none; }
+            #nsk-head .nsx-merged-categories > summary { font: bold 22px/1 sans-serif; list-style: none; }
+            #nsk-head .nsx-merged-categories > summary::-webkit-details-marker { display: none; }
+            #nsk-head .nsx-merged-categories > nav {
+                position: absolute;
+                top: 100%;
+                right: 0;
+                z-index: 20;
+                width: max-content;
+                min-width: 9rem;
+                max-height: 60vh;
+                overflow: auto;
+                padding: 4px;
+                border: 1px solid rgba(128,128,128,.35);
+                border-radius: 7px;
+                background: white;
+                box-shadow: 0 4px 16px rgba(0,0,0,.16);
+            }
+            body.dark-layout #nsk-head .nsx-merged-categories > nav { background: #242424; }
+            #nsk-head .nsx-merged-categories a {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-height: 36px;
+                padding: 0 10px;
+                color: inherit;
+                white-space: nowrap;
+            }
+            #nsk-head .nsx-merged-categories a:is(:hover, :focus-visible, [aria-current]),
+            #nsk-head .nsx-merged-categories[open] > summary,
+            #nsk-head .nsx-header-button:hover { background: rgba(128,128,128,.16); }
+            .category-list.nsx-categories-in-header { display: none !important; }
+            @media (pointer: coarse) {
+                #nsk-head .nsx-header-button, #nsk-head .nsx-merged-categories > summary {
+                    width: 44px;
+                    height: 44px;
+                }
+                #nsk-head .nsx-merged-categories a { min-height: 44px; }
+            }
 
             /* 导航栏链接美化 - 添加悬浮效果 */
             #nsk-head .nav-menu a {
@@ -5424,8 +5293,6 @@ const applyTypographyStyle = (type, config) => {
                     box-sizing: border-box !important;
                     min-width: 0 !important;
                     max-width: 100% !important;
-                    padding-right: 130px !important;
-                    overflow: hidden !important;
                     align-items: center !important;
                     flex-wrap: wrap !important;
                 }
@@ -5438,11 +5305,11 @@ const applyTypographyStyle = (type, config) => {
                 }
                 #nsk-head .nav-menu {
                     order: 10 !important;
-                    flex: 0 0 calc(100% + 130px) !important;
-                    width: calc(100% + 130px) !important;
+                    flex: 0 0 100% !important;
+                    width: 100% !important;
                     min-width: 0 !important;
-                    max-width: calc(100% + 130px) !important;
-                    margin-right: -130px !important;
+                    max-width: 100% !important;
+                    margin-right: 0 !important;
                     flex-wrap: nowrap !important;
                     overflow-x: auto !important;
                     overflow-y: hidden !important;
@@ -5458,14 +5325,6 @@ const applyTypographyStyle = (type, config) => {
                 #nsk-head .search-box {
                     flex: 1 1 0 !important;
                     min-width: 0 !important;
-                }
-                header div.nsx-settings-btn {
-                    right: 95px;
-                }
-                #nsk-head .nsx-settings-btn,
-                #nsk-head .history-dropdown-on,
-                #nsk-head .color-theme-switcher {
-                    top: 9px !important;
                 }
             }
 
@@ -6106,7 +5965,6 @@ const applyTypographyStyle = (type, config) => {
                     ['settled promotions', this.togglePromotions],
                     ['settled header opacity', this.updateHeaderOpacityStyle],
                     ['settled frame opacity', this.updateFrameOpacityStyle],
-                    ['settled category navigation', this.mergeCategoryToNav],
                     ['settled user stats panel', this.toggleUserStatsPanel],
                     ['settled footer visibility', this.toggleFooter],
                     ['settled post category visibility', this.togglePostCategory],
@@ -6163,7 +6021,6 @@ const applyTypographyStyle = (type, config) => {
                     ['header opacity', this.updateHeaderOpacityStyle],
                     ['frame opacity', this.updateFrameOpacityStyle],
                     ['default avatars', this.replaceDefaultAvatars],
-                    ['category navigation', this.mergeCategoryToNav],
                     ['category navigation responsive', this.initCategoryNavResponsive],
                     ['user stats panel', this.toggleUserStatsPanel],
                     ['footer visibility', this.toggleFooter],

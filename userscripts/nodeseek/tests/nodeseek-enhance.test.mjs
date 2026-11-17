@@ -182,9 +182,12 @@ test('脚本不再声明未使用的高权限 API，且作用域外无残留设�
     assert.match(source.trimEnd(), /\}\)\(\);$/);
 });
 
-test('紧凑模式搜索框保持定位上下文，避免搜索图标跑到主题按钮上', () => {
-    assert.match(source, /html\.nsx-compact-mode #nsk-head \.search-box\s*\{[\s\S]*?position: relative !important;/);
-    assert.doesNotMatch(source, /html\.nsx-compact-mode #nsk-head \.search-box\s*\{\s*position: static !important;/);
+test('所有布局的搜索框都是搜索图标的定位容器，并参与导航栏布局', () => {
+    const rule = source.match(/^[ \t]*#nsk-head \.search-box\s*\{([^}]+)\}/m)?.[1] || '';
+    assert.match(rule, /position: relative !important;/);
+    assert.match(rule, /inset: auto !important;/);
+    assert.match(rule, /transform: none !important;/);
+    assert.doesNotMatch(source, /html\.nsx-compact-mode #nsk-head \.search-box\s*\{/);
 });
 
 test('自定义字体样式在等待页面模块之前提前注入', () => {
