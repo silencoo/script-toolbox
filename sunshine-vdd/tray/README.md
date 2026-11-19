@@ -11,6 +11,17 @@ mark for **Fault**. Hover over the icon for the state name.
 A saved guard warning appears as **Guard needs review** in the right-click menu.
 Select it to read the notice. The icon returns to the verified streaming or idle
 state as soon as the monitor reports that the display has recovered.
+
+During a private stream, a fresh monitor sample that confirms an active physical
+output opens a **Privacy warning** on each active desktop and plays one Windows
+alert sound. This check runs during connection setup and capture faults too.
+**View details** opens the report. **Acknowledge** dismisses all copies for the
+current incident. If the output recovers or the stream ends first, the warning
+updates and stays available until acknowledged. An empty per-user marker in
+`%LOCALAPPDATA%\SunshineDisplayHealth\privacy-warning.pending` remembers a
+pending warning across tray restarts. Delivery depends on the host desktop
+being captured and visible in the client.
+
 Physical ready means the monitor verified the approved Windows layout; it does not
 mean the panel shows a picture. Capture geometry is correlated log evidence, not a
 direct capture GUID or frame observation. Legacy schema, invalid JSON, an old boot,

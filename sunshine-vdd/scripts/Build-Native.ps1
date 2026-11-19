@@ -22,7 +22,7 @@ function Compile([string]$Name,[string]$Target,[string[]]$Sources,[string[]]$Ref
     if($LASTEXITCODE -ne 0){throw "Compilation failed: $Name"}
 }
 Compile 'SunshineDisplay.Native.dll' library @($generated,(Join-Path $PSScriptRoot 'DisplayRecovery.cs')) @((Join-Path $framework 'System.Core.dll'))
-Compile 'SunshineDisplay.Core.dll' library @((Join-Path $root 'native/Common.cs'),(Join-Path $root 'native/BootEpoch.cs'),(Join-Path $root 'native/RecoveryEngine.cs'),(Join-Path $root 'boot-recovery/ConsoleSession.cs')) @((Join-Path $framework 'System.Web.Extensions.dll'),(Join-Path $framework 'System.Core.dll'),(Join-Path $framework 'System.Management.dll'))
+Compile 'SunshineDisplay.Core.dll' library @((Join-Path $root 'native/Common.cs'),(Join-Path $root 'native/StreamingPrivacy.cs'),(Join-Path $root 'native/BootEpoch.cs'),(Join-Path $root 'native/RecoveryEngine.cs'),(Join-Path $root 'boot-recovery/ConsoleSession.cs')) @((Join-Path $framework 'System.Web.Extensions.dll'),(Join-Path $framework 'System.Core.dll'),(Join-Path $framework 'System.Management.dll'))
 $common=@((Join-Path $out 'SunshineDisplay.Core.dll'),(Join-Path $out 'SunshineDisplay.Native.dll'),(Join-Path $framework 'System.Web.Extensions.dll'),(Join-Path $framework 'System.Core.dll'))
 Compile 'SunshineDisplay.Recovery.exe' exe @((Join-Path $root 'boot-recovery/Recovery.cs')) ($common+@((Join-Path $framework 'System.ServiceProcess.dll')))
 $trayIcons=Join-Path $root 'tray/icons'
@@ -31,7 +31,7 @@ $trayOptions+=('/win32manifest:'+(Join-Path $root 'tray/app.manifest'))
 foreach($state in 'ready','streaming','checking','fault') {
     $trayOptions+=('/resource:'+(Join-Path $trayIcons "$state.ico")+",SunshineDisplay.$state.ico")
 }
-Compile 'SunshineDisplay.Tray.exe' winexe @((Join-Path $root 'tray/Tray.cs')) ($common+@((Join-Path $framework 'System.Windows.Forms.dll'),(Join-Path $framework 'System.Drawing.dll'))) $trayOptions
+Compile 'SunshineDisplay.Tray.exe' winexe @((Join-Path $root 'tray/Tray.cs'),(Join-Path $root 'tray/PrivacyWarning.cs')) ($common+@((Join-Path $framework 'System.Windows.Forms.dll'),(Join-Path $framework 'System.Drawing.dll'))) $trayOptions
 Copy-Item -LiteralPath (Join-Path $root 'tray/SunshineDisplay.Tray.exe.config') -Destination $out -Force
 if($Test){
     Compile 'SunshineDisplay.Tests.exe' exe @((Join-Path $root 'tests/Native.Tests.cs')) $common

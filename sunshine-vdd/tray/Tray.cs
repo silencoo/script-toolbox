@@ -26,9 +26,12 @@ namespace SunshineDisplay
         readonly string boot;
         readonly ToolStripMenuItem stateItem=new ToolStripMenuItem("Checking or Unknown"){Enabled=false};
         readonly ToolStripMenuItem guardItem=new ToolStripMenuItem("Guard needs review"){Visible=false};
+        readonly PrivacyWarnings privacyWarnings;
         Form details; TextBox text;string report="Waiting for monitor";
         internal TrayContext(string monitorRoot) {
             root=Path.GetFullPath(monitorRoot);boot=ConsoleSession.BootKey();
+            var profile=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            privacyWarnings=new PrivacyWarnings(Path.Combine(profile,"SunshineDisplayHealth","privacy-warning.pending"),ShowDetails);
             var menu=new ContextMenuStrip();menu.Items.Add(stateItem);
             guardItem.Click+=(s,e)=>ShowDetails();
             menu.Items.Add(guardItem);
@@ -74,6 +77,8 @@ namespace SunshineDisplay
             b.AppendLine().AppendLine("Presence means enumerated hardware. Active paths mean Windows desktop attachment. Capture is log/geometry evidence. None proves the panel shows an image.");
             b.AppendLine("Read-only tray. No topology changes, service commands or recovery requests are exposed.");
             b.AppendLine("Monitor logs: "+Path.Combine(root,"data")).AppendLine("Boot logs: "+Paths.Data);
+            privacyWarnings.Refresh(view);
+            if(privacyWarnings.StorageError!=null) b.AppendLine("Could not save alert acknowledgment state: "+privacyWarnings.StorageError);
             report=b.ToString();stateItem.Text=view.State;icon.Text="Sunshine: "+view.State;
             guardItem.Available=view.GuardNotice!=null;
             Icon stateIcon;
@@ -96,7 +101,7 @@ namespace SunshineDisplay
             details.Controls.Add(text);details.Show();
         }
         protected override void ExitThreadCore() {
-            timer.Stop();timer.Dispose();icon.Visible=false;icon.Dispose();
+            timer.Stop();timer.Dispose();privacyWarnings.Dispose();icon.Visible=false;icon.Dispose();
             foreach(var stateIcon in stateIcons.Values) stateIcon.Dispose();
             if(details!=null)details.Dispose();base.ExitThreadCore();
         }

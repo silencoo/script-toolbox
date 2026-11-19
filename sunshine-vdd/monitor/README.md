@@ -72,6 +72,10 @@ session is in progress; run the fixture tests to verify the failure path safely.
 
 - `Set-MonitorMode.ps1 -Mode Observe -Apply`: turn off corrective actions while
   keeping diagnostics. Restarting only the monitor does not interrupt Sunshine.
+- After reviewing a specific archived unreadable state in Observe mode, run
+  `Set-MonitorMode.ps1 -AcknowledgeUnreadableState <archive-filename> -Apply`
+  with the filename from the notice. This backs up the guard state, clears the
+  matching notice and reloads the diagnostic monitor. Clients can stay connected.
 - After investigating a latched failure, with clients disconnected, use
   `Set-MonitorMode.ps1 -Mode Protect -ClearFailureLatch -Apply`; restart Sunshine
   manually when ready. A monitor restart alone does not clear a failure latch.

@@ -12,6 +12,45 @@ static class NativeTests
     static int count;
     static void Check(bool value,string label) {if(!value)throw new Exception(label);count++;Console.WriteLine("PASS "+label);}
     static void Throws(Action action,string label) {bool failed=false;try{action();}catch{failed=true;}Check(failed,label);}
+    static void TestPrivacyWarning(DateTimeOffset now) {
+        var health=new Dictionary<string,object>{{"Status","Starting"},{"Reason","ConnectionGracePeriod"},{"Phase","Streaming"}};
+        var panel=new Dictionary<string,object>{{"Active",true},{"PhysicalConnector",true},{"InstanceId","panel"},{"FriendlyName","Test panel"}};
+        var vdd=new Dictionary<string,object>{{"Active",true},{"PhysicalConnector",false},{"InstanceId","virtual"}};
+        var process=new Dictionary<string,object>{{"StartTime",now.UtcDateTime}};
+        var data=new Dictionary<string,object>{
+            {"At",now.ToString("o")},{"BootKey","boot"},{"SchemaVersion",2},{"LogEpoch",now.UtcDateTime},
+            {"SunshineProcesses",new[]{process}},{"Clients",1},{"Health",health},{"ExpectedMonitor","virtual"},
+            {"DisplayPaths",new[]{panel,vdd}}};
+        Func<HealthView> read=()=>TrayHealth.Evaluate(data,now,"boot");
+        var active=read();
+        Check(active.State=="Fault" && active.Privacy==PrivacyObservation.PhysicalActive && active.PhysicalOutput=="Test panel","Alert during connection grace before capture succeeds");
+        health["Status"]="Degraded";health["Reason"]="CaptureGeometryMatchesDifferentMonitor";
+        Check(read().Privacy==PrivacyObservation.PhysicalActive,"Alert even when Sunshine captures the wrong output");
+        Check(TrayHealth.Evaluate(data,now.AddMinutes(1),"boot").Privacy==PrivacyObservation.Unknown,"Stale heartbeat cannot trigger a popup");
+        data["LogEpoch"]=now.AddMinutes(-1).UtcDateTime;
+        Check(read().Privacy==PrivacyObservation.Unknown,"Old Sunshine client count cannot trigger a popup");
+        data["LogEpoch"]=now.UtcDateTime;
+        var incident=new PrivacyIncident(false);
+        Check(incident.Observe(active.Privacy) && incident.Pending,"Confirmed exposure opens the warning and sounds once");
+        Check(!incident.Observe(active.Privacy),"Repeated confirmed samples produce no extra sound");
+        incident.Acknowledge();
+        incident.Observe(PrivacyObservation.Unknown);
+        Check(!incident.Observe(active.Privacy) && !incident.Pending && read().State=="Fault","Acknowledgment suppresses popup through uncertain samples and keeps live fault");
+        panel["Active"]=false;
+        health["Status"]="Healthy";health["Reason"]="CaptureGeometryMatchesExpectedMonitor";
+        var recovered=read();
+        Check(recovered.Privacy==PrivacyObservation.VerifiedPrivate,"Present but inactive panel is safe with a verified VDD-only stream");
+        incident.Observe(recovered.Privacy);
+        Check(incident.Observe(active.Privacy),"New exposure after verified restoration re-arms the alert");
+        incident.Observe(recovered.Privacy);
+        Check(incident.Pending,"Recovery before acknowledgment keeps the warning available");
+        data["Clients"]=0;health["Phase"]="Idle";panel["Active"]=true;
+        Check(read().Privacy==PrivacyObservation.Disconnected,"Physical monitor while disconnected does not trigger an alert");
+        incident.Observe(read().Privacy);
+        Check(incident.Pending && new PrivacyIncident(true).Pending,"Unacknowledged warning survives disconnect and can be reopened at startup");
+        incident.Acknowledge();
+        Check(!incident.Pending,"Acknowledgment clears a resolved warning");
+    }
     sealed class EnvironmentFixture : IRecoveryEnvironment {
         public double ElapsedSeconds{get;private set;}
         public int Applies,Waits,Reads;
@@ -63,6 +102,7 @@ static class NativeTests
             Check((uint)native.GetField("QDC_VIRTUAL_MODE_AWARE",BindingFlags.NonPublic|BindingFlags.Static).GetRawConstantValue()==0x10,"QDC virtual mode flag is not SDC flag");
             Check((uint)native.GetField("QDC_VIRTUAL_REFRESH_RATE_AWARE",BindingFlags.NonPublic|BindingFlags.Static).GetRawConstantValue()==0x40,"QDC refresh flag is not SDC flag");
             var now=DateTimeOffset.UtcNow;
+            TestPrivacyWarning(now);
             var status=new Dictionary<string,object>{{"SchemaVersion",2},{"At",now.ToString("o")},{"BootKey","boot1"},{"Clients",1},{"Health",new Dictionary<string,object>{{"Status","Healthy"},{"Reason","CaptureGeometryMatchesExpectedMonitor"}}}};
             var live=TrayHealth.Evaluate(status,now,"boot1");
             Check(live.State=="Privacy streaming" && live.GuardNotice==null,"Fresh monitor streaming health shown without a guard warning");

@@ -92,6 +92,8 @@ namespace SunshineDisplay
         public string Detail;
         public double AgeSeconds;
         public string GuardNotice;
+        public PrivacyObservation Privacy;
+        public string PhysicalOutput;
     }
     public static class TrayHealth
     {
@@ -117,6 +119,7 @@ namespace SunshineDisplay
             }
             else if(status=="Healthy" && reason=="CaptureGeometryMatchesExpectedMonitor" && Convert.ToInt32(Get(d,"Clients"))>0) view.State="Privacy streaming";
             else if(status=="Idle" && reason=="PhysicalOnlyIdleTopologyVerified" && Convert.ToInt32(Get(d,"Clients"))==0) view.State="Physical ready";
+            StreamingPrivacy.Evaluate(d,view);
             return view;
         }
     }
