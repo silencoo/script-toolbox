@@ -101,3 +101,14 @@ Windows enumeration never proves that the panel shows a picture.
 The separate [boot recovery service](../boot-recovery/README.md) runs a bounded
 console helper before an explicitly coordinated Sunshine startup. It does not
 reuse these native snapshots across boots and never relies on the login tray.
+
+## Last disconnect
+
+In privacy mode the monitor writes the most recent final-client disconnect to
+`data/last-disconnect.json`. It records only the event time (UTC ticks), outcome,
+elapsed seconds and whether observation has finished. Restoration requires the
+expected physical monitor to be the only active display path and its source to
+match the primary desktop. The grace period is 15 seconds or the configured
+Sunshine revert delay plus five seconds, whichever is longer. A late result
+requires an observed unexpected output after grace followed by verified recovery.
+Historical log events without an observed outcome are marked unverified.

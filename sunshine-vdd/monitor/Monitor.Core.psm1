@@ -1,5 +1,5 @@
 function New-CaptureState {
-    [pscustomobject]@{ Epoch=$null; LastTimestamp=$null; Clients=0; SessionStarted=$null; FirstConnect=$null; LastConnect=$null; LastDisconnect=$null; Capture=$null; Pending=$null; Warnings=@(); ConfigurationLines=$null; RequestedMode=$null }
+    [pscustomobject]@{ Epoch=$null; LastTimestamp=$null; Clients=0; SessionStarted=$null; FirstConnect=$null; LastConnect=$null; LastDisconnect=$null; LastFullDisconnect=$null; Capture=$null; Pending=$null; Warnings=@(); ConfigurationLines=$null; RequestedMode=$null }
 }
 
 function Update-CaptureState {
@@ -10,7 +10,7 @@ function Update-CaptureState {
         }
         if ($line -match 'Sunshine version:') {
             $State.Epoch=$State.LastTimestamp; $State.Clients=0; $State.Capture=$null; $State.Pending=$null
-            $State.SessionStarted=$null; $State.FirstConnect=$null; $State.LastConnect=$null; $State.LastDisconnect=$null; $State.Warnings=@(); $State.ConfigurationLines=$null; $State.RequestedMode=$null
+            $State.SessionStarted=$null; $State.FirstConnect=$null; $State.LastConnect=$null; $State.LastDisconnect=$null; $State.LastFullDisconnect=$null; $State.Warnings=@(); $State.ConfigurationLines=$null; $State.RequestedMode=$null
         }
         if ($line -match 'Scheduling display device configuration:') { $State.ConfigurationLines=@(); $State.RequestedMode=$null; continue }
         if ($null -ne $State.ConfigurationLines) {
@@ -38,6 +38,7 @@ function Update-CaptureState {
             $State.Clients++; $State.LastConnect=$State.LastTimestamp
         }
         if ($line -match 'CLIENT DISCONNECTED') {
+            if ($State.Clients -eq 1) { $State.LastFullDisconnect=$State.LastTimestamp }
             $State.Clients=[math]::Max(0,$State.Clients-1); $State.LastDisconnect=$State.LastTimestamp
             if ($State.Clients -eq 0) { $State.Capture=$null; $State.Pending=$null }
         }
@@ -109,3 +110,55 @@ function Get-PrivacyCaptureHealth {
     return $health
 }
 Export-ModuleMember -Function New-CaptureState, Update-CaptureState, Get-CaptureHealth, Get-PrivacyCaptureHealth
+
+# Return the same record until evidence changes its outcome. The caller persists transitions.
+function Get-DisconnectResult($Previous,$State,$Snapshot,[datetime]$Started,[datetime]$Now) {
+    if(!$State.Epoch -or @($Snapshot.SunshineProcesses).Count -ne 1){return $Previous}
+    $processStart=$Snapshot.SunshineProcesses[0].StartTime
+    if(!$processStart -or [math]::Abs(($State.Epoch-$processStart).TotalSeconds) -gt 15){return $Previous}
+    if(!$State.LastFullDisconnect){
+        if($Previous -and !$Previous.Closed -and $State.Epoch.ToUniversalTime().Ticks -gt $Previous.Id){
+            $record=$Previous.PSObject.Copy()
+            if($record.Outcome -eq 'Pending'){$record.Outcome='Unverified'}
+            $record.Closed=$true
+            return $record
+        }
+        return $Previous
+    }
+    $ended=[datetime]$State.LastFullDisconnect
+    $id=$ended.ToUniversalTime().Ticks
+    if($ended -gt $Now -or ($Previous -and $Previous.Id -gt $id)){return $Previous}
+    $record=$Previous
+    if(!$Previous -or $Previous.Id -ne $id){
+        # Replaying old Sunshine log lines on startup provides no historical topology.
+        if($ended -lt $Started){return [pscustomobject]@{Id=$id;Outcome='Unverified';Seconds=0;Closed=$true}}
+        $record=[pscustomobject]@{Id=$id;Outcome='Pending';Seconds=0;Closed=$false}
+    }
+    if($record.Closed){return $record}
+    if($State.Clients -gt 0 -or ($State.SessionStarted -and $State.SessionStarted -gt $ended)){
+        $next=$record.PSObject.Copy()
+        if($next.Outcome -eq 'Pending'){$next.Outcome='Unverified'}
+        $next.Closed=$true
+        return $next
+    }
+    $active=@($Snapshot.DisplayPaths | Where-Object Active)
+    if(!$active.Count -or !$Snapshot.ExpectedPhysicalMonitor -or @($active | Where-Object {!$_.InstanceId}).Count){return $record}
+    $seconds=($Now-$ended).TotalSeconds
+    $physicalOnly=$active.Count -eq 1 -and $active[0].PhysicalConnector -and $active[0].InstanceId -ieq $Snapshot.ExpectedPhysicalMonitor
+    $displays=@($Snapshot.Displays)
+    if($physicalOnly -and $displays.Count -eq 1 -and $displays[0].Primary -and $active[0].SourceName -and $active[0].SourceName -eq $displays[0].DeviceName){
+        $outcome=if($record.Outcome -eq 'Failed'){'Late'}else{'Restored'}
+        return [pscustomobject]@{Id=$id;Outcome=$outcome;Seconds=[long][math]::Ceiling($seconds);Closed=$true}
+    }
+    $grace=15.0
+    $delayMs=0L
+    if([long]::TryParse([string]$Snapshot.Config.dd_config_revert_delay,[ref]$delayMs)){
+        $grace=[math]::Max($grace,5+($delayMs/1000))
+    }
+    $unexpectedPath=@($active | Where-Object {$_.InstanceId -ine $Snapshot.ExpectedPhysicalMonitor}).Count -gt 0
+    if($unexpectedPath -and $seconds -ge $grace -and $record.Outcome -eq 'Pending'){
+        return [pscustomobject]@{Id=$id;Outcome='Failed';Seconds=[long][math]::Floor($seconds);Closed=$false}
+    }
+    return $record
+}
+Export-ModuleMember -Function Get-DisconnectResult

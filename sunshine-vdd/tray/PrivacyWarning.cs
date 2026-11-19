@@ -13,6 +13,8 @@ namespace SunshineDisplay
         readonly Dictionary<string,PrivacyWarningForm> windows=new Dictionary<string,PrivacyWarningForm>();
         readonly PrivacyIncident incident;
         readonly string marker;
+        readonly string disconnectAckPath;
+        long acknowledgedDisconnect,savedDisconnect,showingDisconnect;
         readonly Action details;
         bool saved;
         internal string StorageError { get; private set; }
@@ -22,11 +24,27 @@ namespace SunshineDisplay
             details=showDetails;
             saved=File.Exists(marker);
             incident=new PrivacyIncident(saved);
+            disconnectAckPath=Path.Combine(Path.GetDirectoryName(marker),"last-disconnect-ack.json");
+            try {
+                if(File.Exists(disconnectAckPath))
+                    Int64.TryParse(Convert.ToString(Json.Read<object>(disconnectAckPath)),out savedDisconnect);
+            } catch(Exception ex) {
+                if(!(ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException ||
+                     ex is InvalidOperationException || ex is InvalidDataException)) throw;
+            }
+            acknowledgedDisconnect=savedDisconnect;
         }
         internal void Refresh(HealthView view) {
             bool sound=incident.Observe(view.Privacy);
             SavePending();
-            if(!incident.Pending) return;
+            var last=view.LastDisconnect;
+            long next=(!incident.Pending && view.StreamConnected && last!=null && last.Warn && last.Id!=acknowledgedDisconnect) ? last.Id : 0;
+            sound|=next!=0 && next!=showingDisconnect;
+            showingDisconnect=next;
+            if(!incident.Pending && showingDisconnect==0) {
+                if(windows.Count!=0) CloseWindows();
+                return;
+            }
             var screens=Screen.AllScreens;
             foreach(var removed in windows.Keys.Except(screens.Select(s=>s.DeviceName)).ToArray()) {
                 windows[removed].Dispose();
@@ -39,23 +57,32 @@ namespace SunshineDisplay
                     window.Location=screen.WorkingArea.Location;
                     windows.Add(screen.DeviceName,window);
                 }
-                window.Present(view,screen.WorkingArea);
+                if(showingDisconnect!=0) window.PresentDisconnect(last,screen.WorkingArea);
+                else window.Present(view,screen.WorkingArea);
             }
             if(sound) SystemSounds.Exclamation.Play();
         }
         void Acknowledge() {
-            incident.Acknowledge();
+            if(showingDisconnect!=0) acknowledgedDisconnect=showingDisconnect;
+            else incident.Acknowledge();
+            showingDisconnect=0;
             CloseWindows();
             SavePending();
         }
         void SavePending() {
-            if(saved==incident.Pending) { StorageError=null; return; }
             try {
-                if(incident.Pending) {
-                    Directory.CreateDirectory(Path.GetDirectoryName(marker));
-                    using(File.Create(marker)) { }
-                } else File.Delete(marker);
-                saved=incident.Pending;
+                if(saved!=incident.Pending) {
+                    if(incident.Pending) {
+                        Directory.CreateDirectory(Path.GetDirectoryName(marker));
+                        using(File.Create(marker)) { }
+                    } else File.Delete(marker);
+                    saved=incident.Pending;
+                }
+                if(savedDisconnect!=acknowledgedDisconnect) {
+                    Directory.CreateDirectory(Path.GetDirectoryName(disconnectAckPath));
+                    Json.Write(disconnectAckPath,acknowledgedDisconnect);
+                    savedDisconnect=acknowledgedDisconnect;
+                }
                 StorageError=null;
             } catch(IOException ex) { StorageError=ex.Message; }
               catch(UnauthorizedAccessException ex) { StorageError=ex.Message; }
@@ -136,6 +163,15 @@ namespace SunshineDisplay
                     note.Text="The current display state is unverified.";
                     break;
             }
+            PositionAndShow(work);
+        }
+        internal void PresentDisconnect(DisconnectReport last,Rectangle work) {
+            title.Text="Last disconnect";
+            body.Text=last.Summary+".";
+            note.Text="Previous session ended "+last.LocalTime+".";
+            PositionAndShow(work);
+        }
+        void PositionAndShow(Rectangle work) {
             // Create the handle on the target monitor before reading its per-monitor DPI.
             var handle=Handle;
             int pad=ScalePixels(18),gap=ScalePixels(8),margin=ScalePixels(12);

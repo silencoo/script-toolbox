@@ -94,6 +94,8 @@ namespace SunshineDisplay
         public string GuardNotice;
         public PrivacyObservation Privacy;
         public string PhysicalOutput;
+        public DisconnectReport LastDisconnect;
+        public bool StreamConnected;
     }
     public static class TrayHealth
     {
@@ -109,6 +111,7 @@ namespace SunshineDisplay
             var h=Get(d,"Health") as Dictionary<string,object>; string status=Text(h,"Status"),reason=Text(h,"Reason");
             var guard=Get(d,"Protection") as Dictionary<string,object>;
             var view=new HealthView{State="Checking or Unknown",Detail=reason+". Windows evidence does not prove a visible picture.",AgeSeconds=age};
+            view.LastDisconnect=DisconnectReport.Read(Get(d,"LastDisconnect") as Dictionary<string,object>);
             if(String.Equals(Text(guard,"Latched"),"True",StringComparison.OrdinalIgnoreCase)) {
                 var notice=Text(guard,"Notice");
                 view.GuardNotice=String.IsNullOrWhiteSpace(notice) ? "Review the saved protection state in the monitor logs." : notice;

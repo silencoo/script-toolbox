@@ -25,6 +25,7 @@ namespace SunshineDisplay
         readonly string root;
         readonly string boot;
         readonly ToolStripMenuItem stateItem=new ToolStripMenuItem("Checking or Unknown"){Enabled=false};
+        readonly ToolStripMenuItem disconnectItem=new ToolStripMenuItem("Last disconnect");
         readonly ToolStripMenuItem guardItem=new ToolStripMenuItem("Guard needs review"){Visible=false};
         readonly PrivacyWarnings privacyWarnings;
         Form details; TextBox text;string report="Waiting for monitor";
@@ -35,6 +36,8 @@ namespace SunshineDisplay
             var menu=new ContextMenuStrip();menu.Items.Add(stateItem);
             guardItem.Click+=(s,e)=>ShowDetails();
             menu.Items.Add(guardItem);
+            disconnectItem.Click+=(s,e)=>ShowDetails();
+            menu.Items.Add(disconnectItem);
             menu.Items.Add("Display and recovery details",null,(s,e)=>ShowDetails());
             menu.Items.Add("Open monitor logs",null,(s,e)=>OpenFolder(Path.Combine(root,"data")));
             menu.Items.Add("Open boot recovery logs",null,(s,e)=>OpenFolder(Paths.Data));
@@ -56,6 +59,7 @@ namespace SunshineDisplay
                 b.AppendLine("DISPLAY / STREAM: "+view.State).AppendLine(view.Detail).AppendLine("Heartbeat age: "+view.AgeSeconds.ToString("0.0")+" seconds");
                 if(view.GuardNotice!=null) b.AppendLine("Guard needs review").AppendLine(view.GuardNotice);
                 b.AppendLine("Observed: "+TrayHealth.Text(data,"At")).AppendLine("Boot: "+TrayHealth.Text(data,"BootKey"));
+                if(view.LastDisconnect!=null) b.AppendLine("Last disconnect at "+view.LastDisconnect.LocalTime+": "+view.LastDisconnect.Summary);
                 foreach(var key in new[]{"ExpectedMonitor","ExpectedPhysicalMonitor","Clients","LogEpoch","Capture","Health","Config","Devices","DisplayTargets","DisplayPaths","Displays","MonitorIdentities","Protection","LastWarnings"}) {
                     b.AppendLine().AppendLine(key+":");Format(b,TrayHealth.Get(data,key),0);
                 }
@@ -81,6 +85,7 @@ namespace SunshineDisplay
             if(privacyWarnings.StorageError!=null) b.AppendLine("Could not save alert acknowledgment state: "+privacyWarnings.StorageError);
             report=b.ToString();stateItem.Text=view.State;icon.Text="Sunshine: "+view.State;
             guardItem.Available=view.GuardNotice!=null;
+            disconnectItem.Text="Last disconnect · "+(view.LastDisconnect==null ? "No verified history available" : view.LastDisconnect.Summary);
             Icon stateIcon;
             if(!stateIcons.TryGetValue(view.State,out stateIcon)) stateIcon=stateIcons["Checking or Unknown"];
             if(icon.Icon!=stateIcon) icon.Icon=stateIcon;

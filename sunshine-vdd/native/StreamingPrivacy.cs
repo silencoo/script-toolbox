@@ -5,6 +5,28 @@ using System.Linq;
 
 namespace SunshineDisplay
 {
+    public sealed class DisconnectReport
+    {
+        public long Id { get; private set; }
+        public string Summary { get; private set; }
+        public bool Warn { get; private set; }
+        public string LocalTime { get { return new DateTime(Id,DateTimeKind.Utc).ToLocalTime().ToString("g"); } }
+
+        internal static DisconnectReport Read(Dictionary<string,object> data) {
+            long id,seconds;
+            if(data==null || !Int64.TryParse(TrayHealth.Text(data,"Id"),out id) || id<=0 || id>DateTime.MaxValue.Ticks ||
+               !Int64.TryParse(TrayHealth.Text(data,"Seconds"),out seconds) || seconds<0) return null;
+            switch(TrayHealth.Text(data,"Outcome")) {
+                case "Pending": return new DisconnectReport{Id=id,Summary="Checking physical display"};
+                case "Restored": return new DisconnectReport{Id=id,Summary="Physical display restored after "+seconds+" s"};
+                case "Late": return new DisconnectReport{Id=id,Summary="Physical display restored late, after "+seconds+" s",Warn=true};
+                case "Failed": return new DisconnectReport{Id=id,Summary="Windows had not returned to the physical monitor alone after "+seconds+" s",Warn=true};
+                case "Unverified": return new DisconnectReport{Id=id,Summary="Restoration unverified"};
+                default: return null;
+            }
+        }
+    }
+
     public enum PrivacyObservation { Unknown, PhysicalActive, VerifiedPrivate, Disconnected }
 
     public sealed class PrivacyIncident
@@ -59,6 +81,7 @@ namespace SunshineDisplay
                 return;
             }
             if(clients<=0 || phase!="Streaming") return;
+            view.StreamConnected=true;
             var active=Records(data,"DisplayPaths").Where(p=>Object.Equals(TrayHealth.Get(p,"Active"),true)).ToArray();
             var expectedPhysical=TrayHealth.Text(data,"ExpectedPhysicalMonitor");
             var physical=active.Where(p=>Object.Equals(TrayHealth.Get(p,"PhysicalConnector"),true) ||

@@ -23,12 +23,23 @@ static class NativeTests
             {"DisplayPaths",new[]{panel,vdd}}};
         Func<HealthView> read=()=>TrayHealth.Evaluate(data,now,"boot");
         var active=read();
+        var history=new Dictionary<string,object>{{"Id",now.AddMinutes(-2).UtcTicks},{"Outcome","Late"},{"Seconds",34}};
+        data["LastDisconnect"]=history;
+        Check(read().StreamConnected && read().LastDisconnect.Warn && read().LastDisconnect.Summary.Contains("34 s"),"Late restore reports the duration on a trusted connection");
+        foreach(var outcome in new[]{"Pending","Restored","Unverified"}) {
+            history["Outcome"]=outcome;Check(!read().LastDisconnect.Warn,"Quiet disconnect outcome "+outcome);
+        }
+        history["Outcome"]="Failed";
+        Check(read().LastDisconnect.Warn && read().State=="Fault","Historical failure coexists with a live privacy alert");
+        Check(!TrayHealth.Evaluate(data,now.AddMinutes(1),"boot").StreamConnected,"Stale samples cannot deliver a history popup");
+        history["Id"]=-1;Check(read().LastDisconnect==null,"Malformed disconnect record ignored");
+        history["Id"]=now.AddMinutes(-2).UtcTicks;
         Check(active.State=="Fault" && active.Privacy==PrivacyObservation.PhysicalActive && active.PhysicalOutput=="Test panel","Alert during connection grace before capture succeeds");
         health["Status"]="Degraded";health["Reason"]="CaptureGeometryMatchesDifferentMonitor";
         Check(read().Privacy==PrivacyObservation.PhysicalActive,"Alert even when Sunshine captures the wrong output");
         Check(TrayHealth.Evaluate(data,now.AddMinutes(1),"boot").Privacy==PrivacyObservation.Unknown,"Stale heartbeat cannot trigger a popup");
         data["LogEpoch"]=now.AddMinutes(-1).UtcDateTime;
-        Check(read().Privacy==PrivacyObservation.Unknown,"Old Sunshine client count cannot trigger a popup");
+        Check(read().Privacy==PrivacyObservation.Unknown && !read().StreamConnected,"Old Sunshine client count cannot trigger a popup");
         data["LogEpoch"]=now.UtcDateTime;
         var incident=new PrivacyIncident(false);
         Check(incident.Observe(active.Privacy) && incident.Pending,"Confirmed exposure opens the warning and sounds once");
@@ -45,7 +56,7 @@ static class NativeTests
         incident.Observe(recovered.Privacy);
         Check(incident.Pending,"Recovery before acknowledgment keeps the warning available");
         data["Clients"]=0;health["Phase"]="Idle";panel["Active"]=true;
-        Check(read().Privacy==PrivacyObservation.Disconnected,"Physical monitor while disconnected does not trigger an alert");
+        Check(read().Privacy==PrivacyObservation.Disconnected && !read().StreamConnected,"Physical monitor while disconnected does not trigger an alert");
         incident.Observe(read().Privacy);
         Check(incident.Pending && new PrivacyIncident(true).Pending,"Unacknowledged warning survives disconnect and can be reopened at startup");
         incident.Acknowledge();

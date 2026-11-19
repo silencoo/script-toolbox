@@ -22,6 +22,14 @@ updates and stays available until acknowledged. An empty per-user marker in
 pending warning across tray restarts. Delivery depends on the host desktop
 being captured and visible in the client.
 
+**Last disconnect** in the tray menu shows what Windows did after the last client
+left. If an unexpected output was still active after the restore grace period,
+the next connection shows a popup. If the physical monitor subsequently became
+the sole primary output before reconnecting, the popup reports how many seconds
+elapsed before the monitor observed that recovery. On-time restores and
+unverified results stay quiet. A current privacy warning takes priority.
+Acknowledgment is remembered for that disconnect across tray restarts.
+
 Physical ready means the monitor verified the approved Windows layout; it does not
 mean the panel shows a picture. Capture geometry is correlated log evidence, not a
 direct capture GUID or frame observation. Legacy schema, invalid JSON, an old boot,

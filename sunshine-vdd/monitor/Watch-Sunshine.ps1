@@ -53,6 +53,16 @@ $candidate=''; $candidateAt=Get-Date; $lastAlert=@{}; $iteration=0; $errorCount=
 $monitorStarted=Get-Date; $lastWarning=$null
 $guard=Initialize-Guard -Root $Root -Settings $settings
 $bootKey=$guard.BootKey
+$disconnectPath=Join-Path $data 'last-disconnect.json'
+$disconnectResult=$null
+$disconnectDirty=$false
+if(Test-Path -LiteralPath $disconnectPath){
+    try {
+        $saved=Get-Content -LiteralPath $disconnectPath -Raw | ConvertFrom-Json
+        if($saved.Id -gt 0 -and $saved.Id -le [datetime]::MaxValue.Ticks -and $saved.Seconds -ge 0 -and
+            $saved.Closed -is [bool] -and $saved.Outcome -in @('Pending','Failed','Restored','Late','Unverified')){$disconnectResult=$saved}
+    } catch { Write-Warning 'Last disconnect history could not be read.' }
+}
 $deviceEvidence=$null; $deviceEvidenceAt=[datetime]::MinValue
 function Get-MonitorProcesses {
     $items=@(Get-Process -Name sunshine -ErrorAction SilentlyContinue | Select-Object Id,StartTime)
@@ -212,6 +222,20 @@ try {
             $processes=@(Get-MonitorProcesses)
             Read-NewLog $processes
             $snapshot=Get-MonitorSnapshot $processes $now
+            if($settings.PSObject.Properties.Name -contains 'PrivacyMode' -and $settings.PrivacyMode){
+                $result=Get-DisconnectResult $disconnectResult $state $snapshot $monitorStarted $now
+                if($result -and (!$disconnectResult -or $result.Id -ne $disconnectResult.Id -or $result.Outcome -ne $disconnectResult.Outcome -or $result.Closed -ne $disconnectResult.Closed)){
+                    $disconnectResult=$result
+                    $disconnectDirty=$true
+                }
+                if($disconnectDirty){
+                    try {
+                        Write-DiagnosticJson -Path $disconnectPath -Value $disconnectResult
+                        $disconnectDirty=$false
+                    } catch { Write-Warning 'Last disconnect history could not be saved.' }
+                }
+                $snapshot | Add-Member LastDisconnect $result
+            }
             $observation=Invoke-GuardTick $guard $snapshot $state $settings {Read-GuardFresh}
             $snapshot | Add-Member Protection ([pscustomobject]@{Mode=$guard.Policy.Mode;Latched=$guard.Runtime.Latched;Notice=$guard.Runtime.Notice;Attempts=$guard.Runtime.Attempts;Decision=$guard.LastDecision;BaselineAvailable=$observation.BaselineAvailable})
             $health=$snapshot.Health; $displays=$snapshot.Displays; $config=$snapshot.Config
