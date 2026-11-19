@@ -8,25 +8,41 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
+[assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
+
 namespace SunshineDisplay
 {
     internal sealed class TrayContext : ApplicationContext
     {
         readonly NotifyIcon icon=new NotifyIcon();
+        readonly Dictionary<string,Icon> stateIcons=new Dictionary<string,Icon> {
+            {"Physical ready",LoadIcon("ready")},
+            {"Privacy streaming",LoadIcon("streaming")},
+            {"Fault",LoadIcon("fault")},
+            {"Checking or Unknown",LoadIcon("checking")}
+        };
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();
         readonly string root;
         readonly string boot;
         readonly ToolStripMenuItem stateItem=new ToolStripMenuItem("Checking or Unknown"){Enabled=false};
+        readonly ToolStripMenuItem guardItem=new ToolStripMenuItem("Guard needs review"){Visible=false};
         Form details; TextBox text;string report="Waiting for monitor";
         internal TrayContext(string monitorRoot) {
             root=Path.GetFullPath(monitorRoot);boot=ConsoleSession.BootKey();
             var menu=new ContextMenuStrip();menu.Items.Add(stateItem);
+            guardItem.Click+=(s,e)=>ShowDetails();
+            menu.Items.Add(guardItem);
             menu.Items.Add("Display and recovery details",null,(s,e)=>ShowDetails());
             menu.Items.Add("Open monitor logs",null,(s,e)=>OpenFolder(Path.Combine(root,"data")));
             menu.Items.Add("Open boot recovery logs",null,(s,e)=>OpenFolder(Paths.Data));
             menu.Items.Add(new ToolStripSeparator());menu.Items.Add("Exit tray",null,(s,e)=>ExitThread());
-            icon.ContextMenuStrip=menu;icon.Icon=SystemIcons.Question;icon.Text="Sunshine: Checking or Unknown";icon.Visible=true;
+            icon.ContextMenuStrip=menu;icon.Icon=stateIcons["Checking or Unknown"];icon.Text="Sunshine: Checking or Unknown";icon.Visible=true;
             icon.DoubleClick+=(s,e)=>ShowDetails();timer.Interval=2000;timer.Tick+=(s,e)=>Refresh();Refresh();timer.Start();
+        }
+        static Icon LoadIcon(string name) {
+            using(var stream=typeof(TrayContext).Assembly.GetManifestResourceStream("SunshineDisplay."+name+".ico"))
+            using(var source=new Icon(stream,SystemInformation.SmallIconSize))
+                return (Icon)source.Clone();
         }
         static void OpenFolder(string path) {try{if(Directory.Exists(path))Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe"),"\""+path+"\""){UseShellExecute=true});else MessageBox.Show("Log directory is not installed: "+path);}catch(Exception e){MessageBox.Show(e.Message);}}
         void Refresh() {
@@ -35,6 +51,7 @@ namespace SunshineDisplay
                 var data=Json.Read<Dictionary<string,object>>(Path.Combine(root,"data","status.json"));
                 view=TrayHealth.Evaluate(data,DateTimeOffset.UtcNow,boot);
                 b.AppendLine("DISPLAY / STREAM: "+view.State).AppendLine(view.Detail).AppendLine("Heartbeat age: "+view.AgeSeconds.ToString("0.0")+" seconds");
+                if(view.GuardNotice!=null) b.AppendLine("Guard needs review").AppendLine(view.GuardNotice);
                 b.AppendLine("Observed: "+TrayHealth.Text(data,"At")).AppendLine("Boot: "+TrayHealth.Text(data,"BootKey"));
                 foreach(var key in new[]{"ExpectedMonitor","ExpectedPhysicalMonitor","Clients","LogEpoch","Capture","Health","Config","Devices","DisplayTargets","DisplayPaths","Displays","MonitorIdentities","Protection","LastWarnings"}) {
                     b.AppendLine().AppendLine(key+":");Format(b,TrayHealth.Get(data,key),0);
@@ -58,7 +75,10 @@ namespace SunshineDisplay
             b.AppendLine("Read-only tray. No topology changes, service commands or recovery requests are exposed.");
             b.AppendLine("Monitor logs: "+Path.Combine(root,"data")).AppendLine("Boot logs: "+Paths.Data);
             report=b.ToString();stateItem.Text=view.State;icon.Text="Sunshine: "+view.State;
-            icon.Icon=view.State=="Fault"?SystemIcons.Error:view.State=="Privacy streaming"?SystemIcons.Shield:view.State=="Physical ready"?SystemIcons.Information:SystemIcons.Question;
+            guardItem.Available=view.GuardNotice!=null;
+            Icon stateIcon;
+            if(!stateIcons.TryGetValue(view.State,out stateIcon)) stateIcon=stateIcons["Checking or Unknown"];
+            if(icon.Icon!=stateIcon) icon.Icon=stateIcon;
             if(details!=null && !details.IsDisposed && text!=null) {int selection=text.SelectionStart;text.Text=report;text.SelectionStart=Math.Min(selection,text.TextLength);}
         }
         static void Format(StringBuilder b,object value,int depth) {
@@ -75,19 +95,25 @@ namespace SunshineDisplay
             text=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Font=new Font("Consolas",10),Text=report};
             details.Controls.Add(text);details.Show();
         }
-        protected override void ExitThreadCore() {timer.Stop();timer.Dispose();icon.Visible=false;icon.Dispose();if(details!=null)details.Dispose();base.ExitThreadCore();}
+        protected override void ExitThreadCore() {
+            timer.Stop();timer.Dispose();icon.Visible=false;icon.Dispose();
+            foreach(var stateIcon in stateIcons.Values) stateIcon.Dispose();
+            if(details!=null)details.Dispose();base.ExitThreadCore();
+        }
     }
     internal static class TrayProgram
     {
         [STAThread] static void Main(string[] args) {
             try {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
                 bool details=Array.IndexOf(args,"--details")>=0;
                 var remaining=new System.Collections.Generic.List<string>(args);remaining.Remove("--details");
                 if(remaining.Count!=0 && !(remaining.Count==2 && remaining[0]=="--monitor-root")) throw new ArgumentException("Only --monitor-root <local directory> and --details are supported");
                 string root=remaining.Count==2?remaining[1]:Path.Combine(Paths.Data,"monitor");
                 if(!Path.IsPathRooted(root) || root.StartsWith(@"\\")) throw new ArgumentException("Monitor status must be a local absolute path");
                 bool created;using(var mutex=new Mutex(true,@"Local\SunshineDisplayHealthTray",out created)) {
-                    if(!created)return;Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);var context=new TrayContext(root);if(details)context.ShowDetails();Application.Run(context);
+                    if(!created)return;var context=new TrayContext(root);if(details)context.ShowDetails();Application.Run(context);
                 }
             } catch(Exception e) {MessageBox.Show(e.Message,"Sunshine display health",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         }

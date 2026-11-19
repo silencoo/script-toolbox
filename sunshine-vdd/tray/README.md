@@ -5,7 +5,12 @@ It reads the existing monitor's `data/status.json` and the boot service's separa
 status. It cannot change topology, stop Sunshine, clear latches, or trigger recovery.
 Boot recovery does not depend on this process or a logged-in user.
 
-States: **Physical ready**, **Privacy streaming**, **Checking or Unknown**, **Fault**.
+The orange sun carries a check mark for **Physical ready**, a play triangle for
+**Privacy streaming**, three dots for **Checking or Unknown**, and an exclamation
+mark for **Fault**. Hover over the icon for the state name.
+A saved guard warning appears as **Guard needs review** in the right-click menu.
+Select it to read the notice. The icon returns to the verified streaming or idle
+state as soon as the monitor reports that the display has recovered.
 Physical ready means the monitor verified the approved Windows layout; it does not
 mean the panel shows a picture. Capture geometry is correlated log evidence, not a
 direct capture GUID or frame observation. Legacy schema, invalid JSON, an old boot,

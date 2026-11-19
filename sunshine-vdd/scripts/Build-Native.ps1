@@ -15,17 +15,24 @@ $match=[regex]::Match($module,"(?s)\`$source = @'\r?\n(.*?)\r?\n'@")
 if(!$match.Success){throw 'Could not extract the shared native display implementation.'}
 $generated=Join-Path $out 'DisplayTopology.generated.cs'
 [IO.File]::WriteAllText($generated,$match.Groups[1].Value,[Text.UTF8Encoding]::new($false))
-function Compile([string]$Name,[string]$Target,[string[]]$Sources,[string[]]$References) {
+function Compile([string]$Name,[string]$Target,[string[]]$Sources,[string[]]$References,[string[]]$ExtraOptions) {
     $options=@('/nologo','/optimize+','/platform:x64','/warn:4',('/target:'+$Target),('/out:'+(Join-Path $out $Name)))
     foreach($reference in $References){$options+=('/reference:'+$reference)}
-    & $compiler @options @Sources
+    & $compiler @options @ExtraOptions @Sources
     if($LASTEXITCODE -ne 0){throw "Compilation failed: $Name"}
 }
 Compile 'SunshineDisplay.Native.dll' library @($generated,(Join-Path $PSScriptRoot 'DisplayRecovery.cs')) @((Join-Path $framework 'System.Core.dll'))
 Compile 'SunshineDisplay.Core.dll' library @((Join-Path $root 'native/Common.cs'),(Join-Path $root 'native/BootEpoch.cs'),(Join-Path $root 'native/RecoveryEngine.cs'),(Join-Path $root 'boot-recovery/ConsoleSession.cs')) @((Join-Path $framework 'System.Web.Extensions.dll'),(Join-Path $framework 'System.Core.dll'),(Join-Path $framework 'System.Management.dll'))
 $common=@((Join-Path $out 'SunshineDisplay.Core.dll'),(Join-Path $out 'SunshineDisplay.Native.dll'),(Join-Path $framework 'System.Web.Extensions.dll'),(Join-Path $framework 'System.Core.dll'))
 Compile 'SunshineDisplay.Recovery.exe' exe @((Join-Path $root 'boot-recovery/Recovery.cs')) ($common+@((Join-Path $framework 'System.ServiceProcess.dll')))
-Compile 'SunshineDisplay.Tray.exe' winexe @((Join-Path $root 'tray/Tray.cs')) ($common+@((Join-Path $framework 'System.Windows.Forms.dll'),(Join-Path $framework 'System.Drawing.dll')))
+$trayIcons=Join-Path $root 'tray/icons'
+$trayOptions=@('/win32icon:'+(Join-Path $trayIcons 'ready.ico'))
+$trayOptions+=('/win32manifest:'+(Join-Path $root 'tray/app.manifest'))
+foreach($state in 'ready','streaming','checking','fault') {
+    $trayOptions+=('/resource:'+(Join-Path $trayIcons "$state.ico")+",SunshineDisplay.$state.ico")
+}
+Compile 'SunshineDisplay.Tray.exe' winexe @((Join-Path $root 'tray/Tray.cs')) ($common+@((Join-Path $framework 'System.Windows.Forms.dll'),(Join-Path $framework 'System.Drawing.dll'))) $trayOptions
+Copy-Item -LiteralPath (Join-Path $root 'tray/SunshineDisplay.Tray.exe.config') -Destination $out -Force
 if($Test){
     Compile 'SunshineDisplay.Tests.exe' exe @((Join-Path $root 'tests/Native.Tests.cs')) $common
     & (Join-Path $out 'SunshineDisplay.Tests.exe')

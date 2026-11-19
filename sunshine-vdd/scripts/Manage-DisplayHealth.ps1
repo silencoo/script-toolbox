@@ -17,8 +17,10 @@ if(!$BuildDirectory){$BuildDirectory=Join-Path $PSScriptRoot '../native/bin'}
 Import-Module (Join-Path $PSScriptRoot '../boot-recovery/BootRecovery.Core.psm1') -Force
 $plan=Get-BootRecoveryInstallPlan -Operation $Operation -Component $Component -StartupCoordinationApproved $ApproveSunshineStartupDependency.IsPresent
 $install=$plan.BinaryDirectory;$data=$plan.DataDirectory;$serviceName=$plan.ServiceName;$taskName=$plan.TrayTask
-$files=@('SunshineDisplay.Core.dll','SunshineDisplay.Native.dll','SunshineDisplay.Recovery.exe','SunshineDisplay.Tray.exe','recovery.json','installation.json')
-if($Component -eq 'Tray'){$files=@('SunshineDisplay.Core.dll','SunshineDisplay.Native.dll','SunshineDisplay.Tray.exe','installation.json')}
+$runtimeFiles=@('SunshineDisplay.Core.dll','SunshineDisplay.Native.dll','SunshineDisplay.Tray.exe','SunshineDisplay.Tray.exe.config')
+if($Component -ne 'Tray'){$runtimeFiles+='SunshineDisplay.Recovery.exe'}
+$files=$runtimeFiles+@('installation.json')
+if($Component -ne 'Tray'){$files+='recovery.json'}
 $config=$null
 if($Operation -eq 'Install' -and $Component -ne 'Tray'){
     if($ConfigurationPath){
@@ -79,7 +81,7 @@ Assert-NoReparse $install;Assert-NoReparse $data
 Assert-OwnedInstallation
 # Never follow an existing child junction while backing up privileged files.
 foreach($base in @($install,$data)){if(Test-Path -LiteralPath $base){foreach($item in Get-ChildItem -LiteralPath $base -Recurse -Force){Assert-NoReparse $item.FullName}}}
-if($Operation -eq 'Install'){foreach($file in $files|Where-Object {$_ -match '\.(exe|dll)$'}){if(!(Test-Path -LiteralPath (Join-Path $BuildDirectory $file))){throw "Build first; missing $file"}}}
+if($Operation -eq 'Install'){foreach($file in $runtimeFiles){if(!(Test-Path -LiteralPath (Join-Path $BuildDirectory $file))){throw "Build first; missing $file"}}}
 [void](New-Item -ItemType Directory -Path $install,$data -Force);Protect-Path $install;Protect-Path $data
 $backupRoot=Join-Path $data 'backups';[void](New-Item -ItemType Directory -Path $backupRoot -Force);Protect-Path $backupRoot
 $backup=Join-Path $backupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'-'+[guid]::NewGuid().ToString('N'))
@@ -135,8 +137,15 @@ try {
         # Refuse to force-stop dependent Sunshine. If the installed recovery service cannot stop, abort the upgrade.
         if($oldService -and $oldService.State -eq 'Start Pending'){throw 'Recovery is in progress; wait before upgrading'}
         if($oldService -and $oldService.State -ne 'Stopped'){Set-Dependencies @(Get-Dependencies|Where-Object {$_ -ne $serviceName});Stop-Service $serviceName -ErrorAction Stop}
-        if($oldTask){Stop-ScheduledTask -TaskName $taskName}
-        foreach($file in $files|Where-Object {$_ -match '\.(exe|dll)$'}){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $install $file) -Force;Protect-Path (Join-Path $install $file)}
+        if($oldTask){
+            $trayPath=Join-Path $install 'SunshineDisplay.Tray.exe'
+            $runningTray=@(Get-Process -Name 'SunshineDisplay.Tray' -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq $trayPath})
+            Stop-ScheduledTask -TaskName $taskName
+            foreach($process in $runningTray){
+                if(!$process.WaitForExit(10000)){throw 'The installed tray is still running; cannot replace its files.'}
+            }
+        }
+        foreach($file in $runtimeFiles){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $install $file) -Force;Protect-Path (Join-Path $install $file)}
         if($Component -ne 'Tray'){
             if($hiberboot -ne 0){Set-ItemProperty -LiteralPath $powerKey -Name HiberbootEnabled -Type DWord -Value 0}
             $regPath='HKLM:\SOFTWARE\SunshineDisplayHealth'
@@ -164,7 +173,7 @@ try {
         if($Component -eq 'Tray' -and $oldService){Set-Dependencies $before.SunshineDependencies}
         $originalHiberboot=$hiberboot
         if($existing -contains 'installation.json'){$originalHiberboot=(Get-Content -LiteralPath (Join-Path $backup 'installation.json') -Raw|ConvertFrom-Json).OriginalHiberbootEnabled}
-        [pscustomobject]@{Product='SunshineDisplayHealth';OriginalHiberbootEnabled=$originalHiberboot;InstalledAtUtc=[datetime]::UtcNow.ToString('o');Backup=$backup;Hashes=@(Get-ChildItem -LiteralPath $install -File|Where-Object Extension -in @('.exe','.dll')|Get-FileHash)}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $install 'installation.json') -Encoding UTF8
+        [pscustomobject]@{Product='SunshineDisplayHealth';OriginalHiberbootEnabled=$originalHiberboot;InstalledAtUtc=[datetime]::UtcNow.ToString('o');Backup=$backup;Hashes=@(foreach($file in $runtimeFiles){Get-FileHash -LiteralPath (Join-Path $install $file)})}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $install 'installation.json') -Encoding UTF8
         Protect-Path (Join-Path $install 'installation.json')
     }
 } catch {

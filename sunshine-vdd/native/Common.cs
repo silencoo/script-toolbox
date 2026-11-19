@@ -91,6 +91,7 @@ namespace SunshineDisplay
         public string State;
         public string Detail;
         public double AgeSeconds;
+        public string GuardNotice;
     }
     public static class TrayHealth
     {
@@ -105,12 +106,18 @@ namespace SunshineDisplay
                 return new HealthView{State="Checking or Unknown",Detail="Monitor heartbeat stale, from another boot, or legacy schema; inspect monitor task/logs",AgeSeconds=age};
             var h=Get(d,"Health") as Dictionary<string,object>; string status=Text(h,"Status"),reason=Text(h,"Reason");
             var guard=Get(d,"Protection") as Dictionary<string,object>;
-            if(Convert.ToString(Get(guard,"Latched"))=="True" || status=="Degraded" || status=="Fault")
-                return new HealthView{State="Fault",Detail=reason+"; inspect capture target, paths and protection notice",AgeSeconds=age};
-            string state="Checking or Unknown";
-            if(status=="Healthy" && reason=="CaptureGeometryMatchesExpectedMonitor" && Convert.ToInt32(Get(d,"Clients"))>0) state="Privacy streaming";
-            if(status=="Idle" && reason=="PhysicalOnlyIdleTopologyVerified" && Convert.ToInt32(Get(d,"Clients"))==0) state="Physical ready";
-            return new HealthView{State=state,Detail=reason+". Windows evidence does not prove a visible picture.",AgeSeconds=age};
+            var view=new HealthView{State="Checking or Unknown",Detail=reason+". Windows evidence does not prove a visible picture.",AgeSeconds=age};
+            if(String.Equals(Text(guard,"Latched"),"True",StringComparison.OrdinalIgnoreCase)) {
+                var notice=Text(guard,"Notice");
+                view.GuardNotice=String.IsNullOrWhiteSpace(notice) ? "Review the saved protection state in the monitor logs." : notice;
+            }
+            if(status=="Degraded" || status=="Fault") {
+                view.State="Fault";
+                view.Detail=reason+". Inspect the capture target and display paths.";
+            }
+            else if(status=="Healthy" && reason=="CaptureGeometryMatchesExpectedMonitor" && Convert.ToInt32(Get(d,"Clients"))>0) view.State="Privacy streaming";
+            else if(status=="Idle" && reason=="PhysicalOnlyIdleTopologyVerified" && Convert.ToInt32(Get(d,"Clients"))==0) view.State="Physical ready";
+            return view;
         }
     }
     public sealed class Journal
