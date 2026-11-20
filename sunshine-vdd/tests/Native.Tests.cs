@@ -26,7 +26,7 @@ static class NativeTests
         var history=new Dictionary<string,object>{{"Id",now.AddMinutes(-2).UtcTicks},{"Outcome","Late"},{"Seconds",34}};
         data["LastDisconnect"]=history;
         Check(read().StreamConnected && read().LastDisconnect.Warn && read().LastDisconnect.Summary.Contains("34 s"),"Late restore reports the duration on a trusted connection");
-        foreach(var outcome in new[]{"Pending","Restored","Unverified"}) {
+        foreach(var outcome in new[]{"Pending","Restored","Unverified","WaitingForMonitor"}) {
             history["Outcome"]=outcome;Check(!read().LastDisconnect.Warn,"Quiet disconnect outcome "+outcome);
         }
         history["Outcome"]="Failed";
@@ -56,6 +56,8 @@ static class NativeTests
         incident.Observe(recovered.Privacy);
         Check(incident.Pending,"Recovery before acknowledgment keeps the warning available");
         data["Clients"]=0;health["Phase"]="Idle";panel["Active"]=true;
+        health["Status"]="Starting";health["Reason"]="WaitingForPhysicalMonitor";
+        Check(read().State=="Waiting for physical monitor" && !read().StreamConnected,"Missing idle panel uses the quiet tray state");
         Check(read().Privacy==PrivacyObservation.Disconnected && !read().StreamConnected,"Physical monitor while disconnected does not trigger an alert");
         incident.Observe(read().Privacy);
         Check(incident.Pending && new PrivacyIncident(true).Pending,"Unacknowledged warning survives disconnect and can be reopened at startup");

@@ -18,6 +18,7 @@ namespace SunshineDisplay
                !Int64.TryParse(TrayHealth.Text(data,"Seconds"),out seconds) || seconds<0) return null;
             switch(TrayHealth.Text(data,"Outcome")) {
                 case "Pending": return new DisconnectReport{Id=id,Summary="Checking physical display"};
+                case "WaitingForMonitor": return new DisconnectReport{Id=id,Summary="Waiting for physical monitor"};
                 case "Restored": return new DisconnectReport{Id=id,Summary="Physical display restored after "+seconds+" s"};
                 case "Late": return new DisconnectReport{Id=id,Summary="Physical display restored late, after "+seconds+" s",Warn=true};
                 case "Failed": return new DisconnectReport{Id=id,Summary="Windows had not returned to the physical monitor alone after "+seconds+" s",Warn=true};

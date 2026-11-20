@@ -56,11 +56,12 @@ $bootKey=$guard.BootKey
 $disconnectPath=Join-Path $data 'last-disconnect.json'
 $disconnectResult=$null
 $disconnectDirty=$false
+$physicalAvailability=$null
 if(Test-Path -LiteralPath $disconnectPath){
     try {
         $saved=Get-Content -LiteralPath $disconnectPath -Raw | ConvertFrom-Json
         if($saved.Id -gt 0 -and $saved.Id -le [datetime]::MaxValue.Ticks -and $saved.Seconds -ge 0 -and
-            $saved.Closed -is [bool] -and $saved.Outcome -in @('Pending','Failed','Restored','Late','Unverified')){$disconnectResult=$saved}
+            $saved.Closed -is [bool] -and $saved.Outcome -in @('Pending','WaitingForMonitor','Failed','Restored','Late','Unverified')){$disconnectResult=$saved}
     } catch { Write-Warning 'Last disconnect history could not be read.' }
 }
 $deviceEvidence=$null; $deviceEvidenceAt=[datetime]::MinValue
@@ -206,6 +207,11 @@ function Get-MonitorSnapshot {
             $snapshot | Add-Member DisplayPaths $paths
             $snapshot | Add-Member DisplayTargets @(foreach($adapter in $allDisplays){foreach($identity in [MonitorIdentity]::Get($adapter.DeviceName)){[pscustomobject]@{InstanceId=$identity.InstanceId;Name=$identity.Description;DisplayName=$adapter.DeviceName;Attached=$adapter.Attached;Primary=$adapter.Primary;IsMttVdd=$adapter.IsMttVdd;IsOtherVirtual=$adapter.IsOtherVirtual}}})
             $snapshot | Add-Member VisiblePicture 'Unverified; Windows enumeration cannot prove a panel shows an image'
+            if($privacyMode){
+                $script:physicalAvailability=Get-PhysicalMonitorAvailability $script:physicalAvailability $snapshot $now
+                $snapshot | Add-Member PhysicalAvailability $script:physicalAvailability
+                Update-IdleDisplayHealth $snapshot $now
+            }
     return $snapshot
 }
 function Read-GuardFresh {

@@ -111,6 +111,51 @@ function Get-PrivacyCaptureHealth {
 }
 Export-ModuleMember -Function New-CaptureState, Update-CaptureState, Get-CaptureHealth, Get-PrivacyCaptureHealth
 
+function Get-PhysicalMonitorAvailability($Previous,$Snapshot,[datetime]$Now) {
+    $physical=$Snapshot.ExpectedPhysicalMonitor
+    $virtual=$Snapshot.ExpectedMonitor
+    $active=@($Snapshot.DisplayPaths | Where-Object Active)
+    $onlyVirtual=$active.Count -eq 1 -and $virtual -and $active[0].InstanceId -ieq $virtual -and $active[0].PhysicalConnector -eq $false
+    $status='Unknown'
+    if($physical -and @($active | Where-Object {$_.PhysicalConnector -and $_.InstanceId -ieq $physical}).Count){
+        $status='Present'
+    } elseif($physical -and $Snapshot.Devices.At){
+        $age=($Now-([datetimeoffset]$Snapshot.Devices.At).LocalDateTime).TotalSeconds
+        $items=@($Snapshot.Devices.Items)
+        $targets=@($Snapshot.DisplayTargets)
+        if($age -ge 0 -and $age -le 15 -and $items.Count -and $targets.Count -and
+            !@($items | Where-Object {!$_.InstanceId -or $_.Present -isnot [bool]}).Count -and
+            !@($targets | Where-Object {!$_.InstanceId}).Count){
+            $presentIds=@($items | Where-Object Present | ForEach-Object InstanceId)
+            $targetIds=@($targets | ForEach-Object InstanceId)
+            if($physical -in $presentIds -and $physical -in $targetIds){$status='Present'}
+            elseif($onlyVirtual -and $virtual -in $presentIds -and $virtual -in $targetIds -and
+                   $physical -notin $presentIds -and $physical -notin $targetIds){$status='Missing'}
+        }
+    }
+    $since=if($Previous -and $Previous.Status -eq $status -and $Previous.Since -le $Now){$Previous.Since}else{$Now}
+    [pscustomobject]@{Status=$status;Since=$since;OnlyVirtual=$onlyVirtual}
+}
+
+function Get-RevertGraceSeconds($Config) {
+    $delayMs=0L
+    [void][long]::TryParse([string]$Config.dd_config_revert_delay,[ref]$delayMs)
+    [math]::Max(15.0,5+($delayMs/1000))
+}
+
+function Update-IdleDisplayHealth($Snapshot,[datetime]$Now) {
+    $health=$Snapshot.Health
+    if($health.Phase -ne 'Idle' -or $health.Reason -notin @('IdlePhysicalDisplayNotRestored','UnexpectedIdleDisplayTopology','DisplayRevertGracePeriod')){return}
+    $availability=$Snapshot.PhysicalAvailability
+    if($availability.Status -eq 'Missing'){
+        $health.Status='Starting';$health.Reason='WaitingForPhysicalMonitor'
+    } elseif($availability.OnlyVirtual -and $availability.Status -eq 'Unknown'){
+        $health.Status='Starting';$health.Reason='PhysicalMonitorPresenceUnverified'
+    } elseif($availability.Status -eq 'Present' -and ($Now-$availability.Since).TotalSeconds -lt (Get-RevertGraceSeconds $Snapshot.Config)){
+        $health.Status='Starting';$health.Reason='DisplayRevertGracePeriod'
+    }
+}
+
 # Return the same record until evidence changes its outcome. The caller persists transitions.
 function Get-DisconnectResult($Previous,$State,$Snapshot,[datetime]$Started,[datetime]$Now) {
     if(!$State.Epoch -or @($Snapshot.SunshineProcesses).Count -ne 1){return $Previous}
@@ -150,15 +195,22 @@ function Get-DisconnectResult($Previous,$State,$Snapshot,[datetime]$Started,[dat
         $outcome=if($record.Outcome -eq 'Failed'){'Late'}else{'Restored'}
         return [pscustomobject]@{Id=$id;Outcome=$outcome;Seconds=[long][math]::Ceiling($seconds);Closed=$true}
     }
-    $grace=15.0
-    $delayMs=0L
-    if([long]::TryParse([string]$Snapshot.Config.dd_config_revert_delay,[ref]$delayMs)){
-        $grace=[math]::Max($grace,5+($delayMs/1000))
+    # Once a failure was observed with the panel present, keep that evidence until recovery.
+    if($record.Outcome -eq 'Failed'){return $record}
+    $availability=$Snapshot.PhysicalAvailability
+    if($availability.Status -eq 'Missing'){
+        if($record.Outcome -eq 'WaitingForMonitor'){return $record}
+        return [pscustomobject]@{Id=$id;Outcome='WaitingForMonitor';Seconds=0;Closed=$false}
     }
+    if($availability.Status -ne 'Present'){return $record}
+    if($record.Outcome -eq 'WaitingForMonitor'){
+        $record=[pscustomobject]@{Id=$id;Outcome='Pending';Seconds=0;Closed=$false}
+    }
+    $grace=Get-RevertGraceSeconds $Snapshot.Config
     $unexpectedPath=@($active | Where-Object {$_.InstanceId -ine $Snapshot.ExpectedPhysicalMonitor}).Count -gt 0
-    if($unexpectedPath -and $seconds -ge $grace -and $record.Outcome -eq 'Pending'){
+    if($unexpectedPath -and $seconds -ge $grace -and ($Now-$availability.Since).TotalSeconds -ge $grace){
         return [pscustomobject]@{Id=$id;Outcome='Failed';Seconds=[long][math]::Floor($seconds);Closed=$false}
     }
     return $record
 }
-Export-ModuleMember -Function Get-DisconnectResult
+Export-ModuleMember -Function Get-DisconnectResult,Get-PhysicalMonitorAvailability,Update-IdleDisplayHealth

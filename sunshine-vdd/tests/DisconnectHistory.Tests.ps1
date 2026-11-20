@@ -14,6 +14,7 @@ $start=$ended.AddMinutes(-1)
 $panel=[pscustomobject]@{InstanceId='panel';Active=$true;PhysicalConnector=$true;SourceName='display1'}
 $virtual=[pscustomobject]@{InstanceId='vdd';Active=$true;PhysicalConnector=$false;SourceName='display2'}
 $snapshot=[pscustomobject]@{ExpectedPhysicalMonitor='Panel';Config=@{};SunshineProcesses=@([pscustomobject]@{StartTime=$state.Epoch})
+    PhysicalAvailability=[pscustomobject]@{Status='Present';Since=$start}
     DisplayPaths=@($virtual);Displays=@([pscustomobject]@{Primary=$true;DeviceName='display1'})}
 function Sample($previous,[double]$seconds){Get-DisconnectResult $previous $state $snapshot $start ($ended.AddSeconds($seconds))}
 $pending=Sample $null 14.8

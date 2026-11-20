@@ -109,6 +109,10 @@ In privacy mode the monitor writes the most recent final-client disconnect to
 elapsed seconds and whether observation has finished. Restoration requires the
 expected physical monitor to be the only active display path and its source to
 match the primary desktop. The grace period is 15 seconds or the configured
-Sunshine revert delay plus five seconds, whichever is longer. A late result
+Sunshine revert delay plus five seconds, whichever is longer. When only the VDD
+is active and fresh PnP and native target inventories both omit the physical
+monitor, the live idle state and disconnect history show **Waiting for physical
+monitor**. Conflicting or incomplete presence evidence cannot establish a failed
+restore. The grace period starts again when the physical monitor returns. A late result
 requires an observed unexpected output after grace followed by verified recovery.
 Historical log events without an observed outcome are marked unverified.

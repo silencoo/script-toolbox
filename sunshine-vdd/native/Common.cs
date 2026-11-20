@@ -122,6 +122,10 @@ namespace SunshineDisplay
             }
             else if(status=="Healthy" && reason=="CaptureGeometryMatchesExpectedMonitor" && Convert.ToInt32(Get(d,"Clients"))>0) view.State="Privacy streaming";
             else if(status=="Idle" && reason=="PhysicalOnlyIdleTopologyVerified" && Convert.ToInt32(Get(d,"Clients"))==0) view.State="Physical ready";
+            else if(status=="Starting" && reason=="WaitingForPhysicalMonitor" && Text(h,"Phase")=="Idle" && Text(d,"Clients")=="0") {
+                view.State="Waiting for physical monitor";
+                view.Detail="Windows sees only the virtual display. Monitoring will continue when the physical monitor returns.";
+            }
             StreamingPrivacy.Evaluate(d,view);
             return view;
         }

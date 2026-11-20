@@ -23,7 +23,10 @@ pending warning across tray restarts. Delivery depends on the host desktop
 being captured and visible in the client.
 
 **Last disconnect** in the tray menu shows what Windows did after the last client
-left. If an unexpected output was still active after the restore grace period,
+left. When Windows sees only the VDD and the physical monitor is missing, the
+entry reads **Waiting for physical monitor** and stays quiet. If the panel returns
+while idle, it gets a fresh restore grace period. If the physical monitor is
+present and an unexpected output is still active after that period,
 the next connection shows a popup. If the physical monitor subsequently became
 the sole primary output before reconnecting, the popup reports how many seconds
 elapsed before the monitor observed that recovery. On-time restores and
