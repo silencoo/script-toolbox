@@ -211,6 +211,14 @@
 		"message": "yaddaşa qeyd edilmiş səhifəni baxarkən infobar göstərin",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "SingleFile-a yerli fayllara giriş icazəsi verilmədiyi üçün o, infobarı göstərə və fayl sistemindən açılmış səhifələri yaddaşa qeyd edə bilmir. Bunu düzəltmək üçün about:addons-dakı SingleFile səhifəsində \"İcazələr və məlumatlar\" bölməsindəki \"Kompüterinizdəki yerli fayllara giriş\" seçimini aktivləşdirin.",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "SingleFile-a fayl URL-lərinə giriş icazəsi verilmədiyi üçün o, infobarı göstərə və fayl sistemindən açılmış səhifələri yaddaşa qeyd edə bilmir. Bunu düzəltmək üçün brauzerin genişləndirmələr səhifəsindəki SingleFile səhifəsində \"Fayl URL-lərinə girişə icazə ver\" seçimini aktivləşdirin.",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
+	},
 	"optionInfobarTemplate": {
 		"message": "infobar məzmununun şablonu",
 		"description": "Options page label: 'template of the infobar content'"
@@ -462,6 +470,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "saxlama zamanı səhifəni kiçildin",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "saxlama zamanı emulyasiya edilmiş ekran ölçüsünü saxlayın",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "sürüşdürməni simulyasiya edin",
@@ -1098,12 +1110,12 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "İç elementlərin çıxarılmasını aktivləşdirin/deaktivləşdirin",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "Siçanın altındakı elementi silin (qırmızı çərçivə)",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "Xarici elementlərin çıxarılmasını aktivləşdirin/deaktivləşdirin",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "Siçanın altındakı elementi saxlayın və qalan hər şeyi silin (yaşıl çərçivə)",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "Son silinmiş elementi geri qaytarın",

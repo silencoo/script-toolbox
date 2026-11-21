@@ -211,6 +211,14 @@
 		"message": "查看已保存页面时显示信息栏",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "由于 SingleFile 未获准访问本地文件，它无法显示信息栏，也无法保存从文件系统打开的页面。要解决此问题，请在 about:addons 的 SingleFile 页面中，于“权限与数据”下启用“访问您计算机上的本地文件”。",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "由于 SingleFile 未获准访问文件网址，它无法显示信息栏，也无法保存从文件系统打开的页面。要解决此问题，请在浏览器扩展页面的 SingleFile 页面中启用“允许访问文件网址”。",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
+	},
 	"optionInfobarTemplate": {
 		"message": "信息栏内容模板",
 		"description": "Options page label: 'template of the infobar content'"
@@ -462,6 +470,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "保存期间缩小页面",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "保存期间保持模拟的屏幕尺寸",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "模拟滚动",
@@ -1098,12 +1110,12 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "启用/禁用 点击时删除内部文档元素",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "删除鼠标下的元素（红色轮廓）",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "启用/禁用 点击时删除外部文档元素",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "保留鼠标下的元素并删除其余所有内容（绿色轮廓）",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "撤销上次移除元素的操作",

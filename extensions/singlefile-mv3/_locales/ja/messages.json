@@ -211,6 +211,14 @@
 		"message": "保存したページを表示するときに情報バーを表示する",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
 	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "SingleFile はローカルファイルへのアクセスが許可されていないため、インフォバーを表示したり、ファイルシステムから開いたページを保存したりできません。これを解決するには、about:addons の SingleFile のページで「権限とデータ」にある「コンピューター上のローカルファイルへのアクセス」を有効にしてください。",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "SingleFile はファイル URL へのアクセスが許可されていないため、インフォバーを表示したり、ファイルシステムから開いたページを保存したりできません。これを解決するには、ブラウザーの拡張機能ページにある SingleFile のページで「ファイルの URL へのアクセスを許可する」を有効にしてください。",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
+	},
 	"optionInfobarTemplate": {
 		"message": "インフォバーのコンテンツのテンプレート",
 		"description": "Options page label: 'template of the infobar content'"
@@ -462,6 +470,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "保存中にページを縮小する",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "保存中にエミュレートした画面サイズを維持する",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "スクロールをシミュレートする",
@@ -1098,12 +1110,12 @@
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
 	"editorCutInnerPage": {
-		"message": "内部要素の削除を有効/無効にする",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "マウスの下の要素を削除する（赤い枠）",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "外部要素の削除を有効/無効にする",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "マウスの下の要素を残し、それ以外をすべて削除する（緑の枠）",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "最後に削除された要素を復元する",
