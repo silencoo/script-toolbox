@@ -37,6 +37,7 @@ const EXTERNAL_CAPTURE_PENDING_REQUEST_TIMEOUT = 300000;
 const HELP_ICON_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAABIUlEQVQ4y+2TsarCMBSGvxTBRdqiUZAWOrhJB9EXcPKFfCvfQYfulUKHDqXg4CYUJSioYO4mSDX3ttzt3n87fMlHTpIjlsulxpDZbEYYhgghSNOUOI5Ny2mZYBAELBYLer0eAJ7ncTweKYri4x7LJJRS0u12n7XrukgpjSc0CpVSXK/XZ32/31FKNW85z3PW6zXT6RSAJEnIsqy5UGvNZrNhu90CcDqd+C6tT6J+v//2Th+PB2VZ1hN2Oh3G4zGTyQTbtl/YbrdjtVpxu91+Ljyfz0RRhG3bzOfzF+Y4TvNXvlwuaK2pE4tfzr/wzwsty0IIURlL0998KxRCMBqN8H2/wlzXJQxD2u12vVkeDoeUZUkURRU+GAw4HA7s9/sK+wK6CWHasQ/S/wAAAABJRU5ErkJggg==";
 const HELP_PAGE_PATH_PREFIX = "/src/ui/pages/help";
 const HELP_PAGE_PATH_DEFAULT = "/src/ui/pages/help.html";
+const HELP_PAGE_LANGUAGES = ["zh_CN"];
 const SHARE_API_SUPPORTED = navigator.canShare && navigator.canShare({ files: [new File([new Blob([""], { type: "text/html" })], "test.html")] });
 let DEFAULT_PROFILE_NAME,
 	DISABLED_PROFILE_NAME,
@@ -116,6 +117,7 @@ const imageQualityLabel = document.getElementById("imageQualityLabel");
 const loadDeferredContentLabel = document.getElementById("loadDeferredContentLabel");
 const loadDeferredContentMaxIdleTimeLabel = document.getElementById("loadDeferredContentMaxIdleTimeLabel");
 const loadDeferredContentKeepZoomLevelLabel = document.getElementById("loadDeferredContentKeepZoomLevelLabel");
+const loadDeferredContentKeepEmulatedScreenSizeLabel = document.getElementById("loadDeferredContentKeepEmulatedScreenSizeLabel");
 const loadDeferredContentDispatchScrollEventLabel = document.getElementById("loadDeferredContentDispatchScrollEventLabel");
 const loadDeferredContentBeforeFramesLabel = document.getElementById("loadDeferredContentBeforeFramesLabel");
 const addMenuEntryLabel = document.getElementById("addMenuEntryLabel");
@@ -297,6 +299,7 @@ const customStylesheetInput = document.getElementById("customStylesheetInput");
 const loadDeferredContentInput = document.getElementById("loadDeferredContentInput");
 const loadDeferredContentMaxIdleTimeInput = document.getElementById("loadDeferredContentMaxIdleTimeInput");
 const loadDeferredContentKeepZoomLevelInput = document.getElementById("loadDeferredContentKeepZoomLevelInput");
+const loadDeferredContentKeepEmulatedScreenSizeInput = document.getElementById("loadDeferredContentKeepEmulatedScreenSizeInput");
 const loadDeferredContentDispatchScrollEventInput = document.getElementById("loadDeferredContentDispatchScrollEventInput");
 const loadDeferredContentBeforeFramesInput = document.getElementById("loadDeferredContentBeforeFramesInput");
 const contextMenuEnabledInput = document.getElementById("contextMenuEnabledInput");
@@ -826,6 +829,7 @@ imageQualityLabel.textContent = browser.i18n.getMessage("optionImageQuality");
 loadDeferredContentLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContent");
 loadDeferredContentMaxIdleTimeLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContentMaxIdleTime");
 loadDeferredContentKeepZoomLevelLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContentKeepZoomLevel");
+loadDeferredContentKeepEmulatedScreenSizeLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContentKeepEmulatedScreenSize");
 loadDeferredContentDispatchScrollEventLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContentDispatchScrollEvent");
 loadDeferredContentBeforeFramesLabel.textContent = browser.i18n.getMessage("optionLoadDeferredContentBeforeFrames");
 addMenuEntryLabel.textContent = browser.i18n.getMessage("optionAddMenuEntry");
@@ -986,6 +990,22 @@ browser.runtime.sendMessage({ method: "tabsData.get" }).then(allTabsData => {
 getHelpContents();
 initExternalCapturePermissions();
 
+async function displayFileAccessWarning() {
+	let fileAccessAllowed, firefoxVersion;
+	try {
+		fileAccessAllowed = await browser.extension.isAllowedFileSchemeAccess();
+		if (browser.runtime.getBrowserInfo) {
+			firefoxVersion = parseInt((await browser.runtime.getBrowserInfo()).version, 10);
+		}
+	} catch {
+		fileAccessAllowed = true;
+	}
+	if (!fileAccessAllowed && (firefoxVersion === undefined || firefoxVersion >= 153)) {
+		document.getElementById("fileAccessWarningLabel").textContent = browser.i18n.getMessage(firefoxVersion === undefined ? "optionDisplayInfobarFileAccessChromium" : "optionDisplayInfobarFileAccessFirefox");
+		document.getElementById("fileAccessWarning").hidden = false;
+	}
+}
+
 function setLinkLabel(linkElement, messageName) {
 	const label = browser.i18n.getMessage(messageName);
 	linkElement.title = label;
@@ -993,6 +1013,7 @@ function setLinkLabel(linkElement, messageName) {
 }
 
 function init() {
+	displayFileAccessWarning();
 	if (!BACKGROUND_SAVE_SUPPORTED) {
 		document.getElementById("backgroundSaveOptions").hidden = true;
 		document.getElementById("confirmFilenameOption").hidden = true;
@@ -1182,6 +1203,8 @@ async function refresh(profileName) {
 	loadDeferredContentMaxIdleTimeInput.value = profileOptions.loadDeferredContentMaxIdleTime;
 	loadDeferredContentKeepZoomLevelInput.checked = profileOptions.loadDeferredContentKeepZoomLevel;
 	loadDeferredContentKeepZoomLevelInput.disabled = !profileOptions.loadDeferredContent;
+	loadDeferredContentKeepEmulatedScreenSizeInput.checked = profileOptions.loadDeferredContentKeepEmulatedScreenSize;
+	loadDeferredContentKeepEmulatedScreenSizeInput.disabled = !profileOptions.loadDeferredContent;
 	loadDeferredContentMaxIdleTimeInput.disabled = !profileOptions.loadDeferredContent;
 	loadDeferredContentDispatchScrollEventInput.checked = profileOptions.loadDeferredContentDispatchScrollEvent;
 	loadDeferredContentDispatchScrollEventInput.disabled = !profileOptions.loadDeferredContent;
@@ -1424,6 +1447,7 @@ async function update() {
 			loadDeferredContent: loadDeferredContentInput.checked,
 			loadDeferredContentMaxIdleTime: Math.max(loadDeferredContentMaxIdleTimeInput.value, 0),
 			loadDeferredContentKeepZoomLevel: loadDeferredContentKeepZoomLevelInput.checked,
+			loadDeferredContentKeepEmulatedScreenSize: loadDeferredContentKeepEmulatedScreenSizeInput.checked,
 			loadDeferredContentDispatchScrollEvent: loadDeferredContentDispatchScrollEventInput.checked,
 			loadDeferredContentBeforeFrames: loadDeferredContentBeforeFramesInput.checked,
 			contextMenuEnabled: contextMenuEnabledInput.checked,
@@ -1904,31 +1928,11 @@ async function getHelpContents() {
 	});
 }
 
-async function getHelpPageURL() {
+function getHelpPageURL() {
 	const language = browser.i18n.getUILanguage().replace(/-/g, "_");
-	try {
-		const url = browser.runtime.getURL(HELP_PAGE_PATH_PREFIX + "_" + language + ".html");
-		await (await fetch(url)).arrayBuffer();
-		return url;
-		// eslint-disable-next-line no-unused-vars
-	} catch (error) {
-		try {
-			const url = browser.runtime.getURL(HELP_PAGE_PATH_PREFIX + "_" + language.split("_")[0] + ".html");
-			await (await fetch(url)).arrayBuffer();
-			return url;
-			// eslint-disable-next-line no-unused-vars
-		} catch (error) {
-			try {
-				const url = browser.runtime.getURL(HELP_PAGE_PATH_PREFIX + "_" + language.split("_")[1] + ".html");
-				await (await fetch(url)).arrayBuffer();
-				return url;
-			}
-			// eslint-disable-next-line no-unused-vars
-			catch (error) {
-				return browser.runtime.getURL(HELP_PAGE_PATH_DEFAULT);
-			}
-		}
-	}
+	const [languageCode, regionCode] = language.split("_");
+	const helpPageLanguage = [language, languageCode, regionCode].find(candidate => HELP_PAGE_LANGUAGES.includes(candidate));
+	return browser.runtime.getURL(helpPageLanguage ? HELP_PAGE_PATH_PREFIX + "_" + helpPageLanguage + ".html" : HELP_PAGE_PATH_DEFAULT);
 }
 
 function getText(blob) {

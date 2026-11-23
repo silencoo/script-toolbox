@@ -194,6 +194,22 @@ async function run() {
 	const { sessionId } = await cdp.Target.attachToTarget({ targetId, flatten: true });
 	await cdp.Runtime.enable(null, sessionId);
 	await cdp.Page.enable(null, sessionId);
+	// real input gives the page a user activation, and the editor then asks before it is left with
+	// unsaved changes: the question is answered here, otherwise it is displayed on the screen of
+	// the developer and holds the suite
+	// a prompt of the editor is answered with promptAnswer, or dismissed when there is none, and is
+	// recorded for the test that expects it
+	const promptDialogs = [];
+	let promptAnswer;
+	cdp.Page.addEventListener("javascriptDialogOpening", event => {
+		if (event.params.type == "beforeunload") {
+			cdp.Page.handleJavaScriptDialog({ accept: true }, sessionId).catch(() => { });
+		}
+		if (event.params.type == "prompt") {
+			promptDialogs.push(event.params);
+			cdp.Page.handleJavaScriptDialog(promptAnswer === undefined ? { accept: false } : { accept: true, promptText: promptAnswer }, sessionId).catch(() => { });
+		}
+	});
 	await waitFor(async () => {
 		const { result } = await cdp.Runtime.evaluate({ expression: "typeof chrome != 'undefined' && chrome.runtime && document.readyState == 'complete' && location.href.startsWith('chrome-extension:') || undefined" }, sessionId);
 		if (!result.value) {
@@ -395,12 +411,83 @@ async function run() {
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Beta' || undefined"), "deep-linked page displayed");
 
 	const singlePageBase64 = readFileSync(SINGLE_PAGE_FIXTURE_PATH).toString("base64");
+	// the options are read when the editor opens: the infobar is displayed in the editor for the
+	// single page, to see it follow the edit of its message
+	await updateDefaultProfile({ displayInfobarInEditor: true });
 	await openEditorArchive(singlePageBase64, "single.zip.html");
 	await waitFor(() => evalInFrame("document.querySelector('h1') && document.querySelector('h1').textContent == 'Alpha' || undefined"), "single-page archive displayed");
 	await assertEquals("single-page: no archive route", () => evalInPage("location.hash"), "");
 	await assertEquals("single-page: cluster hidden", () => evalInPage("document.querySelector('.archive-buttons').hidden"), true);
 	await assertEquals("single-page: save button visible", () => evalInPage("document.querySelector('.save-page-button').hidden"), false);
 	await assertEquals("single-page: edit tools visible", () => evalInPage("[...document.querySelectorAll('.edit-buttons')].every(element => !element.hidden)"), true);
+
+	// the toolbar is longer than a small screen and is dragged to reach its last buttons; the drag
+	// is done with the mouse, which goes through the same handlers as the touch events, and it
+	// starts on a button, which must not be triggered by the release
+	const SAVE_BUTTON_TOP = "Math.round(document.querySelector('.save-page-button').getBoundingClientRect().top)";
+	const TOOLBAR_TRANSFORM = "document.querySelector('.toolbar').style.transform";
+	const smallScreen = { width: 320, height: 400 };
+	await cdp.Emulation.setDeviceMetricsOverride({ ...smallScreen, deviceScaleFactor: 1, mobile: false }, sessionId);
+	await waitFor(() => evalInPage("matchMedia('(orientation: portrait)').matches && innerHeight == " + smallScreen.height + " || undefined"), "toolbar drag: small portrait screen");
+	// the editor reads the orientation in its "resize" listener, which runs with the next frame
+	await evalInPage("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))", true);
+	const saveButtonTop = await evalInPage(SAVE_BUTTON_TOP);
+	await assertEquals("toolbar drag: the save button is beyond the screen", () => Promise.resolve(saveButtonTop > smallScreen.height), true);
+	await dragToolbar(300, 20);
+	await assertEquals("toolbar drag: the toolbar follows the pointer", () => evalInPage(SAVE_BUTTON_TOP), saveButtonTop - 280);
+	await dragToolbar(300, -2000);
+	await assertEquals("toolbar drag: the toolbar stops when the last button reaches the top", () => evalInPage(SAVE_BUTTON_TOP), 0);
+	await dragToolbar(20, 2000);
+	await assertEquals("toolbar drag: the toolbar goes back to its place", () => evalInPage(TOOLBAR_TRANSFORM), "translate(0px, 0px)");
+	await assertEquals("toolbar drag: no button was triggered", () => evalInFrame("document.querySelectorAll('single-file-note').length"), 0);
+	await cdp.Emulation.clearDeviceMetricsOverride(null, sessionId);
+	await waitFor(() => evalInPage("innerHeight != " + smallScreen.height + " || undefined"), "toolbar drag: screen restored");
+
+	// the message of the infobar is asked when the page is saved, and the editor lets the user
+	// change it afterwards: the button asks for it in a prompt holding the current message, where
+	// a line break is written \n as in the infobar template of the options
+	const INFOBAR_MESSAGE = "(singlefile.helper.extractInfobarData(document) || {}).infobarContent || ''";
+	const DISPLAYED_INFOBAR_MESSAGE = "(() => { const infobar = document.querySelector('.editor-container single-file-infobar'); return infobar && infobar.shadowRoot.querySelector('.infobar-content span').textContent; })()";
+	const savedMessage = await evalInFrame(INFOBAR_MESSAGE);
+	await assertEquals("infobar message: the button is displayed", () => evalInPage("document.querySelector('.edit-infobar-button').hidden"), false);
+	await waitFor(() => evalInPage(DISPLAYED_INFOBAR_MESSAGE + " != null || undefined"), "infobar message: the infobar is displayed in the editor");
+	await assertEquals("infobar message: the prompt holds the saved message", () => editInfobarMessage("edited message\\nsecond line"), savedMessage);
+	await waitFor(() => evalInFrame(INFOBAR_MESSAGE + " == 'edited message\\nsecond line' || undefined"), "infobar message: the message is written in the page, on two lines");
+	await waitFor(() => evalInPage(DISPLAYED_INFOBAR_MESSAGE + " == 'edited message\\nsecond line' || undefined"), "infobar message: the infobar displays the new message");
+	await assertEquals("infobar message: the prompt holds the edited message", () => editInfobarMessage(undefined), "edited message\\nsecond line");
+	await assertEquals("infobar message: a dismissed prompt changes nothing", () => evalInFrame(INFOBAR_MESSAGE), "edited message\nsecond line");
+	await editInfobarMessage(savedMessage.replace(/\n/g, "\\n"));
+	await waitFor(() => evalInFrame(INFOBAR_MESSAGE + " == " + JSON.stringify(savedMessage) + " || undefined"), "infobar message: the saved message is put back");
+	await updateDefaultProfile({ displayInfobarInEditor: false });
+
+	async function editInfobarMessage(answer) {
+		const promptCount = promptDialogs.length;
+		promptAnswer = answer;
+		await evalInPage("document.querySelector('.edit-infobar-button').dispatchEvent(new MouseEvent('mouseup'))");
+		const promptDialog = await poll(() => promptDialogs[promptCount], 10000);
+		return promptDialog ? promptDialog.defaultPrompt : "no prompt was displayed";
+	}
+
+	async function dragToolbar(fromY, toY) {
+		const x = 17;
+		await cdp.Input.dispatchMouseEvent({ type: "mousePressed", x, y: fromY, button: "left", buttons: 1, clickCount: 1 }, sessionId);
+		for (let step = 1; step <= 4; step++) {
+			await cdp.Input.dispatchMouseEvent({ type: "mouseMoved", x, y: Math.round(fromY + (toY - fromY) * step / 4), button: "left", buttons: 1 }, sessionId);
+		}
+		await cdp.Input.dispatchMouseEvent({ type: "mouseReleased", x, y: toY, button: "left", buttons: 0, clickCount: 1 }, sessionId);
+	}
+	await evalInFrame("(() => { const link = document.createElement('a'); link.href = '#fragment-target'; link.className = 'fragment-link'; link.textContent = 'fragment link'; const target = document.createElement('p'); target.id = 'fragment-target'; target.textContent = 'fragment target'; const spacers = [0, 1].map(() => { const spacer = document.createElement('div'); spacer.style.height = '5000px'; return spacer; }); document.body.append(link, spacers[0], target, spacers[1]); })()");
+	await evalInFrame("document.querySelector('.fragment-link').click()");
+	await waitFor(() => evalInFrame("scrollY > 4000 && Math.abs(document.getElementById('fragment-target').getBoundingClientRect().top) < 100 || undefined"), "single-page: fragment link scrolls to its target");
+	await assertEquals("single-page: fragment link does not navigate", () => evalInFrame("location.hash"), "");
+	await evalInFrame("scrollTo(0, 0)");
+	await evalInPage("document.querySelector('.edit-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	await waitFor(() => evalInFrame("document.body.isContentEditable || undefined"), "single-page: edit mode enabled");
+	await evalInFrame("document.querySelector('.fragment-link').click()");
+	await new Promise(resolve => setTimeout(resolve, 500));
+	await assertEquals("single-page: fragment link does not scroll in edit mode", () => evalInFrame("scrollY"), 0);
+	await evalInPage("document.querySelector('.edit-page-button').dispatchEvent(new MouseEvent('mouseup'))");
+	await waitFor(() => evalInFrame("!document.body.isContentEditable || undefined"), "single-page: edit mode disabled");
 
 	const dedupBase64 = readFileSync(DEDUP_FIXTURE_PATH).toString("base64");
 	await openEditorArchive(dedupBase64, "multi-page-dedup.zip.html");
@@ -467,6 +554,7 @@ async function run() {
 	const savedPlainContent = readFileSync(savedPlainPath).toString();
 	await assertEquals("plain drop save is a plain page with the dropped content", async () => savedPlainContent.includes("Gamma") && !savedPlainContent.includes("data-sfz") && !savedPlainContent.includes("sfz-pages.json"), true);
 	await assertEquals("plain drop save keeps the note added in the editor", async () => savedPlainContent.includes("single-file-note"), true);
+	await assertEquals("plain drop save embeds the notes runtime once", async () => savedPlainContent.split("<script data-template-shadow-root>").length, 2);
 
 	const digestBase64 = readFileSync(DIGEST_FIXTURE_PATH).toString("base64");
 	await openEditorArchive(digestBase64, "classic-digest.html", false);
@@ -571,6 +659,7 @@ async function run() {
 		};
 		const alphaContent = await getText(savedEntries, "pages/2/index.html");
 		await assertEquals("edited page contains the note", async () => alphaContent.includes("single-file-note") && alphaContent.includes("Alpha"), true);
+		await assertEquals("edited page embeds the notes runtime", async () => alphaContent.includes("<script data-template-shadow-root>") && alphaContent.includes("data-sf-nesting-track-id"), true);
 		const betaSaved = await getText(savedEntries, "pages/3/index.html");
 		const betaOriginal = await getText(originalEntries, "pages/3/index.html");
 		await assertEquals("untouched page preserved byte for byte", async () => betaSaved == betaOriginal, true);
