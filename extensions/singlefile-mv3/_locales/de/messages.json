@@ -95,6 +95,10 @@
 		"message": "Auswahl speichern",
 		"description": "Menu entry: 'Save selection'"
 	},
+	"menuEditAndSaveSelection": {
+		"message": "Annotieren und Speichern der Auswahl...",
+		"description": "Menu entry: 'Annotate and save the selection...'"
+	},
 	"menuSaveFrame": {
 		"message": "Rahmen speichern",
 		"description": "Menu entry: 'Save frame'"
@@ -114,6 +118,18 @@
 	"menuSaveAllTabs": {
 		"message": "Speichern aller Tabs",
 		"description": "Menu entry: 'Save all tabs'"
+	},
+	"menuSaveSelectedTabsInArchive": {
+		"message": "Speichern der ausgewählten Tabs in einem Archiv",
+		"description": "Menu entry: 'Save selected tabs in one archive'"
+	},
+	"menuSaveUnpinnedTabsInArchive": {
+		"message": "Speichern der nicht angehefteten Tabs in einem Archiv",
+		"description": "Menu entry: 'Save unpinned tabs in one archive'"
+	},
+	"menuSaveAllTabsInArchive": {
+		"message": "Speichern aller Tabs in einem Archiv",
+		"description": "Menu entry: 'Save all tabs in one archive'"
 	},
 	"menuBatchSaveUrls": {
 		"message": "Stapelweise URLs speichern...",
@@ -210,6 +226,14 @@
 	"optionDisplayInfobar": {
 		"message": "Infobar beim Betrachten einer gespeicherten Seite anzeigen",
 		"description": "Options page label: 'display an infobar when viewing a saved page'"
+	},
+	"optionDisplayInfobarFileAccessFirefox": {
+		"message": "SingleFile kann die Infobar nicht anzeigen und keine aus dem Dateisystem geöffneten Seiten speichern, weil es nicht auf lokale Dateien zugreifen darf. Um dies zu beheben, aktivieren Sie „Auf lokale Dateien auf Ihrem Computer zugreifen“ unter „Berechtigungen und Daten“ auf der SingleFile-Seite in about:addons.",
+		"description": "Options page warning displayed in Firefox when the extension cannot access local files: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access local files. To fix this, enable \"Access local files on your computer\" in \"Permissions and data\" on the SingleFile page in about:addons.'"
+	},
+	"optionDisplayInfobarFileAccessChromium": {
+		"message": "SingleFile kann die Infobar nicht anzeigen und keine aus dem Dateisystem geöffneten Seiten speichern, weil es nicht auf Datei-URLs zugreifen darf. Um dies zu beheben, aktivieren Sie „Zugriff auf Datei-URLs zulassen“ auf der SingleFile-Seite in der Erweiterungsverwaltung des Browsers.",
+		"description": "Options page warning displayed in Chromium-based browsers when the extension cannot access file URLs: 'SingleFile cannot display the infobar or save pages opened from the filesystem because it is not allowed to access file URLs. To fix this, enable \"Allow access to file URLs\" on the SingleFile page in the extensions page of the browser.'"
 	},
 	"optionInfobarTemplate": {
 		"message": "Muster für Inhalt der Infobar",
@@ -462,6 +486,10 @@
 	"optionLoadDeferredContentKeepZoomLevel": {
 		"message": "Seite während der Speicherung verkleinern",
 		"description": "Options page label: 'zoom out the page during the capture'"
+	},
+	"optionLoadDeferredContentKeepEmulatedScreenSize": {
+		"message": "Emulierte Bildschirmgröße während der Speicherung beibehalten",
+		"description": "Options page label: 'keep the emulated screen size during the capture'"
 	},
 	"optionLoadDeferredContentDispatchScrollEvent": {
 		"message": "Scrollen simulieren",
@@ -1097,13 +1125,17 @@
 		"message": "Die Seite zur besseren Lesbarkeit formatieren",
 		"description": "Title of the button 'Format the page for better readability' in the editor"
 	},
+	"editorEditInfobar": {
+		"message": "Nachricht der Infobar bearbeiten",
+		"description": "Title of the button 'Edit the infobar message' in the editor, also the text of the prompt asking for the message"
+	},
 	"editorCutInnerPage": {
-		"message": "Aktivieren/Deaktivieren der Entfernung interner Elemente",
-		"description": "Title of the button 'Enable/disable removing of internal elements' in the editor"
+		"message": "Element unter dem Mauszeiger entfernen (roter Rahmen)",
+		"description": "Title of the button 'Remove the element under the mouse' in the editor"
 	},
 	"editorCutOuterPage": {
-		"message": "Aktivieren/Deaktivieren der Entfernung externer Elemente",
-		"description": "Title of the button 'Enable/disable removing of external elements' in the editor"
+		"message": "Element unter dem Mauszeiger behalten und alles andere entfernen (grüner Rahmen)",
+		"description": "Title of the button 'Keep the element under the mouse and remove everything else' in the editor"
 	},
 	"editorUndoCutPage": {
 		"message": "Wiederherstellen des zuletzt entfernten Elements",

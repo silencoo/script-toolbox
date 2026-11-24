@@ -21,11 +21,12 @@
  *   Source.
  */
 
-/* global browser, document, prompt, getComputedStyle, addEventListener, removeEventListener, requestAnimationFrame, setTimeout, getSelection, Node, URL */
+/* global browser, document, prompt, getComputedStyle, addEventListener, removeEventListener, requestAnimationFrame, setTimeout, getSelection, Node, NodeFilter, URL */
 
 const singlefile = globalThis.singlefile;
 
 const SELECTED_CONTENT_ATTRIBUTE_NAME = singlefile.helper.SELECTED_CONTENT_ATTRIBUTE_NAME;
+const SELECTED_TEXT_ATTRIBUTE_NAME = singlefile.helper.SELECTED_TEXT_ATTRIBUTE_NAME;
 
 const MASK_TAGNAME = "singlefile-mask";
 const MASK_CONTENT_CLASSNAME = "singlefile-mask-content";
@@ -58,6 +59,9 @@ function getMessage(messageName, defaultMessage) {
 		return defaultMessage;
 	}
 }
+
+const markedElements = new Set();
+const selectedTextNodes = new Set();
 
 let selectedAreaElement, logsWindowElement, backdropStyleElement;
 createLogsWindowElement();
@@ -186,10 +190,20 @@ function onLoadPage() { }
 function getSelectedLinks() {
 	let selectionFound;
 	const links = [];
-	const selection = getSelection();
-	for (let indexRange = 0; indexRange < selection.rangeCount; indexRange++) {
-		let range = selection.getRangeAt(indexRange);
+	const selectedRanges = getSelectedRanges();
+	for (let indexRange = 0; indexRange < selectedRanges.length; indexRange++) {
+		let range = selectedRanges[indexRange];
 		if (range && range.commonAncestorContainer) {
+			const startTextSelected = range.startContainer.nodeType != Node.TEXT_NODE || range.startOffset < range.startContainer.data.length;
+			if (!range.collapsed && startTextSelected) {
+				const startElement = range.startContainer.nodeType == Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+				const startLinkElement = startElement && startElement.closest("a");
+				if (startLinkElement && startLinkElement.tagName == "A" && startLinkElement.href) {
+					const url = new URL(startLinkElement.href);
+					url.hash = "";
+					links.push(url.href);
+				}
+			}
 			const treeWalker = document.createTreeWalker(range.commonAncestorContainer);
 			let rangeSelectionFound = false;
 			let finished = false;
@@ -238,10 +252,10 @@ async function markSelection(optionallySelected) {
 }
 
 function markSelectedContent() {
-	const selection = getSelection();
+	const selectedRanges = getSelectedRanges();
 	let selectionFound;
-	for (let indexRange = 0; indexRange < selection.rangeCount; indexRange++) {
-		let range = selection.getRangeAt(indexRange);
+	for (let indexRange = 0; indexRange < selectedRanges.length; indexRange++) {
+		let range = selectedRanges[indexRange];
 		if (range && range.commonAncestorContainer) {
 			const treeWalker = document.createTreeWalker(range.commonAncestorContainer);
 			let rangeSelectionFound = false;
@@ -253,7 +267,7 @@ function markSelectedContent() {
 						selectionFound = true;
 						markSelectedNode(treeWalker.currentNode);
 					}
-					if (range.startContainer === range.endContainer && selection.rangeCount == 1 && range.startOffset == 0 && range.endOffset == 0) {
+					if (range.startContainer === range.endContainer && selectedRanges.length == 1 && range.startOffset == 0 && range.endOffset == 0) {
 						if (range.startContainer.tagName === "IMG" || range.startContainer.tagName === "VIDEO") {
 							selectionFound = true;
 							markSelectedNode(treeWalker.currentNode);
@@ -280,29 +294,129 @@ function markSelectedContent() {
 						markSelectedNode(node);
 						if (node.querySelectorAll) {
 							node.querySelectorAll("*").forEach(markSelectedNode);
+							const textWalker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+							while (textWalker.nextNode()) {
+								selectedTextNodes.add(textWalker.currentNode);
+							}
 						}
 					}
 				}
 			}
 		}
 	}
+	if (selectionFound) {
+		markSelectedText();
+	}
 	return selectionFound;
+}
+
+function markSelectedText() {
+	markedElements.forEach(element => {
+		const selectedTextIndexes = [];
+		let textIndex = 0, textFound = false, textSelected = false, unselectedTextFound = false;
+		Array.from(element.childNodes).concat([null]).forEach(node => {
+			if (node && node.nodeType == Node.TEXT_NODE) {
+				textFound = textFound || /\S/.test(node.data);
+				textSelected = textSelected || selectedTextNodes.has(node);
+			} else {
+				if (textFound) {
+					if (textSelected) {
+						selectedTextIndexes.push(textIndex);
+					} else {
+						unselectedTextFound = true;
+					}
+					textIndex++;
+				}
+				textFound = false;
+				textSelected = false;
+			}
+		});
+		if (unselectedTextFound) {
+			element.setAttribute(SELECTED_TEXT_ATTRIBUTE_NAME, selectedTextIndexes.join(" "));
+		} else {
+			element.removeAttribute(SELECTED_TEXT_ATTRIBUTE_NAME);
+		}
+	});
+}
+
+function getSelectedRanges() {
+	const selection = getSelection();
+	const selectedRanges = [];
+	for (let indexRange = 0; indexRange < selection.rangeCount; indexRange++) {
+		selectedRanges.push(selection.getRangeAt(indexRange));
+	}
+	if (selectedRanges.length == 1 && selectedRanges[0].collapsed && selection.getComposedRanges) {
+		const composedRange = getComposedRange(selection);
+		if (composedRange) {
+			selectedRanges[0] = composedRange;
+		}
+	}
+	return selectedRanges;
+}
+
+function getComposedRange(selection) {
+	const shadowRoots = [];
+	let staticRange, shadowRootFound;
+	do {
+		shadowRootFound = false;
+		staticRange = getComposedStaticRange(selection, shadowRoots);
+		if (staticRange) {
+			[
+				staticRange.startContainer.childNodes[staticRange.startOffset],
+				staticRange.endContainer.childNodes[staticRange.endOffset - 1]
+			].forEach(node => {
+				const shadowRoot = node && node.nodeType == Node.ELEMENT_NODE && singlefile.helper.getShadowRoot(node);
+				if (shadowRoot && !shadowRoots.includes(shadowRoot)) {
+					shadowRoots.push(shadowRoot);
+					shadowRootFound = true;
+				}
+			});
+		}
+	} while (shadowRootFound);
+	if (staticRange && !staticRange.collapsed && staticRange.startContainer.getRootNode() == staticRange.endContainer.getRootNode()) {
+		const range = document.createRange();
+		range.setStart(staticRange.startContainer, staticRange.startOffset);
+		range.setEnd(staticRange.endContainer, staticRange.endOffset);
+		return range;
+	}
+}
+
+function getComposedStaticRange(selection, shadowRoots) {
+	try {
+		return selection.getComposedRanges({ shadowRoots })[0];
+	} catch {
+		return selection.getComposedRanges(...shadowRoots)[0];
+	}
 }
 
 function markSelectedNode(node) {
 	const element = node.nodeType == Node.ELEMENT_NODE ? node : node.parentElement;
-	element.setAttribute(SELECTED_CONTENT_ATTRIBUTE_NAME, "");
+	if (node.nodeType == Node.TEXT_NODE) {
+		selectedTextNodes.add(node);
+	}
+	if (element) {
+		element.setAttribute(SELECTED_CONTENT_ATTRIBUTE_NAME, "");
+		markedElements.add(element);
+	}
 }
 
 function markSelectedParents(node) {
-	if (node.parentElement) {
+	const parentElement = node.parentElement || (node.parentNode && node.parentNode.host);
+	if (parentElement) {
 		markSelectedNode(node);
-		markSelectedParents(node.parentElement);
+		markSelectedParents(parentElement);
 	}
 }
 
 function unmarkSelection() {
+	markedElements.forEach(selectedContent => {
+		selectedContent.removeAttribute(SELECTED_CONTENT_ATTRIBUTE_NAME);
+		selectedContent.removeAttribute(SELECTED_TEXT_ATTRIBUTE_NAME);
+	});
+	markedElements.clear();
+	selectedTextNodes.clear();
 	document.querySelectorAll("[" + SELECTED_CONTENT_ATTRIBUTE_NAME + "]").forEach(selectedContent => selectedContent.removeAttribute(SELECTED_CONTENT_ATTRIBUTE_NAME));
+	document.querySelectorAll("[" + SELECTED_TEXT_ATTRIBUTE_NAME + "]").forEach(selectedContent => selectedContent.removeAttribute(SELECTED_TEXT_ATTRIBUTE_NAME));
 }
 
 function selectArea() {
